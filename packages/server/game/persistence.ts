@@ -12,6 +12,7 @@ export interface PersistedPlayer {
   id: string;
   accountId: string;
   name: string;
+  classId: string;
   level: number;
   xp: number;
   x: number;
@@ -42,6 +43,7 @@ export async function loadPlayer(characterId: string): Promise<PersistedPlayer |
     id: character.id,
     accountId: character.accountId,
     name: character.name,
+    classId: character.classId,
     level: character.level,
     xp: character.xp,
     x: character.x,

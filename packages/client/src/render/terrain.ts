@@ -1,32 +1,91 @@
 import * as THREE from "three";
-import {
-  terrainHeight,
-  terrainSlope,
-  biomeAt,
-  generatePaths,
-  generateRivers,
-  distToRiver,
-  distPointToSegment,
-  RIVER_HALF_WIDTH,
-  RIVER_WATER_OFFSET,
-  ZONE_SIZE,
-  WATER_LEVEL,
-} from "@rustcraft/shared";
-import { terrainDetailTexture } from "./textures";
+import { terrainHeight, terrainSlope, biomeAt, generatePaths, distPointToSegment, ZONE_SIZE, WATER_LEVEL } from "@rustcraft/shared";
 
 const RESOLUTION = 200; // vertices per side
+const TERRAIN_TILING = 48; // texture repeats across the zone
 
-const SAND = new THREE.Color(0xcfc08a);
-const SAND_DUNE = new THREE.Color(0xdfc47e);
-const GRASS_FOREST = new THREE.Color(0x55803c);
 const GRASS_MEADOW = new THREE.Color(0x8aa04f);
 const GRASS_HILLS = new THREE.Color(0x92923f);
 const GRASS_MOUNTAIN = new THREE.Color(0x6f7d55);
 const GRASS_SWAMP = new THREE.Color(0x515f3a);
+const GRASS_FOREST = new THREE.Color(0x55803c);
 const MUD_SWAMP = new THREE.Color(0x453d29);
-const ROCK = new THREE.Color(0x7d7a72);
-const SNOW = new THREE.Color(0xe8ecf0);
-const DIRT = new THREE.Color(0x8a6f4d);
+const WHITE = new THREE.Color(0xffffff);
+
+const textureLoader = new THREE.TextureLoader();
+function tiledTexture(url: string): THREE.Texture {
+  const tex = textureLoader.load(url);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+/** Photo-sourced ground textures (ambientCG, CC0), blended per-vertex by biome/slope/height. */
+const GROUND_TEXTURES = {
+  grass: tiledTexture("/assets/textures/terrain/grass.jpg"),
+  rock: tiledTexture("/assets/textures/terrain/rock.jpg"),
+  sand: tiledTexture("/assets/textures/terrain/sand.jpg"),
+  snow: tiledTexture("/assets/textures/terrain/snow.jpg"),
+  dirt: tiledTexture("/assets/textures/terrain/dirt.jpg"),
+};
+
+/** Injects a 5-way texture blend (grass/rock/sand/snow/dirt) into the standard Lambert shader. */
+function applyGroundBlendShader(mat: THREE.MeshLambertMaterial): void {
+  mat.onBeforeCompile = (shader) => {
+    shader.uniforms.tGrass = { value: GROUND_TEXTURES.grass };
+    shader.uniforms.tRock = { value: GROUND_TEXTURES.rock };
+    shader.uniforms.tSand = { value: GROUND_TEXTURES.sand };
+    shader.uniforms.tSnow = { value: GROUND_TEXTURES.snow };
+    shader.uniforms.tDirt = { value: GROUND_TEXTURES.dirt };
+    shader.uniforms.uTiling = { value: TERRAIN_TILING };
+
+    shader.vertexShader = shader.vertexShader
+      .replace(
+        "#include <common>",
+        `#include <common>
+        attribute vec3 weightsA;
+        attribute vec2 weightsB;
+        attribute vec2 terrainUv;
+        varying vec3 vWeightsA;
+        varying vec2 vWeightsB;
+        varying vec2 vTerrainUv;`,
+      )
+      .replace(
+        "#include <begin_vertex>",
+        `#include <begin_vertex>
+        vWeightsA = weightsA;
+        vWeightsB = weightsB;
+        vTerrainUv = terrainUv;`,
+      );
+
+    shader.fragmentShader = shader.fragmentShader
+      .replace(
+        "#include <common>",
+        `#include <common>
+        uniform sampler2D tGrass;
+        uniform sampler2D tRock;
+        uniform sampler2D tSand;
+        uniform sampler2D tSnow;
+        uniform sampler2D tDirt;
+        uniform float uTiling;
+        varying vec3 vWeightsA;
+        varying vec2 vWeightsB;
+        varying vec2 vTerrainUv;`,
+      )
+      .replace(
+        "#include <color_fragment>",
+        `#include <color_fragment>
+        vec2 tuv = vTerrainUv * uTiling;
+        vec3 groundColor =
+          texture2D(tGrass, tuv).rgb * vWeightsA.x +
+          texture2D(tRock,  tuv).rgb * vWeightsA.y +
+          texture2D(tSand,  tuv).rgb * vWeightsA.z +
+          texture2D(tSnow,  tuv).rgb * vWeightsB.x +
+          texture2D(tDirt,  tuv).rgb * vWeightsB.y;
+        diffuseColor.rgb = groundColor * mix(vec3(1.0), vColor.rgb, 0.55);`,
+      );
+  };
+}
 
 export function buildTerrain(): THREE.Mesh {
   const geo = new THREE.PlaneGeometry(ZONE_SIZE, ZONE_SIZE, RESOLUTION, RESOLUTION);
@@ -34,8 +93,12 @@ export function buildTerrain(): THREE.Mesh {
 
   const paths = generatePaths();
   const pos = geo.attributes.position as THREE.BufferAttribute;
-  const colors = new Float32Array(pos.count * 3);
-  const color = new THREE.Color();
+  const terrainUv = (geo.attributes.uv as THREE.BufferAttribute).array as Float32Array;
+  const tints = new Float32Array(pos.count * 3);
+  // weightsA = [grass, rock, sand], weightsB = [snow, dirt]
+  const weightsA = new Float32Array(pos.count * 3);
+  const weightsB = new Float32Array(pos.count * 2);
+  const tint = new THREE.Color();
 
   for (let i = 0; i < pos.count; i++) {
     const x = pos.getX(i);
@@ -45,17 +108,27 @@ export function buildTerrain(): THREE.Mesh {
 
     const slope = terrainSlope(x, z);
     const biome = biomeAt(x, z);
+    let wGrass = 0;
+    let wRock = 0;
+    let wSand = 0;
+    let wSnow = 0;
+    let wDirt = 0;
+    tint.copy(WHITE);
+
     if (biome === "dunes") {
       // Deserts stay sandy throughout — no grass, no beach-line transition.
-      color.copy(SAND_DUNE);
+      wSand = 1;
     } else if (biome === "swamp" && y < WATER_LEVEL + 1.4) {
-      color.copy(MUD_SWAMP);
+      wDirt = 1;
+      tint.copy(MUD_SWAMP);
     } else if (y < WATER_LEVEL + 0.6) {
-      color.copy(SAND);
+      wSand = 1;
     } else if (slope > 0.75 || y > 24) {
-      color.copy(y > 26 ? SNOW : ROCK);
+      if (y > 26) wSnow = 1;
+      else wRock = 1;
     } else {
-      const grass =
+      wGrass = 1;
+      tint.copy(
         biome === "meadow"
           ? GRASS_MEADOW
           : biome === "mountain"
@@ -64,9 +137,12 @@ export function buildTerrain(): THREE.Mesh {
               ? GRASS_HILLS
               : biome === "swamp"
                 ? GRASS_SWAMP
-                : GRASS_FOREST;
-      color.copy(grass);
-      if (biome === "mountain" && slope > 0.45) color.lerp(ROCK, 0.5);
+                : GRASS_FOREST,
+      );
+      if (biome === "mountain" && slope > 0.45) {
+        wRock = 0.5;
+        wGrass = 0.5;
+      }
     }
 
     // Dirt paths carved into the grass.
@@ -77,30 +153,39 @@ export function buildTerrain(): THREE.Mesh {
         if (d < minDist) minDist = d;
         if (minDist < 0.5) break;
       }
-      if (minDist < 2.2) color.lerp(DIRT, 0.85);
-      else if (minDist < 3.6) color.lerp(DIRT, 0.85 * (1 - (minDist - 2.2) / 1.4));
+      let pathBlend = 0;
+      if (minDist < 2.2) pathBlend = 0.85;
+      else if (minDist < 3.6) pathBlend = 0.85 * (1 - (minDist - 2.2) / 1.4);
+      if (pathBlend > 0) {
+        wGrass *= 1 - pathBlend;
+        wRock *= 1 - pathBlend;
+        wSand *= 1 - pathBlend;
+        wSnow *= 1 - pathBlend;
+        wDirt = wDirt * (1 - pathBlend) + pathBlend;
+        tint.lerp(WHITE, pathBlend);
+      }
     }
 
-    // Sandy riverbanks along carved river channels.
-    const riverBank = RIVER_HALF_WIDTH + 3;
-    const riverD = distToRiver(x, z);
-    if (riverD < riverBank) {
-      color.lerp(SAND, Math.max(0, Math.min(1, 1 - riverD / riverBank)) * 0.85);
-    }
+    const sum = wGrass + wRock + wSand + wSnow + wDirt || 1;
+    weightsA[i * 3] = wGrass / sum;
+    weightsA[i * 3 + 1] = wRock / sum;
+    weightsA[i * 3 + 2] = wSand / sum;
+    weightsB[i * 2] = wSnow / sum;
+    weightsB[i * 2 + 1] = wDirt / sum;
 
-    colors[i * 3] = color.r;
-    colors[i * 3 + 1] = color.g;
-    colors[i * 3 + 2] = color.b;
+    tints[i * 3] = tint.r;
+    tints[i * 3 + 1] = tint.g;
+    tints[i * 3 + 2] = tint.b;
   }
 
-  geo.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+  geo.setAttribute("color", new THREE.BufferAttribute(tints, 3));
+  geo.setAttribute("weightsA", new THREE.BufferAttribute(weightsA, 3));
+  geo.setAttribute("weightsB", new THREE.BufferAttribute(weightsB, 2));
+  geo.setAttribute("terrainUv", new THREE.BufferAttribute(terrainUv, 2));
   geo.computeVertexNormals();
 
-  // A finely-tiled detail texture multiplies the biome/road vertex colors,
-  // adding grassy grain without hiding the low-poly silhouette.
-  const detail = terrainDetailTexture();
-  detail.repeat.set(RESOLUTION, RESOLUTION);
-  const mat = new THREE.MeshLambertMaterial({ vertexColors: true, map: detail });
+  const mat = new THREE.MeshLambertMaterial({ vertexColors: true });
+  applyGroundBlendShader(mat);
   const mesh = new THREE.Mesh(geo, mat);
   mesh.receiveShadow = true;
   mesh.name = "terrain";
@@ -110,10 +195,14 @@ export function buildTerrain(): THREE.Mesh {
 export function buildWater(): THREE.Mesh {
   const geo = new THREE.PlaneGeometry(ZONE_SIZE * 1.4, ZONE_SIZE * 1.4);
   geo.rotateX(-Math.PI / 2);
+  const normalMap = tiledTexture("/assets/textures/water/water_normal.jpg");
+  normalMap.repeat.set(80, 80);
   const mat = new THREE.MeshLambertMaterial({
     color: 0x2a6a9c,
     transparent: true,
-    opacity: 0.78,
+    opacity: 0.82,
+    normalMap,
+    normalScale: new THREE.Vector2(0.35, 0.35),
   });
   const mesh = new THREE.Mesh(geo, mat);
   mesh.position.y = WATER_LEVEL;
@@ -121,60 +210,3 @@ export function buildWater(): THREE.Mesh {
   return mesh;
 }
 
-/** Winding river water ribbons, following the carved terrain channels. */
-export function buildRivers(): THREE.Group {
-  const group = new THREE.Group();
-  const segments = generateRivers();
-  const byRiver = new Map<number, typeof segments>();
-  for (const s of segments) {
-    if (!byRiver.has(s.riverId)) byRiver.set(s.riverId, []);
-    byRiver.get(s.riverId)!.push(s);
-  }
-
-  const mat = new THREE.MeshLambertMaterial({
-    color: 0x3a7cac,
-    transparent: true,
-    opacity: 0.82,
-    side: THREE.DoubleSide,
-  });
-
-  for (const segs of byRiver.values()) {
-    if (segs.length === 0) continue;
-    const points: [number, number][] = [[segs[0]!.ax, segs[0]!.az]];
-    for (const s of segs) points.push([s.bx, s.bz]);
-
-    const positions: number[] = [];
-    for (let i = 0; i < points.length; i++) {
-      const [x, z] = points[i]!;
-      const prev = points[Math.max(0, i - 1)]!;
-      const next = points[Math.min(points.length - 1, i + 1)]!;
-      const dx = next[0] - prev[0];
-      const dz = next[1] - prev[1];
-      const len = Math.hypot(dx, dz) || 1;
-      const nx = -dz / len;
-      const nz = dx / len;
-      const y = terrainHeight(x, z) + RIVER_WATER_OFFSET;
-      positions.push(x + nx * RIVER_HALF_WIDTH, y, z + nz * RIVER_HALF_WIDTH);
-      positions.push(x - nx * RIVER_HALF_WIDTH, y, z - nz * RIVER_HALF_WIDTH);
-    }
-
-    const indices: number[] = [];
-    for (let i = 0; i < points.length - 1; i++) {
-      const a = i * 2;
-      const b = i * 2 + 1;
-      const c = (i + 1) * 2;
-      const d = (i + 1) * 2 + 1;
-      indices.push(a, c, b, b, c, d);
-    }
-
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
-    geo.setIndex(indices);
-    geo.computeVertexNormals();
-    const mesh = new THREE.Mesh(geo, mat);
-    mesh.name = "river";
-    group.add(mesh);
-  }
-
-  return group;
-}

@@ -255,27 +255,33 @@ export function buildCactus(variant: number): THREE.Group {
 export function buildBiomeTree(biome: Biome, variant: number): THREE.Group {
   switch (biome) {
     case "forest":
-      if (variant < 0.35) return buildGltfTree("trees_A_medium", variant) ?? buildOak(variant);
-      if (variant < 0.6) return buildGltfTree("tree_single_A", variant) ?? buildOak(variant);
-      if (variant < 0.8) return buildGltfTree("trees_B_small", variant) ?? buildTree(variant);
-      return buildTree(variant);
+      if (variant < 0.2) return buildGltfTree("oak_1", variant) ?? buildOak(variant);
+      if (variant < 0.4) return buildGltfTree("oak_2", variant) ?? buildOak(variant);
+      if (variant < 0.6) return buildGltfTree("oak_3", variant) ?? buildOak(variant);
+      if (variant < 0.8) return buildGltfTree("oak_4", variant) ?? buildTree(variant);
+      return buildGltfTree("oak_5", variant) ?? buildTree(variant);
     case "hills":
-      if (variant < 0.4) return buildGltfTree("tree_single_B", variant) ?? buildTree(variant);
-      if (variant < 0.7) return buildGltfTree("trees_B_small", variant) ?? buildTree(variant);
-      return buildTree(variant);
+      if (variant < 0.35) return buildGltfTree("oak_3", variant) ?? buildTree(variant);
+      if (variant < 0.7) return buildGltfTree("oak_5", variant) ?? buildTree(variant);
+      return buildGltfTree("pine_5", variant) ?? buildTree(variant);
     case "mountain":
-      if (variant < 0.45) return buildGltfTree("tree_pine_orange_small", variant) ?? buildDeadTree(variant);
-      if (variant < 0.7) return buildGltfTree("trees_B_medium", variant) ?? buildTree(variant);
+      if (variant < 0.35) return buildGltfTree("pine_1", variant) ?? buildDeadTree(variant);
+      if (variant < 0.55) return buildGltfTree("pine_2", variant) ?? buildDeadTree(variant);
+      if (variant < 0.75) return buildGltfTree("pine_3", variant) ?? buildTree(variant);
+      if (variant < 0.9) return buildGltfTree("pine_4", variant) ?? buildTree(variant);
       return buildDeadTree(variant);
     case "swamp":
-      if (variant < 0.4) return buildGltfTree("tree_dead_small", variant) ?? buildDeadTree(variant);
-      if (variant < 0.75) return buildGltfTree("tree_dead_medium", variant) ?? buildDeadTree(variant);
-      return buildGltfTree("tree_dead_large", variant) ?? buildDeadTree(variant);
+      if (variant < 0.3) return buildGltfTree("twisted_1", variant) ?? buildDeadTree(variant);
+      if (variant < 0.55) return buildGltfTree("twisted_2", variant) ?? buildDeadTree(variant);
+      if (variant < 0.75) return buildGltfTree("twisted_3", variant) ?? buildDeadTree(variant);
+      if (variant < 0.9) return buildGltfTree("dead_1", variant) ?? buildDeadTree(variant);
+      return buildGltfTree("dead_2", variant) ?? buildDeadTree(variant);
     case "dunes":
       return buildCactus(variant);
     case "meadow":
     default:
-      if (variant < 0.25) return buildGltfTree("tree_single_A", variant) ?? buildOak(variant);
+      if (variant < 0.3) return buildGltfTree("oak_1", variant) ?? buildOak(variant);
+      if (variant < 0.6) return buildGltfTree("oak_4", variant) ?? buildOak(variant);
       return buildOak(variant);
   }
 }

@@ -1,6 +1,6 @@
 import { hash2, mulberry32 } from "./rng";
 import { smoothstep, lerp, clamp, distPointToSegment } from "./math";
-import { ZONE_SEED, ZONE_SIZE, SPAWN_POINT, WATER_LEVEL } from "./constants";
+import { ZONE_SEED, ZONE_SIZE, WATER_LEVEL } from "./constants";
 
 /** Value noise at (x, z) for one octave with given cell size. */
 function valueNoise(seed: number, x: number, z: number, cellSize: number): number {
@@ -246,8 +246,6 @@ const RIVER_DEFS: { start: [number, number]; end: [number, number]; seedOffset: 
 ];
 
 export const RIVER_HALF_WIDTH = 5; // meters, centerline to bank
-export const RIVER_DEPTH = 2.2; // meters below the surrounding land
-export const RIVER_WATER_OFFSET = 0.7; // meters above the carved bed to the water surface
 
 let riversCache: RiverSegment[] | null = null;
 
@@ -296,26 +294,12 @@ export function distToRiver(x: number, z: number): number {
   return best;
 }
 
-/** Carve a river trench into a base height, following the land's own contour. */
-function applyRiverCarve(x: number, z: number, h: number): number {
-  // Keep the spawn plateau dry regardless of river proximity.
-  if (Math.hypot(x - SPAWN_POINT.x, z - SPAWN_POINT.z) < 30) return h;
-
-  const d = distToRiver(x, z);
-  const bankSpread = RIVER_HALF_WIDTH * 1.8;
-  if (d > RIVER_HALF_WIDTH + bankSpread) return h;
-
-  const trench = h - RIVER_DEPTH;
-  const t = 1 - smoothstep(clamp((d - RIVER_HALF_WIDTH) / bankSpread, 0, 1));
-  return lerp(h, trench, t);
-}
-
 /**
  * World terrain height at (x, z). Deterministic and identical on client and
  * server — this IS the ground truth for the zone.
  */
 export function terrainHeight(x: number, z: number): number {
-  return applyRiverCarve(x, z, terrainHeightBeforeRivers(x, z));
+  return terrainHeightBeforeRivers(x, z);
 }
 
 /** Approximate terrain normal, for slope checks and lighting. */

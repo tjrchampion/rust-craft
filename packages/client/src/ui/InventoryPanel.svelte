@@ -3,16 +3,18 @@
   import { game } from "./gameState.svelte";
   import { getGame } from "../game/instance";
   import { itemIcon } from "./icons";
-  import { RECIPES, itemDef, INVENTORY_SLOTS, HOTBAR_SLOTS, type ItemSnap } from "@rustcraft/shared";
+  import IconGlyph from "./IconGlyph.svelte";
+  import { RECIPES, itemDef, INVENTORY_SLOTS, HOTBAR_SLOTS, EQUIP_SLOTS, type ItemSnap } from "@rustcraft/shared";
 
-  type Section = "inv" | "hotbar" | "craft";
+  type Section = "inv" | "hotbar" | "equip" | "craft";
   const COLS = 6;
   const INV_ROWS = INVENTORY_SLOTS / COLS;
   const recipes = Object.values(RECIPES);
+  const EQUIP_LABELS: Record<string, string> = { weapon: "Weapon", head: "Head", chest: "Chest" };
 
   let section = $state<Section>("inv");
   let cursor = $state(0);
-  let moving = $state<{ container: "inventory" | "hotbar"; slot: number } | null>(null);
+  let moving = $state<{ container: "inventory" | "hotbar" | "equip"; slot: number } | null>(null);
 
   const invSlots = $derived(
     Array.from({ length: INVENTORY_SLOTS }, (_, i) =>
@@ -22,6 +24,11 @@
   const hotbarSlots = $derived(
     Array.from({ length: HOTBAR_SLOTS }, (_, i) =>
       game.inventory.find((it) => it.container === "hotbar" && it.slot === i),
+    ),
+  );
+  const equipSlots = $derived(
+    Array.from({ length: EQUIP_SLOTS.length }, (_, i) =>
+      game.inventory.find((it) => it.container === "equip" && it.slot === i),
     ),
   );
 
@@ -42,11 +49,14 @@
   function slotAt(sec: Section, idx: number): ItemSnap | undefined {
     if (sec === "inv") return invSlots[idx];
     if (sec === "hotbar") return hotbarSlots[idx];
+    if (sec === "equip") return equipSlots[idx];
     return undefined;
   }
 
-  function containerOf(sec: Section): "inventory" | "hotbar" {
-    return sec === "hotbar" ? "hotbar" : "inventory";
+  function containerOf(sec: Section): "inventory" | "hotbar" | "equip" {
+    if (sec === "hotbar") return "hotbar";
+    if (sec === "equip") return "equip";
+    return "inventory";
   }
 
   function activate(sec: Section, idx: number): void {
@@ -104,12 +114,29 @@
         cursor = (INV_ROWS - 1) * COLS + cursor;
         return;
       }
+      if (dy === 1) {
+        section = "equip";
+        cursor = 0;
+        return;
+      }
       if (dx === 1 && cursor === HOTBAR_SLOTS - 1) {
         section = "craft";
         cursor = recipes.length - 1;
         return;
       }
       cursor = Math.min(HOTBAR_SLOTS - 1, Math.max(0, cursor + dx));
+    } else if (section === "equip") {
+      if (dy === -1) {
+        section = "hotbar";
+        cursor = 0;
+        return;
+      }
+      if (dx === 1 && cursor === EQUIP_SLOTS.length - 1) {
+        section = "craft";
+        cursor = recipes.length - 1;
+        return;
+      }
+      cursor = Math.min(EQUIP_SLOTS.length - 1, Math.max(0, cursor + dx));
     } else {
       if (dx === -1) {
         section = "inv";
@@ -158,7 +185,7 @@
             onclick={() => activate("inv", i)}
           >
             {#if item}
-              <span class="icon">{itemIcon(item.itemId)}</span>
+              <IconGlyph value={itemIcon(item.itemId)} />
               {#if item.qty > 1}<span class="qty">{item.qty}</span>{/if}
             {/if}
           </button>
@@ -174,8 +201,25 @@
             onclick={() => activate("hotbar", i)}
           >
             {#if item}
-              <span class="icon">{itemIcon(item.itemId)}</span>
+              <IconGlyph value={itemIcon(item.itemId)} />
               {#if item.qty > 1}<span class="qty">{item.qty}</span>{/if}
+            {/if}
+          </button>
+        {/each}
+      </div>
+      <h3>Equipment</h3>
+      <div class="grid equip-grid">
+        {#each equipSlots as item, i (i)}
+          <button
+            class="cell"
+            class:cursor={section === "equip" && cursor === i}
+            class:moving={moving?.container === "equip" && moving.slot === i}
+            onclick={() => activate("equip", i)}
+          >
+            {#if item}
+              <IconGlyph value={itemIcon(item.itemId)} />
+            {:else}
+              <span class="slot-label">{EQUIP_LABELS[EQUIP_SLOTS[i]!]}</span>
             {/if}
           </button>
         {/each}
@@ -191,15 +235,15 @@
             class:unavailable={!canCraft(recipe.id)}
             onclick={() => activate("craft", i)}
           >
-            <span class="icon">{itemIcon(recipe.output)}</span>
+            <IconGlyph value={itemIcon(recipe.output)} />
             <span class="name">
               {itemDef(recipe.output).name}
               {#if recipe.station}<span class="station">at {recipe.station}</span>{/if}
             </span>
             <span class="ingredients">
               {#each recipe.ingredients as ing (ing.itemId)}
-                <span class:missing={count(ing.itemId) < ing.qty}>
-                  {itemIcon(ing.itemId)}{count(ing.itemId)}/{ing.qty}
+                <span class="ingredient" class:missing={count(ing.itemId) < ing.qty}>
+                  <IconGlyph value={itemIcon(ing.itemId)} size={14} />{count(ing.itemId)}/{ing.qty}
                 </span>
               {/each}
             </span>
@@ -271,8 +315,15 @@
     border-color: #6ec1ff;
     background: rgba(110, 193, 255, 0.15);
   }
-  .icon {
-    font-size: 22px;
+  .equip-grid {
+    grid-template-columns: repeat(3, 46px);
+  }
+  .slot-label {
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: #6b7686;
+    text-align: center;
   }
   .qty {
     position: absolute;
@@ -326,6 +377,11 @@
     display: flex;
     gap: 6px;
     font-size: 11px;
+  }
+  .ingredient {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
   }
   .ingredients .missing {
     color: #ff8a80;

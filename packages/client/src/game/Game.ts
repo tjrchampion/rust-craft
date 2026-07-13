@@ -19,7 +19,7 @@ import {
 } from "@rustcraft/shared";
 import { Connection } from "../net/connection";
 import { InputManager } from "../input/input";
-import { buildTerrain, buildWater, buildRivers } from "../render/terrain";
+import { buildTerrain, buildWater } from "../render/terrain";
 import { buildHorizonMountains } from "../render/horizon";
 import { buildClouds, type CloudField } from "../render/clouds";
 import { buildNameplate, buildHorse, buildRaft, type MountParts } from "../render/models";
@@ -116,7 +116,6 @@ export class Game {
 
     this.scene.add(buildTerrain());
     this.scene.add(buildWater());
-    this.scene.add(buildRivers());
     this.scene.add(buildHorizonMountains());
     this.clouds = buildClouds();
     this.scene.add(this.clouds.group);
@@ -124,7 +123,6 @@ export class Game {
     this.npcManager = new NpcManager(this.scene);
 
     this.avatar = new AnimatedModel(PLAYER_ANIMS);
-    void this.avatar.loadFrom(playerModelUrl(characterId), 1.8);
     const plate = buildNameplate(characterName, "#ffe9a8");
     plate.position.y = 2.35;
     this.avatar.group.add(plate);
@@ -173,6 +171,7 @@ export class Game {
         ui.selfId = msg.selfId;
         ui.selfName = msg.name;
         ui.names.set(msg.selfId, "You");
+        void this.avatar.loadFrom(playerModelUrl(msg.classId), 1.8);
         ui.self = msg.self;
         ui.inventory = msg.inventory;
         ui.learnedSpells = msg.learnedSpells;
@@ -281,8 +280,12 @@ export class Game {
         break;
       case "heal":
         if (msg.targetId === this.selfId) {
-          ui.addCombat("You feel the shrine's blessing — fully restored");
+          if (msg.spellId === "shrine") ui.addCombat("You feel the shrine's blessing — fully restored");
+          else ui.addCombat(`${ui.nameOf(msg.sourceId)} healed ${ui.nameOf(msg.targetId)} for ${Math.round(msg.amount ?? 0)}`);
           sound.play("levelup");
+        }
+        if (msg.x !== undefined && msg.amount) {
+          this.entities.spawnDamageNumber(msg.x, (msg.y ?? 0) + 0.6, msg.z ?? 0, msg.amount, "#7be07b");
         }
         break;
       case "gather":
@@ -409,9 +412,12 @@ export class Game {
         this.connection.send({ t: "attack" });
         this.avatar.play("attack");
       }
-      if (actions.castPressed && ui.learnedSpells.length > 0) {
-        this.faceTarget();
-        this.connection.send({ t: "cast", spellId: ui.learnedSpells[0]! });
+      if (actions.castSlot !== null) {
+        const spellId = ui.learnedSpells[actions.castSlot];
+        if (spellId) {
+          this.faceTarget();
+          this.connection.send({ t: "cast", spellId });
+        }
       }
       if (actions.interactPressed) {
         if (this.interactNodeId) {
@@ -717,16 +723,21 @@ export class Game {
     sound.play("craft");
   }
 
-  sendConsume(container: "inventory" | "hotbar", slot: number): void {
+  sendConsume(container: "inventory" | "hotbar" | "equip", slot: number): void {
     this.connection.send({ t: "consume", container, slot });
     sound.play("eat");
   }
 
-  sendPlace(container: "inventory" | "hotbar", slot: number): void {
+  sendPlace(container: "inventory" | "hotbar" | "equip", slot: number): void {
     this.connection.send({ t: "place", container, slot });
   }
 
-  sendMoveItem(fc: "inventory" | "hotbar", fs: number, tc: "inventory" | "hotbar", ts: number): void {
+  sendMoveItem(
+    fc: "inventory" | "hotbar" | "equip",
+    fs: number,
+    tc: "inventory" | "hotbar" | "equip",
+    ts: number,
+  ): void {
     this.connection.send({ t: "moveItem", fromContainer: fc, fromSlot: fs, toContainer: tc, toSlot: ts });
   }
 

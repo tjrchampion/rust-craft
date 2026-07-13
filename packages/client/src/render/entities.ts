@@ -1,14 +1,9 @@
 import * as THREE from "three";
-import type { PlayerSnap, MobSnap, ProjectileSnap, StructureSnap, AnimState } from "@rustcraft/shared";
-import { hashString, wrapAngle, mobDef } from "@rustcraft/shared";
+import type { PlayerSnap, MobSnap, ProjectileSnap, StructureSnap, AnimState, ClassId } from "@rustcraft/shared";
+import { wrapAngle, mobDef } from "@rustcraft/shared";
 import { buildNameplate, buildProjectile, buildCampfire, buildHorse, buildRaft } from "./models";
-import {
-  AnimatedModel,
-  PLAYER_ANIMS,
-  PLAYER_MODELS,
-  mobModelSpec,
-  logicalFromState,
-} from "./gltf";
+import { AnimatedModel, PLAYER_ANIMS, mobModelSpec, logicalFromState } from "./gltf";
+import { CLASS_MODEL_URLS } from "./classModels";
 
 const INTERP_DELAY_MS = 130;
 const DESPAWN_AFTER_MS = 1200;
@@ -101,8 +96,8 @@ function paintHpBar(sprite: THREE.Sprite, fraction: number): void {
   texture.needsUpdate = true;
 }
 
-export function playerModelUrl(id: string): string {
-  return PLAYER_MODELS[hashString(id) % PLAYER_MODELS.length]!;
+export function playerModelUrl(classId: string): string {
+  return CLASS_MODEL_URLS[classId as ClassId] ?? CLASS_MODEL_URLS.warrior;
 }
 
 export class EntityManager {
@@ -135,6 +130,7 @@ export class EntityManager {
     name: string | null,
     now: number,
     mobType?: string,
+    classId?: string,
   ): RemoteEntity {
     let model: AnimatedModel;
     let plateY = 2.35;
@@ -144,7 +140,7 @@ export class EntityManager {
 
     if (kind === "player") {
       model = new AnimatedModel(PLAYER_ANIMS);
-      void model.loadFrom(playerModelUrl(id), 1.8);
+      void model.loadFrom(playerModelUrl(classId ?? "warrior"), 1.8);
     } else {
       const def = mobDef(mobType ?? "wolf");
       const spec = mobModelSpec(def.render.model);
@@ -234,7 +230,7 @@ export class EntityManager {
       if (snap.id === selfId) continue;
       let entity = this.entities.get(snap.id);
       if (!entity) {
-        entity = this.createEntity("player", snap.id, snap.name, now);
+        entity = this.createEntity("player", snap.id, snap.name, now, undefined, snap.classId);
         entity.lastX = snap.x;
         entity.lastZ = snap.z;
       }

@@ -15,6 +15,13 @@
       "when": 1783883516930,
       "tag": "0001_worthless_gorilla_man",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1783967465311,
+      "tag": "0002_thick_cloak",
+      "breakpoints": true
     }
   ]
 }

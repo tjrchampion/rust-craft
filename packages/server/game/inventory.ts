@@ -1,6 +1,8 @@
-import { itemDef, INVENTORY_SLOTS, HOTBAR_SLOTS, type ItemSnap } from "@rustcraft/shared";
+import { itemDef, INVENTORY_SLOTS, HOTBAR_SLOTS, EQUIP_SLOTS, type ItemSnap } from "@rustcraft/shared";
 
-export type Container = "inventory" | "hotbar";
+export type Container = "inventory" | "hotbar" | "equip";
+
+export { EQUIP_SLOTS };
 
 export interface InvItem {
   container: Container;
@@ -11,7 +13,9 @@ export interface InvItem {
 }
 
 function slotCount(container: Container): number {
-  return container === "inventory" ? INVENTORY_SLOTS : HOTBAR_SLOTS;
+  if (container === "inventory") return INVENTORY_SLOTS;
+  if (container === "hotbar") return HOTBAR_SLOTS;
+  return EQUIP_SLOTS.length;
 }
 
 export function findItem(items: InvItem[], container: Container, slot: number): InvItem | undefined {
@@ -107,6 +111,8 @@ export function moveItem(
   if (toSlot >= slotCount(toContainer) || fromSlot >= slotCount(fromContainer)) return false;
   const from = findItem(items, fromContainer, fromSlot);
   if (!from) return false;
+  // Equip slots only accept gear matching that slot (weapon/head/chest).
+  if (toContainer === "equip" && itemDef(from.itemId).slot !== EQUIP_SLOTS[toSlot]) return false;
   const to = findItem(items, toContainer, toSlot);
 
   if (to && to.itemId === from.itemId) {

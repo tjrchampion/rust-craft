@@ -20,9 +20,110 @@ const SKELETON_MODELS: Record<string, string> = {
   skeleton_mage: "/assets/models/Skeleton_Mage.glb",
 };
 
+const CREATURES_DIR = "/assets/models/creatures";
+
+/** Quadruped wildlife rig (alpaca, bull, fox, stag). */
+const QUADRUPED_ANIMS: AnimSpec = {
+  idle: ["Idle"],
+  walk: ["Walk"],
+  run: ["Gallop"],
+  attack: ["Attack_Kick", "Attack_Headbutt"],
+  gather: ["Eating"],
+  cast: ["Idle"],
+  dead: ["Death"],
+};
+
+/** Flying/hovering rig (demon, dragon, ghost, ooze, golem, tribal shaman). */
+const FLYER_ANIMS: AnimSpec = {
+  idle: ["Flying_Idle"],
+  walk: ["Flying_Idle"],
+  run: ["Fast_Flying"],
+  attack: ["Punch", "Headbutt"],
+  gather: ["Flying_Idle"],
+  cast: ["Flying_Idle"],
+  dead: ["Death"],
+};
+
+/** Biped raider rig (orc, yeti, demon-alt, frog). */
+const BIPED_ANIMS: AnimSpec = {
+  idle: ["Idle"],
+  walk: ["Walk"],
+  run: ["Run"],
+  attack: ["Punch"],
+  gather: ["Idle"],
+  cast: ["Idle"],
+  dead: ["Death"],
+};
+
+/** Simpler biped rig, no dedicated attack clip (goblin, giant). */
+const SIMPLE_ANIMS: AnimSpec = {
+  idle: ["Idle"],
+  walk: ["Walk"],
+  run: ["Run"],
+  attack: ["Attack"],
+  gather: ["Idle"],
+  cast: ["Idle"],
+  dead: ["Death"],
+};
+
+const ORCENEMY_ANIMS: AnimSpec = {
+  idle: ["Idle"],
+  walk: ["Walk"],
+  run: ["Walk"],
+  attack: ["Bite_Front"],
+  gather: ["Idle"],
+  cast: ["Idle"],
+  dead: ["Death"],
+};
+
+const SPIDER_ANIMS: AnimSpec = {
+  idle: ["Spider_Idle"],
+  walk: ["Spider_Walk"],
+  run: ["Spider_Walk"],
+  attack: ["Spider_Attack"],
+  gather: ["Spider_Idle"],
+  cast: ["Spider_Idle"],
+  dead: ["Spider_Death"],
+};
+
+const VELOCIRAPTOR_ANIMS: AnimSpec = {
+  idle: ["Velociraptor_Idle"],
+  walk: ["Velociraptor_Walk"],
+  run: ["Velociraptor_Run"],
+  attack: ["Velociraptor_Attack"],
+  gather: ["Velociraptor_Idle"],
+  cast: ["Velociraptor_Idle"],
+  dead: ["Velociraptor_Death"],
+};
+
+const CREATURE_MODELS: Record<string, { url: string; anims: AnimSpec }> = {
+  fox: { url: `${CREATURES_DIR}/fox.glb`, anims: QUADRUPED_ANIMS },
+  stag: { url: `${CREATURES_DIR}/stag.glb`, anims: QUADRUPED_ANIMS },
+  alpaca: { url: `${CREATURES_DIR}/alpaca.glb`, anims: QUADRUPED_ANIMS },
+  bull: { url: `${CREATURES_DIR}/bull.glb`, anims: QUADRUPED_ANIMS },
+  spider: { url: `${CREATURES_DIR}/spider.glb`, anims: SPIDER_ANIMS },
+  velociraptor: { url: `${CREATURES_DIR}/velociraptor.glb`, anims: VELOCIRAPTOR_ANIMS },
+  goblin: { url: `${CREATURES_DIR}/goblin.glb`, anims: SIMPLE_ANIMS },
+  giant: { url: `${CREATURES_DIR}/giant.glb`, anims: SIMPLE_ANIMS },
+  orc: { url: `${CREATURES_DIR}/orc.glb`, anims: BIPED_ANIMS },
+  orcenemy: { url: `${CREATURES_DIR}/orcenemy.glb`, anims: ORCENEMY_ANIMS },
+  yeti: { url: `${CREATURES_DIR}/yeti.glb`, anims: SIMPLE_ANIMS },
+  yetialt: { url: `${CREATURES_DIR}/yetialt.glb`, anims: BIPED_ANIMS },
+  frog: { url: `${CREATURES_DIR}/frog.glb`, anims: BIPED_ANIMS },
+  demonalt: { url: `${CREATURES_DIR}/demonalt.glb`, anims: BIPED_ANIMS },
+  demon: { url: `${CREATURES_DIR}/demon.glb`, anims: FLYER_ANIMS },
+  dragon: { url: `${CREATURES_DIR}/dragonevolved.glb`, anims: FLYER_ANIMS },
+  ghost: { url: `${CREATURES_DIR}/ghost.glb`, anims: FLYER_ANIMS },
+  ooze: { url: `${CREATURES_DIR}/glubevolved.glb`, anims: FLYER_ANIMS },
+  golem: { url: `${CREATURES_DIR}/golelingevolved.glb`, anims: FLYER_ANIMS },
+  tribal: { url: `${CREATURES_DIR}/tribal.glb`, anims: FLYER_ANIMS },
+};
+
 /** Resolve a mob-render `model` key to a GLB url + animation set. */
 export function mobModelSpec(model: string): { url: string; anims: AnimSpec } {
   if (model === "wolf") return { url: WOLF_MODEL, anims: WOLF_ANIMS };
+  const creature = CREATURE_MODELS[model];
+  if (creature) return creature;
   const url = SKELETON_MODELS[model] ?? SKELETON_MODELS.skeleton_minion!;
   return { url, anims: PLAYER_ANIMS };
 }

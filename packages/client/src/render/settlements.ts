@@ -1,16 +1,6 @@
 import * as THREE from "three";
 import { GLTFLoader, type GLTF } from "three/examples/jsm/loaders/GLTFLoader.js";
-import {
-  generateVillages,
-  generatePois,
-  generateBridges,
-  mulberry32,
-  hashString,
-  terrainHeight,
-  BRIDGE_SPAN,
-  BRIDGE_DECK_HALF_WIDTH,
-  type BridgeSpec,
-} from "@rustcraft/shared";
+import { generateVillages, generatePois, mulberry32, hashString, terrainHeight } from "@rustcraft/shared";
 import { buildShrine, buildStump, buildCampfire, buildNameplate, buildRock } from "./models";
 
 const loader = new GLTFLoader();
@@ -123,47 +113,6 @@ async function placeProp(
   }
 }
 
-/**
- * A bridge deck tiles several copies of the (small, single-hex-tile) bridge
- * piece end-to-end across the span, rather than stretching one copy ~8x —
- * uniform-scaling a single tile up to river width also blew up its vertical
- * dimension, leaving the deck floating high above the water. Each tile's
- * local origin is the walkable deck plane, so no ground/bbox offset is used;
- * this also matches the height stepMovement uses for the same span.
- */
-async function placeBridge(scene: THREE.Scene, spec: BridgeSpec): Promise<void> {
-  try {
-    const gltf = await loadProp(`building_${spec.type}`);
-    const probe = gltf.scene.clone(true);
-    const bbox = new THREE.Box3().setFromObject(probe);
-    const size = new THREE.Vector3();
-    bbox.getSize(size);
-
-    const deckWidthTarget = BRIDGE_DECK_HALF_WIDTH * 2;
-    const widthAxis = Math.min(size.x, size.z) || 1;
-    const spanAxis = Math.max(size.x, size.z) || 1;
-    const scale = deckWidthTarget / widthAxis;
-    const tileLength = spanAxis * scale;
-    const tilesNeeded = Math.max(1, Math.ceil(BRIDGE_SPAN / tileLength));
-
-    const forwardX = Math.sin(spec.yaw);
-    const forwardZ = Math.cos(spec.yaw);
-    for (let i = 0; i < tilesNeeded; i++) {
-      const offset = (i - (tilesNeeded - 1) / 2) * tileLength;
-      const model = i === 0 ? probe : gltf.scene.clone(true);
-      model.scale.setScalar(scale);
-      model.position.set(spec.x + forwardX * offset, spec.y, spec.z + forwardZ * offset);
-      model.rotation.y = spec.yaw;
-      model.traverse((o) => {
-        if ((o as THREE.Mesh).isMesh) o.castShadow = true;
-      });
-      scene.add(model);
-    }
-  } catch (err) {
-    console.warn(`[settlements] failed to load bridge '${spec.type}'`, err);
-  }
-}
-
 /** Deterministic clutter + a fence perimeter that makes a village feel lived-in. */
 function scatterVillageClutter(
   scene: THREE.Scene,
@@ -236,7 +185,7 @@ export function buildVillage(
   }
 }
 
-/** Ruins, shrines, camps, the watchtower and every bridge — modest in count,
+/** Ruins, shrines, camps, and the watchtower — modest in count,
  *  so these stay eager rather than being streamed per-zone like villages. */
 export function buildWorldStatic(scene: THREE.Scene, withSigns = true): SettlementHandles {
   const shrines: { id: string; x: number; y: number; z: number }[] = [];
@@ -278,10 +227,6 @@ export function buildWorldStatic(scene: THREE.Scene, withSigns = true): Settleme
       sign.position.set(poi.x, poi.y + 18, poi.z);
       scene.add(sign);
     }
-  }
-
-  for (const bridge of generateBridges()) {
-    void placeBridge(scene, bridge);
   }
 
   return { shrines, crystals };

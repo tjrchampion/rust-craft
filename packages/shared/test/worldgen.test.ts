@@ -179,14 +179,12 @@ describe("rivers", () => {
     expect(a.length).toBeGreaterThan(5);
   });
 
-  it("carves a trench below the natural land height near a river", () => {
+  it("no longer carves the terrain — rivers are rendering-free, placement-avoidance data only", () => {
     const rivers = generateRivers();
     const mid = rivers[Math.floor(rivers.length / 2)]!;
     const x = (mid.ax + mid.bx) / 2;
     const z = (mid.az + mid.bz) / 2;
-    // Skip if this sample happens to fall on the protected spawn plateau.
-    if (Math.hypot(x, z) < 35) return;
-    expect(terrainHeight(x, z)).toBeLessThan(terrainHeightBeforeRivers(x, z));
+    expect(terrainHeight(x, z)).toBe(terrainHeightBeforeRivers(x, z));
   });
 
   it("villages and POIs keep clear of river channels", () => {

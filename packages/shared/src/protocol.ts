@@ -40,15 +40,15 @@ export const CraftMsg = z.object({
 
 export const ConsumeMsg = z.object({
   t: z.literal("consume"),
-  container: z.enum(["inventory", "hotbar"]),
+  container: z.enum(["inventory", "hotbar", "equip"]),
   slot: z.number().int().min(0).max(31),
 });
 
 export const MoveItemMsg = z.object({
   t: z.literal("moveItem"),
-  fromContainer: z.enum(["inventory", "hotbar"]),
+  fromContainer: z.enum(["inventory", "hotbar", "equip"]),
   fromSlot: z.number().int().min(0).max(31),
-  toContainer: z.enum(["inventory", "hotbar"]),
+  toContainer: z.enum(["inventory", "hotbar", "equip"]),
   toSlot: z.number().int().min(0).max(31),
 });
 
@@ -59,7 +59,7 @@ export const SelectSlotMsg = z.object({
 
 export const PlaceMsg = z.object({
   t: z.literal("place"),
-  container: z.enum(["inventory", "hotbar"]),
+  container: z.enum(["inventory", "hotbar", "equip"]),
   slot: z.number().int().min(0).max(31),
 });
 
@@ -118,6 +118,7 @@ export type AnimState = "idle" | "run" | "swim" | "attack" | "gather" | "cast" |
 export interface PlayerSnap {
   id: string; // character id
   name: string;
+  classId: string;
   x: number;
   y: number;
   z: number;
@@ -208,7 +209,7 @@ export interface QuestLogEntry {
 }
 
 export interface ItemSnap {
-  container: "inventory" | "hotbar";
+  container: "inventory" | "hotbar" | "equip";
   slot: number;
   itemId: string;
   qty: number;
@@ -235,6 +236,7 @@ export interface SelfState {
   castingSpell: string | null;
   castEndsAt: number | null; // server time ms
   mount: "horse" | "raft" | null;
+  auras: { auraId: string; expiresAt: number }[];
 }
 
 export type ServerMsg =
@@ -242,6 +244,7 @@ export type ServerMsg =
       t: "welcome";
       selfId: string;
       name: string;
+      classId: string;
       self: SelfState;
       inventory: ItemSnap[];
       learnedSpells: string[];

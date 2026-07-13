@@ -2,6 +2,7 @@
   import { game } from "./gameState.svelte";
   import { getGame } from "../game/instance";
   import { itemIcon, mobIcon } from "./icons";
+  import IconGlyph from "./IconGlyph.svelte";
   import { itemDef, mobDef, TIER_NAMES } from "@rustcraft/shared";
   import type { QuestOfferInfo } from "@rustcraft/shared";
 
@@ -46,7 +47,7 @@
           </div>
           <div class="desc">{o.description}</div>
           <div class="objective">
-            <span class="obj-icon">{objectiveIcon(o)}</span>
+            <span class="obj-icon"><IconGlyph value={objectiveIcon(o)} size={16} /></span>
             {objectiveText(o)}
             {#if o.status === "active" || o.status === "complete"}
               <span class="progress">({o.progress}/{o.objectiveCount})</span>
@@ -55,7 +56,7 @@
           <div class="rewards">
             <span class="reward-xp">+{o.rewardXp} XP</span>
             {#each o.rewardItems as r (r.itemId)}
-              <span class="reward-item">{itemIcon(r.itemId)}{r.qty}</span>
+              <span class="reward-item"><IconGlyph value={itemIcon(r.itemId)} size={14} />{r.qty}</span>
             {/each}
           </div>
 
@@ -155,6 +156,8 @@
     margin-bottom: 6px;
   }
   .obj-icon {
+    display: inline-flex;
+    vertical-align: middle;
     margin-right: 4px;
   }
   .progress {
@@ -174,6 +177,9 @@
     font-weight: 700;
   }
   .reward-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
     color: var(--rc-ink-dim);
   }
   .in-progress {

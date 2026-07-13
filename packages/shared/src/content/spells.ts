@@ -1,12 +1,35 @@
+export type DamageType = "physical" | "fire" | "frost" | "holy" | "nature";
+export type SpellTargetKind = "projectile" | "melee" | "self";
+
+export interface SpellTargeting {
+  kind: SpellTargetKind;
+  range: number;
+  /** Projectile only: travel speed before the homing curve-in kicks in. */
+  projectileSpeed?: number;
+}
+
+export interface SpellEffect {
+  type: "damage" | "heal" | "applyAura";
+  /** damage/heal: flat + (casterPower * powerScale). */
+  base?: number;
+  powerScale?: number;
+  damageType?: DamageType;
+  /** applyAura: which aura def (see content/auras.ts) this effect applies. */
+  auraId?: string;
+  /** Who the effect lands on. Defaults to "target" for projectile/melee, "caster" for self. */
+  landsOn?: "caster" | "target";
+}
+
 export interface SpellDef {
   id: string;
   name: string;
   castTimeS: number;
-  manaCost: number;
+  /** Deducted from the caster's resource pool (still `mana` on the wire —
+   *  class.resourceLabel is purely a display flavor: Mana/Stamina/Energy). */
+  resourceCost: number;
   cooldownS: number;
-  range: number;
-  damage: number;
-  projectileSpeed: number;
+  targeting: SpellTargeting;
+  effects: SpellEffect[];
 }
 
 export const SPELLS: Record<string, SpellDef> = {
@@ -14,11 +37,82 @@ export const SPELLS: Record<string, SpellDef> = {
     id: "firebolt",
     name: "Firebolt",
     castTimeS: 1.2,
-    manaCost: 25,
+    resourceCost: 25,
     cooldownS: 3,
-    range: 30,
-    damage: 32,
-    projectileSpeed: 26,
+    targeting: { kind: "projectile", range: 30, projectileSpeed: 26 },
+    effects: [{ type: "damage", base: 10, powerScale: 2.2, damageType: "fire" }],
+  },
+  frostbolt: {
+    id: "frostbolt",
+    name: "Frostbolt",
+    castTimeS: 1.4,
+    resourceCost: 20,
+    cooldownS: 4,
+    targeting: { kind: "projectile", range: 28, projectileSpeed: 22 },
+    effects: [
+      { type: "damage", base: 6, powerScale: 1.6, damageType: "frost" },
+      { type: "applyAura", auraId: "chilled" },
+    ],
+  },
+  rend: {
+    id: "rend",
+    name: "Rend",
+    castTimeS: 0,
+    resourceCost: 15,
+    cooldownS: 6,
+    targeting: { kind: "melee", range: 2.6 },
+    effects: [
+      { type: "damage", base: 4, powerScale: 0.8, damageType: "physical" },
+      { type: "applyAura", auraId: "bleeding" },
+    ],
+  },
+  charge: {
+    id: "charge",
+    name: "Battle Fury",
+    castTimeS: 0,
+    resourceCost: 20,
+    cooldownS: 12,
+    targeting: { kind: "self", range: 0 },
+    effects: [{ type: "applyAura", auraId: "battle_fury", landsOn: "caster" }],
+  },
+  backstab: {
+    id: "backstab",
+    name: "Backstab",
+    castTimeS: 0,
+    resourceCost: 18,
+    cooldownS: 5,
+    targeting: { kind: "melee", range: 2.2 },
+    effects: [{ type: "damage", base: 8, powerScale: 2.6, damageType: "physical" }],
+  },
+  poison_strike: {
+    id: "poison_strike",
+    name: "Poison Strike",
+    castTimeS: 0,
+    resourceCost: 15,
+    cooldownS: 6,
+    targeting: { kind: "melee", range: 2.2 },
+    effects: [
+      { type: "damage", base: 3, powerScale: 0.7, damageType: "physical" },
+      { type: "applyAura", auraId: "poisoned" },
+    ],
+  },
+  heal: {
+    id: "heal",
+    name: "Heal",
+    castTimeS: 1.5,
+    resourceCost: 30,
+    cooldownS: 4,
+    targeting: { kind: "self", range: 0 },
+    effects: [{ type: "heal", base: 10, powerScale: 2.4, landsOn: "caster" }],
+  },
+  smite: {
+    id: "smite",
+    name: "Smite",
+    castTimeS: 1,
+    resourceCost: 22,
+    cooldownS: 3,
+    targeting: { kind: "projectile", range: 26, projectileSpeed: 30 },
+    effects: [{ type: "damage", base: 9, powerScale: 1.9, damageType: "holy" }],
   },
 };
 

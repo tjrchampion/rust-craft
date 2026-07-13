@@ -17,7 +17,8 @@ export interface FrameActions {
   /** Edge-triggered (true on the frame they fire). */
   interactPressed: boolean;
   attackPressed: boolean;
-  castPressed: boolean;
+  /** Index into learnedSpells the player wants to cast this frame, or null. */
+  castSlot: number | null;
   inventoryPressed: boolean;
   chatPressed: boolean;
   respawnPressed: boolean;
@@ -148,7 +149,11 @@ export class InputManager {
     const pressed = (code: string) => this.pressedQueue.has(code);
     let interactPressed = pressed("KeyE");
     let attackPressed = this.mouseAttackQueued || pressed("KeyF");
-    let castPressed = pressed("KeyQ");
+    let castSlot: number | null = null;
+    if (pressed("KeyQ")) castSlot = 0;
+    else if (pressed("KeyZ")) castSlot = 1;
+    else if (pressed("KeyX")) castSlot = 2;
+    else if (pressed("KeyC")) castSlot = 3;
     let inventoryPressed = pressed("Tab") || pressed("KeyI");
     const chatPressed = pressed("Enter");
     let respawnPressed = pressed("KeyR");
@@ -196,7 +201,7 @@ export class InputManager {
 
       interactPressed ||= padPressed(2); // X / Square
       attackPressed ||= padPressed(7) || padPressed(5); // RT or RB
-      castPressed ||= padPressed(3); // Y / Triangle
+      if (castSlot === null && padPressed(3)) castSlot = 0; // Y / Triangle: primary spell
       inventoryPressed ||= padPressed(9); // Start
       respawnPressed ||= padPressed(0);
       mountPressed ||= padPressed(8); // Back/Select: toggle mount
@@ -231,7 +236,7 @@ export class InputManager {
       jump = false;
       sprint = false;
       attackPressed = false;
-      castPressed = false;
+      castSlot = null;
       interactPressed = false;
       targetPressed = false;
       hotbarDelta = 0;
@@ -247,7 +252,7 @@ export class InputManager {
       sprint,
       interactPressed,
       attackPressed,
-      castPressed,
+      castSlot,
       inventoryPressed,
       chatPressed,
       respawnPressed,

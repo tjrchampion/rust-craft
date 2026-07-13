@@ -43,6 +43,13 @@ import {
   questDef,
   questsForVillage,
   QUEST_IDS,
+  classDef,
+  computeActorStats,
+  armorMitigation,
+  applyAura,
+  expireAuras,
+  aggregateAuraModifiers,
+  collectDueTicks,
   type ClientMsg,
   type ServerMsg,
   type MoveState,
@@ -58,10 +65,16 @@ import {
   type QuestOfferInfo,
   type QuestLogEntry,
   type QuestStatus,
+  type ClassId,
+  type BaseStats,
+  type SpellEffect,
+  type SpellDef,
+  type ActiveAura,
   ClientMsg as ClientMsgSchema,
 } from "@rustcraft/shared";
 import {
   type InvItem,
+  type Container,
   addItem,
   removeItem,
   decrementSlot,
@@ -69,6 +82,7 @@ import {
   moveItem,
   damageDurability,
   toSnaps,
+  EQUIP_SLOTS,
 } from "./inventory";
 import {
   loadPlayer,
@@ -112,6 +126,7 @@ interface PlayerState {
   peer: PeerLike;
   move: MoveState;
   yaw: number;
+  classId: ClassId;
   hp: number;
   mana: number;
   hunger: number;
@@ -138,6 +153,7 @@ interface PlayerState {
   partyId: string | null;
   pendingInviteFrom: string | null; // inviter character id
   questProgress: Map<string, { status: "active" | "completed"; progress: number }>;
+  activeAuras: ActiveAura[];
 }
 
 interface MobState {
@@ -157,6 +173,7 @@ interface MobState {
   wanderTz: number;
   nextWanderAt: number;
   actionAnimUntil: number;
+  activeAuras: ActiveAura[];
 }
 
 interface Projectile {
@@ -171,7 +188,7 @@ interface Projectile {
   dz: number;
   traveled: number;
   maxRange: number;
-  damage: number;
+  effects: SpellEffect[];
   speed: number;
   /** Homing target: a mob id or a (pvp) player id, or null for a straight shot. */
   homingId: string | null;
@@ -222,6 +239,7 @@ export class GameServer {
         wanderTz: spawn.z,
         nextWanderAt: 0,
         actionAnimUntil: 0,
+        activeAuras: [],
       });
     }
 
@@ -278,6 +296,7 @@ export class GameServer {
       peer,
       move: { x, y, z, vy: 0, grounded: true },
       yaw: persisted.yaw,
+      classId: (persisted.classId as ClassId) ?? "warrior",
       hp: persisted.hp,
       mana: persisted.mana,
       hunger: persisted.hunger,
@@ -304,6 +323,7 @@ export class GameServer {
       partyId: null,
       pendingInviteFrom: null,
       questProgress: new Map(persisted.questProgress.map((q) => [q.questId, { status: q.status, progress: q.progress }])),
+      activeAuras: [],
     };
 
     this.players.set(player.id, player);
@@ -313,6 +333,7 @@ export class GameServer {
       t: "welcome",
       selfId: player.id,
       name: player.name,
+      classId: player.classId,
       self: this.selfState(player),
       inventory: toSnaps(player.inventory),
       learnedSpells: player.learnedSpells,
@@ -649,11 +670,18 @@ export class GameServer {
       return;
     }
     player.shrineCooldowns.set(shrineId, now + 5 * 60 * 1000);
+    const healedFor = this.maxHp(player) - player.hp;
     player.hp = this.maxHp(player);
     player.mana = this.maxMana(player);
     player.dirty = true;
     this.setActionAnim(player, "cast", 900);
-    this.sendEvent(player, { t: "event", kind: "heal", amount: player.hp, targetId: player.id });
+    this.sendEvent(player, {
+      t: "event",
+      kind: "heal",
+      amount: healedFor,
+      targetId: player.id,
+      spellId: "shrine",
+    });
     this.sendSelf(player);
   }
 
@@ -912,48 +940,7 @@ export class GameServer {
     const held = this.heldItem(player);
     const damage = held ? (itemDef(held.itemId).damage ?? UNARMED_DAMAGE) : UNARMED_DAMAGE;
 
-    const inCone = (tx: number, tz: number) => {
-      const angleTo = Math.atan2(tx - player.move.x, tz - player.move.z);
-      return Math.abs(wrapAngle(angleTo - player.yaw)) <= Math.PI * 0.6;
-    };
-
-    // Nearest living mob within range and roughly in front.
-    let bestMob: MobState | null = null;
-    let bestDist = Infinity;
-    for (const mob of this.mobs.values()) {
-      if (mob.respawnAt !== null) continue;
-      const d = dist3D(player.move.x, player.move.y, player.move.z, mob.x, mob.y, mob.z);
-      if (d > MELEE_RANGE + 0.6) continue;
-      if (!inCone(mob.x, mob.z)) continue;
-      if (d < bestDist) {
-        bestMob = mob;
-        bestDist = d;
-      }
-    }
-
-    // PvP: flagged players can strike other flagged players.
-    let bestFoe: PlayerState | null = null;
-    if (player.pvp) {
-      for (const other of this.players.values()) {
-        if (other.id === player.id || other.dead || !other.pvp) continue;
-        const d = dist3D(
-          player.move.x,
-          player.move.y,
-          player.move.z,
-          other.move.x,
-          other.move.y,
-          other.move.z,
-        );
-        if (d > MELEE_RANGE + 0.6) continue;
-        if (!inCone(other.move.x, other.move.z)) continue;
-        if (d < bestDist) {
-          bestFoe = other;
-          bestDist = d;
-          bestMob = null;
-        }
-      }
-    }
-
+    const { mob: bestMob, foe: bestFoe } = this.findMeleeTarget(player, MELEE_RANGE);
     if (!bestMob && !bestFoe) return;
     if (held && itemDef(held.itemId).maxDurability) damageDurability(player.inventory, held, 1);
     if (bestFoe) this.damagePlayer(bestFoe, damage, player.id);
@@ -970,8 +957,13 @@ export class GameServer {
     const spell = spellDef(spellId);
     const now = Date.now();
     if (now < (player.spellCooldowns.get(spellId) ?? 0)) return;
-    if (player.mana < spell.manaCost) {
-      this.sendEvent(player, { t: "event", kind: "error", message: "Not enough mana" });
+    if (player.mana < spell.resourceCost) {
+      this.sendEvent(player, { t: "event", kind: "error", message: "Not enough resource" });
+      return;
+    }
+    // Instant spells (melee/self abilities) resolve immediately -- no cast bar.
+    if (spell.castTimeS <= 0) {
+      this.resolveSpell(player, spell);
       return;
     }
     player.casting = {
@@ -1000,16 +992,35 @@ export class GameServer {
   private finishCast(player: PlayerState): void {
     const casting = player.casting!;
     player.casting = null;
-    const spell = spellDef(casting.spellId);
-    player.mana = clamp(player.mana - spell.manaCost, 0, this.maxMana(player));
+    this.resolveSpell(player, spellDef(casting.spellId));
+  }
+
+  /** Deduct cost/cooldown, then resolve the spell per its targeting kind. */
+  private resolveSpell(player: PlayerState, spell: SpellDef): void {
+    player.mana = clamp(player.mana - spell.resourceCost, 0, this.maxMana(player));
     player.spellCooldowns.set(spell.id, Date.now() + spell.cooldownS * 1000);
     player.dirty = true;
 
+    if (spell.targeting.kind === "self") {
+      this.applySpellEffects(player, null, spell.effects);
+      this.sendSelf(player);
+      return;
+    }
+
+    if (spell.targeting.kind === "melee") {
+      const target = this.findMeleeTarget(player, spell.targeting.range);
+      if (target.mob || target.foe) this.applySpellEffects(player, target, spell.effects);
+      this.sendSelf(player);
+      return;
+    }
+
+    // Projectile: spawn a homing bolt; effects resolve on hit in tickProjectiles.
     const id = `p${++this.projectileSeq}`;
     const dx = Math.sin(player.yaw);
     const dz = Math.cos(player.yaw);
+    const range = spell.targeting.range;
     // Lock onto the nearest enemy roughly ahead so loose aim still connects.
-    const homingId = this.acquireHomingTarget(player, spell.range);
+    const homingId = this.acquireHomingTarget(player, range);
     this.projectiles.set(id, {
       id,
       spellId: spell.id,
@@ -1022,9 +1033,9 @@ export class GameServer {
       dz,
       traveled: 0,
       // A curving path is longer than a straight one — give homing shots slack.
-      maxRange: homingId ? spell.range * 1.7 : spell.range,
-      damage: spell.damage,
-      speed: spell.projectileSpeed,
+      maxRange: homingId ? range * 1.7 : range,
+      effects: spell.effects,
+      speed: spell.targeting.projectileSpeed ?? 24,
       homingId,
     });
     this.sendSelf(player);
@@ -1246,8 +1257,11 @@ export class GameServer {
     this.sendSelf(player);
   }
 
-  private damagePlayer(player: PlayerState, amount: number, sourceId: string): void {
+  private damagePlayer(player: PlayerState, rawAmount: number, sourceId: string): void {
     if (player.dead) return;
+    // Single choke point for all incoming damage (melee, mob attacks, spells,
+    // aura DoTs) so equipped armor passively mitigates everything uniformly.
+    const amount = rawAmount * armorMitigation(this.computeStats(player).armor);
     this.dismountForCombat(player);
     player.hp -= amount;
     player.dirty = true;
@@ -1287,6 +1301,7 @@ export class GameServer {
     for (const player of this.players.values()) {
       this.tickPlayerMovement(player);
       this.tickVitals(player, now);
+      this.tickPlayerAuras(player, now);
       if (player.casting) {
         const movedFar =
           dist2D(player.move.x, player.move.z, player.casting.startX, player.casting.startZ) > 0.6;
@@ -1399,7 +1414,7 @@ export class GameServer {
       for (const mob of this.mobs.values()) {
         if (mob.respawnAt !== null) continue;
         if (dist3D(proj.x, proj.y, proj.z, mob.x, mob.y + 0.8, mob.z) < 1.7) {
-          if (owner) this.damageMob(mob, proj.damage, owner);
+          if (owner) this.applySpellEffects(owner, { mob, foe: null }, proj.effects);
           this.broadcastNear(proj.x, proj.z, {
             t: "event",
             kind: "spellHit",
@@ -1417,7 +1432,7 @@ export class GameServer {
         for (const other of this.players.values()) {
           if (other.id === proj.ownerId || other.dead || !other.pvp) continue;
           if (dist3D(proj.x, proj.y, proj.z, other.move.x, other.move.y + 1.2, other.move.z) < 1.7) {
-            this.damagePlayer(other, proj.damage, proj.ownerId);
+            if (owner) this.applySpellEffects(owner, { mob: null, foe: other }, proj.effects);
             this.broadcastNear(proj.x, proj.z, {
               t: "event",
               kind: "spellHit",
@@ -1446,6 +1461,7 @@ export class GameServer {
         if (now >= mob.respawnAt) {
           mob.respawnAt = null;
           mob.hp = def.maxHp;
+          mob.activeAuras = [];
           mob.x = mob.homeX;
           mob.z = mob.homeZ;
           mob.y = terrainHeight(mob.x, mob.z);
@@ -1453,6 +1469,9 @@ export class GameServer {
         }
         continue;
       }
+
+      this.tickMobAuras(mob, now);
+      if (mob.respawnAt !== null) continue; // an aura DoT may have just killed it
 
       const distHome = dist2D(mob.x, mob.z, mob.homeX, mob.homeZ);
 
@@ -1549,12 +1568,132 @@ export class GameServer {
     if (this.timeOffset < 0) this.timeOffset += 1;
   }
 
+  /** The dynamic stat calculation engine: base (from class) + level growth +
+   *  equipped gear + active auras, recomputed on demand -- nothing here is
+   *  ever persisted. */
+  private computeStats(player: PlayerState) {
+    const gearMods = EQUIP_SLOTS.map((_, slot) => findItem(player.inventory, "equip", slot))
+      .filter((it): it is InvItem => !!it)
+      .map((it) => itemDef(it.itemId).statModifiers ?? {});
+    const auraMods = aggregateAuraModifiers(player.activeAuras);
+    return computeActorStats(classDef(player.classId).baseStats, player.level, gearMods, auraMods);
+  }
+
   private maxHp(player: PlayerState): number {
-    return BASE_MAX_HP + HP_PER_LEVEL * (player.level - 1);
+    return this.computeStats(player).maxHp;
   }
 
   private maxMana(player: PlayerState): number {
-    return BASE_MAX_MANA + MANA_PER_LEVEL * (player.level - 1);
+    return this.computeStats(player).maxMana;
+  }
+
+  /** Expire auras and resolve any due periodic ticks (DoT/HoT) for a player. */
+  private tickPlayerAuras(player: PlayerState, now: number): void {
+    player.activeAuras = expireAuras(player.activeAuras, now);
+    const due = collectDueTicks(player.activeAuras, now);
+    if (due.length === 0) return;
+    const stats = this.computeStats(player);
+    for (const { tick } of due) {
+      const amount = (tick.base ?? 0) + stats.power * (tick.powerScale ?? 0);
+      if (tick.type === "damage") this.damagePlayer(player, amount, "aura");
+      else player.hp = Math.min(this.maxHp(player), player.hp + amount);
+    }
+    player.dirty = true;
+    this.sendSelf(player);
+  }
+
+  /** Expire auras and resolve any due periodic ticks (DoT) for a mob, crediting the aura's source. */
+  private tickMobAuras(mob: MobState, now: number): void {
+    mob.activeAuras = expireAuras(mob.activeAuras, now);
+    const due = collectDueTicks(mob.activeAuras, now);
+    for (const { tick, aura } of due) {
+      if (tick.type !== "damage") continue;
+      const attacker = this.players.get(aura.sourceId);
+      if (attacker) this.damageMob(mob, tick.base ?? 0, attacker);
+    }
+  }
+
+  /** Nearest valid melee-range target (mob, or a flagged pvp foe) in a forward cone. */
+  private findMeleeTarget(
+    player: PlayerState,
+    range: number,
+  ): { mob: MobState | null; foe: PlayerState | null } {
+    const inCone = (tx: number, tz: number) => {
+      const angleTo = Math.atan2(tx - player.move.x, tz - player.move.z);
+      return Math.abs(wrapAngle(angleTo - player.yaw)) <= Math.PI * 0.6;
+    };
+    let bestMob: MobState | null = null;
+    let bestFoe: PlayerState | null = null;
+    let bestDist = Infinity;
+    for (const mob of this.mobs.values()) {
+      if (mob.respawnAt !== null) continue;
+      const d = dist3D(player.move.x, player.move.y, player.move.z, mob.x, mob.y, mob.z);
+      if (d > range + 0.6 || !inCone(mob.x, mob.z)) continue;
+      if (d < bestDist) {
+        bestMob = mob;
+        bestFoe = null;
+        bestDist = d;
+      }
+    }
+    if (player.pvp) {
+      for (const other of this.players.values()) {
+        if (other.id === player.id || other.dead || !other.pvp) continue;
+        const d = dist3D(player.move.x, player.move.y, player.move.z, other.move.x, other.move.y, other.move.z);
+        if (d > range + 0.6 || !inCone(other.move.x, other.move.z)) continue;
+        if (d < bestDist) {
+          bestFoe = other;
+          bestMob = null;
+          bestDist = d;
+        }
+      }
+    }
+    return { mob: bestMob, foe: bestFoe };
+  }
+
+  /** Resolve a spell's effect payload array against a resolved target (or null for self-only spells). */
+  private applySpellEffects(
+    caster: PlayerState,
+    target: { mob: MobState | null; foe: PlayerState | null } | null,
+    effects: SpellEffect[],
+  ): void {
+    const stats = this.computeStats(caster);
+    const now = Date.now();
+    for (const effect of effects) {
+      const landsOnCaster = effect.landsOn === "caster";
+      if (effect.type === "damage") {
+        if (landsOnCaster) continue; // damage always needs a real target
+        let amount = (effect.base ?? 0) + stats.power * (effect.powerScale ?? 0);
+        if (Math.random() < stats.critChance) amount *= 1.5;
+        if (target?.mob) this.damageMob(target.mob, amount, caster);
+        else if (target?.foe) this.damagePlayer(target.foe, amount, caster.id);
+      } else if (effect.type === "heal") {
+        const healTarget = landsOnCaster ? caster : (target?.foe ?? null);
+        if (!healTarget) continue;
+        const amount = (effect.base ?? 0) + stats.power * (effect.powerScale ?? 0);
+        healTarget.hp = Math.min(this.maxHp(healTarget), healTarget.hp + amount);
+        healTarget.dirty = true;
+        this.broadcastNear(healTarget.move.x, healTarget.move.z, {
+          t: "event",
+          kind: "heal",
+          sourceId: caster.id,
+          targetId: healTarget.id,
+          amount,
+          x: healTarget.move.x,
+          y: healTarget.move.y + 1.5,
+          z: healTarget.move.z,
+        });
+        if (healTarget !== caster) this.sendSelf(healTarget);
+      } else if (effect.type === "applyAura" && effect.auraId) {
+        if (landsOnCaster) {
+          caster.activeAuras = applyAura(caster.activeAuras, effect.auraId, caster.id, now);
+        } else if (target?.mob) {
+          target.mob.activeAuras = applyAura(target.mob.activeAuras, effect.auraId, caster.id, now);
+        } else if (target?.foe) {
+          target.foe.activeAuras = applyAura(target.foe.activeAuras, effect.auraId, caster.id, now);
+          this.sendSelf(target.foe);
+        }
+      }
+    }
   }
 
   private playerAnim(player: PlayerState): AnimState {
@@ -1587,6 +1726,7 @@ export class GameServer {
       castingSpell: player.casting?.spellId ?? null,
       castEndsAt: player.casting?.endsAt ?? null,
       mount: player.mount,
+      auras: player.activeAuras.map((a) => ({ auraId: a.auraId, expiresAt: a.expiresAt })),
     };
   }
 
@@ -1603,6 +1743,7 @@ export class GameServer {
         players.push({
           id: other.id,
           name: other.name,
+          classId: other.classId,
           x: other.move.x,
           y: other.move.y,
           z: other.move.z,
@@ -1719,6 +1860,7 @@ export class GameServer {
       id: player.id,
       accountId: player.accountId,
       name: player.name,
+      classId: player.classId,
       level: player.level,
       xp: player.xp,
       x: player.move.x,
@@ -1789,6 +1931,7 @@ export class GameServer {
       wanderTz: z,
       nextWanderAt: 0,
       actionAnimUntil: 0,
+      activeAuras: [],
     });
     return true;
   }

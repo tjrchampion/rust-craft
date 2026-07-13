@@ -1,11 +1,21 @@
-export type ItemType = "resource" | "tool" | "weapon" | "consumable" | "placeable" | "tome";
+import type { StatModifiers } from "../sim/actorStats";
+
+export type ItemType = "resource" | "tool" | "weapon" | "consumable" | "placeable" | "tome" | "gear";
+
+/** Equip-slot gear is a separate container from the hotbar (see protocol.ts's
+ *  container enum) — it feeds passive stat modifiers into the dynamic stat
+ *  calculation engine rather than being "held" for melee damage. */
+export type GearSlot = "weapon" | "head" | "chest";
+
+/** Fixed equip-slot indices -- slot 0 is always the weapon, etc. */
+export const EQUIP_SLOTS: GearSlot[] = ["weapon", "head", "chest"];
 
 export interface ItemDef {
   id: string;
   name: string;
   type: ItemType;
   stack: number;
-  /** Melee damage when held (tools double as weak weapons). */
+  /** Melee damage when held in the hotbar (tools double as weak weapons). */
   damage?: number;
   /** Gather effectiveness against node classes. */
   gatherPower?: { wood?: number; stone?: number };
@@ -16,6 +26,10 @@ export interface ItemDef {
   teachesSpell?: string;
   /** Placeable: structure type created. */
   placesStructure?: string;
+  /** Gear: which equip slot this occupies. */
+  slot?: GearSlot;
+  /** Gear: passive stat modifiers applied while equipped in `slot`. */
+  statModifiers?: StatModifiers;
 }
 
 export const ITEMS: Record<string, ItemDef> = {
@@ -111,6 +125,56 @@ export const ITEMS: Record<string, ItemDef> = {
     name: "Raft",
     type: "tool",
     stack: 1,
+  },
+
+  // Class starter gear -- equipped (not held), feeds passive stat modifiers.
+  iron_sword: {
+    id: "iron_sword",
+    name: "Iron Sword",
+    type: "gear",
+    stack: 1,
+    slot: "weapon",
+    statModifiers: { power: 3, agility: 1 },
+  },
+  apprentice_staff: {
+    id: "apprentice_staff",
+    name: "Apprentice Staff",
+    type: "gear",
+    stack: 1,
+    slot: "weapon",
+    statModifiers: { power: 4 },
+  },
+  twin_daggers: {
+    id: "twin_daggers",
+    name: "Twin Daggers",
+    type: "gear",
+    stack: 1,
+    slot: "weapon",
+    statModifiers: { agility: 4, critChance: 0.03 },
+  },
+  blessed_mace: {
+    id: "blessed_mace",
+    name: "Blessed Mace",
+    type: "gear",
+    stack: 1,
+    slot: "weapon",
+    statModifiers: { power: 3, vitality: 1 },
+  },
+  leather_armor: {
+    id: "leather_armor",
+    name: "Leather Armor",
+    type: "gear",
+    stack: 1,
+    slot: "chest",
+    statModifiers: { armor: 6, vitality: 1 },
+  },
+  cloth_robe: {
+    id: "cloth_robe",
+    name: "Cloth Robe",
+    type: "gear",
+    stack: 1,
+    slot: "chest",
+    statModifiers: { armor: 2, power: 2 },
   },
 };
 

@@ -6,17 +6,27 @@ const CLOUD_ALT = 95;
 const AREA = 760; // spread across and beyond the play area
 const DRIFT_SPEED = 1.4; // m/s
 
+// Unlit so clouds stay bright and consistent regardless of sun angle/fog,
+// instead of going grey and flat-looking under directional lighting.
+const CLOUD_MATERIAL = new THREE.MeshBasicMaterial({
+  color: 0xffffff,
+  transparent: true,
+  opacity: 0.95,
+  fog: true,
+});
+
 function buildCloudPuff(rng: () => number, scale: number): THREE.Group {
   const group = new THREE.Group();
-  const mat = new THREE.MeshLambertMaterial({ color: 0xf4f6fa, transparent: true, opacity: 0.92, fog: true });
   const puffCount = 4 + Math.floor(rng() * 4);
   for (let i = 0; i < puffCount; i++) {
     const r = 6 + rng() * 8;
-    const puff = new THREE.Mesh(new THREE.IcosahedronGeometry(r, 0), mat);
-    puff.position.set((rng() - 0.5) * 22, (rng() - 0.5) * 4, (rng() - 0.5) * 15);
+    const puff = new THREE.Mesh(new THREE.IcosahedronGeometry(r, 0), CLOUD_MATERIAL);
+    // Flattened vertically — real cumulus puffs read as wide and squat, not round.
+    puff.scale.set(1, 0.42, 1);
+    puff.position.set((rng() - 0.5) * 22, (rng() - 0.5) * 2, (rng() - 0.5) * 15);
     group.add(puff);
   }
-  group.scale.setScalar(scale);
+  group.scale.set(scale, scale * 0.7, scale);
   return group;
 }
 

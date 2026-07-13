@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { generateNodes, terrainHeight } from "@rustcraft/shared";
-import { buildTerrain, buildWater, buildRivers } from "./terrain";
+import { buildTerrain, buildWater } from "./terrain";
 import { buildRock, buildBerryBush, buildBiomeTree } from "./models";
 import { buildSettlements } from "./settlements";
 import { buildHorizonMountains } from "./horizon";
@@ -46,7 +46,6 @@ export class TitleScene {
 
     this.scene.add(buildTerrain());
     this.scene.add(buildWater());
-    this.scene.add(buildRivers());
     this.scene.add(buildHorizonMountains());
     this.clouds = buildClouds();
     this.scene.add(this.clouds.group);

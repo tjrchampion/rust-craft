@@ -4,6 +4,7 @@ export interface CharacterSummary {
   id: string;
   name: string;
   level: number;
+  classId: string;
 }
 
 export interface Realm {
@@ -113,13 +114,13 @@ class AppState {
     await this.refresh();
   }
 
-  async createCharacter(name: string) {
+  async createCharacter(name: string, classId: string) {
     this.error = null;
     const res = await fetch(this.apiUrl("/api/characters"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       credentials: "include",
-      body: JSON.stringify({ name }),
+      body: JSON.stringify({ name, classId }),
     });
     const data = await res.json().catch(() => null);
     if (!res.ok) {

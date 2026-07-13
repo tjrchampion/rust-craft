@@ -41,6 +41,7 @@ export const characters = pgTable(
       .notNull()
       .references(() => accounts.id, { onDelete: "cascade" }),
     name: text("name").notNull(),
+    classId: text("class_id").notNull().default("warrior"),
     level: integer("level").notNull().default(1),
     xp: integer("xp").notNull().default(0),
     x: real("x").notNull().default(0),
