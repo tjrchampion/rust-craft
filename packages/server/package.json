@@ -1,0 +1,28 @@
+{
+  "name": "@rustcraft/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "NODE_OPTIONS=--unhandled-rejections=warn nitro dev --port 3000",
+    "build": "nitro build",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@rustcraft/shared": "workspace:*",
+    "arctic": "^3.7.0",
+    "dotenv": "^17.4.2",
+    "drizzle-orm": "^0.45.2",
+    "h3": "1.15.11",
+    "nitropack": "^2.13.4",
+    "pg": "^8.22.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "@types/pg": "^8.20.0",
+    "drizzle-kit": "^0.31.10",
+    "typescript": "^7.0.2"
+  }
+}

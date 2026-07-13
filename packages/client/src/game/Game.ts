@@ -1,0 +1,764 @@
+import * as THREE from "three";
+import {
+  stepMovement,
+  terrainHeight,
+  TICK_DT,
+  WATER_LEVEL,
+  ZONE_SIZE,
+  clamp,
+  dist2D,
+  hashString,
+  itemDef,
+  mobDef,
+  nodeTypeDef,
+  zoneAt,
+  generateVillages,
+  type MoveState,
+  type ServerMsg,
+  type SelfState,
+} from "@rustcraft/shared";
+import { Connection } from "../net/connection";
+import { InputManager } from "../input/input";
+import { buildTerrain, buildWater, buildRivers } from "../render/terrain";
+import { buildHorizonMountains } from "../render/horizon";
+import { buildClouds, type CloudField } from "../render/clouds";
+import { buildNameplate, buildHorse, buildRaft, type MountParts } from "../render/models";
+import { NodeManager } from "../render/nodes";
+import { EntityManager, playerModelUrl } from "../render/entities";
+import { AnimatedModel, PLAYER_ANIMS, logicalFromState } from "../render/gltf";
+import { buildWorldStatic, buildVillage, animateSettlements, type SettlementHandles } from "../render/settlements";
+import { NpcManager } from "../render/npcs";
+import { sound } from "./sound";
+import { game as ui } from "../ui/gameState.svelte";
+
+const CAMERA_DISTANCE = 6.5;
+const CAMERA_HEIGHT = 2.2;
+const GATHER_RANGE = 4.0;
+
+interface PendingInput {
+  seq: number;
+  moveX: number;
+  moveZ: number;
+  jump: boolean;
+  sprint: boolean;
+  mount: "horse" | "raft" | null;
+}
+
+export class Game {
+  private renderer: THREE.WebGLRenderer;
+  private scene = new THREE.Scene();
+  private camera: THREE.PerspectiveCamera;
+  private sun: THREE.DirectionalLight;
+  private ambient: THREE.AmbientLight;
+
+  private connection = new Connection();
+  private input: InputManager;
+  private nodes!: NodeManager;
+  private entities!: EntityManager;
+  private settlements!: SettlementHandles;
+  private npcManager!: NpcManager;
+  private clouds: CloudField;
+  /** Villages stream in once the player nears their zone, rather than every
+   *  building loading at connect time; the GLTF cache makes re-entry free. */
+  private streamedVillages = new Set<string>();
+  private readonly STREAM_RADIUS = 190;
+  private mountMesh: MountParts | null = null;
+  private currentMount: "horse" | "raft" | null = null;
+
+  private selfId = "";
+  private avatar: AnimatedModel;
+  private move: MoveState = { x: 0, y: 4, z: 0, vy: 0, grounded: true };
+  /** Decaying render offset that absorbs reconcile corrections smoothly. */
+  private posError = new THREE.Vector3();
+  private cameraYaw = 0;
+  private cameraPitch = -0.35;
+  private inputSeq = 0;
+  private pending: PendingInput[] = [];
+  private accumulator = 0;
+  private lastFrame = performance.now();
+  private jumpQueued = false;
+  private running = false;
+  private disposed = false;
+  private animTime = 0;
+  private lastAnimSpeed = 0;
+  private unsubscribe: (() => void) | null = null;
+
+  constructor(
+    canvas: HTMLCanvasElement,
+    characterId: string,
+    characterName: string,
+    private wsAddress: string,
+  ) {
+    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    this.renderer.setSize(window.innerWidth, window.innerHeight);
+    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+    this.camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.1, 900);
+    this.scene.fog = new THREE.Fog(0x87b5d9, 120, 620);
+    this.scene.background = new THREE.Color(0x87b5d9);
+
+    this.sun = new THREE.DirectionalLight(0xfff4e0, 2.4);
+    this.sun.position.set(80, 120, 40);
+    this.sun.castShadow = true;
+    this.sun.shadow.mapSize.set(2048, 2048);
+    this.sun.shadow.camera.left = -70;
+    this.sun.shadow.camera.right = 70;
+    this.sun.shadow.camera.top = 70;
+    this.sun.shadow.camera.bottom = -70;
+    this.sun.shadow.camera.near = 1;
+    this.sun.shadow.camera.far = 320;
+    this.sun.shadow.bias = -0.0015;
+    this.scene.add(this.sun.target);
+    this.ambient = new THREE.AmbientLight(0x8899bb, 0.75);
+    this.scene.add(this.sun, this.ambient);
+
+    this.scene.add(buildTerrain());
+    this.scene.add(buildWater());
+    this.scene.add(buildRivers());
+    this.scene.add(buildHorizonMountains());
+    this.clouds = buildClouds();
+    this.scene.add(this.clouds.group);
+    this.settlements = buildWorldStatic(this.scene);
+    this.npcManager = new NpcManager(this.scene);
+
+    this.avatar = new AnimatedModel(PLAYER_ANIMS);
+    void this.avatar.loadFrom(playerModelUrl(characterId), 1.8);
+    const plate = buildNameplate(characterName, "#ffe9a8");
+    plate.position.y = 2.35;
+    this.avatar.group.add(plate);
+    this.scene.add(this.avatar.group);
+
+    this.entities = new EntityManager(this.scene);
+    this.input = new InputManager(canvas);
+
+    window.addEventListener("resize", this.onResize);
+
+    this.unsubscribe = this.connection.onMessage((msg) => this.onServerMsg(msg));
+    void this.connect(characterId);
+
+    // Unlock/synthesize audio (constructed within the character-select gesture).
+    sound.init();
+
+    // Dev-only handle for verification tooling (scene inspection, teleporting).
+    if (import.meta.env.DEV) (window as unknown as { __rc: Game }).__rc = this;
+  }
+
+  /** Dev helper: expose scene + local state for browser inspection. */
+  get debug() {
+    return {
+      scene: this.scene,
+      move: this.move,
+      entities: this.entities,
+      selfId: this.selfId,
+    };
+  }
+
+  private async connect(characterId: string): Promise<void> {
+    try {
+      await this.connection.connect(characterId, this.wsAddress);
+      ui.connected = true;
+      this.running = true;
+      requestAnimationFrame(this.frame);
+    } catch {
+      ui.disconnected = true;
+    }
+  }
+
+  private onServerMsg(msg: ServerMsg): void {
+    switch (msg.t) {
+      case "welcome": {
+        this.selfId = msg.selfId;
+        ui.selfId = msg.selfId;
+        ui.selfName = msg.name;
+        ui.names.set(msg.selfId, "You");
+        ui.self = msg.self;
+        ui.inventory = msg.inventory;
+        ui.learnedSpells = msg.learnedSpells;
+        ui.selectedSlot = msg.selectedSlot;
+        ui.timeOfDay = msg.timeOfDay;
+        this.move = { x: msg.self.x, y: msg.self.y, z: msg.self.z, vy: msg.self.vy, grounded: msg.self.grounded };
+        this.nodes = new NodeManager(this.scene, msg.depletedNodes);
+        for (const structure of msg.structures) this.entities.addStructure(structure);
+        for (const npc of msg.npcs) this.npcManager.applySnap(npc);
+        ui.questLog = msg.questLog;
+        break;
+      }
+      case "snapshot": {
+        const now = performance.now();
+        ui.timeOfDay = msg.timeOfDay;
+        for (const p of msg.players) {
+          if (p.id !== this.selfId) ui.names.set(p.id, p.name);
+        }
+        for (const m of msg.mobs) {
+          if (!ui.names.has(m.id)) ui.names.set(m.id, mobDef(m.type).name);
+        }
+        this.entities.applyPlayers(msg.players, this.selfId, now);
+        this.entities.applyMobs(msg.mobs, now);
+        this.entities.applyProjectiles(msg.projectiles);
+        for (const npc of msg.npcs) this.npcManager.applySnap(npc);
+        break;
+      }
+      case "self":
+        this.reconcile(msg.self);
+        ui.self = msg.self;
+        break;
+      case "inventory":
+        ui.inventory = msg.items;
+        ui.learnedSpells = msg.learnedSpells;
+        ui.selectedSlot = msg.selectedSlot;
+        break;
+      case "nodeUpdate":
+        this.nodes?.setDepleted(msg.nodeId, msg.depleted);
+        break;
+      case "structureAdd":
+        this.entities.addStructure(msg.structure);
+        break;
+      case "structureRemove":
+        this.entities.removeStructure(msg.id);
+        break;
+      case "event":
+        this.onEvent(msg);
+        break;
+      case "chat":
+        ui.addChat(msg.channel, msg.from, msg.text);
+        break;
+      case "party":
+        ui.party = msg.members;
+        if (msg.inviteFrom) ui.pendingInvite = msg.inviteFrom;
+        else if (!msg.members) ui.pendingInvite = null;
+        break;
+      case "pvp":
+        ui.pvpEnabled = msg.enabled;
+        ui.toast(msg.enabled ? "PvP enabled — you can be attacked!" : "PvP disabled");
+        break;
+      case "questOffer":
+        ui.questOffer = { npcId: msg.npcId, npcName: msg.npcName, offers: msg.offers };
+        this.setUiMode(true);
+        break;
+      case "questLog":
+        ui.questLog = msg.quests;
+        break;
+      case "questComplete":
+        ui.toast(`Quest complete: ${msg.questName} (+${msg.xp} XP)`);
+        ui.addCombat(`Completed "${msg.questName}" — +${msg.xp} XP`);
+        sound.play("levelup");
+        ui.questOffer = null;
+        this.setUiMode(false);
+        break;
+      case "error":
+        if (msg.message === "__disconnected__") {
+          ui.disconnected = true;
+          this.running = false;
+        } else if (msg.message !== "Bad message") {
+          ui.toast(msg.message);
+        }
+        break;
+    }
+  }
+
+  private onEvent(msg: Extract<ServerMsg, { t: "event" }>): void {
+    switch (msg.kind) {
+      case "damage":
+        if (msg.x !== undefined && msg.amount) {
+          const mine = msg.sourceId === this.selfId;
+          const toMe = msg.targetId === this.selfId;
+          this.entities.spawnDamageNumber(
+            msg.x,
+            (msg.y ?? 0) + 0.6,
+            msg.z ?? 0,
+            msg.amount,
+            toMe ? "#ff6b5e" : mine ? "#ffe08a" : "#d9d9d9",
+          );
+          if (mine || toMe) {
+            ui.addCombat(
+              `${ui.nameOf(msg.sourceId)} hit ${ui.nameOf(msg.targetId)} for ${Math.round(msg.amount)}`,
+            );
+            sound.play(toMe ? "hitTaken" : "hitFlesh");
+          }
+        }
+        break;
+      case "heal":
+        if (msg.targetId === this.selfId) {
+          ui.addCombat("You feel the shrine's blessing — fully restored");
+          sound.play("levelup");
+        }
+        break;
+      case "gather":
+        if (msg.itemId && msg.amount) ui.toast(`+${msg.amount} ${itemDef(msg.itemId).name}`);
+        break;
+      case "xp":
+        if (msg.amount) {
+          ui.toast(`+${msg.amount} XP`);
+          ui.addCombat(`You gain ${msg.amount} experience`);
+        }
+        break;
+      case "levelup":
+        ui.toast(`Level up! You are now level ${msg.amount}`);
+        ui.addCombat(`You reached level ${msg.amount}!`);
+        sound.play("levelup");
+        break;
+      case "learnSpell":
+        if (msg.spellId) {
+          ui.toast(`Learned spell: ${msg.spellId}`);
+          sound.play("craft");
+        }
+        break;
+      case "death":
+        ui.toast("You died");
+        ui.addCombat("You died");
+        sound.play("death");
+        break;
+      case "spellHit":
+        sound.play("spellHit");
+        break;
+      case "castStart":
+        if (msg.sourceId === this.selfId) sound.play("castStart");
+        break;
+      case "error":
+        if (msg.message) ui.toast(msg.message);
+        break;
+    }
+  }
+
+  /** Server ack + authoritative state: rewind & replay unacked inputs. */
+  private reconcile(self: SelfState): void {
+    this.pending = this.pending.filter((p) => p.seq > self.ackSeq);
+    const serverState: MoveState = { x: self.x, y: self.y, z: self.z, vy: self.vy, grounded: self.grounded };
+    const drift = dist2D(serverState.x, serverState.z, this.move.x, this.move.z);
+    // Replay pending inputs from the server state; adopt result if we drifted.
+    let replayed = serverState;
+    for (const p of this.pending) {
+      replayed = stepMovement(replayed, p, TICK_DT);
+    }
+    const replayDrift = dist2D(replayed.x, replayed.z, this.move.x, this.move.z) + Math.abs(replayed.y - this.move.y);
+    if (replayDrift > 0.02 || drift > 3) {
+      // Adopt the authoritative position, but fold the correction into a
+      // decaying render error so the camera eases across it instead of
+      // snapping backward (the "few steps back" rubberband).
+      const ex = this.move.x - replayed.x;
+      const ey = this.move.y - replayed.y;
+      const ez = this.move.z - replayed.z;
+      if (Math.hypot(ex, ez) < 2.5) {
+        this.posError.x += ex;
+        this.posError.y += ey;
+        this.posError.z += ez;
+      } else {
+        this.posError.set(0, 0, 0); // genuine teleport/large desync: snap
+      }
+      this.move = replayed;
+    }
+    if (self.dead) this.pending = [];
+  }
+
+  private frame = (now: number): void => {
+    if (this.disposed) return;
+    if (this.running) requestAnimationFrame(this.frame);
+
+    const dt = Math.min(0.1, (now - this.lastFrame) / 1000);
+    this.lastFrame = now;
+
+    const actions = this.input.sample(dt);
+    ui.lastDevice = this.input.lastDevice;
+
+    // Camera orbit
+    this.cameraYaw += actions.lookX;
+    this.cameraPitch = clamp(this.cameraPitch + actions.lookY, -1.2, 0.5);
+    ui.compassYaw = this.cameraYaw;
+
+    const dead = ui.self?.dead ?? false;
+
+    // Inventory toggle + menu navigation forwarding (keyboard & gamepad)
+    if (actions.inventoryPressed && !dead) {
+      ui.inventoryOpen = !ui.inventoryOpen;
+      this.setUiMode(ui.inventoryOpen);
+    }
+    if (ui.inventoryOpen) {
+      const nav = {
+        up: actions.menuUp,
+        down: actions.menuDown,
+        left: actions.menuLeft,
+        right: actions.menuRight,
+        confirm: actions.menuConfirm,
+        cancel: actions.menuCancel && !actions.inventoryPressed,
+      };
+      if (nav.up || nav.down || nav.left || nav.right || nav.confirm || nav.cancel) {
+        window.dispatchEvent(new CustomEvent("rc:menuNav", { detail: nav }));
+      }
+    }
+
+    // Chat opens with Enter (keyboard flow; controller users can still read)
+    if (actions.chatPressed && !ui.chatOpen && !ui.inventoryOpen && !dead) {
+      ui.chatOpen = true;
+      this.setUiMode(true);
+    }
+
+    // Targeting: click-to-target, Shift snap/cycle, Escape clear.
+    if (!dead) this.handleTargeting(actions);
+
+    // UI toggles handled by HUD; here: hotbar + world actions
+    if (!dead) {
+      if (actions.hotbarSlot !== null) this.connection.send({ t: "selectSlot", slot: actions.hotbarSlot });
+      else if (actions.hotbarDelta !== 0) {
+        const next = (ui.selectedSlot + actions.hotbarDelta + 6) % 6;
+        this.connection.send({ t: "selectSlot", slot: next });
+      }
+      if (actions.attackPressed) {
+        this.faceTarget();
+        this.connection.send({ t: "attack" });
+        this.avatar.play("attack");
+      }
+      if (actions.castPressed && ui.learnedSpells.length > 0) {
+        this.faceTarget();
+        this.connection.send({ t: "cast", spellId: ui.learnedSpells[0]! });
+      }
+      if (actions.interactPressed) {
+        if (this.interactNodeId) {
+          this.avatar.play("gather");
+          // Gather feedback: node shake, chip particles, tool sound.
+          if (this.nodes && !this.interactNodeId.startsWith("poi_")) {
+            this.nodes.hitNode(this.interactNodeId);
+            const nt = this.nodes.nodes.get(this.interactNodeId)?.node.type;
+            sound.play(nt === "tree" ? "chop" : nt === "rock" ? "mine" : "pick");
+          }
+        }
+        this.doInteract();
+      }
+      if (actions.pvpTogglePressed) this.sendPvp(!ui.pvpEnabled);
+      if (actions.mountPressed) this.connection.send({ t: "mount" });
+      if (actions.jump) this.jumpQueued = true;
+    } else if (actions.respawnPressed) {
+      this.connection.send({ t: "respawn" });
+    }
+
+    // Fixed-step prediction + input streaming (20 Hz)
+    this.accumulator += dt;
+    while (this.accumulator >= TICK_DT) {
+      this.accumulator -= TICK_DT;
+      if (!dead && ui.connected) this.stepLocal(actions);
+    }
+
+    // Decay the reconcile error so the smoothed render position eases to the
+    // authoritative one over ~150ms (hides the "few steps back" snap).
+    const decay = Math.exp(-dt * 12);
+    this.posError.multiplyScalar(decay);
+    if (this.posError.lengthSq() < 1e-6) this.posError.set(0, 0, 0);
+    const rx = this.move.x + this.posError.x;
+    const ry = this.move.y + this.posError.y;
+    const rz = this.move.z + this.posError.z;
+
+    // Avatar + camera + world updates (rendered at the smoothed position)
+    this.syncMount();
+    const riderLift = this.mountMesh?.riderY ?? 0;
+    this.avatar.group.position.set(rx, ry + riderLift, rz);
+    this.avatar.group.rotation.y = this.cameraYaw;
+    if (this.mountMesh) {
+      this.mountMesh.group.position.set(rx, ry, rz);
+      this.mountMesh.group.rotation.y = this.cameraYaw;
+    }
+    this.animateSelf(dt, actions);
+    this.updateCamera(rx, ry, rz);
+    this.nodes?.update(rx, rz, now, dt);
+    this.entities.update(now, dt);
+    animateSettlements(this.settlements, now);
+    this.updateInteractPrompt();
+    this.updateDayNight(rx, rz);
+    this.clouds.update(dt);
+    this.updateZoneAndStreaming(rx, rz);
+
+    this.renderer.render(this.scene, this.camera);
+  };
+
+  /** Add/remove the mount mesh under the rider when the mount state changes. */
+  private syncMount(): void {
+    const want = ui.self?.mount ?? null;
+    if (want === this.currentMount) return;
+    if (this.mountMesh) {
+      this.scene.remove(this.mountMesh.group);
+      this.mountMesh = null;
+    }
+    if (want === "horse") this.mountMesh = buildHorse();
+    else if (want === "raft") this.mountMesh = buildRaft();
+    if (this.mountMesh) this.scene.add(this.mountMesh.group);
+    // Mount/dismount audio cue.
+    sound.play(want ? "craft" : "ui");
+    this.currentMount = want;
+  }
+
+  /** Named-zone banner (WoW-style) + lazy village streaming as the player travels. */
+  private updateZoneAndStreaming(x: number, z: number): void {
+    const zone = zoneAt(x, z);
+    ui.enterZone(zone.id, zone.name, zone.subtitle);
+
+    for (const village of generateVillages()) {
+      if (this.streamedVillages.has(village.id)) continue;
+      if (dist2D(x, z, village.x, village.z) < this.STREAM_RADIUS) {
+        this.streamedVillages.add(village.id);
+        buildVillage(this.scene, village, true);
+      }
+    }
+  }
+
+  private readonly TARGET_RANGE = 60;
+
+  private handleTargeting(actions: ReturnType<InputManager["sample"]>): void {
+    if (actions.clearTargetPressed) {
+      this.entities.setTarget(null);
+    } else if (actions.targetPressed) {
+      // CapsLock: select nearest, cycle to the next, or deselect when the
+      // current target is the only enemy nearby.
+      const enemies = this.entities.enemiesByProximity(
+        this.camera,
+        this.move.x,
+        this.move.z,
+        this.TARGET_RANGE,
+        this.selfId,
+      );
+      const cur = this.entities.getTargetId();
+      if (enemies.length === 0) {
+        this.entities.setTarget(null);
+      } else if (!cur || !enemies.includes(cur)) {
+        this.entities.setTarget(enemies[0]!);
+        sound.play("target");
+      } else if (enemies.length === 1) {
+        // Only the current target is near → deselect it.
+        this.entities.setTarget(null);
+      } else {
+        const next = (enemies.indexOf(cur) + 1) % enemies.length;
+        this.entities.setTarget(enemies[next]!);
+        sound.play("target");
+      }
+    }
+    // Publish target info to the HUD (auto-clears on death/despawn).
+    ui.target = this.entities.entityInfo(this.entities.getTargetId());
+  }
+
+  /** Snap facing toward the current target so melee/spells connect. */
+  private faceTarget(): void {
+    const tid = this.entities.getTargetId();
+    if (!tid) return;
+    const pos = this.entities.entityWorldPos(tid);
+    if (!pos) return;
+    const yaw = Math.atan2(pos.x - this.move.x, pos.z - this.move.z);
+    this.cameraYaw = yaw;
+    ui.compassYaw = yaw;
+    // Send an immediate facing input so the server updates yaw before it
+    // resolves the attack/cast message that follows this frame.
+    const seq = ++this.inputSeq;
+    const input = { moveX: 0, moveZ: 0, jump: false, sprint: false };
+    this.pending.push({ seq, ...input, mount: ui.self?.mount ?? null });
+    this.connection.send({ t: "input", seq, ...input, yaw });
+  }
+
+  private stepLocal(actions: ReturnType<InputManager["sample"]>): void {
+    // Camera-relative movement -> world space. Camera looks along
+    // forward = (sin yaw, cos yaw); screen-right is (-cos yaw, sin yaw).
+    const sin = Math.sin(this.cameraYaw);
+    const cos = Math.cos(this.cameraYaw);
+    const moveX = -actions.moveX * cos - actions.moveY * sin;
+    const moveZ = actions.moveX * sin - actions.moveY * cos;
+
+    const input = {
+      moveX,
+      moveZ,
+      jump: this.jumpQueued,
+      sprint: actions.sprint,
+    };
+    this.jumpQueued = false;
+    const mount = ui.self?.mount ?? null;
+
+    const seq = ++this.inputSeq;
+    this.pending.push({ seq, ...input, mount });
+    if (this.pending.length > 120) this.pending.shift();
+
+    // Predict with the mount so speed matches the server; the wire message
+    // omits mount (server is authoritative on mount state).
+    this.move = stepMovement(this.move, { ...input, mount }, TICK_DT);
+    this.connection.send({ t: "input", seq, ...input, yaw: this.cameraYaw });
+  }
+
+  private animateSelf(dt: number, actions: ReturnType<InputManager["sample"]>): void {
+    this.animTime += dt;
+    // Clamp to match stepMovement's own diagonal normalization -- otherwise
+    // holding two movement keys (e.g. forward+strafe) inflates this to
+    // sqrt(2) and the walk/run cycle visibly outruns the actual translation.
+    const inputMag = Math.min(1, Math.hypot(actions.moveX, actions.moveY));
+    this.lastAnimSpeed += (inputMag - this.lastAnimSpeed) * Math.min(1, dt * 10);
+
+    const serverAnim = ui.self?.dead ? "dead" : ui.self?.castingSpell ? "cast" : "idle";
+    const speed = this.lastAnimSpeed * (actions.sprint ? 6.8 : 4.6);
+    this.avatar.play(logicalFromState(serverAnim, speed, 3.5));
+    this.avatar.update(dt);
+  }
+
+  private updateCamera(px: number, py: number, pz: number): void {
+    const cy = this.cameraYaw;
+    const cp = this.cameraPitch;
+    const horizontal = CAMERA_DISTANCE * Math.cos(cp);
+    const targetX = px - Math.sin(cy) * horizontal;
+    const targetZ = pz - Math.cos(cy) * horizontal;
+    let targetY = py + CAMERA_HEIGHT - CAMERA_DISTANCE * Math.sin(cp);
+
+    // Keep the camera above the terrain.
+    const ground = terrainHeight(targetX, targetZ);
+    targetY = Math.max(targetY, ground + 0.6, WATER_LEVEL + 0.4);
+
+    this.camera.position.set(targetX, targetY, targetZ);
+    this.camera.lookAt(px, py + 1.5, pz);
+  }
+
+  private updateInteractPrompt(): void {
+    if (!this.nodes || (ui.self?.dead ?? false)) {
+      ui.interactLabel = null;
+      return;
+    }
+    const node = this.nodes.findTarget(this.move.x, this.move.y, this.move.z, this.cameraYaw, GATHER_RANGE);
+    if (node) {
+      const def = nodeTypeDef(node.type);
+      const verb = node.type === "tree" ? "Chop" : node.type === "rock" ? "Mine" : "Pick";
+      ui.interactLabel = `${verb} ${def.name}`;
+      this.interactNodeId = node.id;
+      return;
+    }
+    // Quest giver nearby?
+    const npc = this.npcManager.nearest(this.move.x, this.move.z, 4.5);
+    if (npc) {
+      ui.interactLabel = `Talk to ${npc.name}`;
+      this.interactNodeId = npc.id;
+      return;
+    }
+    this.interactNodeId = null;
+    // Shrine nearby?
+    for (const shrine of this.settlements.shrines) {
+      if (dist2D(this.move.x, this.move.z, shrine.x, shrine.z) < 4.5) {
+        ui.interactLabel = "Pray at the Shrine";
+        this.interactNodeId = shrine.id;
+        return;
+      }
+    }
+    // Water nearby?
+    if (this.nearWater()) {
+      ui.interactLabel = "Drink";
+    } else {
+      ui.interactLabel = null;
+    }
+  }
+
+  private interactNodeId: string | null = null;
+
+  private nearWater(): boolean {
+    const { x, y, z } = this.move;
+    if (y < WATER_LEVEL + 0.5) return true;
+    for (const [dx, dz] of [
+      [3, 0],
+      [-3, 0],
+      [0, 3],
+      [0, -3],
+    ] as const) {
+      if (terrainHeight(x + dx, z + dz) < WATER_LEVEL) return true;
+    }
+    return false;
+  }
+
+  private doInteract(): void {
+    if (this.interactNodeId) {
+      this.connection.send({ t: "interact", nodeId: this.interactNodeId });
+    } else if (this.nearWater()) {
+      this.connection.send({ t: "drink" });
+    }
+  }
+
+  private updateDayNight(px: number, pz: number): void {
+    const t = ui.timeOfDay; // 0..1, 0.5 = midnight-ish; 0.25 = noon-ish given +0.3 offset
+    const angle = t * Math.PI * 2;
+    const elevation = Math.sin(angle);
+    // The sun's shadow frustum is a modest, high-res box that follows the
+    // player, rather than one huge low-res box covering the whole zone.
+    this.sun.position.set(px + Math.cos(angle) * 120, Math.max(20, elevation * 140), pz + 40);
+    this.sun.target.position.set(px, 0, pz);
+    const dayness = clamp(elevation * 1.6 + 0.25, 0.04, 1);
+    this.sun.intensity = 2.4 * dayness;
+    this.ambient.intensity = 0.2 + 0.6 * dayness;
+
+    const day = new THREE.Color(0x87b5d9);
+    const night = new THREE.Color(0x0b1226);
+    const sky = night.clone().lerp(day, dayness);
+    (this.scene.background as THREE.Color).copy(sky);
+    this.scene.fog!.color.copy(sky);
+  }
+
+  // ============ hooks for HUD ============
+
+  sendChat(text: string, channel: "realm" | "party" = "realm"): void {
+    this.connection.send({ t: "chat", channel, text });
+  }
+
+  sendParty(action: "invite" | "accept" | "decline" | "leave", name?: string): void {
+    this.connection.send({ t: "party", action, name });
+  }
+
+  sendPvp(enabled: boolean): void {
+    this.connection.send({ t: "pvp", enabled });
+  }
+
+  sendQuestAction(action: "accept" | "decline" | "turnin", questId: string): void {
+    if (action !== "decline") this.connection.send({ t: "quest", action, questId });
+    sound.play("ui");
+  }
+
+  closeQuestDialog(): void {
+    ui.questOffer = null;
+    this.setUiMode(false);
+  }
+
+  sendCraft(recipeId: string): void {
+    this.connection.send({ t: "craft", recipeId });
+    sound.play("craft");
+  }
+
+  sendConsume(container: "inventory" | "hotbar", slot: number): void {
+    this.connection.send({ t: "consume", container, slot });
+    sound.play("eat");
+  }
+
+  sendPlace(container: "inventory" | "hotbar", slot: number): void {
+    this.connection.send({ t: "place", container, slot });
+  }
+
+  sendMoveItem(fc: "inventory" | "hotbar", fs: number, tc: "inventory" | "hotbar", ts: number): void {
+    this.connection.send({ t: "moveItem", fromContainer: fc, fromSlot: fs, toContainer: tc, toSlot: ts });
+  }
+
+  sendRespawn(): void {
+    this.connection.send({ t: "respawn" });
+  }
+
+  setUiMode(open: boolean): void {
+    this.input.uiMode = open;
+    if (open) this.input.releasePointer();
+  }
+
+  get inputManager(): InputManager {
+    return this.input;
+  }
+
+  private onResize = (): void => {
+    this.camera.aspect = window.innerWidth / window.innerHeight;
+    this.camera.updateProjectionMatrix();
+    this.renderer.setSize(window.innerWidth, window.innerHeight);
+  };
+
+  dispose(): void {
+    this.disposed = true;
+    this.running = false;
+    if (this.mountMesh) {
+      this.scene.remove(this.mountMesh.group);
+      this.mountMesh = null;
+    }
+    this.unsubscribe?.();
+    this.connection.disconnect();
+    window.removeEventListener("resize", this.onResize);
+    this.renderer.dispose();
+  }
+}

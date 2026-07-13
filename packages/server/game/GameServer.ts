@@ -1,0 +1,1811 @@
+import {
+  TICK_MS,
+  TICK_DT,
+  INTEREST_RADIUS,
+  SPAWN_POINT,
+  WATER_LEVEL,
+  WATER_PROXIMITY,
+  DRINK_RESTORE,
+  BASE_MAX_HP,
+  BASE_MAX_MANA,
+  HP_PER_LEVEL,
+  MANA_PER_LEVEL,
+  MANA_REGEN_PER_S,
+  HP_REGEN_PER_S,
+  HUNGER_DECAY_PER_S,
+  THIRST_DECAY_PER_S,
+  STARVATION_DPS,
+  UNARMED_DAMAGE,
+  UNARMED_GATHER_POWER,
+  MELEE_RANGE,
+  MELEE_COOLDOWN_S,
+  RESPAWN_HP_FRACTION,
+  MAX_LEVEL,
+  xpForLevel,
+  HOTBAR_SLOTS,
+  terrainHeight,
+  generateNodes,
+  generateMobSpawns,
+  generatePois,
+  generateVillages,
+  generateNpcQuestGivers,
+  stepMovement,
+  dist2D,
+  dist3D,
+  clamp,
+  wrapAngle,
+  hash2,
+  itemDef,
+  RECIPES,
+  spellDef,
+  mobDef,
+  nodeTypeDef,
+  questDef,
+  questsForVillage,
+  QUEST_IDS,
+  type ClientMsg,
+  type ServerMsg,
+  type MoveState,
+  type WorldNode,
+  type AnimState,
+  type SelfState,
+  type PlayerSnap,
+  type MobSnap,
+  type ProjectileSnap,
+  type StructureSnap,
+  type NpcSnap,
+  type NpcSpec,
+  type QuestOfferInfo,
+  type QuestLogEntry,
+  type QuestStatus,
+  ClientMsg as ClientMsgSchema,
+} from "@rustcraft/shared";
+import {
+  type InvItem,
+  addItem,
+  removeItem,
+  decrementSlot,
+  findItem,
+  moveItem,
+  damageDurability,
+  toSnaps,
+} from "./inventory";
+import {
+  loadPlayer,
+  savePlayer,
+  loadDepletedNodes,
+  upsertDepletedNode,
+  deleteDepletedNodes,
+  loadStructures,
+  insertStructure,
+  type PersistedPlayer,
+  type QuestProgressEntry,
+} from "./persistence";
+
+const DAY_LENGTH_S = 1800; // full day/night cycle — slow, ambient pacing
+const SAVE_INTERVAL_MS = 30_000;
+const GATHER_COOLDOWN_S = 0.55;
+const GATHER_RANGE = 4.5;
+const MAX_INPUTS_PER_TICK = 5; // drain input bursts so ack stays current
+const MAX_INPUT_QUEUE = 60; // ~3s of buffer; don't drop legit inputs
+const ANIM_ACTION_MS = 450;
+
+interface PeerLike {
+  id: string;
+  send(data: string): void;
+  close(code?: number, reason?: string): void;
+}
+
+interface QueuedInput {
+  seq: number;
+  moveX: number;
+  moveZ: number;
+  jump: boolean;
+  sprint: boolean;
+  yaw: number;
+}
+
+interface PlayerState {
+  id: string;
+  accountId: string;
+  name: string;
+  peer: PeerLike;
+  move: MoveState;
+  yaw: number;
+  hp: number;
+  mana: number;
+  hunger: number;
+  thirst: number;
+  xp: number;
+  level: number;
+  learnedSpells: string[];
+  inventory: InvItem[];
+  selectedSlot: number;
+  dead: boolean;
+  inputQueue: QueuedInput[];
+  lastAckSeq: number;
+  lastMoveMag: number;
+  casting: { spellId: string; endsAt: number; startX: number; startZ: number } | null;
+  spellCooldowns: Map<string, number>; // spellId -> ready-at ms
+  meleeReadyAt: number;
+  gatherReadyAt: number;
+  actionAnim: AnimState | null;
+  actionAnimUntil: number;
+  dirty: boolean;
+  pvp: boolean;
+  mount: "horse" | "raft" | null;
+  shrineCooldowns: Map<string, number>; // shrine id -> ready-at ms
+  partyId: string | null;
+  pendingInviteFrom: string | null; // inviter character id
+  questProgress: Map<string, { status: "active" | "completed"; progress: number }>;
+}
+
+interface MobState {
+  id: string;
+  type: string;
+  x: number;
+  y: number;
+  z: number;
+  yaw: number;
+  hp: number;
+  homeX: number;
+  homeZ: number;
+  targetId: string | null;
+  attackReadyAt: number;
+  respawnAt: number | null; // set while dead
+  wanderTx: number;
+  wanderTz: number;
+  nextWanderAt: number;
+  actionAnimUntil: number;
+}
+
+interface Projectile {
+  id: string;
+  spellId: string;
+  ownerId: string;
+  x: number;
+  y: number;
+  z: number;
+  dx: number;
+  dy: number;
+  dz: number;
+  traveled: number;
+  maxRange: number;
+  damage: number;
+  speed: number;
+  /** Homing target: a mob id or a (pvp) player id, or null for a straight shot. */
+  homingId: string | null;
+}
+
+export class GameServer {
+  private players = new Map<string, PlayerState>();
+  private peerToChar = new Map<string, string>();
+  private mobs = new Map<string, MobState>();
+  private projectiles = new Map<string, Projectile>();
+  private structures: StructureSnap[] = [];
+  private nodes = new Map<string, WorldNode>();
+  private nodeHits = new Map<string, number>();
+  private depletedNodes = new Map<string, number>(); // nodeId -> respawn at ms
+  private shrines = new Map<string, { x: number; y: number; z: number }>();
+  private villages: { x: number; z: number }[] = [];
+  private npcs: NpcSpec[] = []; // static base data; marker recomputed per-viewer
+  private parties = new Map<string, Set<string>>(); // partyId -> character ids
+  private partySeq = 0;
+  private tickCount = 0;
+  private tickTimer: ReturnType<typeof setInterval> | null = null;
+  private saveTimer: ReturnType<typeof setInterval> | null = null;
+  private projectileSeq = 0;
+  private started = false;
+  private startedAt = Date.now();
+
+  async start(): Promise<void> {
+    if (this.started) return;
+    this.started = true;
+
+    for (const node of generateNodes()) this.nodes.set(node.id, node);
+    for (const spawn of generateMobSpawns()) {
+      const def = mobDef(spawn.type);
+      this.mobs.set(spawn.id, {
+        id: spawn.id,
+        type: spawn.type,
+        x: spawn.x,
+        y: spawn.y,
+        z: spawn.z,
+        yaw: 0,
+        hp: def.maxHp,
+        homeX: spawn.x,
+        homeZ: spawn.z,
+        targetId: null,
+        attackReadyAt: 0,
+        respawnAt: null,
+        wanderTx: spawn.x,
+        wanderTz: spawn.z,
+        nextWanderAt: 0,
+        actionAnimUntil: 0,
+      });
+    }
+
+    for (const poi of generatePois()) {
+      if (poi.type === "shrine") this.shrines.set(poi.id, { x: poi.x, y: poi.y, z: poi.z });
+    }
+    this.villages = generateVillages().map((v) => ({ x: v.x, z: v.z }));
+    this.npcs = generateNpcQuestGivers();
+
+    this.depletedNodes = await loadDepletedNodes();
+    this.structures = await loadStructures();
+
+    this.tickTimer = setInterval(() => this.tick(), TICK_MS);
+    this.saveTimer = setInterval(() => void this.flushDirty(), SAVE_INTERVAL_MS);
+    console.log(
+      `[game] world ready: ${this.nodes.size} nodes, ${this.mobs.size} mobs, ${this.structures.length} structures`,
+    );
+  }
+
+  stop(): void {
+    if (this.tickTimer) clearInterval(this.tickTimer);
+    if (this.saveTimer) clearInterval(this.saveTimer);
+    this.started = false;
+  }
+
+  // ============================ connection ============================
+
+  async join(peer: PeerLike, characterId: string, accountId: string): Promise<void> {
+    const persisted = await loadPlayer(characterId);
+    if (!persisted || persisted.accountId !== accountId) {
+      this.sendTo(peer, { t: "error", message: "Character not found" });
+      peer.close(4001, "bad character");
+      return;
+    }
+
+    // One connection per character: kick the previous one.
+    const existing = this.players.get(characterId);
+    if (existing) {
+      this.sendTo(existing.peer, { t: "error", message: "Logged in elsewhere" });
+      existing.peer.close(4002, "replaced");
+      this.peerToChar.delete(existing.peer.id);
+      await this.removePlayer(characterId, false);
+    }
+
+    const isNew = persisted.x === 0 && persisted.z === 0 && persisted.xp === 0;
+    const x = isNew ? SPAWN_POINT.x + (Math.random() - 0.5) * 6 : persisted.x;
+    const z = isNew ? SPAWN_POINT.z + (Math.random() - 0.5) * 6 : persisted.z;
+    const y = Math.max(persisted.y, terrainHeight(x, z));
+
+    const player: PlayerState = {
+      id: persisted.id,
+      accountId: persisted.accountId,
+      name: persisted.name,
+      peer,
+      move: { x, y, z, vy: 0, grounded: true },
+      yaw: persisted.yaw,
+      hp: persisted.hp,
+      mana: persisted.mana,
+      hunger: persisted.hunger,
+      thirst: persisted.thirst,
+      xp: persisted.xp,
+      level: persisted.level,
+      learnedSpells: [...persisted.learnedSpells],
+      inventory: persisted.inventory,
+      selectedSlot: 0,
+      dead: persisted.hp <= 0,
+      inputQueue: [],
+      lastAckSeq: 0,
+      lastMoveMag: 0,
+      casting: null,
+      spellCooldowns: new Map(),
+      meleeReadyAt: 0,
+      gatherReadyAt: 0,
+      actionAnim: null,
+      actionAnimUntil: 0,
+      dirty: true,
+      pvp: false,
+      mount: null,
+      shrineCooldowns: new Map(),
+      partyId: null,
+      pendingInviteFrom: null,
+      questProgress: new Map(persisted.questProgress.map((q) => [q.questId, { status: q.status, progress: q.progress }])),
+    };
+
+    this.players.set(player.id, player);
+    this.peerToChar.set(peer.id, player.id);
+
+    this.sendTo(peer, {
+      t: "welcome",
+      selfId: player.id,
+      name: player.name,
+      self: this.selfState(player),
+      inventory: toSnaps(player.inventory),
+      learnedSpells: player.learnedSpells,
+      selectedSlot: player.selectedSlot,
+      depletedNodes: [...this.depletedNodes.keys()],
+      structures: this.structures,
+      npcs: this.npcs.map((n) => this.npcSnapFor(n, player)),
+      questLog: this.questLogFor(player),
+      serverTime: Date.now(),
+      dayLengthS: DAY_LENGTH_S,
+      timeOfDay: this.timeOfDay(),
+    });
+    this.broadcastChat("system", `${player.name} entered the world.`);
+  }
+
+  async leave(peer: PeerLike): Promise<void> {
+    const charId = this.peerToChar.get(peer.id);
+    if (!charId) return;
+    this.peerToChar.delete(peer.id);
+    const player = this.players.get(charId);
+    if (player) this.broadcastChat("system", `${player.name} left the world.`);
+    await this.removePlayer(charId, true);
+  }
+
+  private async removePlayer(charId: string, save: boolean): Promise<void> {
+    const player = this.players.get(charId);
+    if (!player) return;
+    this.leaveParty(player, true);
+    this.players.delete(charId);
+    for (const mob of this.mobs.values()) {
+      if (mob.targetId === charId) mob.targetId = null;
+    }
+    if (save) await savePlayer(this.toPersisted(player)).catch((e) => console.error("[game] save failed", e));
+  }
+
+  handleMessage(peer: PeerLike, raw: unknown): void {
+    let parsed: ClientMsg;
+    try {
+      const json = typeof raw === "string" ? JSON.parse(raw) : raw;
+      parsed = ClientMsgSchema.parse(json);
+    } catch {
+      this.sendTo(peer, { t: "error", message: "Bad message" });
+      return;
+    }
+    const charId = this.peerToChar.get(peer.id);
+    if (!charId) return;
+    const player = this.players.get(charId);
+    if (!player) return;
+
+    switch (parsed.t) {
+      case "input":
+        // Apply facing immediately so a same-frame attack/cast uses the
+        // client's target-facing yaw rather than last tick's.
+        player.yaw = parsed.yaw;
+        if (player.inputQueue.length < MAX_INPUT_QUEUE) player.inputQueue.push(parsed);
+        break;
+      case "interact":
+        if (parsed.nodeId.startsWith("poi_shrine")) this.handleShrine(player, parsed.nodeId);
+        else if (parsed.nodeId.startsWith("npc_")) this.handleQuestGiverInteract(player, parsed.nodeId);
+        else this.handleGather(player, parsed.nodeId);
+        break;
+      case "drink":
+        this.handleDrink(player);
+        break;
+      case "attack":
+        this.handleMelee(player);
+        break;
+      case "cast":
+        this.handleCastStart(player, parsed.spellId);
+        break;
+      case "craft":
+        this.handleCraft(player, parsed.recipeId);
+        break;
+      case "consume":
+        this.handleConsume(player, parsed.container, parsed.slot);
+        break;
+      case "moveItem":
+        if (moveItem(player.inventory, parsed.fromContainer, parsed.fromSlot, parsed.toContainer, parsed.toSlot)) {
+          player.dirty = true;
+          this.sendInventory(player);
+        }
+        break;
+      case "selectSlot":
+        if (parsed.slot < HOTBAR_SLOTS) {
+          player.selectedSlot = parsed.slot;
+          this.sendInventory(player);
+        }
+        break;
+      case "place":
+        void this.handlePlace(player, parsed.container, parsed.slot);
+        break;
+      case "chat":
+        this.handleChat(player, parsed.channel, parsed.text.slice(0, 240));
+        break;
+      case "respawn":
+        this.handleRespawn(player);
+        break;
+      case "pvp":
+        this.handlePvpToggle(player, parsed.enabled);
+        break;
+      case "party":
+        this.handleParty(player, parsed.action, parsed.name);
+        break;
+      case "mount":
+        this.handleMount(player);
+        break;
+      case "quest":
+        this.handleQuestAction(player, parsed.action, parsed.questId);
+        break;
+    }
+  }
+
+  // ============================ chat & social ============================
+
+  private handleChat(player: PlayerState, channel: "realm" | "party", text: string): void {
+    if (channel === "party") {
+      if (!player.partyId) {
+        this.sendEvent(player, { t: "event", kind: "error", message: "You are not in a party" });
+        return;
+      }
+      this.sendToParty(player.partyId, { t: "chat", channel: "party", from: player.name, text });
+      return;
+    }
+    this.broadcast({ t: "chat", channel: "realm", from: player.name, text });
+  }
+
+  private handlePvpToggle(player: PlayerState, enabled: boolean): void {
+    if (player.pvp === enabled) return;
+    player.pvp = enabled;
+    this.sendTo(player.peer, { t: "pvp", enabled });
+    this.broadcastChat(
+      "system",
+      enabled ? `${player.name} has enabled PvP — beware!` : `${player.name} has disabled PvP.`,
+    );
+  }
+
+  private hasItem(player: PlayerState, itemId: string): boolean {
+    return player.inventory.some((i) => i.itemId === itemId && i.qty > 0);
+  }
+
+  /** Toggle a horse (on land) or raft (on water), gated by the right item. */
+  private handleMount(player: PlayerState): void {
+    if (player.dead) return;
+    if (player.mount) {
+      player.mount = null;
+      this.sendSelf(player);
+      return;
+    }
+    const inWater = player.move.y < WATER_LEVEL + 0.3;
+    if (inWater) {
+      if (this.hasItem(player, "raft")) {
+        player.mount = "raft";
+        this.sendSelf(player);
+      } else {
+        this.sendEvent(player, { t: "event", kind: "error", message: "You need a Raft to cross water" });
+      }
+    } else {
+      if (this.hasItem(player, "saddle")) {
+        player.mount = "horse";
+        this.sendSelf(player);
+      } else {
+        this.sendEvent(player, { t: "event", kind: "error", message: "You need a Riding Saddle to mount" });
+      }
+    }
+  }
+
+  /** Travel mounts are dropped the moment a player fights or is struck. */
+  private dismountForCombat(player: PlayerState): void {
+    if (player.mount) {
+      player.mount = null;
+      this.sendSelf(player);
+    }
+  }
+
+  // ============================ quests ============================
+
+  private questStatusFor(player: PlayerState, quest: ReturnType<typeof questDef>): QuestStatus {
+    const entry = player.questProgress.get(quest.id);
+    if (entry?.status === "completed") return "turnedin";
+    if (entry?.status === "active") {
+      return entry.progress >= quest.objectiveCount ? "complete" : "active";
+    }
+    if (player.level < quest.minLevel) return "locked";
+    return "available";
+  }
+
+  private questLogFor(player: PlayerState): QuestLogEntry[] {
+    const entries: QuestLogEntry[] = [];
+    for (const [questId, entry] of player.questProgress) {
+      if (entry.status !== "active") continue;
+      const quest = questDef(questId);
+      entries.push({
+        id: quest.id,
+        name: quest.name,
+        tier: quest.tier,
+        objectiveKind: quest.objectiveKind,
+        objectiveTarget: quest.objectiveTarget,
+        objectiveCount: quest.objectiveCount,
+        progress: entry.progress,
+        status: entry.progress >= quest.objectiveCount ? "complete" : "active",
+      });
+    }
+    return entries;
+  }
+
+  private npcSnapFor(npc: NpcSpec, player: PlayerState): NpcSnap {
+    let hasComplete = false;
+    let hasAvailable = false;
+    let hasActive = false;
+    for (const q of questsForVillage(npc.villageIndex)) {
+      const status = this.questStatusFor(player, q);
+      if (status === "complete") hasComplete = true;
+      else if (status === "available") hasAvailable = true;
+      else if (status === "active") hasActive = true;
+    }
+    const marker = hasComplete ? "complete" : hasAvailable ? "available" : hasActive ? "active" : "none";
+    return { id: npc.id, name: npc.name, x: npc.x, y: npc.y, z: npc.z, yaw: npc.yaw, marker };
+  }
+
+  private handleQuestGiverInteract(player: PlayerState, npcId: string): void {
+    if (player.dead) return;
+    const npc = this.npcs.find((n) => n.id === npcId);
+    if (!npc) return;
+    if (dist2D(player.move.x, player.move.z, npc.x, npc.z) > 6) return;
+
+    const offers: QuestOfferInfo[] = questsForVillage(npc.villageIndex).map((q) => {
+      const entry = player.questProgress.get(q.id);
+      return {
+        id: q.id,
+        name: q.name,
+        description: q.description,
+        tier: q.tier,
+        minLevel: q.minLevel,
+        objectiveKind: q.objectiveKind,
+        objectiveTarget: q.objectiveTarget,
+        objectiveCount: q.objectiveCount,
+        rewardXp: q.rewardXp,
+        rewardItems: q.rewardItems,
+        status: this.questStatusFor(player, q),
+        progress: entry?.progress ?? 0,
+      };
+    });
+    this.sendTo(player.peer, { t: "questOffer", npcId: npc.id, npcName: npc.name, offers });
+  }
+
+  private handleQuestAction(player: PlayerState, action: "accept" | "decline" | "turnin", questId: string): void {
+    if (action === "decline" || !QUEST_IDS.includes(questId)) return;
+    const quest = questDef(questId);
+
+    // Accept/turn-in both require standing near that quest's village giver.
+    const npc = this.npcs.find((n) => n.villageIndex === quest.villageIndex);
+    if (!npc || dist2D(player.move.x, player.move.z, npc.x, npc.z) > 6) {
+      this.sendEvent(player, { t: "event", kind: "error", message: "Move closer to the quest giver" });
+      return;
+    }
+
+    if (action === "accept") {
+      if (this.questStatusFor(player, quest) !== "available") return;
+      player.questProgress.set(quest.id, { status: "active", progress: 0 });
+      player.dirty = true;
+      this.sendTo(player.peer, { t: "questLog", quests: this.questLogFor(player) });
+      return;
+    }
+
+    // turnin
+    const entry = player.questProgress.get(quest.id);
+    if (!entry || entry.status !== "active" || entry.progress < quest.objectiveCount) {
+      this.sendEvent(player, { t: "event", kind: "error", message: "Objective not complete yet" });
+      return;
+    }
+    entry.status = "completed";
+    player.dirty = true;
+    for (const r of quest.rewardItems) addItem(player.inventory, r.itemId, r.qty);
+    this.sendInventory(player);
+    this.grantXp(player, quest.rewardXp);
+    this.sendTo(player.peer, { t: "questLog", quests: this.questLogFor(player) });
+    this.sendTo(player.peer, {
+      t: "questComplete",
+      questId: quest.id,
+      questName: quest.name,
+      xp: quest.rewardXp,
+      items: quest.rewardItems,
+    });
+    this.broadcastChat("system", `${player.name} completed "${quest.name}".`);
+  }
+
+  private addQuestKillProgress(player: PlayerState, mobType: string): void {
+    let changed = false;
+    for (const [questId, entry] of player.questProgress) {
+      if (entry.status !== "active") continue;
+      const quest = questDef(questId);
+      if (quest.objectiveKind !== "kill" || quest.objectiveTarget !== mobType) continue;
+      if (entry.progress >= quest.objectiveCount) continue;
+      entry.progress = Math.min(quest.objectiveCount, entry.progress + 1);
+      changed = true;
+    }
+    if (changed) {
+      player.dirty = true;
+      this.sendTo(player.peer, { t: "questLog", quests: this.questLogFor(player) });
+    }
+  }
+
+  private addQuestGatherProgress(player: PlayerState, itemId: string, qty: number): void {
+    if (qty <= 0) return;
+    let changed = false;
+    for (const [questId, entry] of player.questProgress) {
+      if (entry.status !== "active") continue;
+      const quest = questDef(questId);
+      if (quest.objectiveKind !== "gather" || quest.objectiveTarget !== itemId) continue;
+      if (entry.progress >= quest.objectiveCount) continue;
+      entry.progress = Math.min(quest.objectiveCount, entry.progress + qty);
+      changed = true;
+    }
+    if (changed) {
+      player.dirty = true;
+      this.sendTo(player.peer, { t: "questLog", quests: this.questLogFor(player) });
+    }
+  }
+
+  private handleShrine(player: PlayerState, shrineId: string): void {
+    if (player.dead) return;
+    const shrine = this.shrines.get(shrineId);
+    if (!shrine) return;
+    if (dist2D(player.move.x, player.move.z, shrine.x, shrine.z) > 6) return;
+    const now = Date.now();
+    const readyAt = player.shrineCooldowns.get(shrineId) ?? 0;
+    if (now < readyAt) {
+      const mins = Math.ceil((readyAt - now) / 60000);
+      this.sendEvent(player, {
+        t: "event",
+        kind: "error",
+        message: `The shrine is silent (${mins}m)`,
+      });
+      return;
+    }
+    player.shrineCooldowns.set(shrineId, now + 5 * 60 * 1000);
+    player.hp = this.maxHp(player);
+    player.mana = this.maxMana(player);
+    player.dirty = true;
+    this.setActionAnim(player, "cast", 900);
+    this.sendEvent(player, { t: "event", kind: "heal", amount: player.hp, targetId: player.id });
+    this.sendSelf(player);
+  }
+
+  // ============================ parties ============================
+
+  private handleParty(
+    player: PlayerState,
+    action: "invite" | "accept" | "decline" | "leave",
+    name?: string,
+  ): void {
+    switch (action) {
+      case "invite": {
+        const target = [...this.players.values()].find(
+          (p) => p.name.toLowerCase() === name?.toLowerCase(),
+        );
+        if (!target || target.id === player.id) {
+          this.sendEvent(player, { t: "event", kind: "error", message: "Player not found" });
+          return;
+        }
+        if (target.partyId) {
+          this.sendEvent(player, { t: "event", kind: "error", message: `${target.name} is already in a party` });
+          return;
+        }
+        const partySize = player.partyId ? (this.parties.get(player.partyId)?.size ?? 0) : 1;
+        if (partySize >= 5) {
+          this.sendEvent(player, { t: "event", kind: "error", message: "Party is full" });
+          return;
+        }
+        target.pendingInviteFrom = player.id;
+        this.sendTo(target.peer, {
+          t: "party",
+          members: this.partyMembersOf(target),
+          inviteFrom: player.name,
+        });
+        this.sendTo(player.peer, { t: "chat", channel: "system", from: "system", text: `Invited ${target.name} to your party.` });
+        break;
+      }
+      case "accept": {
+        const inviter = player.pendingInviteFrom ? this.players.get(player.pendingInviteFrom) : undefined;
+        player.pendingInviteFrom = null;
+        if (!inviter) {
+          this.sendEvent(player, { t: "event", kind: "error", message: "Invite expired" });
+          this.sendPartyState(player);
+          return;
+        }
+        let partyId = inviter.partyId;
+        if (!partyId) {
+          partyId = `party_${++this.partySeq}`;
+          this.parties.set(partyId, new Set([inviter.id]));
+          inviter.partyId = partyId;
+        }
+        const members = this.parties.get(partyId)!;
+        if (members.size >= 5) {
+          this.sendEvent(player, { t: "event", kind: "error", message: "Party is full" });
+          return;
+        }
+        members.add(player.id);
+        player.partyId = partyId;
+        this.broadcastPartyState(partyId);
+        this.sendToParty(partyId, {
+          t: "chat",
+          channel: "party",
+          from: "system",
+          text: `${player.name} joined the party.`,
+        });
+        break;
+      }
+      case "decline": {
+        const inviter = player.pendingInviteFrom ? this.players.get(player.pendingInviteFrom) : undefined;
+        player.pendingInviteFrom = null;
+        if (inviter) {
+          this.sendTo(inviter.peer, {
+            t: "chat",
+            channel: "system",
+            from: "system",
+            text: `${player.name} declined your invite.`,
+          });
+        }
+        this.sendPartyState(player);
+        break;
+      }
+      case "leave":
+        this.leaveParty(player, false);
+        break;
+    }
+  }
+
+  private leaveParty(player: PlayerState, disconnecting: boolean): void {
+    const partyId = player.partyId;
+    if (!partyId) return;
+    const members = this.parties.get(partyId);
+    player.partyId = null;
+    if (!disconnecting) this.sendPartyState(player);
+    if (!members) return;
+    members.delete(player.id);
+    this.sendToParty(partyId, {
+      t: "chat",
+      channel: "party",
+      from: "system",
+      text: `${player.name} left the party.`,
+    });
+    if (members.size <= 1) {
+      // Disband: a party of one is no party at all.
+      for (const memberId of members) {
+        const member = this.players.get(memberId);
+        if (member) {
+          member.partyId = null;
+          this.sendPartyState(member);
+        }
+      }
+      this.parties.delete(partyId);
+    } else {
+      this.broadcastPartyState(partyId);
+    }
+  }
+
+  private partyMembersOf(player: PlayerState) {
+    if (!player.partyId) return null;
+    const ids = this.parties.get(player.partyId);
+    if (!ids) return null;
+    return [...ids].map((id) => {
+      const member = this.players.get(id);
+      return member
+        ? {
+            id: member.id,
+            name: member.name,
+            level: member.level,
+            hp: member.hp,
+            maxHp: this.maxHp(member),
+            online: true,
+          }
+        : { id, name: "…", level: 0, hp: 0, maxHp: 1, online: false };
+    });
+  }
+
+  private sendPartyState(player: PlayerState): void {
+    this.sendTo(player.peer, { t: "party", members: this.partyMembersOf(player) });
+  }
+
+  private broadcastPartyState(partyId: string): void {
+    const ids = this.parties.get(partyId);
+    if (!ids) return;
+    for (const id of ids) {
+      const member = this.players.get(id);
+      if (member) this.sendPartyState(member);
+    }
+  }
+
+  private sendToParty(partyId: string, msg: ServerMsg): void {
+    const ids = this.parties.get(partyId);
+    if (!ids) return;
+    const data = JSON.stringify(msg);
+    for (const id of ids) {
+      const member = this.players.get(id);
+      if (member) {
+        try {
+          member.peer.send(data);
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+  }
+
+  // ============================ actions ============================
+
+  private heldItem(player: PlayerState): InvItem | undefined {
+    return findItem(player.inventory, "hotbar", player.selectedSlot);
+  }
+
+  private setActionAnim(player: PlayerState, anim: AnimState, durationMs = ANIM_ACTION_MS): void {
+    player.actionAnim = anim;
+    player.actionAnimUntil = Date.now() + durationMs;
+  }
+
+  private handleGather(player: PlayerState, nodeId: string): void {
+    if (player.dead) return;
+    this.dismountForCombat(player);
+    const now = Date.now();
+    if (now < player.gatherReadyAt) return;
+    const node = this.nodes.get(nodeId);
+    if (!node || this.depletedNodes.has(nodeId)) return;
+    if (dist3D(player.move.x, player.move.y, player.move.z, node.x, node.y, node.z) > GATHER_RANGE) return;
+
+    const type = nodeTypeDef(node.type);
+    const held = this.heldItem(player);
+    let power = UNARMED_GATHER_POWER;
+    if (type.nodeClass !== "pick" && held) {
+      const def = itemDef(held.itemId);
+      power = def.gatherPower?.[type.nodeClass] ?? UNARMED_GATHER_POWER;
+    }
+
+    player.gatherReadyAt = now + GATHER_COOLDOWN_S * 1000;
+    this.setActionAnim(player, "gather");
+    this.cancelCast(player);
+
+    const remaining = (this.nodeHits.get(nodeId) ?? type.hits) - power;
+    const gained = type.yieldPerHit * power;
+    const overflow = addItem(player.inventory, type.yieldItem, gained);
+    player.dirty = true;
+    this.sendInventory(player);
+    this.sendEvent(player, {
+      t: "event",
+      kind: "gather",
+      itemId: type.yieldItem,
+      amount: gained - overflow,
+      x: node.x,
+      y: node.y,
+      z: node.z,
+    });
+    this.addQuestGatherProgress(player, type.yieldItem, gained - overflow);
+
+    if (held && type.nodeClass !== "pick" && itemDef(held.itemId).gatherPower) {
+      damageDurability(player.inventory, held, 1);
+    }
+
+    if (remaining <= 0) {
+      this.nodeHits.delete(nodeId);
+      const respawnAt = now + type.respawnS * 1000;
+      this.depletedNodes.set(nodeId, respawnAt);
+      void upsertDepletedNode(nodeId, respawnAt);
+      this.broadcast({ t: "nodeUpdate", nodeId, depleted: true });
+    } else {
+      this.nodeHits.set(nodeId, remaining);
+    }
+  }
+
+  private handleDrink(player: PlayerState): void {
+    if (player.dead) return;
+    // Near or in water: player position close to water level counts.
+    const nearWater =
+      player.move.y < WATER_LEVEL + 0.5 ||
+      terrainHeight(player.move.x + WATER_PROXIMITY, player.move.z) < WATER_LEVEL ||
+      terrainHeight(player.move.x - WATER_PROXIMITY, player.move.z) < WATER_LEVEL ||
+      terrainHeight(player.move.x, player.move.z + WATER_PROXIMITY) < WATER_LEVEL ||
+      terrainHeight(player.move.x, player.move.z - WATER_PROXIMITY) < WATER_LEVEL;
+    if (!nearWater) {
+      this.sendEvent(player, { t: "event", kind: "error", message: "No water nearby" });
+      return;
+    }
+    player.thirst = clamp(player.thirst + DRINK_RESTORE, 0, 100);
+    player.dirty = true;
+    this.setActionAnim(player, "gather");
+    this.sendSelf(player);
+  }
+
+  private handleMelee(player: PlayerState): void {
+    if (player.dead) return;
+    this.dismountForCombat(player);
+    const now = Date.now();
+    if (now < player.meleeReadyAt) return;
+    player.meleeReadyAt = now + MELEE_COOLDOWN_S * 1000;
+    this.setActionAnim(player, "attack");
+    this.cancelCast(player);
+
+    const held = this.heldItem(player);
+    const damage = held ? (itemDef(held.itemId).damage ?? UNARMED_DAMAGE) : UNARMED_DAMAGE;
+
+    const inCone = (tx: number, tz: number) => {
+      const angleTo = Math.atan2(tx - player.move.x, tz - player.move.z);
+      return Math.abs(wrapAngle(angleTo - player.yaw)) <= Math.PI * 0.6;
+    };
+
+    // Nearest living mob within range and roughly in front.
+    let bestMob: MobState | null = null;
+    let bestDist = Infinity;
+    for (const mob of this.mobs.values()) {
+      if (mob.respawnAt !== null) continue;
+      const d = dist3D(player.move.x, player.move.y, player.move.z, mob.x, mob.y, mob.z);
+      if (d > MELEE_RANGE + 0.6) continue;
+      if (!inCone(mob.x, mob.z)) continue;
+      if (d < bestDist) {
+        bestMob = mob;
+        bestDist = d;
+      }
+    }
+
+    // PvP: flagged players can strike other flagged players.
+    let bestFoe: PlayerState | null = null;
+    if (player.pvp) {
+      for (const other of this.players.values()) {
+        if (other.id === player.id || other.dead || !other.pvp) continue;
+        const d = dist3D(
+          player.move.x,
+          player.move.y,
+          player.move.z,
+          other.move.x,
+          other.move.y,
+          other.move.z,
+        );
+        if (d > MELEE_RANGE + 0.6) continue;
+        if (!inCone(other.move.x, other.move.z)) continue;
+        if (d < bestDist) {
+          bestFoe = other;
+          bestDist = d;
+          bestMob = null;
+        }
+      }
+    }
+
+    if (!bestMob && !bestFoe) return;
+    if (held && itemDef(held.itemId).maxDurability) damageDurability(player.inventory, held, 1);
+    if (bestFoe) this.damagePlayer(bestFoe, damage, player.id);
+    else if (bestMob) this.damageMob(bestMob, damage, player);
+  }
+
+  private handleCastStart(player: PlayerState, spellId: string): void {
+    if (player.dead || player.casting) return;
+    this.dismountForCombat(player);
+    if (!player.learnedSpells.includes(spellId)) {
+      this.sendEvent(player, { t: "event", kind: "error", message: "Spell not learned" });
+      return;
+    }
+    const spell = spellDef(spellId);
+    const now = Date.now();
+    if (now < (player.spellCooldowns.get(spellId) ?? 0)) return;
+    if (player.mana < spell.manaCost) {
+      this.sendEvent(player, { t: "event", kind: "error", message: "Not enough mana" });
+      return;
+    }
+    player.casting = {
+      spellId,
+      endsAt: now + spell.castTimeS * 1000,
+      startX: player.move.x,
+      startZ: player.move.z,
+    };
+    this.setActionAnim(player, "cast", spell.castTimeS * 1000);
+    this.sendSelf(player);
+    this.broadcastNear(player.move.x, player.move.z, {
+      t: "event",
+      kind: "castStart",
+      sourceId: player.id,
+      spellId,
+    });
+  }
+
+  private cancelCast(player: PlayerState): void {
+    if (!player.casting) return;
+    player.casting = null;
+    player.actionAnim = null;
+    this.sendSelf(player);
+  }
+
+  private finishCast(player: PlayerState): void {
+    const casting = player.casting!;
+    player.casting = null;
+    const spell = spellDef(casting.spellId);
+    player.mana = clamp(player.mana - spell.manaCost, 0, this.maxMana(player));
+    player.spellCooldowns.set(spell.id, Date.now() + spell.cooldownS * 1000);
+    player.dirty = true;
+
+    const id = `p${++this.projectileSeq}`;
+    const dx = Math.sin(player.yaw);
+    const dz = Math.cos(player.yaw);
+    // Lock onto the nearest enemy roughly ahead so loose aim still connects.
+    const homingId = this.acquireHomingTarget(player, spell.range);
+    this.projectiles.set(id, {
+      id,
+      spellId: spell.id,
+      ownerId: player.id,
+      x: player.move.x + dx * 0.8,
+      y: player.move.y + 1.4,
+      z: player.move.z + dz * 0.8,
+      dx,
+      dy: 0,
+      dz,
+      traveled: 0,
+      // A curving path is longer than a straight one — give homing shots slack.
+      maxRange: homingId ? spell.range * 1.7 : spell.range,
+      damage: spell.damage,
+      speed: spell.projectileSpeed,
+      homingId,
+    });
+    this.sendSelf(player);
+  }
+
+  /** Nearest enemy (mob, or pvp player if caster is flagged) within range and
+   *  a generous forward cone — the projectile then curves toward it. */
+  private acquireHomingTarget(player: PlayerState, range: number): string | null {
+    let bestId: string | null = null;
+    let bestScore = Infinity;
+    const consider = (tx: number, tz: number, id: string) => {
+      const d = dist2D(player.move.x, player.move.z, tx, tz);
+      if (d > range) return;
+      const angle = Math.abs(wrapAngle(Math.atan2(tx - player.move.x, tz - player.move.z) - player.yaw));
+      if (angle > Math.PI * 0.5) return; // must be within ~90° of facing
+      const score = d + angle * 12; // prefer close + well-aimed
+      if (score < bestScore) {
+        bestScore = score;
+        bestId = id;
+      }
+    };
+    for (const mob of this.mobs.values()) {
+      if (mob.respawnAt !== null) continue;
+      consider(mob.x, mob.z, mob.id);
+    }
+    if (player.pvp) {
+      for (const other of this.players.values()) {
+        if (other.id === player.id || other.dead || !other.pvp) continue;
+        consider(other.move.x, other.move.z, other.id);
+      }
+    }
+    return bestId;
+  }
+
+  /** Current world position of a homing target (mob or player), or null. */
+  private homingTargetPos(id: string): { x: number; y: number; z: number } | null {
+    const mob = this.mobs.get(id);
+    if (mob && mob.respawnAt === null) return { x: mob.x, y: mob.y + 0.8, z: mob.z };
+    const player = this.players.get(id);
+    if (player && !player.dead) return { x: player.move.x, y: player.move.y + 1.2, z: player.move.z };
+    return null;
+  }
+
+  private handleCraft(player: PlayerState, recipeId: string): void {
+    if (player.dead) return;
+    const recipe = RECIPES[recipeId];
+    if (!recipe) return;
+
+    if (recipe.station) {
+      const near = this.structures.some(
+        (s) => s.type === recipe.station && dist2D(s.x, s.z, player.move.x, player.move.z) < 5,
+      );
+      if (!near) {
+        this.sendEvent(player, { t: "event", kind: "error", message: `Requires a ${recipe.station} nearby` });
+        return;
+      }
+    }
+
+    for (const ing of recipe.ingredients) {
+      const have = player.inventory.reduce((n, i) => (i.itemId === ing.itemId ? n + i.qty : n), 0);
+      if (have < ing.qty) {
+        this.sendEvent(player, { t: "event", kind: "error", message: "Missing materials" });
+        return;
+      }
+    }
+    for (const ing of recipe.ingredients) removeItem(player.inventory, ing.itemId, ing.qty);
+    const overflow = addItem(player.inventory, recipe.output, recipe.outputQty);
+    if (overflow > 0) {
+      // No room: refund what we can and bail out honestly.
+      this.sendEvent(player, { t: "event", kind: "error", message: "Inventory full" });
+    }
+    player.dirty = true;
+    this.sendInventory(player);
+    this.sendEvent(player, { t: "event", kind: "gather", itemId: recipe.output, amount: recipe.outputQty - overflow });
+  }
+
+  private handleConsume(player: PlayerState, container: InvItem["container"], slot: number): void {
+    if (player.dead) return;
+    const item = findItem(player.inventory, container, slot);
+    if (!item) return;
+    const def = itemDef(item.itemId);
+
+    if (def.type === "tome" && def.teachesSpell) {
+      if (!player.learnedSpells.includes(def.teachesSpell)) {
+        player.learnedSpells.push(def.teachesSpell);
+        decrementSlot(player.inventory, container, slot);
+        player.dirty = true;
+        this.sendInventory(player);
+        this.sendEvent(player, { t: "event", kind: "learnSpell", spellId: def.teachesSpell });
+      }
+      return;
+    }
+
+    if (def.type !== "consumable" || !def.restore) return;
+    player.hp = clamp(player.hp + (def.restore.hp ?? 0), 0, this.maxHp(player));
+    player.hunger = clamp(player.hunger + (def.restore.hunger ?? 0), 0, 100);
+    player.thirst = clamp(player.thirst + (def.restore.thirst ?? 0), 0, 100);
+    decrementSlot(player.inventory, container, slot);
+    player.dirty = true;
+    this.setActionAnim(player, "gather");
+    this.sendInventory(player);
+    this.sendSelf(player);
+  }
+
+  private async handlePlace(player: PlayerState, container: InvItem["container"], slot: number): Promise<void> {
+    if (player.dead) return;
+    const item = findItem(player.inventory, container, slot);
+    if (!item) return;
+    const def = itemDef(item.itemId);
+    if (def.type !== "placeable" || !def.placesStructure) return;
+
+    const x = player.move.x + Math.sin(player.yaw) * 2;
+    const z = player.move.z + Math.cos(player.yaw) * 2;
+    const y = terrainHeight(x, z);
+    if (y < WATER_LEVEL) {
+      this.sendEvent(player, { t: "event", kind: "error", message: "Can't place in water" });
+      return;
+    }
+
+    decrementSlot(player.inventory, container, slot);
+    player.dirty = true;
+    const id = await insertStructure({ ownerId: player.id, type: def.placesStructure, x, y, z, yaw: player.yaw });
+    const structure: StructureSnap = { id, type: def.placesStructure, ownerId: player.id, x, y, z, yaw: player.yaw };
+    this.structures.push(structure);
+    this.sendInventory(player);
+    this.broadcast({ t: "structureAdd", structure });
+  }
+
+  private handleRespawn(player: PlayerState): void {
+    if (!player.dead) return;
+    player.dead = false;
+    player.hp = this.maxHp(player) * RESPAWN_HP_FRACTION;
+    player.mana = this.maxMana(player) * 0.5;
+    player.hunger = Math.max(player.hunger, 30);
+    player.thirst = Math.max(player.thirst, 30);
+
+    // Respawn at the nearest village graveyard, falling back to world spawn.
+    const grave = this.nearestGraveyard(player.move.x, player.move.z);
+    player.move = {
+      x: grave.x + (Math.random() - 0.5) * 6,
+      y: terrainHeight(grave.x, grave.z) + 0.1,
+      z: grave.z + (Math.random() - 0.5) * 6,
+      vy: 0,
+      grounded: true,
+    };
+    player.dirty = true;
+    this.sendSelf(player);
+  }
+
+  private nearestGraveyard(x: number, z: number): { x: number; z: number } {
+    // Respawn at the closest village; only fall back to world spawn if the
+    // realm has no villages at all.
+    let best: { x: number; z: number } | null = null;
+    let bestDist = Infinity;
+    for (const village of this.villages) {
+      const d = dist2D(x, z, village.x, village.z);
+      if (d < bestDist) {
+        bestDist = d;
+        best = { x: village.x, z: village.z };
+      }
+    }
+    return best ?? { x: SPAWN_POINT.x, z: SPAWN_POINT.z };
+  }
+
+  // ============================ combat ============================
+
+  private damageMob(mob: MobState, amount: number, attacker: PlayerState): void {
+    mob.hp -= amount;
+    mob.targetId = attacker.id;
+    this.broadcastNear(mob.x, mob.z, {
+      t: "event",
+      kind: "damage",
+      sourceId: attacker.id,
+      targetId: mob.id,
+      amount,
+      x: mob.x,
+      y: mob.y + 1,
+      z: mob.z,
+    });
+    if (mob.hp <= 0) this.killMob(mob, attacker);
+  }
+
+  private killMob(mob: MobState, killer: PlayerState): void {
+    const def = mobDef(mob.type);
+    mob.respawnAt = Date.now() + def.respawnS * 1000;
+    mob.targetId = null;
+    mob.hp = 0;
+
+    for (const loot of def.loot) {
+      if (loot.chance !== undefined && Math.random() > loot.chance) continue;
+      const qty = loot.min + Math.floor(Math.random() * (loot.max - loot.min + 1));
+      if (qty > 0) {
+        const got = qty - addItem(killer.inventory, loot.itemId, qty);
+        if (got > 0) {
+          this.sendEvent(killer, { t: "event", kind: "gather", itemId: loot.itemId, amount: got });
+          this.addQuestGatherProgress(killer, loot.itemId, got);
+        }
+      }
+    }
+    killer.dirty = true;
+    this.sendInventory(killer);
+    this.grantXp(killer, def.xp);
+    this.addQuestKillProgress(killer, mob.type);
+  }
+
+  private grantXp(player: PlayerState, amount: number): void {
+    if (player.level >= MAX_LEVEL) return;
+    player.xp += amount;
+    this.sendEvent(player, { t: "event", kind: "xp", amount });
+    while (player.level < MAX_LEVEL && player.xp >= xpForLevel(player.level)) {
+      player.xp -= xpForLevel(player.level);
+      player.level += 1;
+      player.hp = this.maxHp(player); // level-up heals
+      player.mana = this.maxMana(player);
+      this.sendEvent(player, { t: "event", kind: "levelup", amount: player.level });
+      this.broadcastChat("system", `${player.name} reached level ${player.level}!`);
+    }
+    player.dirty = true;
+    this.sendSelf(player);
+  }
+
+  private damagePlayer(player: PlayerState, amount: number, sourceId: string): void {
+    if (player.dead) return;
+    this.dismountForCombat(player);
+    player.hp -= amount;
+    player.dirty = true;
+    this.cancelCast(player);
+    this.broadcastNear(player.move.x, player.move.z, {
+      t: "event",
+      kind: "damage",
+      sourceId,
+      targetId: player.id,
+      amount,
+      x: player.move.x,
+      y: player.move.y + 1.5,
+      z: player.move.z,
+    });
+    if (player.hp <= 0) {
+      player.hp = 0;
+      player.dead = true;
+      this.sendEvent(player, { t: "event", kind: "death" });
+      const killer = this.players.get(sourceId);
+      this.broadcastChat(
+        "system",
+        killer ? `${player.name} was slain by ${killer.name}!` : `${player.name} died.`,
+      );
+      for (const mob of this.mobs.values()) {
+        if (mob.targetId === player.id) mob.targetId = null;
+      }
+    }
+    this.sendSelf(player);
+  }
+
+  // ============================ tick ============================
+
+  private tick(): void {
+    this.tickCount++;
+    const now = Date.now();
+
+    for (const player of this.players.values()) {
+      this.tickPlayerMovement(player);
+      this.tickVitals(player, now);
+      if (player.casting) {
+        const movedFar =
+          dist2D(player.move.x, player.move.z, player.casting.startX, player.casting.startZ) > 0.6;
+        if (movedFar) this.cancelCast(player);
+        else if (now >= player.casting.endsAt) this.finishCast(player);
+      }
+      if (player.actionAnim && now > player.actionAnimUntil) player.actionAnim = null;
+    }
+
+    this.tickProjectiles();
+    this.tickMobs(now);
+    this.tickNodeRespawns(now);
+
+    if (this.tickCount % 2 === 0) {
+      this.sendSnapshots();
+    } else {
+      // Off-tick: send just the self-ack so clients reconcile at a full 20Hz,
+      // keeping the pending-input window (and any rubberband) small.
+      for (const player of this.players.values()) this.sendSelf(player);
+    }
+    // Party frames refresh at 0.5 Hz — enough for out-of-range member HP.
+    if (this.tickCount % 40 === 0) {
+      for (const partyId of this.parties.keys()) this.broadcastPartyState(partyId);
+    }
+  }
+
+  private tickPlayerMovement(player: PlayerState): void {
+    if (player.dead) {
+      player.inputQueue.length = 0;
+      player.lastMoveMag = 0;
+      return;
+    }
+    const inputs = player.inputQueue.splice(0, MAX_INPUTS_PER_TICK);
+    if (inputs.length === 0) {
+      // Keep physics ticking (falling, water) even without fresh input.
+      player.move = stepMovement(
+        player.move,
+        { moveX: 0, moveZ: 0, jump: false, sprint: false, mount: player.mount },
+        TICK_DT,
+      );
+      player.lastMoveMag = 0;
+      return;
+    }
+    for (const input of inputs) {
+      player.yaw = input.yaw;
+      player.move = stepMovement(
+        player.move,
+        { moveX: input.moveX, moveZ: input.moveZ, jump: input.jump, sprint: input.sprint, mount: player.mount },
+        TICK_DT,
+      );
+      player.lastAckSeq = input.seq;
+      player.lastMoveMag = Math.hypot(input.moveX, input.moveZ);
+    }
+    player.dirty = true;
+  }
+
+  private tickVitals(player: PlayerState, now: number): void {
+    if (player.dead) return;
+    player.hunger = clamp(player.hunger - HUNGER_DECAY_PER_S * TICK_DT, 0, 100);
+    player.thirst = clamp(player.thirst - THIRST_DECAY_PER_S * TICK_DT, 0, 100);
+    player.mana = clamp(player.mana + MANA_REGEN_PER_S * TICK_DT, 0, this.maxMana(player));
+
+    if (player.hunger <= 0 || player.thirst <= 0) {
+      player.hp -= STARVATION_DPS * TICK_DT;
+      if (player.hp <= 0) {
+        player.hp = 0;
+        player.dead = true;
+        player.mount = null;
+        this.sendEvent(player, { t: "event", kind: "death" });
+        this.broadcastChat("system", `${player.name} starved to death.`);
+      }
+    } else if (player.hunger > 30 && player.thirst > 30) {
+      player.hp = clamp(player.hp + HP_REGEN_PER_S * TICK_DT, 0, this.maxHp(player));
+    }
+  }
+
+  private tickProjectiles(): void {
+    for (const proj of [...this.projectiles.values()]) {
+      // Homing: curve the velocity toward the locked target at a capped turn
+      // rate so the bolt bends in rather than snapping.
+      if (proj.homingId) {
+        const tp = this.homingTargetPos(proj.homingId);
+        if (!tp) {
+          proj.homingId = null;
+        } else {
+          const dirX = tp.x - proj.x;
+          const dirY = tp.y - proj.y;
+          const dirZ = tp.z - proj.z;
+          const len = Math.hypot(dirX, dirY, dirZ) || 1;
+          // Curve harder when the target is close so fast bolts still bend in.
+          const MAX_TURN = len < 8 ? 0.55 : 0.32;
+          proj.dx += ((dirX / len) - proj.dx) * MAX_TURN;
+          proj.dy += ((dirY / len) - proj.dy) * MAX_TURN;
+          proj.dz += ((dirZ / len) - proj.dz) * MAX_TURN;
+          const n = Math.hypot(proj.dx, proj.dy, proj.dz) || 1;
+          proj.dx /= n;
+          proj.dy /= n;
+          proj.dz /= n;
+        }
+      }
+
+      const step = proj.speed * TICK_DT;
+      proj.x += proj.dx * step;
+      proj.y += proj.dy * step;
+      proj.z += proj.dz * step;
+      proj.traveled += step;
+
+      let hit = false;
+      const owner = this.players.get(proj.ownerId);
+      for (const mob of this.mobs.values()) {
+        if (mob.respawnAt !== null) continue;
+        if (dist3D(proj.x, proj.y, proj.z, mob.x, mob.y + 0.8, mob.z) < 1.7) {
+          if (owner) this.damageMob(mob, proj.damage, owner);
+          this.broadcastNear(proj.x, proj.z, {
+            t: "event",
+            kind: "spellHit",
+            spellId: proj.spellId,
+            x: proj.x,
+            y: proj.y,
+            z: proj.z,
+          });
+          hit = true;
+          break;
+        }
+      }
+      // PvP: firebolts strike flagged players when the caster is flagged too.
+      if (!hit && owner?.pvp) {
+        for (const other of this.players.values()) {
+          if (other.id === proj.ownerId || other.dead || !other.pvp) continue;
+          if (dist3D(proj.x, proj.y, proj.z, other.move.x, other.move.y + 1.2, other.move.z) < 1.7) {
+            this.damagePlayer(other, proj.damage, proj.ownerId);
+            this.broadcastNear(proj.x, proj.z, {
+              t: "event",
+              kind: "spellHit",
+              spellId: proj.spellId,
+              x: proj.x,
+              y: proj.y,
+              z: proj.z,
+            });
+            hit = true;
+            break;
+          }
+        }
+      }
+      const groundHit = proj.y < terrainHeight(proj.x, proj.z);
+      if (hit || groundHit || proj.traveled >= proj.maxRange) {
+        this.projectiles.delete(proj.id);
+      }
+    }
+  }
+
+  private tickMobs(now: number): void {
+    for (const mob of this.mobs.values()) {
+      const def = mobDef(mob.type);
+
+      if (mob.respawnAt !== null) {
+        if (now >= mob.respawnAt) {
+          mob.respawnAt = null;
+          mob.hp = def.maxHp;
+          mob.x = mob.homeX;
+          mob.z = mob.homeZ;
+          mob.y = terrainHeight(mob.x, mob.z);
+          mob.targetId = null;
+        }
+        continue;
+      }
+
+      const distHome = dist2D(mob.x, mob.z, mob.homeX, mob.homeZ);
+
+      // Acquire target.
+      if (!mob.targetId) {
+        for (const player of this.players.values()) {
+          if (player.dead) continue;
+          if (dist2D(mob.x, mob.z, player.move.x, player.move.z) < def.aggroRange) {
+            mob.targetId = player.id;
+            break;
+          }
+        }
+      }
+
+      const target = mob.targetId ? this.players.get(mob.targetId) : undefined;
+      if (mob.targetId && (!target || target.dead)) {
+        mob.targetId = null;
+      }
+
+      if (target && !target.dead && distHome < def.leashRange) {
+        // Chase / attack.
+        const d = dist2D(mob.x, mob.z, target.move.x, target.move.z);
+        mob.yaw = Math.atan2(target.move.x - mob.x, target.move.z - mob.z);
+        if (d > def.attackRange) {
+          this.moveMob(mob, target.move.x, target.move.z, def.speed);
+        } else if (now >= mob.attackReadyAt) {
+          mob.attackReadyAt = now + def.attackCooldownS * 1000;
+          mob.actionAnimUntil = now + ANIM_ACTION_MS;
+          this.damagePlayer(target, def.damage, mob.id);
+        }
+      } else {
+        if (mob.targetId) mob.targetId = null; // leash: give up
+        if (distHome > 2 && distHome > def.leashRange * 0.5) {
+          this.moveMob(mob, mob.homeX, mob.homeZ, def.speed * 0.9);
+          if (distHome > def.leashRange * 0.9) mob.hp = def.maxHp; // reset heal
+        } else {
+          // Wander.
+          if (now >= mob.nextWanderAt) {
+            const r = hash2(now & 0xffff, Math.round(mob.homeX), Math.round(mob.homeZ));
+            const angle = r * Math.PI * 2;
+            const radius = 4 + r * 10;
+            mob.wanderTx = mob.homeX + Math.sin(angle) * radius;
+            mob.wanderTz = mob.homeZ + Math.cos(angle) * radius;
+            mob.nextWanderAt = now + 3000 + r * 5000;
+          }
+          if (dist2D(mob.x, mob.z, mob.wanderTx, mob.wanderTz) > 1) {
+            this.moveMob(mob, mob.wanderTx, mob.wanderTz, def.wanderSpeed);
+          }
+        }
+      }
+    }
+  }
+
+  private moveMob(mob: MobState, tx: number, tz: number, speed: number): void {
+    const dx = tx - mob.x;
+    const dz = tz - mob.z;
+    const d = Math.hypot(dx, dz);
+    if (d < 0.01) return;
+    const step = Math.min(speed * TICK_DT, d);
+    const nx = mob.x + (dx / d) * step;
+    const nz = mob.z + (dz / d) * step;
+    const ny = terrainHeight(nx, nz);
+    if (ny < WATER_LEVEL - 0.2) return; // wolves won't swim
+    mob.x = nx;
+    mob.z = nz;
+    mob.y = ny;
+    mob.yaw = Math.atan2(dx, dz);
+  }
+
+  private tickNodeRespawns(now: number): void {
+    if (this.tickCount % 20 !== 0) return; // check once a second
+    const respawned: string[] = [];
+    for (const [nodeId, at] of this.depletedNodes) {
+      if (now >= at) {
+        this.depletedNodes.delete(nodeId);
+        respawned.push(nodeId);
+        this.broadcast({ t: "nodeUpdate", nodeId, depleted: false });
+      }
+    }
+    if (respawned.length > 0) void deleteDepletedNodes(respawned);
+  }
+
+  // ============================ snapshots ============================
+
+  private timeOffset = 0.3;
+
+  private timeOfDay(): number {
+    return ((Date.now() - this.startedAt) / 1000 / DAY_LENGTH_S + this.timeOffset) % 1;
+  }
+
+  /** Dev tool: pin the current time-of-day to a value in [0,1). */
+  setTimeOfDay(t: number): void {
+    this.timeOffset = (t - (Date.now() - this.startedAt) / 1000 / DAY_LENGTH_S) % 1;
+    if (this.timeOffset < 0) this.timeOffset += 1;
+  }
+
+  private maxHp(player: PlayerState): number {
+    return BASE_MAX_HP + HP_PER_LEVEL * (player.level - 1);
+  }
+
+  private maxMana(player: PlayerState): number {
+    return BASE_MAX_MANA + MANA_PER_LEVEL * (player.level - 1);
+  }
+
+  private playerAnim(player: PlayerState): AnimState {
+    if (player.dead) return "dead";
+    if (player.casting) return "cast";
+    if (player.actionAnim) return player.actionAnim;
+    if (player.move.y < WATER_LEVEL - 0.4) return "swim";
+    if (player.lastMoveMag > 0.1) return "run";
+    return "idle";
+  }
+
+  private selfState(player: PlayerState): SelfState {
+    return {
+      x: player.move.x,
+      y: player.move.y,
+      z: player.move.z,
+      vy: player.move.vy,
+      grounded: player.move.grounded,
+      hp: player.hp,
+      maxHp: this.maxHp(player),
+      mana: player.mana,
+      maxMana: this.maxMana(player),
+      hunger: player.hunger,
+      thirst: player.thirst,
+      xp: player.xp,
+      xpNext: xpForLevel(player.level),
+      level: player.level,
+      dead: player.dead,
+      ackSeq: player.lastAckSeq,
+      castingSpell: player.casting?.spellId ?? null,
+      castEndsAt: player.casting?.endsAt ?? null,
+      mount: player.mount,
+    };
+  }
+
+  private sendSnapshots(): void {
+    const now = Date.now();
+    const allPlayers = [...this.players.values()];
+    for (const viewer of allPlayers) {
+      const px = viewer.move.x;
+      const pz = viewer.move.z;
+
+      const players: PlayerSnap[] = [];
+      for (const other of allPlayers) {
+        if (dist2D(px, pz, other.move.x, other.move.z) > INTEREST_RADIUS) continue;
+        players.push({
+          id: other.id,
+          name: other.name,
+          x: other.move.x,
+          y: other.move.y,
+          z: other.move.z,
+          yaw: other.yaw,
+          hp: other.hp,
+          maxHp: this.maxHp(other),
+          anim: this.playerAnim(other),
+          pvp: other.pvp,
+          mount: other.mount,
+        });
+      }
+
+      const mobs: MobSnap[] = [];
+      for (const mob of this.mobs.values()) {
+        if (mob.respawnAt !== null) continue;
+        if (dist2D(px, pz, mob.x, mob.z) > INTEREST_RADIUS) continue;
+        const def = mobDef(mob.type);
+        mobs.push({
+          id: mob.id,
+          type: mob.type,
+          x: mob.x,
+          y: mob.y,
+          z: mob.z,
+          yaw: mob.yaw,
+          hp: mob.hp,
+          maxHp: def.maxHp,
+          anim: mob.actionAnimUntil > now ? "attack" : mob.targetId ? "run" : "idle",
+        });
+      }
+
+      const projectiles: ProjectileSnap[] = [];
+      for (const proj of this.projectiles.values()) {
+        if (dist2D(px, pz, proj.x, proj.z) > INTEREST_RADIUS) continue;
+        projectiles.push({ id: proj.id, spellId: proj.spellId, x: proj.x, y: proj.y, z: proj.z });
+      }
+
+      const npcs: NpcSnap[] = [];
+      for (const npc of this.npcs) {
+        if (dist2D(px, pz, npc.x, npc.z) > INTEREST_RADIUS) continue;
+        npcs.push(this.npcSnapFor(npc, viewer));
+      }
+
+      this.sendTo(viewer.peer, {
+        t: "snapshot",
+        tick: this.tickCount,
+        timeOfDay: this.timeOfDay(),
+        players,
+        mobs,
+        projectiles,
+        npcs,
+      });
+      this.sendSelf(viewer);
+    }
+  }
+
+  // ============================ io helpers ============================
+
+  private sendTo(peer: PeerLike, msg: ServerMsg): void {
+    try {
+      peer.send(JSON.stringify(msg));
+    } catch {
+      // peer already gone; cleanup happens on close event
+    }
+  }
+
+  private sendSelf(player: PlayerState): void {
+    this.sendTo(player.peer, { t: "self", self: this.selfState(player) });
+  }
+
+  private sendInventory(player: PlayerState): void {
+    this.sendTo(player.peer, {
+      t: "inventory",
+      items: toSnaps(player.inventory),
+      learnedSpells: player.learnedSpells,
+      selectedSlot: player.selectedSlot,
+    });
+  }
+
+  private sendEvent(player: PlayerState, msg: ServerMsg): void {
+    this.sendTo(player.peer, msg);
+  }
+
+  private broadcast(msg: ServerMsg): void {
+    const data = JSON.stringify(msg);
+    for (const player of this.players.values()) {
+      try {
+        player.peer.send(data);
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+
+  private broadcastNear(x: number, z: number, msg: ServerMsg): void {
+    const data = JSON.stringify(msg);
+    for (const player of this.players.values()) {
+      if (dist2D(x, z, player.move.x, player.move.z) > INTEREST_RADIUS) continue;
+      try {
+        player.peer.send(data);
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+
+  private broadcastChat(from: string, text: string): void {
+    this.broadcast({ t: "chat", channel: from === "system" ? "system" : "realm", from, text });
+  }
+
+  // ============================ persistence ============================
+
+  private toPersisted(player: PlayerState): PersistedPlayer {
+    return {
+      id: player.id,
+      accountId: player.accountId,
+      name: player.name,
+      level: player.level,
+      xp: player.xp,
+      x: player.move.x,
+      y: player.move.y,
+      z: player.move.z,
+      yaw: player.yaw,
+      hp: player.hp,
+      mana: player.mana,
+      hunger: player.hunger,
+      thirst: player.thirst,
+      learnedSpells: player.learnedSpells,
+      inventory: player.inventory,
+      questProgress: [...player.questProgress.entries()].map(([questId, e]) => ({
+        questId,
+        status: e.status,
+        progress: e.progress,
+      })),
+    };
+  }
+
+  async flushDirty(): Promise<void> {
+    for (const player of this.players.values()) {
+      if (!player.dirty) continue;
+      player.dirty = false;
+      await savePlayer(this.toPersisted(player)).catch((e) => {
+        player.dirty = true;
+        console.error("[game] periodic save failed", e);
+      });
+    }
+  }
+
+  debugStatus() {
+    return {
+      started: this.started,
+      tickCount: this.tickCount,
+      players: [...this.players.keys()],
+      mobs: this.mobs.size,
+      nodes: this.nodes.size,
+      depletedNodes: this.depletedNodes.size,
+      structures: this.structures.length,
+      projectiles: this.projectiles.size,
+    };
+  }
+
+  /** Dev-only: spawn a mob of a given type next to a connected character. */
+  debugSpawnMob(charId: string, type: string): boolean {
+    const player = this.players.get(charId);
+    if (!player) return false;
+    const def = mobDef(type);
+    const x = player.move.x + Math.sin(player.yaw) * 4;
+    const z = player.move.z + Math.cos(player.yaw) * 4;
+    const y = terrainHeight(x, z);
+    const id = `dbg_${type}_${Date.now()}`;
+    this.mobs.set(id, {
+      id,
+      type,
+      x,
+      y,
+      z,
+      yaw: 0,
+      hp: def.maxHp,
+      homeX: x,
+      homeZ: z,
+      targetId: null,
+      attackReadyAt: 0,
+      respawnAt: null,
+      wanderTx: x,
+      wanderTz: z,
+      nextWanderAt: 0,
+      actionAnimUntil: 0,
+    });
+    return true;
+  }
+
+  /** Dev-only: hand an item to a connected character (verification tooling). */
+  debugGive(charId: string, itemId: string, qty: number): boolean {
+    const player = this.players.get(charId);
+    if (!player) return false;
+    addItem(player.inventory, itemId, qty);
+    player.dirty = true;
+    this.sendInventory(player);
+    return true;
+  }
+
+  async flushAll(): Promise<void> {
+    for (const player of this.players.values()) {
+      await savePlayer(this.toPersisted(player)).catch((e) => console.error("[game] flush failed", e));
+    }
+  }
+}

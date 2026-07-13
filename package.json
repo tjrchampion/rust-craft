@@ -1,0 +1,25 @@
+{
+  "name": "rust-craft",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "pnpm run --parallel --filter @rustcraft/server --filter @rustcraft/client dev",
+    "dev:server": "pnpm --filter @rustcraft/server dev",
+    "dev:client": "pnpm --filter @rustcraft/client dev",
+    "build": "pnpm -r build",
+    "db:generate": "pnpm --filter @rustcraft/server db:generate",
+    "db:migrate": "pnpm --filter @rustcraft/server db:migrate",
+    "test": "pnpm -r test",
+    "typecheck": "pnpm -r typecheck"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild",
+      "@parcel/watcher"
+    ]
+  }
+}

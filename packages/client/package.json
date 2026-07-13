@@ -1,0 +1,24 @@
+{
+  "name": "@rustcraft/client",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "typecheck": "svelte-check --tsconfig ./tsconfig.json"
+  },
+  "dependencies": {
+    "@fontsource/cinzel": "^5.2.8",
+    "@rustcraft/shared": "workspace:*",
+    "svelte": "^5.56.4",
+    "three": "^0.185.1"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^7.2.0",
+    "@types/three": "^0.185.1",
+    "svelte-check": "^4.7.2",
+    "typescript": "^5.9.3",
+    "vite": "^8.1.4"
+  }
+}

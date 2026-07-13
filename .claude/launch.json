@@ -1,0 +1,19 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "server",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--filter", "@rustcraft/server", "dev"],
+      "port": 3000,
+      "autoPort": false
+    },
+    {
+      "name": "client",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--filter", "@rustcraft/client", "dev"],
+      "port": 5173,
+      "autoPort": true
+    }
+  ]
+}

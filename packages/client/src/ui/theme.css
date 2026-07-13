@@ -1,0 +1,105 @@
+/* Rust-Craft UI theme — shared frame language for every panel and bar. */
+@import "@fontsource/cinzel/400.css";
+@import "@fontsource/cinzel/700.css";
+@import "@fontsource/cinzel/900.css";
+
+:root {
+  --rc-display: "Cinzel", "Times New Roman", serif;
+  --rc-body: system-ui, -apple-system, sans-serif;
+
+  --rc-gold: #c9a24b;
+  --rc-gold-bright: #ffd66e;
+  --rc-gold-dim: #8a6f33;
+  --rc-parchment: #e8dcbf;
+  --rc-panel: rgba(14, 12, 9, 0.92);
+  --rc-panel-light: rgba(30, 26, 18, 0.92);
+  --rc-ink: #e9e2d0;
+  --rc-ink-dim: #a99f86;
+  --rc-blood: #b83a3a;
+  --rc-mana: #3a62b8;
+  --rc-nature: #6f9c46;
+  --rc-ember: #d97b2e;
+}
+
+/* Ornate frame used by panels, cards and bars */
+.rc-frame {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(0, 0, 0, 0.25)),
+    var(--rc-panel);
+  border: 1px solid var(--rc-gold-dim);
+  outline: 1px solid rgba(0, 0, 0, 0.8);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 224, 150, 0.08),
+    0 10px 40px rgba(0, 0, 0, 0.55);
+  border-radius: 6px;
+}
+
+.rc-frame-title {
+  font-family: var(--rc-display);
+  font-weight: 700;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--rc-gold);
+  font-size: 13px;
+}
+
+.rc-btn {
+  font-family: var(--rc-display);
+  font-weight: 700;
+  letter-spacing: 1px;
+  color: var(--rc-parchment);
+  background: linear-gradient(180deg, #3a3226, #241f16);
+  border: 1px solid var(--rc-gold-dim);
+  border-radius: 5px;
+  padding: 10px 16px;
+  cursor: pointer;
+  transition: all 0.12s ease-out;
+}
+.rc-btn:hover,
+.rc-btn:focus-visible {
+  border-color: var(--rc-gold-bright);
+  color: #fff;
+  box-shadow: 0 0 14px rgba(255, 214, 110, 0.25);
+  outline: none;
+}
+.rc-btn.primary {
+  background: linear-gradient(180deg, #6e5426, #4a3618);
+}
+
+.rc-input {
+  font-family: var(--rc-body);
+  width: 100%;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  border-radius: 5px;
+  border: 1px solid #4a4232;
+  background: rgba(8, 7, 5, 0.8);
+  color: var(--rc-ink);
+  font-size: 14px;
+}
+.rc-input:focus {
+  border-color: var(--rc-gold);
+  outline: none;
+}
+
+.rc-divider {
+  height: 1px;
+  margin: 14px 0;
+  background: linear-gradient(90deg, transparent, var(--rc-gold-dim), transparent);
+}
+
+/* Stylized in-game cursor (gold arrow), used in menus. Falls back to auto. */
+:root {
+  --rc-cursor: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='28' height='28' viewBox='0 0 28 28'><path d='M3 2 L3 22 L9 16 L13 25 L17 23 L13 14 L21 14 Z' fill='%23f5ecd2' stroke='%23191308' stroke-width='1.5' stroke-linejoin='round'/></svg>")
+    2 2, auto;
+}
+body {
+  cursor: var(--rc-cursor);
+}
+/* Buttons/links get a pointer-flavored variant. */
+.rc-btn,
+button,
+a,
+select {
+  cursor: var(--rc-cursor);
+}
