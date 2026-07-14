@@ -14,8 +14,10 @@
     "typecheck": "pnpm -r typecheck"
   },
   "engines": {
-    "node": "22.x"
+    "node": "20.x",
+    "pnpm": "9.x"
   },
+  "packageManager": "pnpm@9.15.0",
   "pnpm": {
     "onlyBuiltDependencies": [
       "esbuild",
