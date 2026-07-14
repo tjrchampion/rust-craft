@@ -24,6 +24,7 @@ import { buildHorizonMountains } from "../render/horizon";
 import { buildClouds, type CloudField } from "../render/clouds";
 import { buildNameplate, buildHorse, buildRaft, type MountParts } from "../render/models";
 import { NodeManager } from "../render/nodes";
+import { GrassField } from "../render/grass";
 import { EntityManager, playerModelUrl } from "../render/entities";
 import { AnimatedModel, PLAYER_ANIMS, logicalFromState } from "../render/gltf";
 import { buildWorldStatic, buildVillage, animateSettlements, type SettlementHandles } from "../render/settlements";
@@ -57,6 +58,7 @@ export class Game {
   private entities!: EntityManager;
   private settlements!: SettlementHandles;
   private npcManager!: NpcManager;
+  private grass: GrassField;
   private clouds: CloudField;
   /** Villages stream in once the player nears their zone, rather than every
    *  building loading at connect time; the GLTF cache makes re-entry free. */
@@ -77,6 +79,9 @@ export class Game {
   private accumulator = 0;
   private lastFrame = performance.now();
   private jumpQueued = false;
+  /** Escape presses redelivered just after an auto-opened system menu (see
+   *  onFullscreenChange) are ignored so they don't immediately close it again. */
+  private suppressEscapeUntil = 0;
   private running = false;
   private disposed = false;
   private animTime = 0;
@@ -121,6 +126,7 @@ export class Game {
     this.scene.add(this.clouds.group);
     this.settlements = buildWorldStatic(this.scene);
     this.npcManager = new NpcManager(this.scene);
+    this.grass = new GrassField(this.scene);
 
     this.avatar = new AnimatedModel(PLAYER_ANIMS);
     const plate = buildNameplate(characterName, "#ffe9a8");
@@ -132,6 +138,7 @@ export class Game {
     this.input = new InputManager(canvas);
 
     window.addEventListener("resize", this.onResize);
+    document.addEventListener("fullscreenchange", this.onFullscreenChange);
 
     this.unsubscribe = this.connection.onMessage((msg) => this.onServerMsg(msg));
     void this.connect(characterId);
@@ -181,6 +188,7 @@ export class Game {
         this.nodes = new NodeManager(this.scene, msg.depletedNodes);
         for (const structure of msg.structures) this.entities.addStructure(structure);
         for (const npc of msg.npcs) this.npcManager.applySnap(npc);
+        ui.questMarkers = this.npcManager.questMarkers();
         ui.questLog = msg.questLog;
         break;
       }
@@ -197,6 +205,7 @@ export class Game {
         this.entities.applyMobs(msg.mobs, now);
         this.entities.applyProjectiles(msg.projectiles);
         for (const npc of msg.npcs) this.npcManager.applySnap(npc);
+        ui.questMarkers = this.npcManager.questMarkers();
         break;
       }
       case "self":
@@ -377,15 +386,21 @@ export class Game {
       ui.inventoryOpen = !ui.inventoryOpen;
       this.setUiMode(ui.inventoryOpen);
     }
+    // Escape is claimed by the inventory's own cancel handling (closes a
+    // drag-in-progress, then the panel) before the system-menu precedence
+    // below gets a look, so a single Escape press never does two things.
+    let escapeConsumedByPanel = false;
     if (ui.inventoryOpen) {
+      const cancel = actions.menuCancel && !actions.inventoryPressed;
       const nav = {
         up: actions.menuUp,
         down: actions.menuDown,
         left: actions.menuLeft,
         right: actions.menuRight,
         confirm: actions.menuConfirm,
-        cancel: actions.menuCancel && !actions.inventoryPressed,
+        cancel,
       };
+      if (cancel) escapeConsumedByPanel = true;
       if (nav.up || nav.down || nav.left || nav.right || nav.confirm || nav.cancel) {
         window.dispatchEvent(new CustomEvent("rc:menuNav", { detail: nav }));
       }
@@ -397,7 +412,31 @@ export class Game {
       this.setUiMode(true);
     }
 
-    // Targeting: click-to-target, Shift snap/cycle, Escape clear.
+    // World map toggles with M, but only from a clean slate — it doesn't
+    // stack on top of another panel.
+    if (actions.mapPressed && !ui.inventoryOpen && !ui.systemMenuOpen && !ui.questOffer && !ui.chatOpen) {
+      this.setWorldMapOpen(!ui.worldMapOpen);
+    }
+
+    // Escape precedence: close the system menu if open, else the world map,
+    // else close the quest dialog if open (it has no Escape handler of its
+    // own), else clear the current target, else — nothing else to close —
+    // open the system menu.
+    if (actions.clearTargetPressed && !escapeConsumedByPanel && performance.now() > this.suppressEscapeUntil) {
+      if (ui.systemMenuOpen) {
+        this.setSystemMenuOpen(false);
+      } else if (ui.worldMapOpen) {
+        this.setWorldMapOpen(false);
+      } else if (ui.questOffer) {
+        this.closeQuestDialog();
+      } else if (this.entities.getTargetId()) {
+        this.entities.setTarget(null);
+      } else if (!ui.inventoryOpen && !ui.chatOpen) {
+        this.setSystemMenuOpen(true);
+      }
+    }
+
+    // Targeting: click-to-target, Shift snap/cycle.
     if (!dead) this.handleTargeting(actions);
 
     // UI toggles handled by HUD; here: hotbar + world actions
@@ -453,6 +492,8 @@ export class Game {
     const rx = this.move.x + this.posError.x;
     const ry = this.move.y + this.posError.y;
     const rz = this.move.z + this.posError.z;
+    ui.playerX = rx;
+    ui.playerZ = rz;
 
     // Avatar + camera + world updates (rendered at the smoothed position)
     this.syncMount();
@@ -466,6 +507,7 @@ export class Game {
     this.animateSelf(dt, actions);
     this.updateCamera(rx, ry, rz);
     this.nodes?.update(rx, rz, now, dt);
+    this.grass.update(rx, rz, now);
     this.entities.update(now, dt);
     animateSettlements(this.settlements, now);
     this.updateInteractPrompt();
@@ -509,9 +551,7 @@ export class Game {
   private readonly TARGET_RANGE = 60;
 
   private handleTargeting(actions: ReturnType<InputManager["sample"]>): void {
-    if (actions.clearTargetPressed) {
-      this.entities.setTarget(null);
-    } else if (actions.targetPressed) {
+    if (actions.targetPressed) {
       // CapsLock: select nearest, cycle to the next, or deselect when the
       // current target is the only enemy nearby.
       const enemies = this.entities.enemiesByProximity(
@@ -692,6 +732,7 @@ export class Game {
     const sky = night.clone().lerp(day, dayness);
     (this.scene.background as THREE.Color).copy(sky);
     this.scene.fog!.color.copy(sky);
+    this.clouds.setDayness(dayness);
   }
 
   // ============ hooks for HUD ============
@@ -750,6 +791,16 @@ export class Game {
     if (open) this.input.releasePointer();
   }
 
+  setSystemMenuOpen(open: boolean): void {
+    ui.systemMenuOpen = open;
+    this.setUiMode(open || ui.inventoryOpen || ui.chatOpen || ui.questOffer !== null || ui.worldMapOpen);
+  }
+
+  setWorldMapOpen(open: boolean): void {
+    ui.worldMapOpen = open;
+    this.setUiMode(open || ui.inventoryOpen || ui.chatOpen || ui.questOffer !== null || ui.systemMenuOpen);
+  }
+
   get inputManager(): InputManager {
     return this.input;
   }
@@ -758,6 +809,20 @@ export class Game {
     this.camera.aspect = window.innerWidth / window.innerHeight;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(window.innerWidth, window.innerHeight);
+  };
+
+  /** Browsers exit fullscreen on Escape at the UA level and some of them
+   *  never deliver that keydown to page scripts, so our own Escape handling
+   *  in `frame()` never runs and the player is stuck needing a second press
+   *  just to open the menu. Treat "fullscreen just exited, menu not already
+   *  open" as that same intent and open it directly; suppress the next
+   *  Escape briefly in case the keydown does also arrive, so it doesn't
+   *  immediately toggle the menu shut again. */
+  private onFullscreenChange = (): void => {
+    if (!document.fullscreenElement && !ui.systemMenuOpen) {
+      this.setSystemMenuOpen(true);
+      this.suppressEscapeUntil = performance.now() + 400;
+    }
   };
 
   dispose(): void {
@@ -770,6 +835,7 @@ export class Game {
     this.unsubscribe?.();
     this.connection.disconnect();
     window.removeEventListener("resize", this.onResize);
+    document.removeEventListener("fullscreenchange", this.onFullscreenChange);
     this.renderer.dispose();
   }
 }

@@ -89,10 +89,10 @@
 
   <div class="topbar">
     <Logo size={0.4} />
-    <div class="account-line">
-      {app.me?.account?.displayName ?? "unknown"} · {app.realm.name}
-      <button class="linkish" onclick={() => void app.logout()}>sign out</button>
-    </div>
+  </div>
+  <div class="account-line">
+    {app.me?.account?.displayName ?? "unknown"} · {app.realm.name}
+    <button class="linkish" onclick={() => void app.logout()}>sign out</button>
   </div>
 
   <div class="sidebar rc-frame">
@@ -207,16 +207,20 @@
     position: absolute;
     top: 16px;
     left: 24px;
-    z-index: 2;
-    display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 4px;
+    z-index: 3;
   }
+  /* Its own corner (not stacked under the Logo) so it can't end up behind
+     the sidebar panel — Logo has a transform:scale that shrinks it visually
+     but leaves its full untransformed box in flow, which used to push a
+     stacked account-line row down far enough to sit under the sidebar. */
   .account-line {
+    position: absolute;
+    top: 20px;
+    right: 24px;
+    z-index: 3;
+    white-space: nowrap;
     color: var(--rc-ink-dim);
     font-size: 12px;
-    margin-left: 2px;
   }
   .linkish {
     background: none;

@@ -97,4 +97,14 @@ export class NpcManager {
     }
     return best ? { id: best.id, name: best.name } : null;
   }
+
+  /** Quest-relevant NPCs (offering, in progress, or ready to turn in) for the minimap. */
+  questMarkers(): { id: string; name: string; x: number; z: number; marker: "available" | "complete" | "active" }[] {
+    const out: { id: string; name: string; x: number; z: number; marker: "available" | "complete" | "active" }[] = [];
+    for (const h of this.handles.values()) {
+      if (h.markerState === "none") continue;
+      out.push({ id: h.id, name: h.name, x: h.x, z: h.z, marker: h.markerState });
+    }
+    return out;
+  }
 }

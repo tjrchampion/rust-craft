@@ -26,6 +26,7 @@ export interface FrameActions {
   mountPressed: boolean; // G: toggle mount / raft
   targetPressed: boolean; // CapsLock: cycle/clear nearest enemy
   clearTargetPressed: boolean; // Escape
+  mapPressed: boolean; // M: toggle world map
   hotbarDelta: number; // -1 | 0 | 1 from wheel / dpad
   hotbarSlot: number | null; // direct 1-6 selection
   menuUp: boolean;
@@ -159,6 +160,7 @@ export class InputManager {
     let respawnPressed = pressed("KeyR");
     const pvpTogglePressed = pressed("KeyP");
     let mountPressed = pressed("KeyG");
+    let mapPressed = pressed("KeyM");
     // CapsLock cycles to / clears the nearest enemy target.
     let targetPressed = this.capsQueued;
     this.capsQueued = false;
@@ -207,6 +209,7 @@ export class InputManager {
       mountPressed ||= padPressed(8); // Back/Select: toggle mount
       targetPressed ||= padPressed(4); // LB: snap/cycle target
       clearTargetPressed ||= padPressed(6); // LT: clear target
+      mapPressed ||= padPressed(11); // R3: toggle world map
       if (padPressed(14)) hotbarDelta -= 1; // dpad left
       if (padPressed(15)) hotbarDelta += 1; // dpad right
 
@@ -260,6 +263,7 @@ export class InputManager {
       mountPressed,
       targetPressed,
       clearTargetPressed,
+      mapPressed,
       hotbarDelta,
       hotbarSlot,
       menuUp,

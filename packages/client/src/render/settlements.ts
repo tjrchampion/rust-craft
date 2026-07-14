@@ -204,21 +204,26 @@ export function buildWorldStatic(scene: THREE.Scene, withSigns = true): Settleme
       const crystal = shrine.getObjectByName("crystal");
       if (crystal) crystals.push(crystal);
     } else if (poi.type === "camp") {
+      const fireX = poi.x + 2;
       const fire = buildCampfire();
-      fire.position.set(poi.x + 2, poi.y, poi.z);
+      fire.position.set(fireX, terrainHeight(fireX, poi.z), poi.z);
       scene.add(fire);
       for (let i = 0; i < 5; i++) {
         const stump = buildStump((i * 0.19 + 0.07) % 1);
         const a = i * 1.35;
-        stump.position.set(poi.x + Math.sin(a) * 5, poi.y, poi.z + Math.cos(a) * 5);
+        const sx = poi.x + Math.sin(a) * 5;
+        const sz = poi.z + Math.cos(a) * 5;
+        stump.position.set(sx, terrainHeight(sx, sz), sz);
         scene.add(stump);
       }
     } else if (poi.type === "ruins") {
       for (let i = 0; i < 3; i++) {
         const rubble = buildRock((i * 0.31 + 0.11) % 1);
         const a = poi.yaw + i * 2.2;
+        const rx = poi.x + Math.sin(a) * 4.5;
+        const rz = poi.z + Math.cos(a) * 4.5;
         rubble.scale.setScalar(0.7);
-        rubble.position.set(poi.x + Math.sin(a) * 4.5, poi.y, poi.z + Math.cos(a) * 4.5);
+        rubble.position.set(rx, terrainHeight(rx, rz), rz);
         scene.add(rubble);
       }
     } else if (poi.type === "tower" && withSigns) {

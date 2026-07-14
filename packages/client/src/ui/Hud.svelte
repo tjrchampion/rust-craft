@@ -11,6 +11,9 @@
   import QuestTracker from "./QuestTracker.svelte";
   import QuestDialog from "./QuestDialog.svelte";
   import ZoneBanner from "./ZoneBanner.svelte";
+  import SystemMenu from "./SystemMenu.svelte";
+  import MiniMap from "./MiniMap.svelte";
+  import WorldMap from "./WorldMap.svelte";
 
   const interactKey = $derived(game.lastDevice === "gamepad" ? "Ⓧ" : "E");
 
@@ -84,6 +87,7 @@
     <Chat />
     <Party />
     <TargetFrame />
+    <MiniMap />
     <QuestTracker />
     <ZoneBanner />
   {/if}
@@ -92,6 +96,8 @@
     <InventoryPanel />
   {/if}
   <QuestDialog />
+  <SystemMenu />
+  <WorldMap />
 </div>
 
 <style>

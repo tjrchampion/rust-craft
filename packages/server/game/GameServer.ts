@@ -250,7 +250,11 @@ export class GameServer {
     this.npcs = generateNpcQuestGivers();
 
     this.depletedNodes = await loadDepletedNodes();
-    this.structures = await loadStructures();
+    // Recompute height fresh rather than trusting the persisted value — it was
+    // baked in at placement time, and goes stale (floating/clipped structures)
+    // whenever the terrain height formula changes afterward (e.g. the river
+    // carve removal), since the ground at that (x, z) may no longer match.
+    this.structures = (await loadStructures()).map((s) => ({ ...s, y: terrainHeight(s.x, s.z) }));
 
     this.tickTimer = setInterval(() => this.tick(), TICK_MS);
     this.saveTimer = setInterval(() => void this.flushDirty(), SAVE_INTERVAL_MS);

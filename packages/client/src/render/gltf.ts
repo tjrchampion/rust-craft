@@ -1,8 +1,10 @@
 import * as THREE from "three";
 import { GLTFLoader, type GLTF } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { SkeletonUtils } from "three/examples/jsm/Addons.js";
+import { MeshoptDecoder } from "three/examples/jsm/libs/meshopt_decoder.module.js";
 
 const loader = new GLTFLoader();
+loader.setMeshoptDecoder(MeshoptDecoder);
 const cache = new Map<string, Promise<GLTF>>();
 
 export const PLAYER_MODELS = [

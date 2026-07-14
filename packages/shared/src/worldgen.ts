@@ -349,11 +349,14 @@ interface BiomeMix {
   rock: number;
 }
 
+// meadow/mountain/hills were the sparsest for trees (see BiomeMix docs above);
+// boosted `tree` (and `presence` where the whole biome felt empty) so those
+// stretches of the map read as denser forest instead of bare filler terrain.
 const BIOME_MIX: Record<Biome, BiomeMix> = {
   forest: { presence: 0.62, tree: 0.6, rock: 0.85 },
-  meadow: { presence: 0.34, tree: 0.3, rock: 0.45 },
-  mountain: { presence: 0.5, tree: 0.28, rock: 0.85 },
-  hills: { presence: 0.42, tree: 0.35, rock: 0.75 },
+  meadow: { presence: 0.48, tree: 0.45, rock: 0.6 },
+  mountain: { presence: 0.58, tree: 0.35, rock: 0.85 },
+  hills: { presence: 0.52, tree: 0.48, rock: 0.75 },
   swamp: { presence: 0.55, tree: 0.5, rock: 0.55 },
   dunes: { presence: 0.16, tree: 0.7, rock: 0.9 },
 };

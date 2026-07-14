@@ -26,7 +26,7 @@
 <style>
   .tracker {
     position: absolute;
-    top: 14px;
+    top: 202px;
     right: 16px;
     width: 210px;
     padding: 10px 12px;

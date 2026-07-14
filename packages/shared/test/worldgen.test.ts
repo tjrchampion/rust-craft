@@ -131,9 +131,12 @@ describe("node scatter with settlements", () => {
     }
   });
 
-  it("biome mixes differ (meadow berry-rich, mountain rocky)", () => {
+  it("biome mixes differ (meadow berry-rich, mountain mixed rock + real forest)", () => {
     const nodes = generateNodes();
-    const byBiome = { meadow: { berry: 0, all: 0 }, mountain: { rock: 0, all: 0 } };
+    const byBiome = {
+      meadow: { berry: 0, all: 0 },
+      mountain: { rock: 0, tree: 0, all: 0 },
+    };
     for (const n of nodes) {
       if (n.biome === "meadow") {
         byBiome.meadow.all++;
@@ -141,6 +144,7 @@ describe("node scatter with settlements", () => {
       } else if (n.biome === "mountain") {
         byBiome.mountain.all++;
         if (n.type === "rock") byBiome.mountain.rock++;
+        if (n.type === "tree") byBiome.mountain.tree++;
       }
       expect(n.biome).toBe(biomeAt(n.x, n.z));
     }
@@ -148,7 +152,12 @@ describe("node scatter with settlements", () => {
       expect(byBiome.meadow.berry / byBiome.meadow.all).toBeGreaterThan(0.3);
     }
     if (byBiome.mountain.all > 20) {
-      expect(byBiome.mountain.rock / byBiome.mountain.all).toBeGreaterThan(0.4);
+      // Mountain was rebalanced to carry noticeably more forest (it used to
+      // be one of the sparsest biomes for trees) without losing its rocky
+      // character — both should now be meaningfully represented, rather
+      // than rock alone dominating the way it used to.
+      expect(byBiome.mountain.rock / byBiome.mountain.all).toBeGreaterThan(0.25);
+      expect(byBiome.mountain.tree / byBiome.mountain.all).toBeGreaterThan(0.25);
     }
   });
 

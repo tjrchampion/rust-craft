@@ -16,6 +16,14 @@ export interface Toast {
   at: number;
 }
 
+export interface QuestMarker {
+  id: string;
+  name: string;
+  x: number;
+  z: number;
+  marker: "available" | "complete" | "active";
+}
+
 let toastId = 0;
 
 class GameState {
@@ -31,9 +39,14 @@ class GameState {
   interactLabel = $state<string | null>(null);
   timeOfDay = $state(0.3);
   compassYaw = $state(0);
+  playerX = $state(0);
+  playerZ = $state(0);
+  questMarkers = $state<QuestMarker[]>([]);
   lastDevice = $state<"kbm" | "gamepad">("kbm");
   inventoryOpen = $state(false);
   chatOpen = $state(false);
+  systemMenuOpen = $state(false);
+  worldMapOpen = $state(false);
   disconnected = $state(false);
   pvpEnabled = $state(false);
   target = $state<TargetInfo | null>(null);
@@ -90,6 +103,7 @@ class GameState {
     this.interactLabel = null;
     this.inventoryOpen = false;
     this.chatOpen = false;
+    this.worldMapOpen = false;
     this.disconnected = false;
     this.pvpEnabled = false;
     this.target = null;
@@ -101,6 +115,7 @@ class GameState {
     this.questLog = [];
     this.currentZoneId = null;
     this.zoneBanner = null;
+    this.questMarkers = [];
   }
 }
 

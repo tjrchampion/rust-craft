@@ -6,10 +6,13 @@ const CLOUD_ALT = 95;
 const AREA = 760; // spread across and beyond the play area
 const DRIFT_SPEED = 1.4; // m/s
 
-// Unlit so clouds stay bright and consistent regardless of sun angle/fog,
-// instead of going grey and flat-looking under directional lighting.
+// Unlit so clouds stay a controlled, deliberate color regardless of sun
+// angle/fog — but that color is driven by day/night (see setDayness) so they
+// don't glow bright white in the middle of the night.
+const CLOUD_DAY_COLOR = new THREE.Color(0xfff8ee);
+const CLOUD_NIGHT_COLOR = new THREE.Color(0x2a3350);
 const CLOUD_MATERIAL = new THREE.MeshBasicMaterial({
-  color: 0xffffff,
+  color: CLOUD_DAY_COLOR.clone(),
   transparent: true,
   opacity: 0.95,
   fog: true,
@@ -34,6 +37,8 @@ export interface CloudField {
   group: THREE.Group;
   /** Drift clouds slowly across the sky; call once per rendered frame. */
   update(dt: number): void;
+  /** Tint clouds toward a dim night color as `dayness` (0 = deep night, 1 = full day) drops. */
+  setDayness(dayness: number): void;
 }
 
 /** A field of slow-drifting low-poly cloud puffs high above the zone. */
@@ -58,5 +63,9 @@ export function buildClouds(): CloudField {
     }
   }
 
-  return { group, update };
+  function setDayness(dayness: number): void {
+    CLOUD_MATERIAL.color.copy(CLOUD_NIGHT_COLOR).lerp(CLOUD_DAY_COLOR, dayness);
+  }
+
+  return { group, update, setDayness };
 }
