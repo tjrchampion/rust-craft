@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "NODE_OPTIONS=--unhandled-rejections=warn nitro dev --port 3000",
     "build": "nitro build",
+    "start": "node scripts/migrate.mjs && node .output/server/index.mjs",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "typecheck": "tsc --noEmit"

@@ -9,6 +9,7 @@ export default defineEventHandler(async (event) => {
     discord: Boolean(env("DISCORD_CLIENT_ID")),
     google: Boolean(env("GOOGLE_CLIENT_ID")),
     dev: IS_DEV,
+    password: true,
   };
   const account = await getAccount(event);
   if (!account) return { account: null, characters: [], providers };

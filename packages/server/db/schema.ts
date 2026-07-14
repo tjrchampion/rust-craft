@@ -15,10 +15,12 @@ export const accounts = pgTable(
   "accounts",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    provider: text("provider").notNull(), // 'discord' | 'google' | 'dev'
-    providerId: text("provider_id").notNull(),
+    provider: text("provider").notNull(), // 'discord' | 'google' | 'dev' | 'password'
+    providerId: text("provider_id").notNull(), // for 'password': the lowercased email
     email: text("email"),
     displayName: text("display_name"),
+    // Only set for provider = 'password'; `scrypt` salt:hash, see utils/password.ts.
+    passwordHash: text("password_hash"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [uniqueIndex("accounts_provider_idx").on(t.provider, t.providerId)],

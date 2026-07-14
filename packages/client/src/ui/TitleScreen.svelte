@@ -3,11 +3,22 @@
   import Logo from "./Logo.svelte";
 
   let devName = $state("");
-  let addingRealm = $state(false);
-  let realmName = $state("");
-  let realmUrl = $state("");
 
-  const providers = $derived(app.me?.providers ?? { discord: false, google: false, dev: true });
+  let mode = $state<"login" | "signup">("login");
+  let email = $state("");
+  let password = $state("");
+  let displayName = $state("");
+
+  const providers = $derived(
+    app.me?.providers ?? { discord: false, google: false, dev: true, password: true },
+  );
+
+  function submitPassword(e: SubmitEvent): void {
+    e.preventDefault();
+    if (!email.trim() || !password) return;
+    if (mode === "signup") void app.signup(email.trim(), password, displayName.trim() || undefined);
+    else void app.login(email.trim(), password);
+  }
 </script>
 
 <div class="title-screen">
@@ -17,19 +28,74 @@
     <Logo />
 
     <div class="card rc-frame">
-      {#if providers.discord}
-        <button class="rc-btn primary" onclick={() => (location.href = app.apiUrl("/api/auth/discord"))}>
-          Sign in with Discord
-        </button>
+      {#if providers.password}
+        <div class="mode-tabs">
+          <button
+            type="button"
+            class="mode-tab"
+            class:active={mode === "login"}
+            onclick={() => (mode = "login")}
+          >
+            Sign In
+          </button>
+          <button
+            type="button"
+            class="mode-tab"
+            class:active={mode === "signup"}
+            onclick={() => (mode = "signup")}
+          >
+            Create Account
+          </button>
+        </div>
+        <form onsubmit={submitPassword}>
+          <input
+            class="rc-input"
+            type="email"
+            placeholder="Email"
+            bind:value={email}
+            maxlength={120}
+            autocomplete="email"
+          />
+          {#if mode === "signup"}
+            <input
+              class="rc-input"
+              placeholder="Display name (optional)"
+              bind:value={displayName}
+              maxlength={24}
+            />
+          {/if}
+          <input
+            class="rc-input"
+            type="password"
+            placeholder="Password"
+            bind:value={password}
+            maxlength={200}
+            autocomplete={mode === "signup" ? "new-password" : "current-password"}
+          />
+          <button class="rc-btn enter" type="submit">
+            {mode === "signup" ? "Create Account" : "Sign In"}
+          </button>
+        </form>
       {/if}
-      {#if providers.google}
-        <button class="rc-btn primary" onclick={() => (location.href = app.apiUrl("/api/auth/google"))}>
-          Sign in with Google
-        </button>
+
+      {#if providers.discord || providers.google}
+        {#if providers.password}
+          <div class="rc-divider"></div>
+        {/if}
+        {#if providers.discord}
+          <button class="rc-btn primary" onclick={() => (location.href = app.apiUrl("/api/auth/discord"))}>
+            Sign in with Discord
+          </button>
+        {/if}
+        {#if providers.google}
+          <button class="rc-btn primary" onclick={() => (location.href = app.apiUrl("/api/auth/google"))}>
+            Sign in with Google
+          </button>
+        {/if}
       {/if}
 
       {#if providers.dev}
-        {#if providers.discord || providers.google}
+        {#if providers.password || providers.discord || providers.google}
           <div class="rc-divider"></div>
         {/if}
         <form
@@ -43,7 +109,7 @@
         </form>
       {/if}
 
-      {#if !providers.discord && !providers.google && !providers.dev}
+      {#if !providers.password && !providers.discord && !providers.google && !providers.dev}
         <div class="note">No sign-in method configured on this realm.</div>
       {/if}
 
@@ -51,47 +117,6 @@
         <div class="error">{app.error}</div>
       {/if}
     </div>
-
-    <div class="realm-bar rc-frame">
-      <span class="realm-label rc-frame-title">Realm</span>
-      <select
-        class="rc-input realm-select"
-        value={app.realm.name}
-        onchange={(e) => {
-          const realm = app.realms.find((r) => r.name === e.currentTarget.value);
-          if (realm) app.selectRealm(realm);
-        }}
-      >
-        {#each app.realms as realm (realm.name)}
-          <option value={realm.name}>{realm.name}{realm.url ? ` — ${realm.url}` : " (this server)"}</option>
-        {/each}
-      </select>
-      {#if app.realm.url}
-        <button class="rc-btn small" onclick={() => app.removeRealm(app.realm)} title="Remove realm">✕</button>
-      {/if}
-      <button class="rc-btn small" onclick={() => (addingRealm = !addingRealm)}>
-        {addingRealm ? "Cancel" : "+ Add"}
-      </button>
-    </div>
-
-    {#if addingRealm}
-      <form
-        class="add-realm rc-frame"
-        onsubmit={(e) => {
-          e.preventDefault();
-          app.addRealm(realmName, realmUrl);
-          if (!app.error) {
-            addingRealm = false;
-            realmName = "";
-            realmUrl = "";
-          }
-        }}
-      >
-        <input class="rc-input" placeholder="Realm name" bind:value={realmName} maxlength={24} />
-        <input class="rc-input" placeholder="https://realm.example.com" bind:value={realmUrl} maxlength={120} />
-        <button class="rc-btn" type="submit">Add Realm</button>
-      </form>
-    {/if}
   </div>
 
   <div class="footer">RustCraft pre-alpha · a persistent world of survival &amp; sorcery</div>
@@ -135,36 +160,30 @@
     flex-direction: column;
     gap: 10px;
   }
+  .mode-tabs {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 4px;
+  }
+  .mode-tab {
+    flex: 1;
+    background: transparent;
+    border: 1px solid var(--rc-gold-dim);
+    color: var(--rc-ink-dim);
+    border-radius: 5px;
+    padding: 7px 0;
+    font-family: var(--rc-display);
+    font-size: 12px;
+    letter-spacing: 1px;
+    cursor: pointer;
+  }
+  .mode-tab.active {
+    border-color: var(--rc-gold-bright);
+    color: var(--rc-gold-bright);
+    background: rgba(212, 175, 92, 0.12);
+  }
   .rc-btn.enter {
     font-size: 16px;
-  }
-  .realm-bar {
-    width: 340px;
-    box-sizing: border-box;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 10px 14px;
-  }
-  .realm-label {
-    flex-shrink: 0;
-  }
-  .realm-select {
-    flex: 1;
-    min-width: 0;
-  }
-  .rc-btn.small {
-    padding: 6px 10px;
-    font-size: 11px;
-    flex-shrink: 0;
-  }
-  .add-realm {
-    width: 340px;
-    box-sizing: border-box;
-    padding: 14px;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
   }
   .note {
     color: var(--rc-ink-dim);

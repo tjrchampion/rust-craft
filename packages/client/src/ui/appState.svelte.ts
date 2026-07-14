@@ -16,33 +16,17 @@ export interface Realm {
 export interface MeResponse {
   account: { id: string; displayName: string | null; provider: string } | null;
   characters: CharacterSummary[];
-  providers: { discord: boolean; google: boolean; dev: boolean };
+  providers: { discord: boolean; google: boolean; dev: boolean; password: boolean };
 }
 
 const LOCAL_REALM: Realm = { name: "Local Realm", url: "" };
-
-function loadRealms(): Realm[] {
-  try {
-    const saved = JSON.parse(localStorage.getItem("rc_realms") ?? "[]") as Realm[];
-    return [LOCAL_REALM, ...saved.filter((r) => r.url)];
-  } catch {
-    return [LOCAL_REALM];
-  }
-}
 
 class AppState {
   screen = $state<Screen>("loading");
   me = $state<MeResponse | null>(null);
   activeCharacter = $state<CharacterSummary | null>(null);
   error = $state<string | null>(null);
-  realms = $state<Realm[]>(loadRealms());
   realm = $state<Realm>(LOCAL_REALM);
-
-  constructor() {
-    const savedName = localStorage.getItem("rc_realm");
-    const found = this.realms.find((r) => r.name === savedName);
-    if (found) this.realm = found;
-  }
 
   private setScreen(s: Screen) {
     this.screen = s;
@@ -59,32 +43,6 @@ class AppState {
     }
     const proto = location.protocol === "https:" ? "wss" : "ws";
     return `${proto}://${location.host}/ws`;
-  }
-
-  selectRealm(realm: Realm) {
-    this.realm = realm;
-    localStorage.setItem("rc_realm", realm.name);
-    void this.refresh();
-  }
-
-  addRealm(name: string, url: string) {
-    const trimmedUrl = url.trim().replace(/\/$/, "");
-    const trimmedName = name.trim() || trimmedUrl;
-    if (!/^https?:\/\//.test(trimmedUrl)) {
-      this.error = "Realm URL must start with http(s)://";
-      return;
-    }
-    const realm: Realm = { name: trimmedName, url: trimmedUrl };
-    this.realms = [...this.realms.filter((r) => r.name !== trimmedName), realm];
-    localStorage.setItem("rc_realms", JSON.stringify(this.realms.filter((r) => r.url)));
-    this.selectRealm(realm);
-  }
-
-  removeRealm(realm: Realm) {
-    if (!realm.url) return; // can't remove local
-    this.realms = this.realms.filter((r) => r.name !== realm.name);
-    localStorage.setItem("rc_realms", JSON.stringify(this.realms.filter((r) => r.url)));
-    if (this.realm.name === realm.name) this.selectRealm(this.realms[0]!);
   }
 
   async refresh() {
@@ -106,6 +64,36 @@ class AppState {
       headers: { "Content-Type": "application/json" },
       credentials: "include",
       body: JSON.stringify({ name }),
+    }).catch(() => null);
+    if (!res?.ok) {
+      this.error = (await res?.json().catch(() => null))?.statusMessage ?? "Login failed";
+      return;
+    }
+    await this.refresh();
+  }
+
+  async signup(email: string, password: string, displayName?: string) {
+    this.error = null;
+    const res = await fetch(this.apiUrl("/api/auth/signup"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({ email, password, displayName }),
+    }).catch(() => null);
+    if (!res?.ok) {
+      this.error = (await res?.json().catch(() => null))?.statusMessage ?? "Could not create account";
+      return;
+    }
+    await this.refresh();
+  }
+
+  async login(email: string, password: string) {
+    this.error = null;
+    const res = await fetch(this.apiUrl("/api/auth/login"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({ email, password }),
     }).catch(() => null);
     if (!res?.ok) {
       this.error = (await res?.json().catch(() => null))?.statusMessage ?? "Login failed";
