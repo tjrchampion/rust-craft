@@ -50,7 +50,10 @@ export default defineEventHandler(async (event) => {
     }
     return { character };
   } catch (err: unknown) {
-    if (err && typeof err === "object" && "code" in err && err.code === "23505") {
+    // drizzle-orm wraps every driver error in a DrizzleQueryError, so the
+    // real pg error (and its .code) lives at err.cause, not on err itself.
+    const pgErr = err && typeof err === "object" && "cause" in err ? err.cause : err;
+    if (pgErr && typeof pgErr === "object" && "code" in pgErr && pgErr.code === "23505") {
       throw createError({ statusCode: 409, statusMessage: "That name is taken" });
     }
     throw err;
