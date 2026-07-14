@@ -1,5 +1,6 @@
 import * as THREE from "three";
-import type { Biome } from "@rustcraft/shared";
+import type { Biome, DamageType } from "@rustcraft/shared";
+import { spellDef } from "@rustcraft/shared";
 import { barkTexture, foliageTexture } from "./textures";
 import { buildGltfTree } from "./natureAssets";
 
@@ -463,14 +464,30 @@ export function buildRaft(): MountParts {
   return { group, riderY: 0.4 };
 }
 
-export function buildProjectile(): THREE.Group {
+const DAMAGE_TYPE_COLORS: Record<DamageType, number> = {
+  fire: 0xff6a2b,
+  frost: 0x6fd0ff,
+  holy: 0xffe9a8,
+  nature: 0x7be07b,
+  physical: 0xd8d8d8,
+};
+const DEFAULT_SPELL_COLOR = 0xffb347;
+
+/** Visual color for a spell's projectile/particles, keyed off its primary
+ *  damage type — so every school of magic reads as visually distinct. */
+export function spellColor(spellId: string): number {
+  const damageType = spellDef(spellId).effects.find((e) => e.type === "damage")?.damageType;
+  return damageType ? DAMAGE_TYPE_COLORS[damageType] : DEFAULT_SPELL_COLOR;
+}
+
+export function buildProjectile(color = 0xffb347): THREE.Group {
   const group = new THREE.Group();
   const core = new THREE.Mesh(
     new THREE.SphereGeometry(0.18, 8, 6),
-    new THREE.MeshBasicMaterial({ color: 0xffb347 }),
+    new THREE.MeshBasicMaterial({ color }),
   );
   group.add(core);
-  const light = new THREE.PointLight(0xff7722, 6, 8, 1.8);
+  const light = new THREE.PointLight(color, 6, 8, 1.8);
   group.add(light);
   return group;
 }

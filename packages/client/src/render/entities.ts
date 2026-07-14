@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import type { PlayerSnap, MobSnap, ProjectileSnap, StructureSnap, AnimState, ClassId } from "@rustcraft/shared";
 import { wrapAngle, mobDef } from "@rustcraft/shared";
-import { buildNameplate, buildProjectile, buildCampfire, buildHorse, buildRaft } from "./models";
+import { buildNameplate, buildProjectile, buildCampfire, buildHorse, buildRaft, spellColor } from "./models";
 import { AnimatedModel, PLAYER_ANIMS, mobModelSpec, logicalFromState } from "./gltf";
 import { CLASS_MODEL_URLS } from "./classModels";
 
@@ -50,6 +50,15 @@ export interface TargetInfo {
 interface DamageNumber {
   sprite: THREE.Sprite;
   born: number;
+}
+
+interface Spark {
+  mesh: THREE.Mesh;
+  vx: number;
+  vy: number;
+  vz: number;
+  born: number;
+  lifeMs: number;
 }
 
 function buildDamageSprite(text: string, color: string): THREE.Sprite {
@@ -103,9 +112,10 @@ export function playerModelUrl(classId: string): string {
 export class EntityManager {
   private scene: THREE.Scene;
   private entities = new Map<string, RemoteEntity>();
-  private projectiles = new Map<string, { group: THREE.Group; target: THREE.Vector3 }>();
+  private projectiles = new Map<string, { group: THREE.Group; target: THREE.Vector3; color: number }>();
   private structures = new Map<string, THREE.Group>();
   private damageNumbers: DamageNumber[] = [];
+  private sparks: Spark[] = [];
   private raycaster = new THREE.Raycaster();
   private targetId: string | null = null;
   private targetRing: THREE.Mesh;
@@ -270,19 +280,62 @@ export class EntityManager {
       seen.add(snap.id);
       let proj = this.projectiles.get(snap.id);
       if (!proj) {
-        const group = buildProjectile();
+        const color = spellColor(snap.spellId);
+        const group = buildProjectile(color);
         group.position.set(snap.x, snap.y, snap.z);
         this.scene.add(group);
-        proj = { group, target: new THREE.Vector3(snap.x, snap.y, snap.z) };
+        proj = { group, target: new THREE.Vector3(snap.x, snap.y, snap.z), color };
         this.projectiles.set(snap.id, proj);
       }
       proj.target.set(snap.x, snap.y, snap.z);
     }
     for (const [id, proj] of this.projectiles) {
       if (!seen.has(id)) {
+        this.spawnBurst(proj.group.position, proj.color, 14);
         this.scene.remove(proj.group);
         this.projectiles.delete(id);
       }
+    }
+  }
+
+  /** Small colored spark, fading and drifting — used for projectile trails. */
+  private spawnTrailSpark(pos: THREE.Vector3, color: number): void {
+    const mesh = new THREE.Mesh(
+      new THREE.SphereGeometry(0.05, 4, 4),
+      new THREE.MeshBasicMaterial({ color, transparent: true }),
+    );
+    mesh.position.copy(pos);
+    this.scene.add(mesh);
+    this.sparks.push({
+      mesh,
+      vx: (Math.random() - 0.5) * 0.4,
+      vy: (Math.random() - 0.5) * 0.4,
+      vz: (Math.random() - 0.5) * 0.4,
+      born: performance.now(),
+      lifeMs: 260,
+    });
+  }
+
+  /** Radial burst of colored sparks — used when a projectile lands. */
+  private spawnBurst(pos: THREE.Vector3, color: number, count: number): void {
+    for (let i = 0; i < count; i++) {
+      const mesh = new THREE.Mesh(
+        new THREE.SphereGeometry(0.07, 4, 4),
+        new THREE.MeshBasicMaterial({ color, transparent: true }),
+      );
+      mesh.position.copy(pos);
+      this.scene.add(mesh);
+      const ang = Math.random() * Math.PI * 2;
+      const upAng = Math.random() * Math.PI - Math.PI / 2;
+      const spd = 1.8 + Math.random() * 2.4;
+      this.sparks.push({
+        mesh,
+        vx: Math.cos(ang) * Math.cos(upAng) * spd,
+        vy: Math.sin(upAng) * spd,
+        vz: Math.sin(ang) * Math.cos(upAng) * spd,
+        born: performance.now(),
+        lifeMs: 420,
+      });
     }
   }
 
@@ -354,6 +407,22 @@ export class EntityManager {
 
     for (const proj of this.projectiles.values()) {
       proj.group.position.lerp(proj.target, Math.min(1, dt * 18));
+      this.spawnTrailSpark(proj.group.position, proj.color);
+    }
+
+    for (let i = this.sparks.length - 1; i >= 0; i--) {
+      const s = this.sparks[i]!;
+      const age = (now - s.born) / s.lifeMs;
+      if (age >= 1) {
+        this.scene.remove(s.mesh);
+        this.sparks.splice(i, 1);
+        continue;
+      }
+      s.vy -= 4 * dt;
+      s.mesh.position.x += s.vx * dt;
+      s.mesh.position.y += s.vy * dt;
+      s.mesh.position.z += s.vz * dt;
+      (s.mesh.material as THREE.MeshBasicMaterial).opacity = 1 - age;
     }
 
     for (const group of this.structures.values()) {
@@ -466,9 +535,11 @@ export class EntityManager {
     for (const e of this.entities.values()) this.scene.remove(e.group);
     for (const p of this.projectiles.values()) this.scene.remove(p.group);
     for (const s of this.structures.values()) this.scene.remove(s);
+    for (const s of this.sparks) this.scene.remove(s.mesh);
     this.entities.clear();
     this.projectiles.clear();
     this.structures.clear();
+    this.sparks.length = 0;
     this.setTarget(null);
   }
 }

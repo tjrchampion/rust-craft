@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { generateNodes, terrainHeight } from "@rustcraft/shared";
-import { buildTerrain, buildWater } from "./terrain";
+import { buildTerrain, buildWater, type WaterField } from "./terrain";
 import { buildRock, buildBerryBush, buildBiomeTree } from "./models";
 import { buildSettlements } from "./settlements";
 import { buildHorizonMountains } from "./horizon";
@@ -18,6 +18,7 @@ export class TitleScene {
   private start = performance.now();
   private lastFrame = performance.now();
   private clouds: CloudField;
+  private water: WaterField;
 
   constructor(canvas: HTMLCanvasElement) {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
@@ -45,7 +46,8 @@ export class TitleScene {
     this.scene.add(sun, sun.target, new THREE.AmbientLight(0xb08a6a, 0.85));
 
     this.scene.add(buildTerrain());
-    this.scene.add(buildWater());
+    this.water = buildWater();
+    this.scene.add(this.water.mesh);
     this.scene.add(buildHorizonMountains());
     this.clouds = buildClouds();
     this.scene.add(this.clouds.group);
@@ -79,6 +81,7 @@ export class TitleScene {
     const dt = Math.min(0.1, (now - this.lastFrame) / 1000);
     this.lastFrame = now;
     this.clouds.update(dt);
+    this.water.update(dt);
     const t = (now - this.start) / 1000;
     const angle = t * 0.045;
     const radius = 85;

@@ -208,11 +208,20 @@ export function buildRegionTerrain(centerX: number, centerZ: number, sizeX: numb
   return mesh;
 }
 
-export function buildWater(): THREE.Mesh {
+export interface WaterField {
+  mesh: THREE.Mesh;
+  update(dt: number): void;
+}
+
+export function buildWater(): WaterField {
   const geo = new THREE.PlaneGeometry(ZONE_SIZE * 1.4, ZONE_SIZE * 1.4);
   geo.rotateX(-Math.PI / 2);
   const normalMap = tiledTexture("/assets/textures/water/water_normal.jpg");
   normalMap.repeat.set(80, 80);
+  // A second copy of the same map, scrolling at a different speed/angle —
+  // MeshLambertMaterial only samples one normal map, so instead of a real
+  // two-layer blend we alternate the scroll direction with a slow drift so
+  // the ripple pattern never reads as a straight, mechanical conveyor-belt.
   const mat = new THREE.MeshLambertMaterial({
     color: 0x2a6a9c,
     transparent: true,
@@ -223,6 +232,13 @@ export function buildWater(): THREE.Mesh {
   const mesh = new THREE.Mesh(geo, mat);
   mesh.position.y = WATER_LEVEL;
   mesh.name = "water";
-  return mesh;
+
+  let t = 0;
+  function update(dt: number): void {
+    t += dt;
+    normalMap.offset.set(t * 0.015 + Math.sin(t * 0.05) * 0.03, t * 0.011);
+  }
+
+  return { mesh, update };
 }
 

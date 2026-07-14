@@ -25,7 +25,7 @@ import {
 } from "@rustcraft/shared";
 import { Connection } from "../net/connection";
 import { InputManager } from "../input/input";
-import { buildTerrain, buildWater, buildRegionTerrain } from "../render/terrain";
+import { buildTerrain, buildWater, buildRegionTerrain, type WaterField } from "../render/terrain";
 import { buildHorizonMountains } from "../render/horizon";
 import { buildClouds, type CloudField } from "../render/clouds";
 import { buildNameplate, buildHorse, buildRaft, type MountParts } from "../render/models";
@@ -66,6 +66,7 @@ export class Game {
   private npcManager!: NpcManager;
   private grass: GrassField;
   private clouds: CloudField;
+  private water!: WaterField;
   /** Villages stream in once the player nears their zone, rather than every
    *  building loading at connect time; the GLTF cache makes re-entry free. */
   private streamedVillages = new Set<string>();
@@ -135,7 +136,8 @@ export class Game {
     this.scene.add(this.sun, this.ambient);
 
     this.scene.add(buildTerrain());
-    this.scene.add(buildWater());
+    this.water = buildWater();
+    this.scene.add(this.water.mesh);
     this.scene.add(buildHorizonMountains());
     this.clouds = buildClouds();
     this.scene.add(this.clouds.group);
@@ -536,6 +538,7 @@ export class Game {
     this.updateInteractPrompt();
     this.updateDayNight(rx, rz);
     this.clouds.update(dt);
+    this.water.update(dt);
     this.updateZoneAndStreaming(rx, rz);
 
     this.renderer.render(this.scene, this.camera);
