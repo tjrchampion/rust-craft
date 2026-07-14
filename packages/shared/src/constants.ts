@@ -9,6 +9,21 @@ export const WATER_LEVEL = 2.4; // world y of water surface
 
 export const SPAWN_POINT = { x: 0, z: 0 };
 
+// Ashenpeak: a second, higher-tier region north of Greenlands (the original
+// zone), reached through a steep valley. One continuous coordinate space —
+// north is +z (matches the client's minimap/horizon-ring convention).
+export const VALLEY_START_Z = ZONE_SIZE / 2; // 300 — Greenlands' original north edge
+export const VALLEY_END_Z = VALLEY_START_Z + 400; // 700 — a long, gradual climb, not a sudden one
+export const REGION_TWO_MAX_Z = VALLEY_END_Z + ZONE_SIZE; // 1300 — same footprint as Greenlands
+export const WORLD_MIN_X = -ZONE_SIZE / 2;
+export const WORLD_MAX_X = ZONE_SIZE / 2;
+export const WORLD_MIN_Z = -ZONE_SIZE / 2;
+export const WORLD_MAX_Z = REGION_TWO_MAX_Z;
+export const VALLEY_MOUTH_HALF_WIDTH = 45; // where it meets Greenlands, before widening as it climbs
+export const REGION_TWO_GATE_X = 0;
+export const REGION_TWO_GATE_Z = VALLEY_START_Z; // (0, 300) — lazy-activation trigger point
+export const REGION_TWO_TRIGGER_RADIUS = 200;
+
 // Movement
 export const WALK_SPEED = 4.6; // m/s
 export const SPRINT_SPEED = 6.8;

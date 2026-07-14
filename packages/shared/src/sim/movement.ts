@@ -11,7 +11,10 @@ import {
   JUMP_VELOCITY,
   GRAVITY,
   WATER_LEVEL,
-  ZONE_SIZE,
+  WORLD_MIN_X,
+  WORLD_MAX_X,
+  WORLD_MIN_Z,
+  WORLD_MAX_Z,
 } from "../constants";
 
 export type MountKind = "horse" | "raft" | null;
@@ -64,9 +67,8 @@ export function stepMovement(state: MoveState, input: MoveInput, dt: number): Mo
   x += mx * speed * dt;
   z += mz * speed * dt;
 
-  const half = ZONE_SIZE / 2;
-  x = clamp(x, -half, half);
-  z = clamp(z, -half, half);
+  x = clamp(x, WORLD_MIN_X, WORLD_MAX_X);
+  z = clamp(z, WORLD_MIN_Z, WORLD_MAX_Z);
 
   // A bridge deck overrides the carved river trench so players walk the
   // span instead of wading through the water beneath it.

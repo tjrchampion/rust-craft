@@ -87,9 +87,12 @@ function applyGroundBlendShader(mat: THREE.MeshLambertMaterial): void {
   };
 }
 
-export function buildTerrain(): THREE.Mesh {
-  const geo = new THREE.PlaneGeometry(ZONE_SIZE, ZONE_SIZE, RESOLUTION, RESOLUTION);
+/** Shared body behind `buildTerrain()`/`buildRegionTerrain()` — a heightmapped,
+ *  biome-textured plane centered at `(centerX, centerZ)`. */
+function buildTerrainMesh(centerX: number, centerZ: number, sizeX: number, sizeZ: number): THREE.Mesh {
+  const geo = new THREE.PlaneGeometry(sizeX, sizeZ, RESOLUTION, RESOLUTION);
   geo.rotateX(-Math.PI / 2);
+  geo.translate(centerX, 0, centerZ);
 
   const paths = generatePaths();
   const pos = geo.attributes.position as THREE.BufferAttribute;
@@ -188,7 +191,20 @@ export function buildTerrain(): THREE.Mesh {
   applyGroundBlendShader(mat);
   const mesh = new THREE.Mesh(geo, mat);
   mesh.receiveShadow = true;
+  return mesh;
+}
+
+export function buildTerrain(): THREE.Mesh {
+  const mesh = buildTerrainMesh(0, 0, ZONE_SIZE, ZONE_SIZE);
   mesh.name = "terrain";
+  return mesh;
+}
+
+/** Ashenpeak (region 2) + the valley connecting it — built lazily, once the
+ *  player approaches, so it costs nothing until then. */
+export function buildRegionTerrain(centerX: number, centerZ: number, sizeX: number, sizeZ: number): THREE.Mesh {
+  const mesh = buildTerrainMesh(centerX, centerZ, sizeX, sizeZ);
+  mesh.name = "terrain-region-two";
   return mesh;
 }
 

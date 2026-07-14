@@ -14,6 +14,11 @@ const SNOWLINE = 78;
 const BASE_Y = -18;
 const TEXTURE_TILING = 5;
 
+// A permanent gap in the backdrop where Ashenpeak Pass leads out of the
+// zone — angle=0 (x=0, z=+radius) is true north, already aligned with the
+// valley's own x=0 centerline, so no coordinate translation is needed.
+const GAP_HALF_ANGLE = 0.22; // ~12.6°, wide enough to clear the valley mouth
+
 const textureLoader = new THREE.TextureLoader();
 function tiledTexture(url: string): THREE.Texture {
   const tex = textureLoader.load(url);
@@ -73,7 +78,9 @@ export function buildHorizonMountains(): THREE.Group {
       const angle = (col / RING_SEGMENTS) * Math.PI * 2;
       const x = Math.sin(angle) * radius;
       const z = Math.cos(angle) * radius;
-      const y = BASE_Y + mountainHeight(x, z, radialT);
+      const northDist = angle > Math.PI ? Math.PI * 2 - angle : angle; // wrapped distance from angle=0
+      const gapFade = smoothstep(GAP_HALF_ANGLE * 0.55, GAP_HALF_ANGLE, northDist);
+      const y = BASE_Y + mountainHeight(x, z, radialT) * gapFade;
 
       const i = row * cols + col;
       positions[i * 3] = x;

@@ -10,7 +10,16 @@ import {
   RIVER_HALF_WIDTH,
   type Biome,
 } from "./terrain";
-import { ZONE_SEED, ZONE_SIZE, WATER_LEVEL, SPAWN_POINT } from "./constants";
+import {
+  ZONE_SEED,
+  ZONE_SIZE,
+  WATER_LEVEL,
+  SPAWN_POINT,
+  WORLD_MIN_X,
+  WORLD_MAX_X,
+  VALLEY_START_Z,
+  REGION_TWO_MAX_Z,
+} from "./constants";
 import { dist2D, clamp, distPointToSegment } from "./math";
 
 export interface WorldNode {
@@ -361,29 +370,46 @@ const BIOME_MIX: Record<Biome, BiomeMix> = {
   dunes: { presence: 0.16, tree: 0.7, rock: 0.9 },
 };
 
+export interface ScatterBounds {
+  minX: number;
+  maxX: number;
+  minZ: number;
+  maxZ: number;
+}
+
+const REGION_ONE_BOUNDS: ScatterBounds = {
+  minX: -ZONE_SIZE / 2,
+  maxX: ZONE_SIZE / 2,
+  minZ: -ZONE_SIZE / 2,
+  maxZ: ZONE_SIZE / 2,
+};
+
 /**
  * Deterministic resource node scatter. Client and server both call this and
- * get the identical node list; only depletion state is dynamic.
+ * get the identical node list; only depletion state is dynamic. Defaults
+ * reproduce the original Greenlands-only behavior exactly; `bounds`/
+ * `idPrefix`/`seedSalt` let a second region reuse this same scatter logic
+ * over its own coordinate window without colliding ids or cloning the noise.
  */
-export function generateNodes(): WorldNode[] {
+export function generateNodes(bounds: ScatterBounds = REGION_ONE_BOUNDS, idPrefix = "n_", seedSalt = 0): WorldNode[] {
   const villages = generateVillages();
   const paths = generatePaths();
   const pois = generatePois();
 
   const nodes: WorldNode[] = [];
-  const half = ZONE_SIZE / 2;
-  const cells = Math.floor(ZONE_SIZE / NODE_CELL);
-  for (let cx = 0; cx < cells; cx++) {
-    for (let cz = 0; cz < cells; cz++) {
-      const jx = hash2(ZONE_SEED + 31, cx, cz);
-      const jz = hash2(ZONE_SEED + 37, cx, cz);
-      const x = -half + (cx + 0.15 + jx * 0.7) * NODE_CELL;
-      const z = -half + (cz + 0.15 + jz * 0.7) * NODE_CELL;
+  const cellsX = Math.floor((bounds.maxX - bounds.minX) / NODE_CELL);
+  const cellsZ = Math.floor((bounds.maxZ - bounds.minZ) / NODE_CELL);
+  for (let cx = 0; cx < cellsX; cx++) {
+    for (let cz = 0; cz < cellsZ; cz++) {
+      const jx = hash2(ZONE_SEED + 31 + seedSalt, cx, cz);
+      const jz = hash2(ZONE_SEED + 37 + seedSalt, cx, cz);
+      const x = bounds.minX + (cx + 0.15 + jx * 0.7) * NODE_CELL;
+      const z = bounds.minZ + (cz + 0.15 + jz * 0.7) * NODE_CELL;
 
       const biome = biomeAt(x, z);
       const mix = BIOME_MIX[biome];
-      const presence = hash2(ZONE_SEED + 11, cx, cz);
-      const density = fbm(ZONE_SEED + 23, x, z, 160, 2);
+      const presence = hash2(ZONE_SEED + 11 + seedSalt, cx, cz);
+      const density = fbm(ZONE_SEED + 23 + seedSalt, x, z, 160, 2);
       if (presence > mix.presence * (0.45 + density * 0.9)) continue;
 
       const y = terrainHeight(x, z);
@@ -395,15 +421,15 @@ export function generateNodes(): WorldNode[] {
       if (paths.some((s) => distPointToSegment(x, z, s.ax, s.az, s.bx, s.bz) < PATH_CLEAR)) continue;
       if (distToRiver(x, z) < RIVER_HALF_WIDTH + 2) continue;
 
-      const roll = hash2(ZONE_SEED + 41, cx, cz);
+      const roll = hash2(ZONE_SEED + 41 + seedSalt, cx, cz);
       const type = roll < mix.tree ? "tree" : roll < mix.rock ? "rock" : "berry_bush";
       nodes.push({
-        id: `n_${cx}_${cz}`,
+        id: `${idPrefix}${cx}_${cz}`,
         type,
         x,
         y,
         z,
-        variant: hash2(ZONE_SEED + 43, cx, cz),
+        variant: hash2(ZONE_SEED + 43 + seedSalt, cx, cz),
         biome,
       });
     }
@@ -472,27 +498,57 @@ const BIOME_MOB_TABLE: Record<Biome, [string, number][]> = {
   ],
 };
 
-function pickBiomeMob(biome: Biome, roll: number): string {
-  const table = BIOME_MOB_TABLE[biome];
+function pickFromWeights(table: [string, number][], roll: number): string {
   for (const [type, w] of table) if (roll < w) return type;
   return "wolf";
 }
 
+function pickBiomeMob(biome: Biome, roll: number): string {
+  return pickFromWeights(BIOME_MOB_TABLE[biome], roll);
+}
+
+// Ashenpeak (region 2): all existing tier-3/4 mobs, much denser than any
+// region-1 biome — no new creature types, just pushed to be the baseline.
+const REGION_TWO_MOB_TABLE: [string, number][] = [
+  ["yeti", 0.22],
+  ["yetialt", 0.4],
+  ["golem", 0.58],
+  ["giant", 0.74],
+  ["demon", 0.86],
+  ["demonalt", 0.94],
+  ["dragon", 1.0],
+];
+
 /**
  * Deterministic mob spawn points. Every biome has a mix of beasts and stray
- * undead; ruins add dense skeleton clusters on top.
+ * undead; ruins add dense skeleton clusters on top. Defaults reproduce the
+ * original Greenlands-only behavior exactly; the extra parameters let a
+ * second region reuse this same scatter logic with its own bounds, id
+ * namespace, cell density, fill rate, and mob-picking rule.
  */
-export function generateMobSpawns(): MobSpawn[] {
+export function generateMobSpawns(
+  bounds: ScatterBounds = REGION_ONE_BOUNDS,
+  idPrefix = "m_",
+  seedSalt = 0,
+  mobCell = MOB_CELL,
+  fillThreshold = 0.72,
+  pickMob: (biome: Biome, roll: number) => string = pickBiomeMob,
+): MobSpawn[] {
   const villages = generateVillages();
-  const ruins = generatePois().filter((p) => p.type === "ruins");
+  // Only ruins actually inside these bounds get skeleton clusters below —
+  // without this filter, calling this for a second region (which has no
+  // ruins of its own) would otherwise re-place region-1's exact clusters.
+  const ruins = generatePois().filter(
+    (p) => p.type === "ruins" && p.x >= bounds.minX && p.x <= bounds.maxX && p.z >= bounds.minZ && p.z <= bounds.maxZ,
+  );
   const spawns: MobSpawn[] = [];
-  const half = ZONE_SIZE / 2;
-  const cells = Math.floor(ZONE_SIZE / MOB_CELL);
-  for (let cx = 0; cx < cells; cx++) {
-    for (let cz = 0; cz < cells; cz++) {
-      if (hash2(ZONE_SEED + 51, cx, cz) > 0.72) continue; // denser world
-      const x = -half + (cx + 0.2 + hash2(ZONE_SEED + 53, cx, cz) * 0.6) * MOB_CELL;
-      const z = -half + (cz + 0.2 + hash2(ZONE_SEED + 57, cx, cz) * 0.6) * MOB_CELL;
+  const cellsX = Math.floor((bounds.maxX - bounds.minX) / mobCell);
+  const cellsZ = Math.floor((bounds.maxZ - bounds.minZ) / mobCell);
+  for (let cx = 0; cx < cellsX; cx++) {
+    for (let cz = 0; cz < cellsZ; cz++) {
+      if (hash2(ZONE_SEED + 51 + seedSalt, cx, cz) > fillThreshold) continue; // denser world
+      const x = bounds.minX + (cx + 0.2 + hash2(ZONE_SEED + 53 + seedSalt, cx, cz) * 0.6) * mobCell;
+      const z = bounds.minZ + (cz + 0.2 + hash2(ZONE_SEED + 57 + seedSalt, cx, cz) * 0.6) * mobCell;
       const y = terrainHeight(x, z);
       if (y < WATER_LEVEL + 0.5) continue;
       if (dist2D(x, z, SPAWN_POINT.x, SPAWN_POINT.z) < SPAWN_CLEAR_RADIUS * 1.6) continue;
@@ -500,12 +556,14 @@ export function generateMobSpawns(): MobSpawn[] {
       if (ruins.some((r) => dist2D(x, z, r.x, r.z) < UNDEAD_RADIUS)) continue; // undead handled below
       if (distToRiver(x, z) < RIVER_HALF_WIDTH + 2) continue;
 
-      const type = pickBiomeMob(biomeAt(x, z), hash2(ZONE_SEED + 61, cx, cz));
-      spawns.push({ id: `m_${cx}_${cz}`, type, x, y, z });
+      const type = pickMob(biomeAt(x, z), hash2(ZONE_SEED + 61 + seedSalt, cx, cz));
+      spawns.push({ id: `${idPrefix}${cx}_${cz}`, type, x, y, z });
     }
   }
 
   // Guaranteed undead clusters ringing each ruins so they feel truly haunted.
+  // (`ruins` is already filtered to `bounds` above, so this is naturally a
+  // no-op for any region with none — e.g. region 2.)
   for (let ri = 0; ri < ruins.length; ri++) {
     const r = ruins[ri]!;
     const count = 5 + Math.floor(hash2(ZONE_SEED + 71, ri, 0) * 3); // 5-7
@@ -526,6 +584,41 @@ export function generateMobSpawns(): MobSpawn[] {
   }
 
   return spawns;
+}
+
+// ============================ Ashenpeak (region 2) ============================
+
+const REGION_TWO_BOUNDS: ScatterBounds = {
+  minX: WORLD_MIN_X,
+  maxX: WORLD_MAX_X,
+  minZ: VALLEY_START_Z,
+  maxZ: REGION_TWO_MAX_Z,
+};
+
+let regionTwoNodesCache: WorldNode[] | null = null;
+let regionTwoMobSpawnsCache: MobSpawn[] | null = null;
+
+/** Same deterministic scatter as `generateNodes()`, over Ashenpeak's own
+ *  coordinate window (never sampled by region 1). */
+export function generateRegionTwoNodes(): WorldNode[] {
+  if (regionTwoNodesCache) return regionTwoNodesCache;
+  regionTwoNodesCache = generateNodes(REGION_TWO_BOUNDS, "n2_", 9001);
+  return regionTwoNodesCache;
+}
+
+/** Denser, all-tier-3/4 mob spawns for Ashenpeak — smaller cells and a much
+ *  higher fill rate than region 1, reusing the existing high-tier roster. */
+export function generateRegionTwoMobSpawns(): MobSpawn[] {
+  if (regionTwoMobSpawnsCache) return regionTwoMobSpawnsCache;
+  regionTwoMobSpawnsCache = generateMobSpawns(
+    REGION_TWO_BOUNDS,
+    "m2_",
+    9101,
+    32,
+    0.4,
+    (_biome, roll) => pickFromWeights(REGION_TWO_MOB_TABLE, roll),
+  );
+  return regionTwoMobSpawnsCache;
 }
 
 // ============================ bridges ============================

@@ -28,10 +28,10 @@ export class NodeManager {
   private lastWindowUpdate = 0;
   private chips: Chip[] = [];
 
-  constructor(scene: THREE.Scene, depletedIds: string[]) {
+  constructor(scene: THREE.Scene, depletedIds: string[], nodes: WorldNode[] = generateNodes()) {
     this.scene = scene;
     const depleted = new Set(depletedIds);
-    for (const node of generateNodes()) {
+    for (const node of nodes) {
       this.nodes.set(node.id, {
         node,
         mesh: null,

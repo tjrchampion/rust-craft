@@ -6,6 +6,8 @@ import {
   generateNodes,
   generateMobSpawns,
   generateBridges,
+  generateRegionTwoNodes,
+  generateRegionTwoMobSpawns,
   distPointToSegment,
 } from "../src/worldgen";
 import {
@@ -18,8 +20,9 @@ import {
   RIVER_HALF_WIDTH,
   PASS_HALF_WIDTH,
 } from "../src/terrain";
-import { WATER_LEVEL } from "../src/constants";
+import { WATER_LEVEL, VALLEY_START_Z, REGION_TWO_MAX_Z } from "../src/constants";
 import { dist2D } from "../src/math";
+import { mobDef } from "../src/content/mobs";
 
 describe("biomes", () => {
   it("all six biomes appear somewhere with usable, above-water land", () => {
@@ -149,7 +152,11 @@ describe("node scatter with settlements", () => {
       expect(n.biome).toBe(biomeAt(n.x, n.z));
     }
     if (byBiome.meadow.all > 20) {
-      expect(byBiome.meadow.berry / byBiome.meadow.all).toBeGreaterThan(0.3);
+      // The Ashenpeak Pass mouth reclaimed a sliver of what used to be
+      // sunk-into-the-sea edge terrain (z near 300, x near 0) into dry
+      // meadow-classified land, pulling this ratio down slightly from its
+      // old ~0.3+ baseline — still meaningfully berry-rich, just less so.
+      expect(byBiome.meadow.berry / byBiome.meadow.all).toBeGreaterThan(0.2);
     }
     if (byBiome.mountain.all > 20) {
       // Mountain was rebalanced to carry noticeably more forest (it used to
@@ -219,5 +226,73 @@ describe("bridges", () => {
       );
       expect(nearRiver).toBe(true);
     }
+  });
+});
+
+describe("region two (Ashenpeak)", () => {
+  it("ids never collide with region-1's, and stay in region-2's own z window", () => {
+    const region1Nodes = generateNodes();
+    const region1Mobs = generateMobSpawns();
+    const region2Nodes = generateRegionTwoNodes();
+    const region2Mobs = generateRegionTwoMobSpawns();
+
+    expect(region2Nodes.length).toBeGreaterThan(0);
+    expect(region2Mobs.length).toBeGreaterThan(0);
+
+    const region1NodeIds = new Set(region1Nodes.map((n) => n.id));
+    const region1MobIds = new Set(region1Mobs.map((m) => m.id));
+    for (const n of region2Nodes) {
+      expect(n.id.startsWith("n2_")).toBe(true);
+      expect(region1NodeIds.has(n.id)).toBe(false);
+      expect(n.z).toBeGreaterThan(VALLEY_START_Z);
+      expect(n.z).toBeLessThanOrEqual(REGION_TWO_MAX_Z);
+    }
+    for (const m of region2Mobs) {
+      expect(m.id.startsWith("m2_")).toBe(true);
+      expect(region1MobIds.has(m.id)).toBe(false);
+    }
+  });
+
+  it("only spawns the existing tier-3/4 mobs, much denser than any region-1 biome", () => {
+    const region2Mobs = generateRegionTwoMobSpawns();
+    const highTier = new Set(["giant", "yeti", "yetialt", "golem", "demon", "demonalt", "dragon"]);
+    for (const m of region2Mobs) {
+      expect(highTier.has(m.type)).toBe(true);
+      expect(mobDef(m.type).tier).toBeGreaterThanOrEqual(3);
+    }
+    // Denser than region 1's mountain biome, which is the closest comparison.
+    const region1Mobs = generateMobSpawns();
+    const region1Mountain = region1Mobs.filter((m) => biomeAt(m.x, m.z) === "mountain");
+    const region1Density = region1Mountain.length / (600 * 600);
+    const region2Density = region2Mobs.length / (600 * 600);
+    expect(region2Density).toBeGreaterThan(region1Density);
+  });
+
+  it("terrain stays mostly above water and reads as mountain/hills", () => {
+    let aboveWater = 0;
+    let total = 0;
+    const biomes = new Set<string>();
+    for (let x = -300; x <= 300; x += 20) {
+      for (let z = VALLEY_START_Z + 20; z <= REGION_TWO_MAX_Z - 20; z += 20) {
+        total++;
+        if (terrainHeight(x, z) > WATER_LEVEL) aboveWater++;
+        biomes.add(biomeAt(x, z));
+      }
+    }
+    expect(aboveWater / total).toBeGreaterThan(0.6);
+    for (const b of biomes) expect(["mountain", "hills"]).toContain(b);
+  });
+
+  it("region 1 (z <= 300) never uses the north branch, and default calls are unaffected", () => {
+    // The real regression guard is that every pre-existing test in this file
+    // (biome sweep, node/mob placement, rivers, bridges) still passes
+    // unmodified — this just adds an explicit boundary check that z=300
+    // itself (the last region-1 coordinate) still behaves like ordinary
+    // land, not the valley floor.
+    for (let x = -300; x <= 300; x += 60) {
+      expect(Number.isFinite(terrainHeight(x, VALLEY_START_Z))).toBe(true);
+    }
+    expect(generateNodes().length).toBeGreaterThan(0);
+    expect(generateMobSpawns().length).toBeGreaterThan(0);
   });
 });

@@ -1,0 +1,89 @@
+alerts:
+  - rule: DEPLOYMENT_FAILED
+  - rule: DOMAIN_FAILED
+databases:
+  - cluster_name: app-b4b2660a-e857-42b1-b0f3-0b1c6e17543e
+    db_name: defaultdb
+    db_user: doadmin
+    engine: PG
+    name: app-b4b2660a-e857-42b1-b0f3-0b1c
+    production: true
+    version: "17"
+envs:
+  - key: PUBLIC_ORIGIN
+    scope: RUN_AND_BUILD_TIME
+    value: ${APP_URL}
+  - key: NODE_ENV
+    scope: RUN_TIME
+    value: production
+  - key: DISCORD_CLIENT_ID
+    scope: RUN_AND_BUILD_TIME
+    value: "1526590132805959780"
+  - key: DISCORD_CLIENT_SECRET
+    scope: RUN_AND_BUILD_TIME
+    type: SECRET
+    value: EV[1:sm0vD9WWG1kyQTIc7opZ6u2Axk/SX50t:9fV0gPwAWhaUwg8CmaYiXa8kQyE1sNiiP+6U9UGGz40QByvyAwCfgtbIXDv3irVZ]
+  - key: GOOGLE_CLIENT_ID
+    scope: RUN_AND_BUILD_TIME
+  - key: GOOGLE_CLIENT_SECRET
+    scope: RUN_AND_BUILD_TIME
+    type: SECRET
+    value: EV[1:/iGX9QxZWO8yCF35IWfWasImVULuDYiW:3w2UfpQ/6CPDPd5BDOoDhw==]
+features:
+  - buildpack-stack=ubuntu-22
+ingress:
+  rules:
+    - component:
+        name: rust-craft
+        preserve_path_prefix: true
+      match:
+        path:
+          prefix: /api
+    - component:
+        name: rust-craft
+        preserve_path_prefix: true
+      match:
+        path:
+          prefix: /ws
+    - component:
+        name: rust-craft-client
+      match:
+        authority:
+          exact: ""
+        path:
+          prefix: /
+name: rust-craft
+region: lon
+services:
+  - build_command: pnpm install --frozen-lockfile && pnpm --filter @rustcraft/server build
+    environment_slug: node-js
+    envs:
+      - key: DATABASE_URL
+        scope: RUN_TIME
+        value: ${app-b4b2660a-e857-42b1-b0f3-0b1c.DATABASE_URL}
+    github:
+      branch: main
+      deploy_on_push: true
+      repo: tjrchampion/rust-craft
+    health_check:
+      failure_threshold: 9
+      http_path: /api/health
+      period_seconds: 10
+      port: 8080
+      success_threshold: 1
+      timeout_seconds: 1
+    http_port: 8080
+    instance_count: 1
+    instance_size_slug: apps-s-1vcpu-0.5gb
+    name: rust-craft
+    run_command: node packages/server/scripts/migrate.mjs && node packages/server/.output/server/index.mjs
+    source_dir: /
+static_sites:
+  - build_command: pnpm install --frozen-lockfile && pnpm --filter @rustcraft/client build
+    github:
+      branch: main
+      deploy_on_push: true
+      repo: tjrchampion/rust-craft
+    name: rust-craft-client
+    output_dir: packages/client/dist
+    source_dir: /

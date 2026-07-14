@@ -1,5 +1,5 @@
 import { generateVillages } from "./worldgen";
-import { SPAWN_POINT } from "./constants";
+import { SPAWN_POINT, VALLEY_START_Z, VALLEY_END_Z } from "./constants";
 import { dist2D } from "./math";
 
 export interface ZoneInfo {
@@ -15,6 +15,18 @@ const SPAWN_ZONE: ZoneInfo = {
   id: "z_spawn",
   name: "The Hearthlands",
   subtitle: "A peaceful starting ground",
+};
+
+const VALLEY_ZONE: ZoneInfo = {
+  id: "z_valley",
+  name: "Ashenpeak Pass",
+  subtitle: "A steep, wind-scoured canyon climbing into the high peaks",
+};
+
+const REGION_TWO_ZONE: ZoneInfo = {
+  id: "z_ashenpeak",
+  name: "Ashenpeak",
+  subtitle: "Where only the desperate and the deadly make their home",
 };
 
 /** Flavor subtitles cycle deterministically by village index. */
@@ -48,6 +60,9 @@ export function generateZones(): ZoneInfo[] {
  * village (a simple Voronoi split) so every point in the world has a name.
  */
 export function zoneAt(x: number, z: number): ZoneInfo {
+  if (z > VALLEY_END_Z) return REGION_TWO_ZONE;
+  if (z > VALLEY_START_Z) return VALLEY_ZONE;
+
   const zones = generateZones();
   if (dist2D(x, z, SPAWN_POINT.x, SPAWN_POINT.z) < SPAWN_ZONE_RADIUS) return zones[0]!;
 

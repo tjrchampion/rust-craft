@@ -26,6 +26,11 @@ import {
   terrainHeight,
   generateNodes,
   generateMobSpawns,
+  generateRegionTwoNodes,
+  generateRegionTwoMobSpawns,
+  REGION_TWO_GATE_X,
+  REGION_TWO_GATE_Z,
+  REGION_TWO_TRIGGER_RADIUS,
   generatePois,
   generateVillages,
   generateNpcQuestGivers,
@@ -208,6 +213,10 @@ export class GameServer {
   private npcs: NpcSpec[] = []; // static base data; marker recomputed per-viewer
   private parties = new Map<string, Set<string>>(); // partyId -> character ids
   private partySeq = 0;
+  /** Ashenpeak (region 2) stays dormant — not generated, not ticked — until a
+   *  player first walks through the valley; then it's resident for the rest
+   *  of this process's life (resets to dormant on a restart). */
+  private regionTwoActive = false;
   private tickCount = 0;
   private tickTimer: ReturnType<typeof setInterval> | null = null;
   private saveTimer: ReturnType<typeof setInterval> | null = null;
@@ -261,6 +270,37 @@ export class GameServer {
     console.log(
       `[game] world ready: ${this.nodes.size} nodes, ${this.mobs.size} mobs, ${this.structures.length} structures`,
     );
+  }
+
+  /** Lazily populates Ashenpeak's nodes/mobs the first time any player walks
+   *  through the valley — nothing about it exists in memory before this. */
+  private activateRegionTwo(): void {
+    if (this.regionTwoActive) return;
+    this.regionTwoActive = true;
+    for (const node of generateRegionTwoNodes()) this.nodes.set(node.id, node);
+    for (const spawn of generateRegionTwoMobSpawns()) {
+      const def = mobDef(spawn.type);
+      this.mobs.set(spawn.id, {
+        id: spawn.id,
+        type: spawn.type,
+        x: spawn.x,
+        y: spawn.y,
+        z: spawn.z,
+        yaw: 0,
+        hp: def.maxHp,
+        homeX: spawn.x,
+        homeZ: spawn.z,
+        targetId: null,
+        attackReadyAt: 0,
+        respawnAt: null,
+        wanderTx: spawn.x,
+        wanderTz: spawn.z,
+        nextWanderAt: 0,
+        actionAnimUntil: 0,
+        activeAuras: [],
+      });
+    }
+    console.log(`[game] region two activated: ${this.nodes.size} nodes total, ${this.mobs.size} mobs total`);
   }
 
   stop(): void {
@@ -1304,6 +1344,12 @@ export class GameServer {
 
     for (const player of this.players.values()) {
       this.tickPlayerMovement(player);
+      if (
+        !this.regionTwoActive &&
+        dist2D(player.move.x, player.move.z, REGION_TWO_GATE_X, REGION_TWO_GATE_Z) < REGION_TWO_TRIGGER_RADIUS
+      ) {
+        this.activateRegionTwo();
+      }
       this.tickVitals(player, now);
       this.tickPlayerAuras(player, now);
       if (player.casting) {

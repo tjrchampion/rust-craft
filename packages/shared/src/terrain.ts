@@ -1,6 +1,14 @@
 import { hash2, mulberry32 } from "./rng";
 import { smoothstep, lerp, clamp, distPointToSegment } from "./math";
-import { ZONE_SEED, ZONE_SIZE, WATER_LEVEL } from "./constants";
+import {
+  ZONE_SEED,
+  ZONE_SIZE,
+  WATER_LEVEL,
+  VALLEY_START_Z,
+  VALLEY_END_Z,
+  REGION_TWO_MAX_Z,
+  VALLEY_MOUTH_HALF_WIDTH,
+} from "./constants";
 
 /** Value noise at (x, z) for one octave with given cell size. */
 function valueNoise(seed: number, x: number, z: number, cellSize: number): number {
@@ -51,6 +59,7 @@ export function moistureValue(x: number, z: number): number {
  * else is meadow (dry-ish) or forest (wetter mid-ground).
  */
 export function biomeAt(x: number, z: number): Biome {
+  if (z > VALLEY_START_Z) return northBiomeAt(x, z);
   const e = biomeValue(x, z);
   const m = moistureValue(x, z);
   if (e > 0.72) return "mountain";
@@ -62,11 +71,95 @@ export function biomeAt(x: number, z: number): Biome {
   return m < 0.34 ? "hills" : "forest";
 }
 
+// ============================ Ashenpeak (region 2) ============================
+// A second, higher-tier region north of Greenlands' original z=300 edge,
+// reached through a steep valley. These functions sample the same fbm/hash2
+// primitives at real (x,z) — since region 2's coordinates were never used by
+// region 1, this is automatically a fresh noise field, not a translated copy.
+
+/** Elevation field for the north, deliberately biased upward so the area
+ *  reads as overwhelmingly mountainous rather than the mixed Whittaker mix
+ *  region 1 uses. */
+function northElevation(x: number, z: number): number {
+  const base = fbm(ZONE_SEED + 5501, x, z, 90, 4);
+  const ridge = fbm(ZONE_SEED + 5577, x, z, 200, 2);
+  const raw = base * 0.4 + ridge * 0.6;
+  return clamp(raw * 0.5 + 0.55, 0, 1);
+}
+
+function northBiomeAt(x: number, z: number): Biome {
+  return northElevation(x, z) > 0.55 ? "mountain" : "hills";
+}
+
+/** Half-width of the walkable pass floor at a given z — widest at the
+ *  Greenlands mouth, gradually widening further as it climbs (never
+ *  narrows), so the corridor never pinches down to nothing. */
+function passHalfWidth(z: number): number {
+  const t = smoothstep(clamp((z - VALLEY_START_Z) / (VALLEY_END_Z - VALLEY_START_Z), 0, 1));
+  return lerp(VALLEY_MOUTH_HALF_WIDTH, VALLEY_MOUTH_HALF_WIDTH * 2.2, t);
+}
+
+/** Walkable floor height along the pass — starts just above sea level at the
+ *  Greenlands mouth (so it's dry land, not a water gap) and climbs
+ *  gradually over the whole VALLEY_START_Z..VALLEY_END_Z span to a high
+ *  mountain plateau. */
+function passFloorHeight(z: number): number {
+  const t = smoothstep(clamp((z - VALLEY_START_Z) / (VALLEY_END_Z - VALLEY_START_Z), 0, 1));
+  return lerp(4, 46, t);
+}
+
+/** Guaranteed minimum wall height flanking the pass, maxed against the
+ *  natural noise-based peak below — this is what makes "always mountains,
+ *  no gap to slip around" a hard guarantee rather than a noise accident. */
+function passWallFloor(z: number): number {
+  const t = smoothstep(clamp((z - VALLEY_START_Z) / (VALLEY_END_Z - VALLEY_START_Z), 0, 1));
+  return lerp(55, 95, t);
+}
+
+function northTerrainHeight(x: number, z: number): number {
+  const dx = Math.abs(x);
+  const elevation = northElevation(x, z);
+  const jagged = fbm(ZONE_SEED + 5601, x, z, 40, 3) - 0.5;
+  let naturalPeak = 20 + elevation * 60 + jagged * 14;
+  const STEP = 6;
+  naturalPeak = lerp(naturalPeak, Math.round(naturalPeak / STEP) * STEP, 0.6);
+
+  // Pass shaping (guaranteed floor + walls) fades out gradually over the
+  // last 150 units approaching VALLEY_END_Z, blending into open, natural
+  // highlands rather than ending in a hard seam.
+  const passT = 1 - smoothstep(clamp((z - (VALLEY_END_Z - 150)) / 150, 0, 1));
+  const clampedZ = Math.min(z, VALLEY_END_Z);
+  const halfWidth = passHalfWidth(clampedZ);
+  const wallT = smoothstep(clamp((dx - halfWidth * 0.75) / (halfWidth * 0.5), 0, 1));
+  const floor = passFloorHeight(clampedZ);
+  const wallHeight = Math.max(naturalPeak, passWallFloor(clampedZ));
+  const passShaped = lerp(floor, wallHeight, wallT);
+
+  let h = lerp(naturalPeak, passShaped, passT);
+
+  if (z > VALLEY_END_Z) {
+    // Region 2's own outer-edge falloff — sinks its east/west walls and its
+    // far (north) edge near REGION_TWO_MAX_Z, but never its near (south)
+    // edge, which is the pass exit and must stay open and walkable. Using
+    // a one-sided distance from the region's z-center (instead of abs())
+    // keeps the near edge unaffected regardless of how close z is to it.
+    const half2 = ZONE_SIZE / 2;
+    const cz2 = (VALLEY_END_Z + REGION_TWO_MAX_Z) / 2;
+    const dzFar = Math.max(0, z - cz2);
+    const edge2 = Math.max(dx, dzFar);
+    const falloff2 = smoothstep(clamp((edge2 - half2 * 0.72) / (half2 * 0.28), 0, 1));
+    h = lerp(h, -8, falloff2);
+  }
+
+  return h;
+}
+
 /**
  * Terrain height before rivers are carved in — the raw hill/biome shape.
  * Exported so bridge decks can sit at bank height instead of the trench.
  */
 export function terrainHeightBeforeRivers(x: number, z: number): number {
+  if (z > VALLEY_START_Z) return northTerrainHeight(x, z);
   const base = fbm(ZONE_SEED, x, z, 90, 4); // rolling hills
   const ridge = fbm(ZONE_SEED + 7777, x, z, 220, 2); // large-scale variation
   let h = base * 14 + ridge * 12 - 6;
@@ -123,11 +216,21 @@ export function terrainHeightBeforeRivers(x: number, z: number): number {
   const flat = 1 - smoothstep(clamp(dSpawn / 40, 0, 1));
   h = lerp(h, 4.2, flat * 0.85);
 
-  // Sink the map edges into the sea so the zone has a natural border.
+  // Sink the map edges into the sea so the zone has a natural border —
+  // except right at the Ashenpeak Pass mouth (north edge, near x=0), which
+  // must stay dry land so the pass connects to Greenlands without a strip
+  // of water cutting it off.
   const edge = Math.max(Math.abs(x), Math.abs(z));
   const half = ZONE_SIZE / 2;
   const falloff = smoothstep(clamp((edge - half * 0.72) / (half * 0.28), 0, 1));
-  h = lerp(h, -8, falloff);
+  const gateSuppress =
+    z > 0
+      ? 1 -
+        smoothstep(
+          clamp((Math.abs(x) - VALLEY_MOUTH_HALF_WIDTH) / (VALLEY_MOUTH_HALF_WIDTH * 0.6), 0, 1),
+        )
+      : 0;
+  h = lerp(h, -8, falloff * (1 - gateSuppress));
 
   return h;
 }

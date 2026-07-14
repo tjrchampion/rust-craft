@@ -13,13 +13,19 @@ import {
   nodeTypeDef,
   zoneAt,
   generateVillages,
+  generateRegionTwoNodes,
+  VALLEY_START_Z,
+  REGION_TWO_MAX_Z,
+  REGION_TWO_GATE_X,
+  REGION_TWO_GATE_Z,
+  REGION_TWO_TRIGGER_RADIUS,
   type MoveState,
   type ServerMsg,
   type SelfState,
 } from "@rustcraft/shared";
 import { Connection } from "../net/connection";
 import { InputManager } from "../input/input";
-import { buildTerrain, buildWater } from "../render/terrain";
+import { buildTerrain, buildWater, buildRegionTerrain } from "../render/terrain";
 import { buildHorizonMountains } from "../render/horizon";
 import { buildClouds, type CloudField } from "../render/clouds";
 import { buildNameplate, buildHorse, buildRaft, type MountParts } from "../render/models";
@@ -64,6 +70,15 @@ export class Game {
    *  building loading at connect time; the GLTF cache makes re-entry free. */
   private streamedVillages = new Set<string>();
   private readonly STREAM_RADIUS = 190;
+  /** Ashenpeak (region 2) — built once, lazily, the first time the player
+   *  approaches the valley; stays resident for the rest of the session. */
+  private regionTwoBuilt = false;
+  private regionTwoNodes: NodeManager | null = null;
+  /** Snapshot of `welcome`'s depleted-node ids, kept around so the lazily
+   *  built region-2 NodeManager can honor any already-depleted nodes there
+   *  (e.g. a returning player who gathered one before its respawn timer
+   *  elapsed) instead of always starting "fresh." */
+  private depletedNodeIds: string[] = [];
   private mountMesh: MountParts | null = null;
   private currentMount: "horse" | "raft" | null = null;
 
@@ -185,6 +200,7 @@ export class Game {
         ui.selectedSlot = msg.selectedSlot;
         ui.timeOfDay = msg.timeOfDay;
         this.move = { x: msg.self.x, y: msg.self.y, z: msg.self.z, vy: msg.self.vy, grounded: msg.self.grounded };
+        this.depletedNodeIds = msg.depletedNodes;
         this.nodes = new NodeManager(this.scene, msg.depletedNodes);
         for (const structure of msg.structures) this.entities.addStructure(structure);
         for (const npc of msg.npcs) this.npcManager.applySnap(npc);
@@ -219,6 +235,7 @@ export class Game {
         break;
       case "nodeUpdate":
         this.nodes?.setDepleted(msg.nodeId, msg.depleted);
+        this.regionTwoNodes?.setDepleted(msg.nodeId, msg.depleted);
         break;
       case "structureAdd":
         this.entities.addStructure(msg.structure);
@@ -461,11 +478,16 @@ export class Game {
       if (actions.interactPressed) {
         if (this.interactNodeId) {
           this.avatar.play("gather");
-          // Gather feedback: node shake, chip particles, tool sound.
-          if (this.nodes && !this.interactNodeId.startsWith("poi_")) {
-            this.nodes.hitNode(this.interactNodeId);
-            const nt = this.nodes.nodes.get(this.interactNodeId)?.node.type;
-            sound.play(nt === "tree" ? "chop" : nt === "rock" ? "mine" : "pick");
+          // Gather feedback: node shake, chip particles, tool sound. The
+          // target node could belong to either the main map's manager or
+          // Ashenpeak's (once built) — whichever one actually has it.
+          if (!this.interactNodeId.startsWith("poi_")) {
+            const mgr = this.nodes?.nodes.has(this.interactNodeId) ? this.nodes : this.regionTwoNodes;
+            if (mgr) {
+              mgr.hitNode(this.interactNodeId);
+              const nt = mgr.nodes.get(this.interactNodeId)?.node.type;
+              sound.play(nt === "tree" ? "chop" : nt === "rock" ? "mine" : "pick");
+            }
           }
         }
         this.doInteract();
@@ -507,6 +529,7 @@ export class Game {
     this.animateSelf(dt, actions);
     this.updateCamera(rx, ry, rz);
     this.nodes?.update(rx, rz, now, dt);
+    this.regionTwoNodes?.update(rx, rz, now, dt);
     this.grass.update(rx, rz, now);
     this.entities.update(now, dt);
     animateSettlements(this.settlements, now);
@@ -545,6 +568,18 @@ export class Game {
         this.streamedVillages.add(village.id);
         buildVillage(this.scene, village, true);
       }
+    }
+
+    // Ashenpeak (region 2): nothing about it exists in the scene until the
+    // player is already well inside the valley approach — built once, then
+    // stays resident (its own NodeManager reuses the same VISIBLE_RADIUS
+    // windowing as the main map's, unaffected by this outer gate).
+    if (!this.regionTwoBuilt && dist2D(x, z, REGION_TWO_GATE_X, REGION_TWO_GATE_Z) < REGION_TWO_TRIGGER_RADIUS) {
+      this.regionTwoBuilt = true;
+      const centerZ = (VALLEY_START_Z + REGION_TWO_MAX_Z) / 2;
+      const sizeZ = REGION_TWO_MAX_Z - VALLEY_START_Z;
+      this.scene.add(buildRegionTerrain(0, centerZ, ZONE_SIZE, sizeZ));
+      this.regionTwoNodes = new NodeManager(this.scene, this.depletedNodeIds, generateRegionTwoNodes());
     }
   }
 
@@ -659,7 +694,10 @@ export class Game {
       ui.interactLabel = null;
       return;
     }
-    const node = this.nodes.findTarget(this.move.x, this.move.y, this.move.z, this.cameraYaw, GATHER_RANGE);
+    const node =
+      this.nodes.findTarget(this.move.x, this.move.y, this.move.z, this.cameraYaw, GATHER_RANGE) ??
+      this.regionTwoNodes?.findTarget(this.move.x, this.move.y, this.move.z, this.cameraYaw, GATHER_RANGE) ??
+      null;
     if (node) {
       const def = nodeTypeDef(node.type);
       const verb = node.type === "tree" ? "Chop" : node.type === "rock" ? "Mine" : "Pick";
