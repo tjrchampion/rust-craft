@@ -1,13 +1,18 @@
 import { config } from "dotenv";
-import { resolve } from "node:path";
+import { resolve, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { Pool } from "pg";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
 
-// Same env-loading convention as utils/env.ts (this script is always invoked
-// with cwd = packages/server, via `pnpm --filter @rustcraft/server start`).
-config({ path: resolve(process.cwd(), "../../.env") });
-config({ path: resolve(process.cwd(), ".env"), override: false });
+// Resolve paths relative to this script's own location, not process.cwd() —
+// deploy platforms (e.g. DigitalOcean App Platform's run_command) may invoke
+// this directly from the repo root rather than via `pnpm --filter
+// @rustcraft/server start`, which would otherwise silently break both the
+// .env lookup and the migrations folder path below.
+const serverDir = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+config({ path: resolve(serverDir, "../../.env") });
+config({ path: resolve(serverDir, ".env"), override: false });
 
 const isDev = process.env.NODE_ENV !== "production";
 const databaseUrl = process.env.DATABASE_URL ?? "postgres://rustcraft:rustcraft@localhost:5433/rustcraft";
@@ -29,7 +34,7 @@ const db = drizzle(pool);
 
 try {
   await migrate(db, {
-    migrationsFolder: "./db/migrations",
+    migrationsFolder: resolve(serverDir, "db/migrations"),
     // Managed Postgres (production) commonly restricts the app's own DB
     // user from CREATE SCHEMA, so migration tracking lives in `public`
     // there. Local dev already has its tracking history under the default
