@@ -33,6 +33,12 @@ class GameState {
   selfName = $state("");
   selfId = $state("");
   classId = $state("");
+  /** serverTime - Date.now(), sampled once from the "welcome" message.
+   *  castEndsAt (and anything else the server timestamps) is in the
+   *  server's clock, not the client's -- subtract this offset before
+   *  comparing against a local Date.now() so cast-bar-style countdowns
+   *  aren't wrecked by clock skew between the two machines. */
+  serverTimeOffset = $state(0);
   inventory = $state<ItemSnap[]>([]);
   learnedSpells = $state<string[]>([]);
   selectedSlot = $state(0);

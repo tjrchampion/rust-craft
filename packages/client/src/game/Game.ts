@@ -205,6 +205,7 @@ export class Game {
         ui.names.set(msg.selfId, "You");
         this.selfClassId = msg.classId;
         ui.classId = msg.classId;
+        ui.serverTimeOffset = msg.serverTime - Date.now();
         void this.avatar.loadFrom(playerModelUrl(msg.classId), 1.8);
         ui.self = msg.self;
         ui.inventory = msg.inventory;

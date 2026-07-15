@@ -2,6 +2,7 @@
   import { game } from "./gameState.svelte";
   import { app } from "./appState.svelte";
   import { promptLabel } from "./padGlyphs";
+  import { spellDef } from "@rustcraft/shared";
   import Vitals from "./Vitals.svelte";
   import Hotbar from "./Hotbar.svelte";
   import CharacterScreen from "./CharacterScreen.svelte";
@@ -25,9 +26,13 @@
       return;
     }
     const endsAt = game.self.castEndsAt;
+    const totalMs = spellDef(game.self.castingSpell).castTimeS * 1000;
     const interval = setInterval(() => {
-      const remaining = endsAt - Date.now();
-      castProgress = Math.min(1, Math.max(0, 1 - remaining / 1200));
+      // castEndsAt is a server-clock timestamp; subtract serverTimeOffset
+      // (sampled once at connect) before comparing against our own
+      // Date.now(), or any client/server clock skew throws this off.
+      const remaining = endsAt - game.serverTimeOffset - Date.now();
+      castProgress = totalMs > 0 ? Math.min(1, Math.max(0, 1 - remaining / totalMs)) : 1;
     }, 40);
     return () => clearInterval(interval);
   });
