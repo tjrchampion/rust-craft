@@ -11,8 +11,8 @@
     <div class="body">
       <div class="name">{t.name}</div>
       <div class="bar">
-        <div class="fill" style="width: {(t.hp / t.maxHp) * 100}%"></div>
-        <span>{Math.ceil(t.hp)} / {t.maxHp}</span>
+        <div class="fill" style="width: {Math.min(100, (t.hp / t.maxHp) * 100)}%"></div>
+        <span>{Math.min(Math.ceil(t.hp), t.maxHp)} / {t.maxHp}</span>
       </div>
     </div>
   </div>

@@ -44,6 +44,7 @@ class GameState {
   questMarkers = $state<QuestMarker[]>([]);
   lastDevice = $state<"kbm" | "gamepad">("kbm");
   inventoryOpen = $state(false);
+  spellbookOpen = $state(false);
   chatOpen = $state(false);
   systemMenuOpen = $state(false);
   worldMapOpen = $state(false);
@@ -102,6 +103,7 @@ class GameState {
     this.toasts = [];
     this.interactLabel = null;
     this.inventoryOpen = false;
+    this.spellbookOpen = false;
     this.chatOpen = false;
     this.worldMapOpen = false;
     this.disconnected = false;

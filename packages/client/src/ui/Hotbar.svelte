@@ -2,40 +2,78 @@
   import { game } from "./gameState.svelte";
   import { itemIcon, spellIcon } from "./icons";
   import IconGlyph from "./IconGlyph.svelte";
+  import { promptLabel } from "./padGlyphs";
   import { HOTBAR_SLOTS, itemDef, spellDef } from "@rustcraft/shared";
 
-  const slots = $derived(
-    Array.from({ length: HOTBAR_SLOTS }, (_, i) =>
-      game.inventory.find((it) => it.container === "hotbar" && it.slot === i),
-    ),
-  );
+  const SPELL_PREFIX = "spell:";
+  const KEY_LABELS = ["1", "2", "3", "4", "5", "6"];
+  // Slots 6-9 (Q/Z/X/C) are also reachable on gamepad: 6 = bare Y tap, 7-9 = LB-hold chord.
+  const PAD_LABELS = ["Y", "LB+B", "LB+X", "LB+Y"];
+  const KBM_LETTER_LABELS = ["Q", "Z", "X", "C"];
 
-  const SPELL_KEYS = ["Q", "Z", "X", "C"];
-  const SPELL_PAD_LABEL = "Y";
+  function keyLabel(i: number): string {
+    if (i < 6) return KEY_LABELS[i]!;
+    return promptLabel(PAD_LABELS[i - 6] ?? "", KBM_LETTER_LABELS[i - 6] ?? "");
+  }
+
+  // Cooldown sweeps need a periodic re-render since nothing else about the
+  // slot changes while a spell is on cooldown -- a plain $derived wouldn't
+  // recompute on its own between server snapshots.
+  let nowTick = $state(Date.now());
+  $effect(() => {
+    const id = setInterval(() => (nowTick = Date.now()), 100);
+    return () => clearInterval(id);
+  });
+
+  // One unified action bar -- a slot either holds a real item (rendered as
+  // before) or a spell marker ("spell:<id>", see the assignSpell flow in
+  // SpellbookModal), rendered via the spell icon/name instead.
+  const slots = $derived(
+    Array.from({ length: HOTBAR_SLOTS }, (_, i) => {
+      const item = game.inventory.find((it) => it.container === "hotbar" && it.slot === i);
+      const spellId = item?.itemId.startsWith(SPELL_PREFIX) ? item.itemId.slice(SPELL_PREFIX.length) : null;
+      let cooldownFrac = 0;
+      let cooldownLabel = "";
+      if (spellId) {
+        const total = spellDef(spellId).cooldownS;
+        const entry = game.self?.spellCooldowns.find((c) => c.spellId === spellId);
+        if (entry && total > 0) {
+          const remaining = Math.max(0, (entry.readyAt - nowTick) / 1000);
+          cooldownFrac = Math.min(1, remaining / total);
+          if (remaining > 0.05) cooldownLabel = remaining >= 10 ? String(Math.ceil(remaining)) : remaining.toFixed(1);
+        }
+      }
+      return { item, spellId, cooldownFrac, cooldownLabel };
+    }),
+  );
 </script>
 
 <div class="hotbar">
-  {#each slots as item, i (i)}
-    <div class="slot" class:active={i === game.selectedSlot}>
-      {#if item}
+  {#each slots as { item, spellId, cooldownFrac, cooldownLabel }, i (i)}
+    <div
+      class="slot"
+      class:active={i === game.selectedSlot}
+      class:spell={spellId !== null}
+      class:first={i === 6}
+      title={spellId ? spellDef(spellId).name : undefined}
+    >
+      {#if spellId}
+        <IconGlyph value={spellIcon(spellId)} size={26} />
+        {#if game.self?.castingSpell === spellId}
+          <div class="casting"></div>
+        {/if}
+        {#if cooldownFrac > 0}
+          <div class="cooldown-sweep" style="--frac: {cooldownFrac}"></div>
+          {#if cooldownLabel}<span class="cooldown-label">{cooldownLabel}</span>{/if}
+        {/if}
+      {:else if item}
         <IconGlyph value={itemIcon(item.itemId)} size={26} />
         {#if item.qty > 1}<span class="qty">{item.qty}</span>{/if}
         {#if item.durability !== null && itemDef(item.itemId).maxDurability}
           <div class="dura" style="width: {(item.durability / itemDef(item.itemId).maxDurability!) * 100}%"></div>
         {/if}
       {/if}
-      <span class="num">{i + 1}</span>
-    </div>
-  {/each}
-  {#each game.learnedSpells as spellId, i (spellId)}
-    {@const spell = spellDef(spellId)}
-    {@const key = i === 0 && game.lastDevice === "gamepad" ? SPELL_PAD_LABEL : SPELL_KEYS[i]}
-    <div class="slot spell" class:first={i === 0} title="{spell.name} ({key})">
-      <IconGlyph value={spellIcon(spellId)} size={26} />
-      {#if key}<span class="num">{key}</span>{/if}
-      {#if game.self?.castingSpell === spellId}
-        <div class="casting"></div>
-      {/if}
+      <span class="num">{keyLabel(i)}</span>
     </div>
   {/each}
 </div>
@@ -119,5 +157,23 @@
     to {
       opacity: 1;
     }
+  }
+  /* Radial wipe that recedes as the spell comes off cooldown -- --frac is
+     1 right after casting and counts down to 0 when ready again. */
+  .cooldown-sweep {
+    position: absolute;
+    inset: 0;
+    border-radius: 6px;
+    background: conic-gradient(rgba(0, 0, 0, 0.78) calc(var(--frac) * 360deg), transparent 0);
+    pointer-events: none;
+  }
+  .cooldown-label {
+    position: absolute;
+    font-family: var(--rc-display);
+    font-size: 15px;
+    font-weight: 700;
+    color: #fff;
+    text-shadow: 0 1px 3px #000;
+    pointer-events: none;
   }
 </style>

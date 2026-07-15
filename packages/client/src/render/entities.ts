@@ -1,9 +1,10 @@
 import * as THREE from "three";
 import type { PlayerSnap, MobSnap, ProjectileSnap, StructureSnap, AnimState, ClassId } from "@rustcraft/shared";
 import { wrapAngle, mobDef, itemDef } from "@rustcraft/shared";
-import { buildNameplate, buildProjectile, buildCampfire, buildHorse, buildRaft, spellColor } from "./models";
+import { buildNameplate, buildCampfire, buildHorse, buildRaft } from "./models";
 import { AnimatedModel, PLAYER_ANIMS, mobModelSpec, logicalFromState } from "./gltf";
 import { CLASS_MODEL_URLS, CLASS_WEAPON_NODES } from "./classModels";
+import { buildSchoolProjectile, buildSchoolParticle, schoolProfile, spellSchool, type School } from "./vfx";
 
 const INTERP_DELAY_MS = 130;
 const DESPAWN_AFTER_MS = 1200;
@@ -63,6 +64,9 @@ interface Spark {
   vx: number;
   vy: number;
   vz: number;
+  gravity: number;
+  drag: number;
+  spin: number;
   born: number;
   lifeMs: number;
 }
@@ -124,7 +128,7 @@ export function playerModelUrl(classId: string): string {
 export class EntityManager {
   private scene: THREE.Scene;
   private entities = new Map<string, RemoteEntity>();
-  private projectiles = new Map<string, { group: THREE.Group; target: THREE.Vector3; color: number }>();
+  private projectiles = new Map<string, { group: THREE.Group; target: THREE.Vector3; school: School }>();
   private structures = new Map<string, THREE.Group>();
   private damageNumbers: DamageNumber[] = [];
   private sparks: Spark[] = [];
@@ -309,18 +313,18 @@ export class EntityManager {
       seen.add(snap.id);
       let proj = this.projectiles.get(snap.id);
       if (!proj) {
-        const color = spellColor(snap.spellId);
-        const group = buildProjectile(color);
+        const school = spellSchool(snap.spellId);
+        const group = buildSchoolProjectile(school);
         group.position.set(snap.x, snap.y, snap.z);
         this.scene.add(group);
-        proj = { group, target: new THREE.Vector3(snap.x, snap.y, snap.z), color };
+        proj = { group, target: new THREE.Vector3(snap.x, snap.y, snap.z), school };
         this.projectiles.set(snap.id, proj);
       }
       proj.target.set(snap.x, snap.y, snap.z);
     }
     for (const [id, proj] of this.projectiles) {
       if (!seen.has(id)) {
-        this.spawnBurst(proj.group.position, proj.color, 14);
+        this.spawnBurst(proj.group.position, proj.school);
         this.scene.remove(proj.group);
         this.projectiles.delete(id);
       }
@@ -329,18 +333,17 @@ export class EntityManager {
 
   /** Public entry point for melee/self spells (Rend, Battle Fury, Heal, …)
    *  which have no projectile of their own to carry a burst — spawned
-   *  directly around the caster instead, colored the same way projectile
-   *  spells are. */
+   *  directly around the caster instead, using the same school profile
+   *  projectile impacts do. */
   spawnSpellBurst(x: number, y: number, z: number, spellId: string): void {
-    this.spawnBurst(new THREE.Vector3(x, y, z), spellColor(spellId), 14);
+    this.spawnBurst(new THREE.Vector3(x, y, z), spellSchool(spellId));
   }
 
-  /** Small colored spark, fading and drifting — used for projectile trails. */
-  private spawnTrailSpark(pos: THREE.Vector3, color: number): void {
-    const mesh = new THREE.Mesh(
-      new THREE.SphereGeometry(0.05, 4, 4),
-      new THREE.MeshBasicMaterial({ color, transparent: true }),
-    );
+  /** Small school-colored spark, fading and drifting — used for projectile trails. */
+  private spawnTrailSpark(pos: THREE.Vector3, school: School): void {
+    const profile = schoolProfile(school);
+    const mesh = buildSchoolParticle(profile);
+    mesh.scale.setScalar(profile.particleSize * 0.6);
     mesh.position.copy(pos);
     this.scene.add(mesh);
     this.sparks.push({
@@ -348,38 +351,76 @@ export class EntityManager {
       vx: (Math.random() - 0.5) * 0.4,
       vy: (Math.random() - 0.5) * 0.4,
       vz: (Math.random() - 0.5) * 0.4,
+      gravity: profile.gravity * 0.3,
+      drag: profile.drag,
+      spin: profile.spin,
       born: performance.now(),
       lifeMs: 260,
     });
   }
 
-  /** Radial burst of colored sparks — used when a projectile lands. */
-  private spawnBurst(pos: THREE.Vector3, color: number, count: number): void {
-    for (let i = 0; i < count; i++) {
-      const mesh = new THREE.Mesh(
-        new THREE.SphereGeometry(0.07, 4, 4),
-        new THREE.MeshBasicMaterial({ color, transparent: true }),
-      );
-      mesh.position.copy(pos);
-      this.scene.add(mesh);
+  /** Burst of school-flavored particles — used when a projectile lands or a
+   *  melee/self/aoe spell resolves. Initial velocity shape (radial/rising/
+   *  hover/implode) comes from the school's profile, so Fire embers float
+   *  up, Frost shards shatter down, Arcane glitter hangs and spins, and
+   *  Shadow wisps look like they're being sucked toward the impact point. */
+  private spawnBurst(pos: THREE.Vector3, school: School): void {
+    const profile = schoolProfile(school);
+    for (let i = 0; i < profile.count; i++) {
+      const mesh = buildSchoolParticle(profile);
       const ang = Math.random() * Math.PI * 2;
-      const upAng = Math.random() * Math.PI - Math.PI / 2;
-      const spd = 1.8 + Math.random() * 2.4;
+      let vx: number;
+      let vy: number;
+      let vz: number;
+      let spawnPos = pos;
+      if (profile.spread === "implode") {
+        const offR = 0.6 + Math.random() * 1.2;
+        const ox = Math.cos(ang) * offR;
+        const oy = (Math.random() - 0.3) * offR;
+        const oz = Math.sin(ang) * offR;
+        spawnPos = new THREE.Vector3(pos.x + ox, pos.y + oy, pos.z + oz);
+        const speed = 1.5 + Math.random() * 1.5;
+        vx = (-ox / offR) * speed;
+        vy = (-oy / offR) * speed * 0.6;
+        vz = (-oz / offR) * speed;
+      } else if (profile.spread === "rising") {
+        const upAng = Math.random() * Math.PI * 0.5 + Math.PI * 0.15;
+        const spd = 1.0 + Math.random() * 1.8;
+        vx = Math.cos(ang) * Math.cos(upAng) * spd * 0.6;
+        vy = Math.sin(upAng) * spd;
+        vz = Math.sin(ang) * Math.cos(upAng) * spd * 0.6;
+      } else if (profile.spread === "hover") {
+        const spd = 0.3 + Math.random() * 0.6;
+        vx = Math.cos(ang) * spd;
+        vy = (Math.random() - 0.3) * spd;
+        vz = Math.sin(ang) * spd;
+      } else {
+        const upAng = Math.random() * Math.PI - Math.PI / 2;
+        const spd = 1.8 + Math.random() * 2.4;
+        vx = Math.cos(ang) * Math.cos(upAng) * spd;
+        vy = Math.sin(upAng) * spd;
+        vz = Math.sin(ang) * Math.cos(upAng) * spd;
+      }
+      mesh.position.copy(spawnPos);
+      this.scene.add(mesh);
       this.sparks.push({
         mesh,
-        vx: Math.cos(ang) * Math.cos(upAng) * spd,
-        vy: Math.sin(upAng) * spd,
-        vz: Math.sin(ang) * Math.cos(upAng) * spd,
+        vx,
+        vy,
+        vz,
+        gravity: profile.gravity,
+        drag: profile.drag,
+        spin: profile.spin,
         born: performance.now(),
-        lifeMs: 420,
+        lifeMs: profile.lifeMs,
       });
     }
-    this.spawnGroundRing(pos, color);
+    this.spawnGroundRing(pos, profile.ringColor, profile.ringDuration);
   }
 
   /** Flat ring that expands outward on the ground and fades — a shockwave
    *  accompanying every burst (projectile impact, melee/self spellcast). */
-  private spawnGroundRing(pos: THREE.Vector3, color: number): void {
+  private spawnGroundRing(pos: THREE.Vector3, color: number, lifeMs: number): void {
     const mesh = new THREE.Mesh(
       new THREE.RingGeometry(0.4, 0.6, 32),
       new THREE.MeshBasicMaterial({ color, transparent: true, side: THREE.DoubleSide, depthWrite: false }),
@@ -387,7 +428,7 @@ export class EntityManager {
     mesh.rotation.x = -Math.PI / 2;
     mesh.position.set(pos.x, pos.y - 0.9, pos.z);
     this.scene.add(mesh);
-    this.groundBursts.push({ mesh, born: performance.now(), lifeMs: 500 });
+    this.groundBursts.push({ mesh, born: performance.now(), lifeMs });
   }
 
   addStructure(snap: StructureSnap): void {
@@ -478,7 +519,9 @@ export class EntityManager {
 
     for (const proj of this.projectiles.values()) {
       proj.group.position.lerp(proj.target, Math.min(1, dt * 18));
-      this.spawnTrailSpark(proj.group.position, proj.color);
+      const spinSpeed = (proj.group.userData.spinSpeed as number | undefined) ?? 0;
+      if (spinSpeed) proj.group.rotation.y += spinSpeed * dt;
+      this.spawnTrailSpark(proj.group.position, proj.school);
     }
 
     for (let i = this.sparks.length - 1; i >= 0; i--) {
@@ -489,11 +532,21 @@ export class EntityManager {
         this.sparks.splice(i, 1);
         continue;
       }
-      s.vy -= 4 * dt;
+      s.vy -= s.gravity * dt;
+      if (s.drag) {
+        const damp = Math.max(0, 1 - s.drag * dt);
+        s.vx *= damp;
+        s.vy *= damp;
+        s.vz *= damp;
+      }
       s.mesh.position.x += s.vx * dt;
       s.mesh.position.y += s.vy * dt;
       s.mesh.position.z += s.vz * dt;
-      (s.mesh.material as THREE.MeshBasicMaterial).opacity = 1 - age;
+      if (s.spin) {
+        s.mesh.rotation.x += s.spin * dt;
+        s.mesh.rotation.y += s.spin * dt * 0.7;
+      }
+      (s.mesh.material as THREE.ShaderMaterial).uniforms.uOpacity.value = 1 - age;
     }
 
     for (let i = this.groundBursts.length - 1; i >= 0; i--) {

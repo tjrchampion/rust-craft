@@ -1,6 +1,5 @@
 import * as THREE from "three";
-import type { Biome, DamageType } from "@rustcraft/shared";
-import { spellDef } from "@rustcraft/shared";
+import type { Biome } from "@rustcraft/shared";
 import { barkTexture, foliageTexture } from "./textures";
 import { buildGltfTree } from "./natureAssets";
 
@@ -462,41 +461,6 @@ export function buildRaft(): MountParts {
   pole.rotation.z = 0.3;
   group.add(pole);
   return { group, riderY: 0.4 };
-}
-
-const DAMAGE_TYPE_COLORS: Record<DamageType, number> = {
-  fire: 0xff6a2b,
-  frost: 0x6fd0ff,
-  holy: 0xffe9a8,
-  nature: 0x7be07b,
-  physical: 0xd8d8d8,
-};
-const DEFAULT_SPELL_COLOR = 0xffb347;
-const HEAL_COLOR = 0x7be07b;
-
-/** Visual color for a spell's projectile/particles, keyed off its primary
- *  damage type — so every school of magic reads as visually distinct. Heals
- *  get a dedicated green (matching the existing heal damage-number color)
- *  regardless of class; pure buff/aura spells with neither fall back to a
- *  warm default so instant self spells (e.g. Battle Fury) still get a burst. */
-export function spellColor(spellId: string): number {
-  const effects = spellDef(spellId).effects;
-  const damageType = effects.find((e) => e.type === "damage")?.damageType;
-  if (damageType) return DAMAGE_TYPE_COLORS[damageType];
-  if (effects.some((e) => e.type === "heal")) return HEAL_COLOR;
-  return DEFAULT_SPELL_COLOR;
-}
-
-export function buildProjectile(color = 0xffb347): THREE.Group {
-  const group = new THREE.Group();
-  const core = new THREE.Mesh(
-    new THREE.SphereGeometry(0.18, 8, 6),
-    new THREE.MeshBasicMaterial({ color }),
-  );
-  group.add(core);
-  const light = new THREE.PointLight(color, 6, 8, 1.8);
-  group.add(light);
-  return group;
 }
 
 /** Canvas-based floating nameplate sprite. */

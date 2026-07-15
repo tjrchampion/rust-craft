@@ -111,11 +111,19 @@ export function moveItem(
   if (toSlot >= slotCount(toContainer) || fromSlot >= slotCount(fromContainer)) return false;
   const from = findItem(items, fromContainer, fromSlot);
   if (!from) return false;
-  // Equip slots only accept gear matching that slot (weapon/head/chest).
-  if (toContainer === "equip" && itemDef(from.itemId).slot !== EQUIP_SLOTS[toSlot]) return false;
+  // Spell markers ("spell:<id>", see GameServer.handleAssignSpell) aren't
+  // real items -- itemDef() would throw on them, and they only ever belong
+  // in the hotbar, never equip/inventory.
+  const fromIsSpell = from.itemId.startsWith("spell:");
+  if (fromIsSpell) {
+    if (toContainer !== "hotbar") return false;
+  } else {
+    // Equip slots only accept gear matching that slot (weapon/head/chest).
+    if (toContainer === "equip" && itemDef(from.itemId).slot !== EQUIP_SLOTS[toSlot]) return false;
+  }
   const to = findItem(items, toContainer, toSlot);
 
-  if (to && to.itemId === from.itemId) {
+  if (!fromIsSpell && to && to.itemId === from.itemId) {
     // Merge stacks.
     const def = itemDef(from.itemId);
     const take = Math.min(def.stack - to.qty, from.qty);

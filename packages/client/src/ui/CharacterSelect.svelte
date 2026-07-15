@@ -82,6 +82,60 @@
       if (created) selectedCharacterId = created.id;
     }
   }
+
+  // --- Lightweight gamepad support -----------------------------------
+  // No InputManager exists before entering the world (Game.ts only builds
+  // one after the player is already in a world), so this screen polls the
+  // gamepad itself rather than pulling in that whole machinery for a single
+  // vertical list + confirm/cancel. Name entry still needs a real keyboard,
+  // same reasoning as chat in-game -- A only ever picks a class, never
+  // submits the create form.
+  const GAMEPAD_DEADZONE = 0.35;
+  let padRafId = 0;
+  let prevPadButtons: boolean[] = [];
+  let prevAxisY = 0;
+
+  function moveSelection(delta: number): void {
+    if (mode === "select") {
+      if (characters.length === 0) return;
+      const idx = characters.findIndex((c) => c.id === selectedCharacterId);
+      const next = ((idx < 0 ? 0 : idx) + delta + characters.length) % characters.length;
+      selectCharacter(characters[next]!);
+    } else {
+      const idx = CLASS_IDS.findIndex((id) => id === (selectedClassId ?? hoveredClassId));
+      const next = ((idx < 0 ? 0 : idx) + delta + CLASS_IDS.length) % CLASS_IDS.length;
+      selectClass(CLASS_IDS[next]!);
+    }
+  }
+
+  function confirmSelection(): void {
+    if (mode === "select") enterSelected();
+  }
+
+  function cancelSelection(): void {
+    if (mode === "create" && characters.length > 0) mode = "select";
+  }
+
+  function pollGamepad(): void {
+    padRafId = requestAnimationFrame(pollGamepad);
+    const pad = navigator.getGamepads?.()[0];
+    if (!pad) return;
+    const pressed = (i: number) => (pad.buttons[i]?.pressed ?? false) && !(prevPadButtons[i] ?? false);
+    const axisY = pad.axes[1] ?? 0;
+    const edgeUp = axisY < -0.6 && prevAxisY >= -0.6;
+    const edgeDown = axisY > 0.6 && prevAxisY <= 0.6;
+    if (pressed(12) || edgeUp) moveSelection(-1); // dpad up / stick up
+    if (pressed(13) || edgeDown) moveSelection(1); // dpad down / stick down
+    if (pressed(0)) confirmSelection(); // A
+    if (pressed(1)) cancelSelection(); // B
+    prevPadButtons = pad.buttons.map((b) => b.pressed);
+    prevAxisY = Math.abs(axisY) < GAMEPAD_DEADZONE ? 0 : axisY;
+  }
+
+  onMount(() => {
+    padRafId = requestAnimationFrame(pollGamepad);
+    return () => cancelAnimationFrame(padRafId);
+  });
 </script>
 
 <div class="select-screen">

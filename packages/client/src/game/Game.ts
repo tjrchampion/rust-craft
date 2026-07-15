@@ -13,6 +13,7 @@ import {
   nodeTypeDef,
   spellDef,
   zoneAt,
+  HOTBAR_SLOTS,
   generateVillages,
   generateRegionTwoNodes,
   VALLEY_START_Z,
@@ -387,6 +388,25 @@ export class Game {
     this.equippedWeaponDef = def;
   }
 
+  /** The unified action bar: a slot either holds a real item (select it, same
+   *  as before) or a spell marker ("spell:<id>", see the assignSpell flow in
+   *  InventoryPanel) -- cast it directly instead. */
+  private useHotbarSlot(slot: number): void {
+    const entry = ui.inventory.find((i) => i.container === "hotbar" && i.slot === slot);
+    if (entry?.itemId.startsWith("spell:")) {
+      const spellId = entry.itemId.slice("spell:".length);
+      this.faceTarget();
+      this.connection.send({ t: "cast", spellId });
+      // Instant spells (melee/self) resolve server-side with no cast bar, so
+      // the server's own "casting" pose never kicks in for them — play the
+      // swing predictively here, same as a plain attack, so pressing the key
+      // doesn't look like nothing happened.
+      if (spellDef(spellId).castTimeS <= 0) this.avatar.play("attack");
+      return;
+    }
+    this.connection.send({ t: "selectSlot", slot });
+  }
+
   /** Server ack + authoritative state: rewind & replay unacked inputs. */
   private reconcile(self: SelfState): void {
     this.pending = this.pending.filter((p) => p.seq > self.ackSeq);
@@ -437,14 +457,46 @@ export class Game {
     // Inventory toggle + menu navigation forwarding (keyboard & gamepad)
     if (actions.inventoryPressed && !dead) {
       ui.inventoryOpen = !ui.inventoryOpen;
-      this.setUiMode(ui.inventoryOpen);
+      if (ui.inventoryOpen) ui.spellbookOpen = false;
+      this.setUiMode(ui.inventoryOpen || ui.spellbookOpen);
     }
-    // Escape is claimed by the inventory's own cancel handling (closes a
-    // drag-in-progress, then the panel) before the system-menu precedence
+
+    // Spellbook toggle -- its own modal, mutually exclusive with Inventory
+    // (both render a centered panel, so stacking them looks broken).
+    if (actions.spellbookPressed && !dead) {
+      ui.spellbookOpen = !ui.spellbookOpen;
+      if (ui.spellbookOpen) ui.inventoryOpen = false;
+      this.setUiMode(ui.spellbookOpen || ui.inventoryOpen);
+    }
+
+    // Dedicated gamepad Start button: a direct, always-available pause-menu
+    // toggle (previously Start only opened the inventory, and the only way
+    // to reach the system menu was the Escape/clear-target chain below,
+    // which required a clean slate first -- easy to press and see nothing
+    // happen).
+    if (actions.systemMenuPressed) {
+      if (ui.systemMenuOpen) this.setSystemMenuOpen(false);
+      else if (!ui.inventoryOpen && !ui.chatOpen) this.setSystemMenuOpen(true);
+    }
+
+    // Menu navigation forwarding (keyboard & gamepad) -- generalized across
+    // every modal panel (they all call setUiMode(true) when open), so
+    // Inventory/System Menu/Quest Dialog all get the same up/down/confirm/
+    // cancel handling from one dispatch. Escape is claimed by the active
+    // panel's own cancel handling before the system-menu precedence chain
     // below gets a look, so a single Escape press never does two things.
     let escapeConsumedByPanel = false;
-    if (ui.inventoryOpen) {
-      const cancel = actions.menuCancel && !actions.inventoryPressed;
+    const activePanel = ui.inventoryOpen
+      ? "inventory"
+      : ui.spellbookOpen
+        ? "spellbook"
+        : ui.systemMenuOpen
+          ? "system"
+          : ui.questOffer
+            ? "quest"
+            : null;
+    if (activePanel) {
+      const cancel = actions.menuCancel && !(activePanel === "inventory" && actions.inventoryPressed);
       const nav = {
         up: actions.menuUp,
         down: actions.menuDown,
@@ -459,6 +511,13 @@ export class Game {
       }
     }
 
+    // A party invite is a non-modal toast (doesn't call setUiMode, movement
+    // stays live), so it gets its own direct confirm/cancel check rather
+    // than folding into the modal-panel chain above.
+    if (ui.pendingInvite && (actions.menuConfirm || actions.menuCancel)) {
+      this.sendParty(actions.menuConfirm ? "accept" : "decline");
+    }
+
     // Chat opens with Enter (keyboard flow; controller users can still read)
     if (actions.chatPressed && !ui.chatOpen && !ui.inventoryOpen && !dead) {
       ui.chatOpen = true;
@@ -467,7 +526,7 @@ export class Game {
 
     // World map toggles with M, but only from a clean slate — it doesn't
     // stack on top of another panel.
-    if (actions.mapPressed && !ui.inventoryOpen && !ui.systemMenuOpen && !ui.questOffer && !ui.chatOpen) {
+    if (actions.mapPressed && !ui.inventoryOpen && !ui.spellbookOpen && !ui.systemMenuOpen && !ui.questOffer && !ui.chatOpen) {
       this.setWorldMapOpen(!ui.worldMapOpen);
     }
 
@@ -484,7 +543,7 @@ export class Game {
         this.closeQuestDialog();
       } else if (this.entities.getTargetId()) {
         this.entities.setTarget(null);
-      } else if (!ui.inventoryOpen && !ui.chatOpen) {
+      } else if (!ui.inventoryOpen && !ui.spellbookOpen && !ui.chatOpen) {
         this.setSystemMenuOpen(true);
       }
     }
@@ -494,27 +553,15 @@ export class Game {
 
     // UI toggles handled by HUD; here: hotbar + world actions
     if (!dead) {
-      if (actions.hotbarSlot !== null) this.connection.send({ t: "selectSlot", slot: actions.hotbarSlot });
+      if (actions.hotbarSlot !== null) this.useHotbarSlot(actions.hotbarSlot);
       else if (actions.hotbarDelta !== 0) {
-        const next = (ui.selectedSlot + actions.hotbarDelta + 6) % 6;
+        const next = (ui.selectedSlot + actions.hotbarDelta + HOTBAR_SLOTS) % HOTBAR_SLOTS;
         this.connection.send({ t: "selectSlot", slot: next });
       }
       if (actions.attackPressed) {
         this.faceTarget();
         this.connection.send({ t: "attack" });
         this.avatar.play("attack");
-      }
-      if (actions.castSlot !== null) {
-        const spellId = ui.learnedSpells[actions.castSlot];
-        if (spellId) {
-          this.faceTarget();
-          this.connection.send({ t: "cast", spellId });
-          // Instant spells (melee/self) resolve server-side with no cast
-          // bar, so the server's own "casting" pose never kicks in for
-          // them — play the swing predictively here, same as a plain
-          // attack, so pressing the key doesn't look like nothing happened.
-          if (spellDef(spellId).castTimeS <= 0) this.avatar.play("attack");
-        }
       }
       if (actions.interactPressed) {
         if (this.interactNodeId) {
@@ -901,6 +948,13 @@ export class Game {
     this.connection.send({ t: "moveItem", fromContainer: fc, fromSlot: fs, toContainer: tc, toSlot: ts });
   }
 
+  /** Pull a *newly chosen* spell from the spellbook into a hotbar slot (or
+   *  clear it with spellId: null). Rearranging a spell already slotted uses
+   *  sendMoveItem instead -- both ends are already "hotbar". */
+  sendAssignSpell(spellId: string | null, slot: number): void {
+    this.connection.send({ t: "assignSpell", spellId, slot });
+  }
+
   sendRespawn(): void {
     this.connection.send({ t: "respawn" });
   }
@@ -912,12 +966,16 @@ export class Game {
 
   setSystemMenuOpen(open: boolean): void {
     ui.systemMenuOpen = open;
-    this.setUiMode(open || ui.inventoryOpen || ui.chatOpen || ui.questOffer !== null || ui.worldMapOpen);
+    this.setUiMode(
+      open || ui.inventoryOpen || ui.spellbookOpen || ui.chatOpen || ui.questOffer !== null || ui.worldMapOpen,
+    );
   }
 
   setWorldMapOpen(open: boolean): void {
     ui.worldMapOpen = open;
-    this.setUiMode(open || ui.inventoryOpen || ui.chatOpen || ui.questOffer !== null || ui.systemMenuOpen);
+    this.setUiMode(
+      open || ui.inventoryOpen || ui.spellbookOpen || ui.chatOpen || ui.questOffer !== null || ui.systemMenuOpen,
+    );
   }
 
   get inputManager(): InputManager {

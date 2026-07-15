@@ -1,11 +1,14 @@
-export type DamageType = "physical" | "fire" | "frost" | "holy" | "nature";
-export type SpellTargetKind = "projectile" | "melee" | "self";
+export type DamageType = "physical" | "fire" | "frost" | "holy" | "nature" | "arcane" | "shadow";
+export type SpellTargetKind = "projectile" | "melee" | "self" | "aoe";
 
 export interface SpellTargeting {
   kind: SpellTargetKind;
   range: number;
   /** Projectile only: travel speed before the homing curve-in kicks in. */
   projectileSpeed?: number;
+  /** AoE only: burst radius centered on the caster (no ground-targeting
+   *  system exists, so all AoE is a self-centered nova). */
+  radius?: number;
 }
 
 export interface SpellEffect {
@@ -18,6 +21,13 @@ export interface SpellEffect {
   auraId?: string;
   /** Who the effect lands on. Defaults to "target" for projectile/melee, "caster" for self. */
   landsOn?: "caster" | "target";
+  /** damage only: fraction of the dealt damage returned to the caster as
+   *  healing -- a vampiric/drain hit rather than a plain nuke. */
+  lifestealPct?: number;
+  /** damage only: extra damage multiplier that scales with the target's
+   *  missing HP fraction (0 at full HP, up to +executeScale*base at 0 HP) --
+   *  an execute-style finisher rather than flat burst. */
+  executeScale?: number;
 }
 
 export interface SpellDef {
@@ -40,7 +50,10 @@ export const SPELLS: Record<string, SpellDef> = {
     resourceCost: 25,
     cooldownS: 3,
     targeting: { kind: "projectile", range: 30, projectileSpeed: 26 },
-    effects: [{ type: "damage", base: 10, powerScale: 2.2, damageType: "fire" }],
+    effects: [
+      { type: "damage", base: 8, powerScale: 1.9, damageType: "fire" },
+      { type: "applyAura", auraId: "burning" },
+    ],
   },
   frostbolt: {
     id: "frostbolt",
@@ -170,6 +183,219 @@ export const SPELLS: Record<string, SpellDef> = {
     cooldownS: 12,
     targeting: { kind: "self", range: 0 },
     effects: [{ type: "applyAura", auraId: "divine_favor", landsOn: "caster" }],
+  },
+  whirlwind: {
+    id: "whirlwind",
+    name: "Whirlwind",
+    castTimeS: 0,
+    resourceCost: 25,
+    cooldownS: 8,
+    targeting: { kind: "aoe", range: 0, radius: 4 },
+    effects: [{ type: "damage", base: 5, powerScale: 1.1, damageType: "physical" }],
+  },
+  flame_nova: {
+    id: "flame_nova",
+    name: "Flame Nova",
+    castTimeS: 0.8,
+    resourceCost: 30,
+    cooldownS: 8,
+    targeting: { kind: "aoe", range: 0, radius: 5 },
+    effects: [
+      { type: "damage", base: 5, powerScale: 1.2, damageType: "fire" },
+      { type: "applyAura", auraId: "burning" },
+    ],
+  },
+  fan_of_knives: {
+    id: "fan_of_knives",
+    name: "Fan of Knives",
+    castTimeS: 0,
+    resourceCost: 22,
+    cooldownS: 8,
+    targeting: { kind: "aoe", range: 0, radius: 4 },
+    effects: [{ type: "damage", base: 4, powerScale: 1.2, damageType: "physical" }],
+  },
+  circle_of_healing: {
+    id: "circle_of_healing",
+    name: "Circle of Healing",
+    castTimeS: 1.2,
+    resourceCost: 35,
+    cooldownS: 10,
+    targeting: { kind: "aoe", range: 0, radius: 8 },
+    effects: [{ type: "heal", base: 8, powerScale: 1.8 }],
+  },
+  volley: {
+    id: "volley",
+    name: "Volley",
+    castTimeS: 1.0,
+    resourceCost: 28,
+    cooldownS: 8,
+    targeting: { kind: "aoe", range: 0, radius: 6 },
+    effects: [{ type: "damage", base: 6, powerScale: 1.3, damageType: "physical" }],
+  },
+  thorn_burst: {
+    id: "thorn_burst",
+    name: "Thorn Burst",
+    castTimeS: 0.8,
+    resourceCost: 26,
+    cooldownS: 8,
+    targeting: { kind: "aoe", range: 0, radius: 5 },
+    effects: [{ type: "damage", base: 6, powerScale: 1.4, damageType: "nature" }],
+  },
+  consecration: {
+    id: "consecration",
+    name: "Consecration",
+    castTimeS: 0.8,
+    resourceCost: 28,
+    cooldownS: 8,
+    targeting: { kind: "aoe", range: 0, radius: 5 },
+    effects: [{ type: "damage", base: 6, powerScale: 1.3, damageType: "holy" }],
+  },
+  execute: {
+    id: "execute",
+    name: "Execute",
+    castTimeS: 0,
+    resourceCost: 25,
+    cooldownS: 10,
+    targeting: { kind: "melee", range: 2.6 },
+    effects: [{ type: "damage", base: 8, powerScale: 1.4, damageType: "physical", executeScale: 3.0 }],
+  },
+  shield_wall: {
+    id: "shield_wall",
+    name: "Shield Wall",
+    castTimeS: 0,
+    resourceCost: 20,
+    cooldownS: 16,
+    targeting: { kind: "self", range: 0 },
+    effects: [{ type: "applyAura", auraId: "shield_wall", landsOn: "caster" }],
+  },
+  arcane_blast: {
+    id: "arcane_blast",
+    name: "Arcane Blast",
+    castTimeS: 1.6,
+    resourceCost: 30,
+    cooldownS: 5,
+    targeting: { kind: "projectile", range: 28, projectileSpeed: 30 },
+    effects: [
+      { type: "damage", base: 11, powerScale: 2.2, damageType: "arcane" },
+      { type: "applyAura", auraId: "arcane_silence" },
+    ],
+  },
+  blizzard: {
+    id: "blizzard",
+    name: "Blizzard",
+    castTimeS: 1.2,
+    resourceCost: 32,
+    cooldownS: 10,
+    targeting: { kind: "aoe", range: 0, radius: 6 },
+    effects: [
+      { type: "damage", base: 5, powerScale: 1.2, damageType: "frost" },
+      { type: "applyAura", auraId: "chilled" },
+    ],
+  },
+  eviscerate: {
+    id: "eviscerate",
+    name: "Eviscerate",
+    castTimeS: 0,
+    resourceCost: 22,
+    cooldownS: 8,
+    targeting: { kind: "melee", range: 2.2 },
+    effects: [{ type: "damage", base: 7, powerScale: 1.3, damageType: "shadow", executeScale: 2.6 }],
+  },
+  garrote: {
+    id: "garrote",
+    name: "Garrote",
+    castTimeS: 0,
+    resourceCost: 16,
+    cooldownS: 6,
+    targeting: { kind: "melee", range: 2.2 },
+    effects: [
+      { type: "damage", base: 3, powerScale: 0.6, damageType: "shadow", lifestealPct: 0.5 },
+      { type: "applyAura", auraId: "bleeding" },
+    ],
+  },
+  holy_fire: {
+    id: "holy_fire",
+    name: "Holy Fire",
+    castTimeS: 1.4,
+    resourceCost: 26,
+    cooldownS: 6,
+    targeting: { kind: "projectile", range: 26, projectileSpeed: 28 },
+    effects: [
+      { type: "damage", base: 7, powerScale: 1.6, damageType: "holy" },
+      { type: "applyAura", auraId: "holy_burn" },
+    ],
+  },
+  renew: {
+    id: "renew",
+    name: "Renew",
+    castTimeS: 0,
+    resourceCost: 22,
+    cooldownS: 8,
+    targeting: { kind: "self", range: 0 },
+    effects: [{ type: "applyAura", auraId: "renew", landsOn: "caster" }],
+  },
+  aimed_shot: {
+    id: "aimed_shot",
+    name: "Aimed Shot",
+    castTimeS: 2.0,
+    resourceCost: 28,
+    cooldownS: 8,
+    targeting: { kind: "projectile", range: 34, projectileSpeed: 36 },
+    effects: [{ type: "damage", base: 8, powerScale: 1.5, damageType: "physical", executeScale: 2.4 }],
+  },
+  serpent_sting: {
+    id: "serpent_sting",
+    name: "Serpent Sting",
+    castTimeS: 0.8,
+    resourceCost: 18,
+    cooldownS: 6,
+    targeting: { kind: "projectile", range: 30, projectileSpeed: 30 },
+    effects: [
+      { type: "damage", base: 4, powerScale: 0.9, damageType: "nature" },
+      { type: "applyAura", auraId: "poisoned" },
+    ],
+  },
+  moonfire: {
+    id: "moonfire",
+    name: "Moonfire",
+    castTimeS: 1.0,
+    resourceCost: 20,
+    cooldownS: 5,
+    targeting: { kind: "projectile", range: 28, projectileSpeed: 26 },
+    effects: [
+      { type: "damage", base: 5, powerScale: 1.1, damageType: "arcane" },
+      { type: "applyAura", auraId: "moonfire_burn" },
+    ],
+  },
+  entangling_roots: {
+    id: "entangling_roots",
+    name: "Entangling Roots",
+    castTimeS: 1.0,
+    resourceCost: 18,
+    cooldownS: 10,
+    targeting: { kind: "projectile", range: 24, projectileSpeed: 24 },
+    effects: [
+      { type: "damage", base: 3, powerScale: 0.6, damageType: "nature" },
+      { type: "applyAura", auraId: "entangled" },
+    ],
+  },
+  hammer_of_wrath: {
+    id: "hammer_of_wrath",
+    name: "Hammer of Wrath",
+    castTimeS: 1.0,
+    resourceCost: 26,
+    cooldownS: 7,
+    targeting: { kind: "projectile", range: 26, projectileSpeed: 30 },
+    effects: [{ type: "damage", base: 6, powerScale: 1.3, damageType: "holy", executeScale: 2.8 }],
+  },
+  holy_shield: {
+    id: "holy_shield",
+    name: "Holy Shield",
+    castTimeS: 0,
+    resourceCost: 20,
+    cooldownS: 16,
+    targeting: { kind: "self", range: 0 },
+    effects: [{ type: "applyAura", auraId: "holy_shield", landsOn: "caster" }],
   },
 };
 

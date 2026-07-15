@@ -1,8 +1,10 @@
 <script lang="ts">
+  import { onMount } from "svelte";
   import { game } from "./gameState.svelte";
   import { getGame } from "../game/instance";
   import { itemIcon, mobIcon } from "./icons";
   import IconGlyph from "./IconGlyph.svelte";
+  import { promptLabel } from "./padGlyphs";
   import { itemDef, mobDef, TIER_NAMES } from "@rustcraft/shared";
   import type { QuestOfferInfo } from "@rustcraft/shared";
 
@@ -10,6 +12,11 @@
   const visible = $derived((offer?.offers ?? []).filter((o) => o.status !== "turnedin"));
 
   const TIER_COLORS = ["#9a9a9a", "#8fd48f", "#5aa7e0", "#b98fe0", "#e0a15a"];
+
+  let cursor = $state(0);
+  $effect(() => {
+    if (cursor >= visible.length) cursor = Math.max(0, visible.length - 1);
+  });
 
   function objectiveText(o: QuestOfferInfo): string {
     const name = o.objectiveKind === "kill" ? mobDef(o.objectiveTarget).name : itemDef(o.objectiveTarget).name;
@@ -24,6 +31,30 @@
   function close(): void {
     getGame()?.closeQuestDialog();
   }
+
+  function activate(): void {
+    const o = visible[cursor];
+    if (!o) return;
+    if (o.status === "available") getGame()?.sendQuestAction("accept", o.id);
+    else if (o.status === "complete") getGame()?.sendQuestAction("turnin", o.id);
+  }
+
+  onMount(() => {
+    const onNav = (e: Event) => {
+      const d = (e as CustomEvent<{ up: boolean; down: boolean; confirm: boolean; cancel: boolean }>).detail;
+      if (d.cancel) {
+        close();
+        return;
+      }
+      if (d.up) cursor = Math.max(0, cursor - 1);
+      if (d.down) cursor = Math.min(visible.length - 1, cursor + 1);
+      if (d.confirm) activate();
+    };
+    window.addEventListener("rc:menuNav", onNav);
+    return () => window.removeEventListener("rc:menuNav", onNav);
+  });
+
+  const hint = $derived(promptLabel("Ⓐ accept/turn in · Ⓑ close · d-pad select", "Click accept/turn in · Esc close"));
 </script>
 
 {#if offer}
@@ -39,8 +70,8 @@
         <div class="empty">No tasks right now. Come back later.</div>
       {/if}
 
-      {#each visible as o (o.id)}
-        <div class="quest" class:locked={o.status === "locked"}>
+      {#each visible as o, i (o.id)}
+        <div class="quest" class:locked={o.status === "locked"} class:selected={i === cursor}>
           <div class="quest-top">
             <span class="quest-name">{o.name}</span>
             <span class="tier" style="color: {TIER_COLORS[o.tier]}">{TIER_NAMES[o.tier]}</span>
@@ -73,6 +104,7 @@
       {/each}
 
       <button class="rc-btn close-btn" onclick={close}>Close</button>
+      <div class="hint">{hint}</div>
     </div>
   </div>
 {/if}
@@ -127,6 +159,16 @@
   }
   .quest.locked {
     opacity: 0.55;
+  }
+  .quest.selected {
+    border-color: var(--rc-gold-bright);
+    box-shadow: 0 0 14px rgba(255, 214, 110, 0.25);
+  }
+  .hint {
+    text-align: center;
+    font-size: 11px;
+    color: var(--rc-ink-dim);
+    margin-top: 4px;
   }
   .quest-top {
     display: flex;

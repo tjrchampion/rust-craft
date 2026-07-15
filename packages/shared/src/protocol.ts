@@ -55,7 +55,16 @@ export const MoveItemMsg = z.object({
 
 export const SelectSlotMsg = z.object({
   t: z.literal("selectSlot"),
-  slot: z.number().int().min(0).max(7),
+  slot: z.number().int().min(0).max(9),
+});
+
+/** Puts a learned spell into a hotbar slot (or clears it with spellId: null).
+ *  Rearranging a spell already in the hotbar reuses MoveItemMsg instead --
+ *  this is only for pulling a *new* spell in from the spellbook. */
+export const AssignSpellMsg = z.object({
+  t: z.literal("assignSpell"),
+  spellId: z.string().max(32).nullable(),
+  slot: z.number().int().min(0).max(9),
 });
 
 export const PlaceMsg = z.object({
@@ -112,6 +121,7 @@ export const ClientMsg = z.discriminatedUnion("t", [
   MountMsg,
   QuestMsg,
   SitMsg,
+  AssignSpellMsg,
 ]);
 export type ClientMsg = z.infer<typeof ClientMsg>;
 
@@ -254,6 +264,7 @@ export interface SelfState {
   mount: "horse" | "raft" | null;
   sitting: boolean;
   auras: { auraId: string; expiresAt: number }[];
+  spellCooldowns: { spellId: string; readyAt: number }[];
 }
 
 export type ServerMsg =

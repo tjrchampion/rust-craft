@@ -2,9 +2,15 @@
   import { onMount } from "svelte";
   import { game } from "./gameState.svelte";
   import { getGame } from "../game/instance";
-  import { itemIcon } from "./icons";
+  import { itemIcon, spellIcon } from "./icons";
   import IconGlyph from "./IconGlyph.svelte";
+  import { promptLabel } from "./padGlyphs";
   import { RECIPES, itemDef, INVENTORY_SLOTS, HOTBAR_SLOTS, EQUIP_SLOTS, type ItemSnap } from "@rustcraft/shared";
+
+  const SPELL_PREFIX = "spell:";
+  function spellIdOf(item: ItemSnap | undefined): string | null {
+    return item?.itemId.startsWith(SPELL_PREFIX) ? item.itemId.slice(SPELL_PREFIX.length) : null;
+  }
 
   type Section = "inv" | "hotbar" | "equip" | "craft";
   const COLS = 6;
@@ -14,6 +20,11 @@
 
   let section = $state<Section>("inv");
   let cursor = $state(0);
+  /** A physical item picked up from inv/hotbar/equip, moved via sendMoveItem
+   *  -- also used to rearrange a spell already slotted in the hotbar (both
+   *  ends are "hotbar" and moveItem already tolerates the "spell:" marker).
+   *  Assigning a *new* spell from the spellbook happens in its own modal
+   *  (SpellbookModal.svelte) now, not here. */
   let moving = $state<{ container: "inventory" | "hotbar" | "equip"; slot: number } | null>(null);
 
   const invSlots = $derived(
@@ -79,6 +90,13 @@
     }
     const item = slotAt(sec, idx);
     if (!item) return;
+    if (spellIdOf(item)) {
+      // A spell already slotted, picked up to rearrange -- reuse the item
+      // path (both ends are "hotbar", and moveItem already tolerates the
+      // "spell:" marker). Assigning a *new* spell happens in SpellbookModal.
+      moving = { container, slot: idx };
+      return;
+    }
     const def = itemDef(item.itemId);
     if (def.type === "consumable" || def.type === "tome") {
       g.sendConsume(container, idx);
@@ -138,6 +156,7 @@
       }
       cursor = Math.min(EQUIP_SLOTS.length - 1, Math.max(0, cursor + dx));
     } else {
+      // craft
       if (dx === -1) {
         section = "inv";
         cursor = Math.min(cursor, INV_ROWS - 1) * COLS + (COLS - 1);
@@ -166,9 +185,7 @@
   });
 
   const hintKeys = $derived(
-    game.lastDevice === "gamepad"
-      ? "Ⓐ use/move · Ⓑ close · d-pad navigate"
-      : "Click/Enter use/move · Esc close · arrows navigate",
+    promptLabel("Ⓐ use/move · Ⓑ close · d-pad navigate", "Click/Enter use/move · Esc close · arrows navigate"),
   );
 </script>
 
@@ -194,13 +211,16 @@
       <h3>Hotbar</h3>
       <div class="grid">
         {#each hotbarSlots as item, i (i)}
+          {@const spellId = spellIdOf(item)}
           <button
             class="cell"
             class:cursor={section === "hotbar" && cursor === i}
             class:moving={moving?.container === "hotbar" && moving.slot === i}
             onclick={() => activate("hotbar", i)}
           >
-            {#if item}
+            {#if spellId}
+              <IconGlyph value={spellIcon(spellId)} />
+            {:else if item}
               <IconGlyph value={itemIcon(item.itemId)} />
               {#if item.qty > 1}<span class="qty">{item.qty}</span>{/if}
             {/if}
@@ -250,6 +270,16 @@
           </button>
         {/each}
       </div>
+      <button
+        class="spellbook-btn"
+        onclick={() => {
+          close();
+          game.spellbookOpen = true;
+          getGame()?.setUiMode(true);
+        }}
+      >
+        Open Spellbook (K)
+      </button>
     </div>
   </div>
   <div class="hints">{hintKeys}</div>
@@ -341,7 +371,7 @@
     display: flex;
     flex-direction: column;
     gap: 4px;
-    max-height: 330px;
+    max-height: 230px;
     overflow-y: auto;
   }
   .recipe {
@@ -391,5 +421,21 @@
     font-size: 12px;
     color: #9fb0c4;
     text-shadow: 0 1px 3px #000;
+  }
+  .spellbook-btn {
+    margin-top: 10px;
+    width: 100%;
+    background: rgba(200, 120, 255, 0.12);
+    border: 2px solid rgba(200, 120, 255, 0.4);
+    border-radius: 6px;
+    padding: 8px 10px;
+    color: #dce6f2;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .spellbook-btn:hover {
+    background: rgba(200, 120, 255, 0.22);
+    border-color: rgba(200, 120, 255, 0.7);
   }
 </style>

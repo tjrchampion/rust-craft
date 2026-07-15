@@ -45,6 +45,7 @@ import {
   RECIPES,
   spellDef,
   mobDef,
+  auraDef,
   nodeTypeDef,
   questDef,
   questsForVillage,
@@ -474,6 +475,9 @@ export class GameServer {
         break;
       case "place":
         void this.handlePlace(player, parsed.container, parsed.slot);
+        break;
+      case "assignSpell":
+        this.handleAssignSpell(player, parsed.spellId, parsed.slot);
         break;
       case "chat":
         this.handleChat(player, parsed.channel, parsed.text.slice(0, 240));
@@ -930,7 +934,11 @@ export class GameServer {
   // ============================ actions ============================
 
   private heldItem(player: PlayerState): InvItem | undefined {
-    return findItem(player.inventory, "hotbar", player.selectedSlot);
+    const item = findItem(player.inventory, "hotbar", player.selectedSlot);
+    // A spell socketed into the selected slot isn't a real, wieldable item --
+    // itemDef() would throw on it. Treat it the same as an empty hand.
+    if (item?.itemId.startsWith("spell:")) return undefined;
+    return item;
   }
 
   private setActionAnim(player: PlayerState, anim: AnimState, durationMs = ANIM_ACTION_MS): void {
@@ -1035,6 +1043,10 @@ export class GameServer {
       this.sendEvent(player, { t: "event", kind: "error", message: "Spell not learned" });
       return;
     }
+    if (player.activeAuras.some((a) => auraDef(a.auraId).silences)) {
+      this.sendEvent(player, { t: "event", kind: "error", message: "Silenced" });
+      return;
+    }
     const spell = spellDef(spellId);
     const now = Date.now();
     if (now < (player.spellCooldowns.get(spellId) ?? 0)) return;
@@ -1109,6 +1121,49 @@ export class GameServer {
       // Poison Strike) never triggered a swing animation, sound, or
       // particle burst before, unlike a plain attack — pressing the spell
       // key looked like it did nothing, especially with no target in range.
+      this.setActionAnim(player, "attack");
+      this.broadcastNear(player.move.x, player.move.z, {
+        t: "event",
+        kind: "spellHit",
+        spellId: spell.id,
+        sourceId: player.id,
+        x: player.move.x,
+        y: player.move.y + 1,
+        z: player.move.z,
+      });
+      this.sendSelf(player);
+      return;
+    }
+
+    if (spell.targeting.kind === "aoe") {
+      const r = spell.targeting.radius ?? 6;
+      const healing = spell.effects.some((e) => e.type === "heal");
+      if (healing) {
+        // Allies (self + same party) within radius -- a damage aoe hits
+        // enemies, so a heal aoe should hit friends instead of reusing the
+        // same enemy-collection loop.
+        this.applySpellEffects(player, { mob: null, foe: player }, spell.effects);
+        for (const other of this.players.values()) {
+          if (other.id === player.id || !player.partyId || other.partyId !== player.partyId) continue;
+          if (dist2D(player.move.x, player.move.z, other.move.x, other.move.z) > r) continue;
+          this.applySpellEffects(player, { mob: null, foe: other }, spell.effects);
+        }
+      } else {
+        // Every enemy in range takes the hit -- no single-best-match here,
+        // unlike melee/projectile (which each resolve exactly one target).
+        for (const mob of this.mobs.values()) {
+          if (mob.respawnAt === null && dist2D(player.move.x, player.move.z, mob.x, mob.z) <= r) {
+            this.applySpellEffects(player, { mob, foe: null }, spell.effects);
+          }
+        }
+        if (player.pvp) {
+          for (const other of this.players.values()) {
+            if (other.id === player.id || other.dead || !other.pvp) continue;
+            if (dist2D(player.move.x, player.move.z, other.move.x, other.move.z) > r) continue;
+            this.applySpellEffects(player, { mob: null, foe: other }, spell.effects);
+          }
+        }
+      }
       this.setActionAnim(player, "attack");
       this.broadcastNear(player.move.x, player.move.z, {
         t: "event",
@@ -1271,6 +1326,31 @@ export class GameServer {
     this.structures.push(structure);
     this.sendInventory(player);
     this.broadcast({ t: "structureAdd", structure });
+  }
+
+  /** Puts a *newly chosen* spell from the spellbook into a hotbar slot (or
+   *  clears it with spellId: null). Rearranging a spell already slotted
+   *  goes through the normal "moveItem" hotbar<->hotbar path instead --
+   *  this one's only job is planting a fresh spell-marker entry. */
+  private handleAssignSpell(player: PlayerState, spellId: string | null, slot: number): void {
+    if (player.dead || slot >= HOTBAR_SLOTS) return;
+    if (spellId !== null && !player.learnedSpells.includes(spellId)) return;
+    // Clear the destination slot, and any other hotbar slot already holding
+    // this same spell -- a spell can only occupy one bar slot at a time, so
+    // picking it from the spellbook again relocates it instead of
+    // duplicating it (the spellbook itself isn't a consumed source).
+    for (let i = player.inventory.length - 1; i >= 0; i--) {
+      const it = player.inventory[i]!;
+      if (it.container !== "hotbar") continue;
+      if (it.slot === slot || (spellId !== null && it.itemId === `spell:${spellId}`)) {
+        player.inventory.splice(i, 1);
+      }
+    }
+    if (spellId !== null) {
+      player.inventory.push({ container: "hotbar", slot, itemId: `spell:${spellId}`, qty: 1, durability: null });
+    }
+    player.dirty = true;
+    this.sendInventory(player);
   }
 
   private handleRespawn(player: PlayerState): void {
@@ -1787,9 +1867,22 @@ export class GameServer {
       if (effect.type === "damage") {
         if (landsOnCaster) continue; // damage always needs a real target
         let amount = (effect.base ?? 0) + stats.power * (effect.powerScale ?? 0);
+        if (effect.executeScale) {
+          const targetMaxHp = target?.mob ? mobDef(target.mob.type).maxHp : target?.foe ? this.maxHp(target.foe) : null;
+          const targetHp = target?.mob ? target.mob.hp : (target?.foe?.hp ?? null);
+          if (targetMaxHp && targetHp !== null) {
+            const missingFrac = 1 - clamp(targetHp / targetMaxHp, 0, 1);
+            amount *= 1 + effect.executeScale * missingFrac;
+          }
+        }
         if (Math.random() < stats.critChance) amount *= 1.5;
         if (target?.mob) this.damageMob(target.mob, amount, caster);
         else if (target?.foe) this.damagePlayer(target.foe, amount, caster.id);
+        if (effect.lifestealPct) {
+          caster.hp = Math.min(this.maxHp(caster), caster.hp + amount * effect.lifestealPct);
+          caster.dirty = true;
+          this.sendSelf(caster);
+        }
       } else if (effect.type === "heal") {
         const healTarget = landsOnCaster ? caster : (target?.foe ?? null);
         if (!healTarget) continue;
@@ -1855,6 +1948,9 @@ export class GameServer {
       mount: player.mount,
       sitting: player.sitting !== null,
       auras: player.activeAuras.map((a) => ({ auraId: a.auraId, expiresAt: a.expiresAt })),
+      spellCooldowns: [...player.spellCooldowns]
+        .filter(([, readyAt]) => readyAt > Date.now())
+        .map(([spellId, readyAt]) => ({ spellId, readyAt })),
     };
   }
 

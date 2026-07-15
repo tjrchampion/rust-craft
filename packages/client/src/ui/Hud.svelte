@@ -1,9 +1,11 @@
 <script lang="ts">
   import { game } from "./gameState.svelte";
   import { app } from "./appState.svelte";
+  import { promptLabel } from "./padGlyphs";
   import Vitals from "./Vitals.svelte";
   import Hotbar from "./Hotbar.svelte";
   import InventoryPanel from "./InventoryPanel.svelte";
+  import SpellbookModal from "./SpellbookModal.svelte";
   import Chat from "./Chat.svelte";
   import TopBar from "./TopBar.svelte";
   import Party from "./Party.svelte";
@@ -15,7 +17,7 @@
   import MiniMap from "./MiniMap.svelte";
   import WorldMap from "./WorldMap.svelte";
 
-  const interactKey = $derived(game.lastDevice === "gamepad" ? "Ⓧ" : "E");
+  const interactKey = $derived(promptLabel("Ⓧ", "E"));
 
   let castProgress = $state(0);
   $effect(() => {
@@ -49,7 +51,7 @@
   {#if game.self?.dead}
     <div class="overlay death">
       <div class="death-title">YOU DIED</div>
-      <div class="death-sub">{game.lastDevice === "gamepad" ? "Press Ⓐ to respawn" : "Press R to respawn"}</div>
+      <div class="death-sub">{promptLabel("Press Ⓐ to respawn", "Press R to respawn")}</div>
     </div>
   {/if}
 
@@ -63,7 +65,7 @@
   {#if game.self?.mount && !game.self?.dead}
     <div class="mounted rc-frame">
       {game.self.mount === "horse" ? "🐎 Mounted" : "🛶 Rafting"}
-      <span class="hint">{game.lastDevice === "gamepad" ? "Back" : "G"} to dismount</span>
+      <span class="hint">{promptLabel("Back", "G")} to dismount</span>
     </div>
   {/if}
 
@@ -94,6 +96,9 @@
 
   {#if game.inventoryOpen}
     <InventoryPanel />
+  {/if}
+  {#if game.spellbookOpen}
+    <SpellbookModal />
   {/if}
   <QuestDialog />
   <SystemMenu />

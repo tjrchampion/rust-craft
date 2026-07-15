@@ -64,6 +64,8 @@ export function xpForLevel(level: number): number {
 
 // Inventory
 export const INVENTORY_SLOTS = 24;
-export const HOTBAR_SLOTS = 6;
+// Slots 0-5 = number keys 1-6; slots 6-9 = Q/Z/X/C. A single unified action
+// bar -- every slot can independently hold either an item or a spell.
+export const HOTBAR_SLOTS = 10;
 
 export const PROTOCOL_VERSION = 1;

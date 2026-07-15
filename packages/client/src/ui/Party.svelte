@@ -31,7 +31,7 @@
       <div class="member rc-frame" class:offline={!member.online}>
         <div class="member-name">{member.name} <span class="lvl">lv{member.level}</span></div>
         <div class="member-bar">
-          <div class="member-fill" style="width: {(member.hp / member.maxHp) * 100}%"></div>
+          <div class="member-fill" style="width: {Math.min(100, (member.hp / member.maxHp) * 100)}%"></div>
         </div>
       </div>
     {/each}

@@ -15,12 +15,12 @@
         <span class="name">{game.selfName}</span>
       </div>
       <div class="bar hp">
-        <div class="fill" style="width: {(self.hp / self.maxHp) * 100}%"></div>
-        <span>{Math.ceil(self.hp)} / {self.maxHp}</span>
+        <div class="fill" style="width: {Math.min(100, (self.hp / self.maxHp) * 100)}%"></div>
+        <span>{Math.min(Math.ceil(self.hp), self.maxHp)} / {self.maxHp}</span>
       </div>
       <div class="bar mana">
-        <div class="fill" style="width: {(self.mana / self.maxMana) * 100}%"></div>
-        <span>{Math.floor(self.mana)}</span>
+        <div class="fill" style="width: {Math.min(100, (self.mana / self.maxMana) * 100)}%"></div>
+        <span>{Math.min(Math.floor(self.mana), self.maxMana)}</span>
       </div>
       <div class="row">
         <div class="bar small hunger" title="Hunger">
