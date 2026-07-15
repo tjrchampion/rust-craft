@@ -188,6 +188,28 @@ export const ITEMS: Record<string, ItemDef> = {
     // "handslotl" at runtime even though the source glTF calls it "handslot.l".
     weaponProp: { url: "/assets/models/props/bow_withString.glb", bone: "handslotl" },
   },
+  grove_staff: {
+    id: "grove_staff",
+    name: "Grove Staff",
+    type: "gear",
+    stack: 1,
+    slot: "weapon",
+    statModifiers: { power: 3, vitality: 1 },
+    // Druid.glb, like Ranger.glb, bundles no baked-in weapon variants --
+    // attach the pack's standalone staff prop onto the right hand.
+    weaponProp: { url: "/assets/models/props/staff.glb", bone: "handslotr" },
+  },
+  sunforged_blade: {
+    id: "sunforged_blade",
+    name: "Sunforged Blade",
+    type: "gear",
+    stack: 1,
+    slot: "weapon",
+    statModifiers: { power: 3, vitality: 2 },
+    // Paladin.glb bundles no baked-in weapon variants either -- attach the
+    // pack's standalone one-handed sword prop onto the right hand.
+    weaponProp: { url: "/assets/models/props/sword_1handed.glb", bone: "handslotr" },
+  },
   leather_armor: {
     id: "leather_armor",
     name: "Leather Armor",

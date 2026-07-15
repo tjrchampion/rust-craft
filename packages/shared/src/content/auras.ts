@@ -57,6 +57,23 @@ export const AURAS: Record<string, AuraDef> = {
     icon: "⚔️",
     positive: true,
   },
+  regrowth: {
+    id: "regrowth",
+    name: "Regrowth",
+    durationS: 8,
+    tickIntervalS: 2,
+    tick: { type: "heal", base: 4, powerScale: 0.6 },
+    icon: "🌿",
+    positive: true,
+  },
+  divine_favor: {
+    id: "divine_favor",
+    name: "Divine Favor",
+    durationS: 6,
+    statModifiers: { armor: 5, power: 2 },
+    icon: "✨",
+    positive: true,
+  },
 };
 
 export function auraDef(id: string): AuraDef {

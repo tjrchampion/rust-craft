@@ -32,6 +32,10 @@ interface RemoteEntity {
   lastX: number;
   lastZ: number;
   speed: number;
+  /** Movement vector relative to this entity's own facing (yaw) -- see
+   *  update()'s directional-clip selection. */
+  localMoveX: number;
+  localMoveY: number;
   pvp: boolean;
   hp: number;
   maxHp: number;
@@ -198,6 +202,8 @@ export class EntityManager {
       anim: "idle",
       lastX: 0,
       lastZ: 0,
+      localMoveX: 0,
+      localMoveY: 0,
       speed: 0,
       pvp: false,
       hp: 1,
@@ -437,14 +443,32 @@ export class EntityManager {
         const z = a.z + (b.z - a.z) * alpha;
         const yaw = a.yaw + wrapAngle(b.yaw - a.yaw) * alpha;
 
-        entity.speed = Math.hypot(x - entity.lastX, z - entity.lastZ) / Math.max(dt, 1e-4);
+        const dx = x - entity.lastX;
+        const dz = z - entity.lastZ;
+        entity.speed = Math.hypot(dx, dz) / Math.max(dt, 1e-4);
+        // The body faces `yaw` (its own facing), not necessarily its travel
+        // direction, so rotate the world-space delta into that facing's
+        // local space -- inverse of the camera-relative transform used to
+        // build world moves from input in Game.stepLocal.
+        const cos = Math.cos(yaw);
+        const sin = Math.sin(yaw);
+        entity.localMoveX = -cos * dx + sin * dz;
+        entity.localMoveY = -sin * dx - cos * dz;
         entity.lastX = x;
         entity.lastZ = z;
         entity.group.position.set(x, y, z);
         entity.group.rotation.y = yaw;
       }
 
-      entity.model.play(logicalFromState(entity.anim, entity.speed, entity.kind === "mob" ? 3 : 3.5));
+      entity.model.play(
+        logicalFromState(
+          entity.anim,
+          entity.speed,
+          entity.kind === "mob" ? 3 : 3.5,
+          entity.localMoveX,
+          entity.localMoveY,
+        ),
+      );
       entity.model.update(dt);
     }
 
@@ -530,6 +554,12 @@ export class EntityManager {
     const e = this.entities.get(id);
     if (!e) return null;
     return out.copy(e.group.position);
+  }
+
+  /** Flinch reaction on taking damage -- a one-shot, so it's safe to call on
+   *  every damage tick (e.g. a DoT) without fighting the movement/idle loop. */
+  playHit(id: string): void {
+    this.entities.get(id)?.model.play("hit");
   }
 
   /** Raycast normalized device coords into the scene; return the entity hit. */

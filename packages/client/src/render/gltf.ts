@@ -13,6 +13,8 @@ export const PLAYER_MODELS = [
   "/assets/models/Mage.glb",
   "/assets/models/Rogue.glb",
   "/assets/models/Ranger.glb",
+  "/assets/models/Druid.glb",
+  "/assets/models/Paladin.glb",
 ];
 export const WOLF_MODEL = "/assets/models/Wolf.glb";
 
@@ -149,6 +151,12 @@ export interface AnimSpec {
   gather: string[];
   cast: string[];
   dead: string[];
+  /** Optional, rig-dependent: gracefully fall back (see ANIM_FALLBACK) when absent. */
+  strafeLeft?: string[];
+  strafeRight?: string[];
+  walkBack?: string[];
+  hit?: string[];
+  jump?: string[];
 }
 
 export const PLAYER_ANIMS: AnimSpec = {
@@ -159,6 +167,11 @@ export const PLAYER_ANIMS: AnimSpec = {
   gather: ["1H_Melee_Attack_Chop", "Interact"],
   cast: ["Spellcasting", "Spellcast_Long"],
   dead: ["Death_A"],
+  strafeLeft: ["Running_Strafe_Left"],
+  strafeRight: ["Running_Strafe_Right"],
+  walkBack: ["Walking_Backwards"],
+  hit: ["Hit_A"],
+  jump: ["Jump_Idle"],
 };
 
 export const WOLF_ANIMS: AnimSpec = {
@@ -172,6 +185,15 @@ export const WOLF_ANIMS: AnimSpec = {
 };
 
 export type LogicalAnim = keyof AnimSpec;
+
+/** When a rig's AnimSpec doesn't define one of the optional directional/reaction
+ *  logicals, degrade to the nearest clip every rig is guaranteed to have. */
+const ANIM_FALLBACK: Partial<Record<LogicalAnim, LogicalAnim>> = {
+  strafeLeft: "walk",
+  strafeRight: "walk",
+  walkBack: "walk",
+  jump: "idle",
+};
 
 /**
  * A loaded, animated character instance. Height-normalized so gameplay code
@@ -332,20 +354,29 @@ export class AnimatedModel {
     return this.mixer !== null;
   }
 
-  /** Crossfade to a logical animation. One-shots (attack/gather) auto-return to idle. */
+  private findAction(logical: LogicalAnim): THREE.AnimationAction | null {
+    for (const name of this.spec[logical] ?? []) {
+      const found = this.actions.get(name);
+      if (found) return found;
+    }
+    return null;
+  }
+
+  /** Crossfade to a logical animation. One-shots (attack/gather/hit) auto-return to idle. */
   play(logical: LogicalAnim): void {
     if (!this.mixer) return;
     const now = performance.now();
-    const oneShot = logical === "attack" || logical === "gather";
+    const oneShot = logical === "attack" || logical === "gather" || logical === "hit";
     if (!oneShot && now < this.oneShotUntil) return; // let the swing finish
     if (logical === this.currentLogical && !oneShot) return;
 
-    let action: THREE.AnimationAction | null = null;
-    for (const name of this.spec[logical]) {
-      const found = this.actions.get(name);
-      if (found) {
-        action = found;
-        break;
+    let action = this.findAction(logical);
+    let resolved = logical;
+    if (!action) {
+      const fallback = ANIM_FALLBACK[logical];
+      if (fallback) {
+        action = this.findAction(fallback);
+        resolved = fallback;
       }
     }
     if (!action) return;
@@ -357,7 +388,7 @@ export class AnimatedModel {
       action.reset();
     }
 
-    if (logical === "dead") {
+    if (resolved === "dead") {
       action.setLoop(THREE.LoopOnce, 1);
       action.clampWhenFinished = true;
     } else if (oneShot) {
@@ -370,6 +401,10 @@ export class AnimatedModel {
     }
     action.play();
     this.current = action;
+    // Track the originally-requested logical (not the fallback it resolved
+    // to) so the short-circuit above still matches on repeated calls --
+    // otherwise a rig missing e.g. strafeLeft would reset its walk fallback
+    // to frame 0 every single frame instead of playing it smoothly.
     this.currentLogical = oneShot ? null : logical;
   }
 
@@ -378,29 +413,47 @@ export class AnimatedModel {
   }
 }
 
-/** Map server anim + observed speed to a logical clip. */
+/** Every rig's body always faces its yaw (camera yaw for the local player,
+ *  server-authoritative yaw for remote entities) rather than its movement
+ *  direction, so strafing/backpedaling needs its own clips instead of just
+ *  running the forward-walk cycle sideways. `localMoveX`/`localMoveY` are the
+ *  movement vector in that facing's own local space: +X = strafing right,
+ *  +Y = moving backward (matches InputManager's camera-relative axes). */
+function directionalMove(localMoveX: number, localMoveY: number, running: boolean): LogicalAnim {
+  if (Math.abs(localMoveX) > Math.abs(localMoveY) * 1.1) {
+    return localMoveX > 0 ? "strafeRight" : "strafeLeft";
+  }
+  if (localMoveY > 0.15) return "walkBack";
+  return running ? "run" : "walk";
+}
+
+/** Map server anim + observed speed/direction to a logical clip. */
 export function logicalFromState(
   serverAnim: string,
   speed: number,
   runThreshold: number,
+  localMoveX = 0,
+  localMoveY = 0,
 ): LogicalAnim {
   switch (serverAnim) {
     case "dead":
       return "dead";
+    case "jump":
+      return "jump";
     case "cast":
       // Casting no longer roots the player in place server-side, so prefer
       // the movement clip while actually walking/running -- otherwise the
       // avatar would glide through the world stuck in the cast pose.
-      if (speed > runThreshold) return "run";
-      if (speed > 0.35) return "walk";
+      if (speed > runThreshold) return directionalMove(localMoveX, localMoveY, true);
+      if (speed > 0.35) return directionalMove(localMoveX, localMoveY, false);
       return "cast";
     case "attack":
       return "attack";
     case "gather":
       return "gather";
     default:
-      if (speed > runThreshold) return "run";
-      if (speed > 0.35) return "walk";
+      if (speed > runThreshold) return directionalMove(localMoveX, localMoveY, true);
+      if (speed > 0.35) return directionalMove(localMoveX, localMoveY, false);
       return "idle";
   }
 }

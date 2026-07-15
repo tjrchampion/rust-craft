@@ -35,7 +35,7 @@ describe("computeActorStats", () => {
   });
 
   it("every class template has distinct, sane base stats", () => {
-    expect(CLASS_IDS.length).toBe(5);
+    expect(CLASS_IDS.length).toBe(7);
     for (const id of CLASS_IDS) {
       const stats = CLASSES[id].baseStats;
       expect(stats.power).toBeGreaterThan(0);

@@ -1,7 +1,7 @@
 import type { BaseStats } from "../sim/actorStats";
 import type { GearSlot } from "./items";
 
-export type ClassId = "warrior" | "mage" | "rogue" | "cleric" | "ranger";
+export type ClassId = "warrior" | "mage" | "rogue" | "cleric" | "ranger" | "druid" | "paladin";
 
 /**
  * Classes are pure data blueprints applied ONLY at character creation --
@@ -78,6 +78,30 @@ export const CLASSES: Record<ClassId, ClassTemplate> = {
     startingSpells: ["quick_shot", "piercing_shot", "heal"],
     startingGear: [
       { slot: "weapon", itemId: "hunting_bow" },
+      { slot: "chest", itemId: "leather_armor" },
+    ],
+  },
+  druid: {
+    id: "druid",
+    name: "Druid",
+    description: "A shaper of growth and decay, mending allies and calling down nature's wrath.",
+    resourceLabel: "Harmony",
+    baseStats: { power: 8, armor: 4, agility: 5, vitality: 6 },
+    startingSpells: ["wrath", "regrowth", "heal"],
+    startingGear: [
+      { slot: "weapon", itemId: "grove_staff" },
+      { slot: "chest", itemId: "cloth_robe" },
+    ],
+  },
+  paladin: {
+    id: "paladin",
+    name: "Paladin",
+    description: "A holy knight who smites foes up close and shields allies with faith.",
+    resourceLabel: "Faith",
+    baseStats: { power: 8, armor: 8, agility: 4, vitality: 9 },
+    startingSpells: ["crusader_strike", "divine_favor", "heal"],
+    startingGear: [
+      { slot: "weapon", itemId: "sunforged_blade" },
       { slot: "chest", itemId: "leather_armor" },
     ],
   },

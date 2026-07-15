@@ -7,6 +7,8 @@ export const CLASS_MODEL_URLS: Record<ClassId, string> = {
   rogue: "/assets/models/Rogue.glb",
   cleric: "/assets/models/Knight.glb",
   ranger: "/assets/models/Ranger.glb",
+  druid: "/assets/models/Druid.glb",
+  paladin: "/assets/models/Paladin.glb",
 };
 
 export const CLASS_ICONS: Record<ClassId, string> = {
@@ -15,6 +17,8 @@ export const CLASS_ICONS: Record<ClassId, string> = {
   rogue: "🗡️",
   cleric: "☀️",
   ranger: "🏹",
+  druid: "🌿",
+  paladin: "🛡️",
 };
 
 /** Every weapon/shield/accessory node name present in each class's rig — the
@@ -33,7 +37,9 @@ export const CLASS_WEAPON_NODES: Record<ClassId, string[]> = {
     "Round_Shield",
     "Spike_Shield",
   ],
-  // Ranger.glb doesn't bundle any baked-in weapon variants (unlike the other
-  // 4 rigs) — its bow is attached separately via ItemDef.weaponProp instead.
+  // Ranger/Druid/Paladin.glb don't bundle any baked-in weapon variants (unlike
+  // the other 4 rigs) — their weapons attach separately via ItemDef.weaponProp.
   ranger: [],
+  druid: [],
+  paladin: [],
 };

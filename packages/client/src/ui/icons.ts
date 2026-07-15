@@ -22,6 +22,8 @@ const ICONS: Record<string, string> = {
   twin_daggers: "🔪",
   blessed_mace: "🔨",
   hunting_bow: "🏹",
+  grove_staff: "🌳",
+  sunforged_blade: "⚔️",
   leather_armor: "🥋",
   cloth_robe: "👘",
 };
@@ -37,6 +39,10 @@ const SPELL_ICONS: Record<string, string> = {
   smite: "⚡",
   quick_shot: "🏹",
   piercing_shot: "🎯",
+  wrath: "🍃",
+  regrowth: "🌿",
+  crusader_strike: "🔨",
+  divine_favor: "✨",
 };
 
 const MOB_ICONS: Record<string, string> = {

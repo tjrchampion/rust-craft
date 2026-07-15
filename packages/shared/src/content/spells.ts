@@ -135,6 +135,42 @@ export const SPELLS: Record<string, SpellDef> = {
       { type: "applyAura", auraId: "bleeding" },
     ],
   },
+  wrath: {
+    id: "wrath",
+    name: "Wrath",
+    castTimeS: 1.3,
+    resourceCost: 22,
+    cooldownS: 3,
+    targeting: { kind: "projectile", range: 28, projectileSpeed: 24 },
+    effects: [{ type: "damage", base: 9, powerScale: 2.0, damageType: "nature" }],
+  },
+  regrowth: {
+    id: "regrowth",
+    name: "Regrowth",
+    castTimeS: 1.0,
+    resourceCost: 20,
+    cooldownS: 6,
+    targeting: { kind: "self", range: 0 },
+    effects: [{ type: "applyAura", auraId: "regrowth", landsOn: "caster" }],
+  },
+  crusader_strike: {
+    id: "crusader_strike",
+    name: "Crusader Strike",
+    castTimeS: 0,
+    resourceCost: 18,
+    cooldownS: 5,
+    targeting: { kind: "melee", range: 2.4 },
+    effects: [{ type: "damage", base: 8, powerScale: 2.0, damageType: "holy" }],
+  },
+  divine_favor: {
+    id: "divine_favor",
+    name: "Divine Favor",
+    castTimeS: 0,
+    resourceCost: 20,
+    cooldownS: 12,
+    targeting: { kind: "self", range: 0 },
+    effects: [{ type: "applyAura", auraId: "divine_favor", landsOn: "caster" }],
+  },
 };
 
 export function spellDef(id: string): SpellDef {

@@ -298,6 +298,8 @@ export class Game {
         if (msg.x !== undefined && msg.amount) {
           const mine = msg.sourceId === this.selfId;
           const toMe = msg.targetId === this.selfId;
+          if (toMe) this.avatar.play("hit");
+          else if (msg.targetId) this.entities.playHit(msg.targetId);
           this.entities.spawnDamageNumber(
             msg.x,
             (msg.y ?? 0) + 0.6,
@@ -700,9 +702,18 @@ export class Game {
     const inputMag = Math.min(1, Math.hypot(actions.moveX, actions.moveY));
     this.lastAnimSpeed += (inputMag - this.lastAnimSpeed) * Math.min(1, dt * 10);
 
-    const serverAnim = ui.self?.dead ? "dead" : ui.self?.castingSpell ? "cast" : "idle";
+    // vy is only ever nonzero mid-jump/fall -- swimming pins it to exactly 0
+    // even though `grounded` is also false there, so checking vy (not
+    // grounded) keeps the jump pose from showing while treading water.
+    const serverAnim = ui.self?.dead
+      ? "dead"
+      : this.move.vy !== 0
+        ? "jump"
+        : ui.self?.castingSpell
+          ? "cast"
+          : "idle";
     const speed = this.lastAnimSpeed * (actions.sprint ? 6.8 : 4.6);
-    this.avatar.play(logicalFromState(serverAnim, speed, 3.5));
+    this.avatar.play(logicalFromState(serverAnim, speed, 3.5, actions.moveX, actions.moveY));
     this.avatar.update(dt);
   }
 
