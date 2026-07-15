@@ -58,7 +58,6 @@ class GameState {
   inventoryOpen = $state(false);
   activeTab = $state<CharacterTab>("inventory");
   chatOpen = $state(false);
-  systemMenuOpen = $state(false);
   worldMapOpen = $state(false);
   disconnected = $state(false);
   pvpEnabled = $state(false);

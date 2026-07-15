@@ -90,7 +90,7 @@
         <span><span class="dot" style="background:{POI_COLOR.camp}"></span>Camp</span>
         <span><span class="dot" style="background:{POI_COLOR.ruins}"></span>Ruins</span>
       </div>
-      <div class="hint">M or Esc to close</div>
+      <div class="hint">M to close</div>
     </div>
   </div>
 {/if}

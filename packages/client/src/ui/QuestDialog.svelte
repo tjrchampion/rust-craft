@@ -54,7 +54,7 @@
     return () => window.removeEventListener("rc:menuNav", onNav);
   });
 
-  const hint = $derived(promptLabel("Ⓐ accept/turn in · Ⓑ close · d-pad select", "Click accept/turn in · Esc close"));
+  const hint = $derived(promptLabel("Ⓐ accept/turn in · Ⓑ close · d-pad select", "Click accept/turn in · click ✕ to close"));
 </script>
 
 {#if offer}

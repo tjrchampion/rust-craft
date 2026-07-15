@@ -4,6 +4,7 @@
   import { promptLabel } from "./padGlyphs";
   import { spellDef } from "@rustcraft/shared";
   import Vitals from "./Vitals.svelte";
+  import AuraBar from "./AuraBar.svelte";
   import Hotbar from "./Hotbar.svelte";
   import CharacterScreen from "./CharacterScreen.svelte";
   import Chat from "./Chat.svelte";
@@ -13,7 +14,6 @@
   import QuestTracker from "./QuestTracker.svelte";
   import QuestDialog from "./QuestDialog.svelte";
   import ZoneBanner from "./ZoneBanner.svelte";
-  import SystemMenu from "./SystemMenu.svelte";
   import MiniMap from "./MiniMap.svelte";
   import WorldMap from "./WorldMap.svelte";
 
@@ -89,6 +89,7 @@
   {#if game.connected}
     <TopBar />
     <Vitals />
+    <AuraBar />
     <Hotbar />
     <Chat />
     <Party />
@@ -102,7 +103,6 @@
     <CharacterScreen />
   {/if}
   <QuestDialog />
-  <SystemMenu />
   <WorldMap />
 </div>
 

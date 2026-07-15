@@ -241,7 +241,7 @@
   });
 
   const hintKeys = $derived(
-    promptLabel("Ⓐ select · Ⓑ close · d-pad navigate", "Click to select · Esc close"),
+    promptLabel("Ⓐ select · Ⓑ close · d-pad navigate", "Click to select · press again or click ✕ to close"),
   );
 </script>
 

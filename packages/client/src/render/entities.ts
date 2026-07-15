@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import type { PlayerSnap, MobSnap, ProjectileSnap, StructureSnap, AnimState, ClassId } from "@rustcraft/shared";
-import { wrapAngle, mobDef, itemDef } from "@rustcraft/shared";
+import { wrapAngle, mobDef, itemDef, auraDef } from "@rustcraft/shared";
 import { buildNameplate, buildCampfire, buildHorse, buildRaft } from "./models";
 import { AnimatedModel, PLAYER_ANIMS, mobModelSpec, logicalFromState } from "./gltf";
 import { CLASS_MODEL_URLS, CLASS_WEAPON_NODES } from "./classModels";
@@ -26,6 +26,8 @@ interface RemoteEntity {
   model: AnimatedModel;
   nameplate?: THREE.Sprite;
   hpBar?: THREE.Sprite;
+  debuffIcons: THREE.Sprite;
+  lastDebuffKey: string;
   ring?: THREE.Mesh;
   samples: Sample[];
   lastSeen: number;
@@ -121,6 +123,46 @@ function paintHpBar(sprite: THREE.Sprite, fraction: number): void {
   texture.needsUpdate = true;
 }
 
+function buildDebuffIcons(): THREE.Sprite {
+  const canvas = document.createElement("canvas");
+  canvas.width = 160;
+  canvas.height = 40;
+  const texture = new THREE.CanvasTexture(canvas);
+  const sprite = new THREE.Sprite(
+    new THREE.SpriteMaterial({ map: texture, transparent: true, depthWrite: false }),
+  );
+  sprite.scale.set(1.4, 0.35, 1);
+  sprite.visible = false;
+  return sprite;
+}
+
+/** Redraws the floating debuff-icon row above an entity's head -- one glyph
+ *  per currently-ticking damage-over-time aura. The row (and the whole
+ *  sprite) disappears the moment the server stops including an aura id,
+ *  i.e. exactly when it expires -- no separate client-side timer needed
+ *  since position/hp/etc already refresh every snapshot tick anyway. */
+function paintDebuffIcons(sprite: THREE.Sprite, auraIds: string[]): void {
+  const texture = (sprite.material as THREE.SpriteMaterial).map as THREE.CanvasTexture;
+  const canvas = texture.image as HTMLCanvasElement;
+  const ctx = canvas.getContext("2d")!;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  const size = 30;
+  const gap = 6;
+  const totalWidth = auraIds.length * size + Math.max(0, auraIds.length - 1) * gap;
+  let x = (canvas.width - totalWidth) / 2 + size / 2;
+  ctx.font = `${size}px system-ui, sans-serif`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.shadowColor = "rgba(0,0,0,0.9)";
+  ctx.shadowBlur = 4;
+  for (const auraId of auraIds) {
+    ctx.fillText(auraDef(auraId).icon, x, canvas.height / 2);
+    x += size + gap;
+  }
+  texture.needsUpdate = true;
+  sprite.visible = auraIds.length > 0;
+}
+
 export function playerModelUrl(classId: string): string {
   return CLASS_MODEL_URLS[classId as ClassId] ?? CLASS_MODEL_URLS.warrior;
 }
@@ -190,6 +232,9 @@ export class EntityManager {
     const hpBar = buildHpBar();
     hpBar.position.y = barY;
     group.add(hpBar);
+    const debuffIcons = buildDebuffIcons();
+    debuffIcons.position.y = plateY + 0.3;
+    group.add(debuffIcons);
     this.scene.add(group);
 
     const entity: RemoteEntity = {
@@ -201,6 +246,8 @@ export class EntityManager {
       model,
       nameplate,
       hpBar,
+      debuffIcons,
+      lastDebuffKey: "",
       samples: [],
       lastSeen: now,
       anim: "idle",
@@ -286,6 +333,7 @@ export class EntityManager {
       entity.samples.push({ t: now, x: snap.x, y: snap.y, z: snap.z, yaw: snap.yaw });
       if (entity.samples.length > 12) entity.samples.shift();
       if (entity.hpBar) paintHpBar(entity.hpBar, snap.hp / snap.maxHp);
+      this.updateDebuffs(entity, snap.debuffs);
     }
   }
 
@@ -304,7 +352,18 @@ export class EntityManager {
       entity.samples.push({ t: now, x: snap.x, y: snap.y, z: snap.z, yaw: snap.yaw });
       if (entity.samples.length > 12) entity.samples.shift();
       if (entity.hpBar) paintHpBar(entity.hpBar, snap.hp / snap.maxHp);
+      this.updateDebuffs(entity, snap.debuffs);
     }
+  }
+
+  /** Repaints the floating debuff-icon row only when the active set actually
+   *  changed (auras persist across most snapshot ticks unchanged, so this
+   *  avoids redrawing the canvas texture 20x/sec for nothing). */
+  private updateDebuffs(entity: RemoteEntity, debuffs: string[]): void {
+    const key = debuffs.join(",");
+    if (key === entity.lastDebuffKey) return;
+    entity.lastDebuffKey = key;
+    paintDebuffIcons(entity.debuffIcons, debuffs);
   }
 
   applyProjectiles(snaps: ProjectileSnap[]): void {

@@ -154,6 +154,9 @@ export interface PlayerSnap {
   pvp: boolean;
   mount: "horse" | "raft" | null;
   weaponId: string | null;
+  /** Aura ids for currently-ticking damage-over-time effects only (not
+   *  buffs/HoTs/silence) -- drives the floating debuff icon over their head. */
+  debuffs: string[];
 }
 
 export interface PartyMemberSnap {
@@ -175,6 +178,8 @@ export interface MobSnap {
   hp: number;
   maxHp: number;
   anim: AnimState;
+  /** Aura ids for currently-ticking damage-over-time effects only. */
+  debuffs: string[];
 }
 
 export interface StructureSnap {

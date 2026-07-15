@@ -103,9 +103,6 @@ export class Game {
   private accumulator = 0;
   private lastFrame = performance.now();
   private jumpQueued = false;
-  /** Escape presses redelivered just after an auto-opened system menu (see
-   *  onFullscreenChange) are ignored so they don't immediately close it again. */
-  private suppressEscapeUntil = 0;
   private running = false;
   private disposed = false;
   private animTime = 0;
@@ -163,7 +160,6 @@ export class Game {
     this.input = new InputManager(canvas);
 
     window.addEventListener("resize", this.onResize);
-    document.addEventListener("fullscreenchange", this.onFullscreenChange);
 
     this.unsubscribe = this.connection.onMessage((msg) => this.onServerMsg(msg));
     void this.connect(characterId);
@@ -456,45 +452,21 @@ export class Game {
 
     const dead = ui.self?.dead ?? false;
 
-    // Character screen toggle (Tab/I opens on the Inventory tab; K jumps
-    // straight to the Spell Book tab). Both close the screen if it's already
-    // open showing that same tab, otherwise they open it / switch tabs --
-    // one shared full-page panel, not separate modals.
-    if (actions.inventoryPressed && !dead) {
-      if (ui.inventoryOpen && ui.activeTab === "inventory") ui.inventoryOpen = false;
-      else {
-        ui.inventoryOpen = true;
-        ui.activeTab = "inventory";
-      }
-      this.setUiMode(ui.inventoryOpen);
-    }
-    if (actions.spellbookPressed && !dead) {
-      if (ui.inventoryOpen && ui.activeTab === "spellbook") ui.inventoryOpen = false;
-      else {
-        ui.inventoryOpen = true;
-        ui.activeTab = "spellbook";
-      }
-      this.setUiMode(ui.inventoryOpen);
-    }
-
-    // Dedicated gamepad Start button: a direct, always-available pause-menu
-    // toggle (previously Start only opened the inventory, and the only way
-    // to reach the system menu was the Escape/clear-target chain below,
-    // which required a clean slate first -- easy to press and see nothing
-    // happen).
-    if (actions.systemMenuPressed) {
-      if (ui.systemMenuOpen) this.setSystemMenuOpen(false);
-      else if (!ui.inventoryOpen && !ui.chatOpen) this.setSystemMenuOpen(true);
-    }
+    // Character screen toggle -- Tab/I/K/J/O (and gamepad Start) each open the
+    // same full-page panel directly on their own tab, or close it if it's
+    // already open showing that tab. One shared panel, not separate modals.
+    if (actions.inventoryPressed && !dead) this.toggleTab("inventory");
+    if (actions.spellbookPressed && !dead) this.toggleTab("spellbook");
+    if (actions.craftingPressed && !dead) this.toggleTab("craft");
+    if (actions.systemPressed && !dead) this.toggleTab("system");
+    if (actions.systemMenuPressed && !dead) this.toggleTab("system");
 
     // Menu navigation forwarding (keyboard & gamepad) -- generalized across
-    // every modal panel (they all call setUiMode(true) when open), so
-    // Inventory/System Menu/Quest Dialog all get the same up/down/confirm/
-    // cancel handling from one dispatch. Escape is claimed by the active
-    // panel's own cancel handling before the system-menu precedence chain
-    // below gets a look, so a single Escape press never does two things.
+    // every modal panel (they all call setUiMode(true) when open), so the
+    // character screen and Quest Dialog get the same up/down/confirm/cancel
+    // handling from one dispatch.
     let escapeConsumedByPanel = false;
-    const activePanel = ui.inventoryOpen ? "inventory" : ui.systemMenuOpen ? "system" : ui.questOffer ? "quest" : null;
+    const activePanel = ui.inventoryOpen ? "inventory" : ui.questOffer ? "quest" : null;
     if (activePanel) {
       const cancel = actions.menuCancel && !(activePanel === "inventory" && actions.inventoryPressed);
       const nav = {
@@ -526,25 +498,21 @@ export class Game {
 
     // World map toggles with M, but only from a clean slate — it doesn't
     // stack on top of another panel.
-    if (actions.mapPressed && !ui.inventoryOpen && !ui.systemMenuOpen && !ui.questOffer && !ui.chatOpen) {
+    if (actions.mapPressed && !ui.inventoryOpen && !ui.questOffer && !ui.chatOpen) {
       this.setWorldMapOpen(!ui.worldMapOpen);
     }
 
-    // Escape precedence: close the system menu if open, else the world map,
-    // else close the quest dialog if open (it has no Escape handler of its
-    // own), else clear the current target, else — nothing else to close —
-    // open the system menu.
-    if (actions.clearTargetPressed && !escapeConsumedByPanel && performance.now() > this.suppressEscapeUntil) {
-      if (ui.systemMenuOpen) {
-        this.setSystemMenuOpen(false);
-      } else if (ui.worldMapOpen) {
+    // Gamepad B ("back"): close the world map, else the quest dialog, else
+    // clear the current target. No keyboard key drives this any more --
+    // Escape is intentionally a no-op in this game beyond the browser's own
+    // built-in "exit fullscreen" handling, so there's nothing to mirror here.
+    if (actions.clearTargetPressed && !escapeConsumedByPanel) {
+      if (ui.worldMapOpen) {
         this.setWorldMapOpen(false);
       } else if (ui.questOffer) {
         this.closeQuestDialog();
       } else if (this.entities.getTargetId()) {
         this.entities.setTarget(null);
-      } else if (!ui.inventoryOpen && !ui.chatOpen) {
-        this.setSystemMenuOpen(true);
       }
     }
 
@@ -964,14 +932,21 @@ export class Game {
     if (open) this.input.releasePointer();
   }
 
-  setSystemMenuOpen(open: boolean): void {
-    ui.systemMenuOpen = open;
-    this.setUiMode(open || ui.inventoryOpen || ui.chatOpen || ui.questOffer !== null || ui.worldMapOpen);
+  /** Open the character screen directly on `tab`, or close it if it's
+   *  already open showing that same tab -- shared by every key/button that
+   *  jumps to a specific tab (Tab/I, K, J, O, gamepad Start). */
+  private toggleTab(tab: CharacterTab): void {
+    if (ui.inventoryOpen && ui.activeTab === tab) ui.inventoryOpen = false;
+    else {
+      ui.inventoryOpen = true;
+      ui.activeTab = tab;
+    }
+    this.setUiMode(ui.inventoryOpen);
   }
 
   setWorldMapOpen(open: boolean): void {
     ui.worldMapOpen = open;
-    this.setUiMode(open || ui.inventoryOpen || ui.chatOpen || ui.questOffer !== null || ui.systemMenuOpen);
+    this.setUiMode(open || ui.inventoryOpen || ui.chatOpen || ui.questOffer !== null);
   }
 
   get inputManager(): InputManager {
@@ -984,20 +959,6 @@ export class Game {
     this.renderer.setSize(window.innerWidth, window.innerHeight);
   };
 
-  /** Browsers exit fullscreen on Escape at the UA level and some of them
-   *  never deliver that keydown to page scripts, so our own Escape handling
-   *  in `frame()` never runs and the player is stuck needing a second press
-   *  just to open the menu. Treat "fullscreen just exited, menu not already
-   *  open" as that same intent and open it directly; suppress the next
-   *  Escape briefly in case the keydown does also arrive, so it doesn't
-   *  immediately toggle the menu shut again. */
-  private onFullscreenChange = (): void => {
-    if (!document.fullscreenElement && !ui.systemMenuOpen) {
-      this.setSystemMenuOpen(true);
-      this.suppressEscapeUntil = performance.now() + 400;
-    }
-  };
-
   dispose(): void {
     this.disposed = true;
     this.running = false;
@@ -1008,7 +969,6 @@ export class Game {
     this.unsubscribe?.();
     this.connection.disconnect();
     window.removeEventListener("resize", this.onResize);
-    document.removeEventListener("fullscreenchange", this.onFullscreenChange);
     this.renderer.dispose();
   }
 }

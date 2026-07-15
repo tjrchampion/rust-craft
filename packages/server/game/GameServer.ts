@@ -1954,6 +1954,13 @@ export class GameServer {
     };
   }
 
+  /** Aura ids worth showing as a floating debuff icon over an entity's head
+   *  -- damage-over-time only, not buffs/HoTs/silence (those are the
+   *  caster's own business, not something bystanders need to see ticking). */
+  private dotDebuffs(auras: ActiveAura[]): string[] {
+    return auras.filter((a) => auraDef(a.auraId).tick?.type === "damage").map((a) => a.auraId);
+  }
+
   private sendSnapshots(): void {
     const now = Date.now();
     const allPlayers = [...this.players.values()];
@@ -1978,6 +1985,7 @@ export class GameServer {
           pvp: other.pvp,
           mount: other.mount,
           weaponId: findItem(other.inventory, "equip", 0)?.itemId ?? null,
+          debuffs: this.dotDebuffs(other.activeAuras),
         });
       }
 
@@ -1996,6 +2004,7 @@ export class GameServer {
           hp: mob.hp,
           maxHp: def.maxHp,
           anim: mob.actionAnimUntil > now ? "attack" : mob.targetId ? "run" : "idle",
+          debuffs: this.dotDebuffs(mob.activeAuras),
         });
       }
 
