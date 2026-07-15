@@ -62,8 +62,21 @@ export function biomeAt(x: number, z: number): Biome {
   if (z > VALLEY_START_Z) return northBiomeAt(x, z);
   const e = biomeValue(x, z);
   const m = moistureValue(x, z);
-  if (e > 0.72) return "mountain";
-  if (e < 0.32) {
+  // Foothill approach: bias elevation upward over the last stretch before
+  // the Ashenpeak gate, so the ground reads as rising hills/mountain by the
+  // time it reaches z=300, instead of ordinary lowland biome cutting
+  // straight into a mountain wall with zero warning. Gated by gateWallT so
+  // the walkable gate mouth itself keeps its ordinary biome, matching
+  // terrainHeightBeforeRivers's own gating (same shape, same reasoning).
+  const approachT = gateApproachT(z);
+  let eLifted = e;
+  if (approachT > 0) {
+    const gateHalfWidth = passHalfWidth(VALLEY_START_Z);
+    const gateWallT = smoothstep(clamp((Math.abs(x) - gateHalfWidth * 0.75) / (gateHalfWidth * 0.5), 0, 1));
+    eLifted = lerp(e, 1, approachT * gateWallT);
+  }
+  if (eLifted > 0.72) return "mountain";
+  if (eLifted < 0.32) {
     if (m > 0.58) return "swamp";
     if (m < 0.34) return "dunes";
     return "meadow";
@@ -89,6 +102,19 @@ function northElevation(x: number, z: number): number {
 
 function northBiomeAt(x: number, z: number): Biome {
   return northElevation(x, z) > 0.55 ? "mountain" : "hills";
+}
+
+/** How far into Greenlands' final approach to the Ashenpeak gate (x,z) is —
+ *  0 well south of it, ramping to 1 right at the border (VALLEY_START_Z).
+ *  Shared by biomeAt and terrainHeightBeforeRivers so the ground and its
+ *  biome rise together, rather than one lagging the other. Kept narrow
+ *  (villages/POIs settle as far south as z≈120) so it can never reach into
+ *  already-placed settlements and shift them.
+ */
+const GATE_APPROACH_BAND = 55;
+function gateApproachT(z: number): number {
+  if (z <= VALLEY_START_Z - GATE_APPROACH_BAND) return 0;
+  return smoothstep(clamp((z - (VALLEY_START_Z - GATE_APPROACH_BAND)) / GATE_APPROACH_BAND, 0, 1));
 }
 
 /** Half-width of the walkable pass floor at a given z — widest at the
@@ -231,6 +257,26 @@ export function terrainHeightBeforeRivers(x: number, z: number): number {
         )
       : 0;
   h = lerp(h, -8, falloff * (1 - gateSuppress));
+
+  // Foothill approach: over the final stretch before the Ashenpeak gate,
+  // raise the ground toward the pass's own guaranteed wall height — using
+  // real jagged noise for texture (so knolls poke up unevenly rather than
+  // the whole band rising in lockstep) and taking the max with the existing
+  // natural height (never lowering it), blended in smoothly across the
+  // whole approach band rather than concentrated in a final narrow patch.
+  // Gated by gateWallT so the walkable gate mouth (already close to the
+  // pass floor's own height) is left alone — only the flanking walls rise.
+  const approachT = gateApproachT(z);
+  if (approachT > 0) {
+    const gateHalfWidth = passHalfWidth(VALLEY_START_Z);
+    const gateWallT = smoothstep(clamp((Math.abs(x) - gateHalfWidth * 0.75) / (gateHalfWidth * 0.5), 0, 1));
+    const liftT = approachT * gateWallT;
+    if (liftT > 0) {
+      const foothillJagged = fbm(ZONE_SEED + 6101, x, z, 50, 3) - 0.5;
+      const wallTarget = passWallFloor(VALLEY_START_Z) + foothillJagged * 20;
+      h = lerp(h, Math.max(h, wallTarget), liftT);
+    }
+  }
 
   return h;
 }
