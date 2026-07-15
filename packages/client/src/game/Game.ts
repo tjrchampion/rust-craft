@@ -24,6 +24,7 @@ import {
   type ServerMsg,
   type SelfState,
   type ItemSnap,
+  type ItemDef,
 } from "@rustcraft/shared";
 import { Connection } from "../net/connection";
 import { InputManager } from "../input/input";
@@ -51,6 +52,7 @@ interface PendingInput {
   moveZ: number;
   jump: boolean;
   sprint: boolean;
+  block: boolean;
   mount: "horse" | "raft" | null;
 }
 
@@ -88,6 +90,7 @@ export class Game {
 
   private selfId = "";
   private selfClassId = "warrior";
+  private equippedWeaponDef: ItemDef | null = null;
   private avatar: AnimatedModel;
   private move: MoveState = { x: 0, y: 4, z: 0, vy: 0, grounded: true };
   /** Decaying render offset that absorbs reconcile corrections smoothly. */
@@ -338,6 +341,9 @@ export class Game {
         ui.toast(`Level up! You are now level ${msg.amount}`);
         ui.addCombat(`You reached level ${msg.amount}!`);
         sound.play("levelup");
+        // The broadcast actionAnim round-trip is fine for other players, but
+        // self shouldn't wait on it for this kind of instant feedback.
+        this.avatar.play("cheer");
         break;
       case "learnSpell":
         if (msg.spellId) {
@@ -378,6 +384,7 @@ export class Game {
     const allKnown = CLASS_WEAPON_NODES[this.selfClassId as keyof typeof CLASS_WEAPON_NODES] ?? [];
     this.avatar.setWeapon(def?.weaponModel ?? [], allKnown);
     void this.avatar.setWeaponProp(def?.weaponProp ?? null);
+    this.equippedWeaponDef = def;
   }
 
   /** Server ack + authoritative state: rewind & replay unacked inputs. */
@@ -662,24 +669,30 @@ export class Game {
     // Send an immediate facing input so the server updates yaw before it
     // resolves the attack/cast message that follows this frame.
     const seq = ++this.inputSeq;
-    const input = { moveX: 0, moveZ: 0, jump: false, sprint: false };
+    const input = { moveX: 0, moveZ: 0, jump: false, sprint: false, block: false };
     this.pending.push({ seq, ...input, mount: ui.self?.mount ?? null });
     this.connection.send({ t: "input", seq, ...input, yaw });
   }
 
   private stepLocal(actions: ReturnType<InputManager["sample"]>): void {
+    // Blocking/sitting root the player in place -- mirrors the server's own
+    // rooting in tickPlayerMovement so client prediction doesn't drift ahead
+    // before the correction arrives.
+    const rooted = actions.block || (ui.self?.sitting ?? false);
+
     // Camera-relative movement -> world space. Camera looks along
     // forward = (sin yaw, cos yaw); screen-right is (-cos yaw, sin yaw).
     const sin = Math.sin(this.cameraYaw);
     const cos = Math.cos(this.cameraYaw);
-    const moveX = -actions.moveX * cos - actions.moveY * sin;
-    const moveZ = actions.moveX * sin - actions.moveY * cos;
+    const moveX = rooted ? 0 : -actions.moveX * cos - actions.moveY * sin;
+    const moveZ = rooted ? 0 : actions.moveX * sin - actions.moveY * cos;
 
     const input = {
       moveX,
       moveZ,
       jump: this.jumpQueued,
       sprint: actions.sprint,
+      block: actions.block,
     };
     this.jumpQueued = false;
     const mount = ui.self?.mount ?? null;
@@ -702,18 +715,31 @@ export class Game {
     const inputMag = Math.min(1, Math.hypot(actions.moveX, actions.moveY));
     this.lastAnimSpeed += (inputMag - this.lastAnimSpeed) * Math.min(1, dt * 10);
 
-    // vy is only ever nonzero mid-jump/fall -- swimming pins it to exactly 0
-    // even though `grounded` is also false there, so checking vy (not
-    // grounded) keeps the jump pose from showing while treading water.
+    // Priority mirrors the server's own playerAnim(): dead > sit > block >
+    // jump > cast > idle. vy is only ever nonzero mid-jump/fall -- swimming
+    // pins it to exactly 0 even though `grounded` is also false there, so
+    // checking vy (not grounded) keeps the jump pose from showing while
+    // treading water.
     const serverAnim = ui.self?.dead
       ? "dead"
-      : this.move.vy !== 0
-        ? "jump"
-        : ui.self?.castingSpell
-          ? "cast"
-          : "idle";
+      : ui.self?.sitting
+        ? "sit"
+        : actions.block
+          ? "block"
+          : this.move.vy !== 0
+            ? "jump"
+            : ui.self?.castingSpell
+              ? "cast"
+              : "idle";
     const speed = this.lastAnimSpeed * (actions.sprint ? 6.8 : 4.6);
-    this.avatar.play(logicalFromState(serverAnim, speed, 3.5, actions.moveX, actions.moveY));
+    const logical = logicalFromState(serverAnim, speed, 3.5, actions.moveX, actions.moveY);
+    const overrides =
+      logical === "cast"
+        ? this.equippedWeaponDef?.castAnim
+        : logical === "attack"
+          ? this.equippedWeaponDef?.attackAnim
+          : undefined;
+    this.avatar.play(logical, overrides);
     this.avatar.update(dt);
   }
 
@@ -736,6 +762,11 @@ export class Game {
   private updateInteractPrompt(): void {
     if (!this.nodes || (ui.self?.dead ?? false)) {
       ui.interactLabel = null;
+      return;
+    }
+    if (ui.self?.sitting) {
+      ui.interactLabel = "Stand";
+      this.nearCampfire = false;
       return;
     }
     const node =
@@ -768,12 +799,16 @@ export class Game {
     // Water nearby?
     if (this.nearWater()) {
       ui.interactLabel = "Drink";
-    } else {
-      ui.interactLabel = null;
+      this.nearCampfire = false;
+      return;
     }
+    // Campfire nearby?
+    this.nearCampfire = this.entities.structureNear(this.move.x, this.move.z, 4);
+    ui.interactLabel = this.nearCampfire ? "Sit" : null;
   }
 
   private interactNodeId: string | null = null;
+  private nearCampfire = false;
 
   private nearWater(): boolean {
     const { x, y, z } = this.move;
@@ -790,7 +825,9 @@ export class Game {
   }
 
   private doInteract(): void {
-    if (this.interactNodeId) {
+    if (ui.self?.sitting || this.nearCampfire) {
+      this.connection.send({ t: "sit" });
+    } else if (this.interactNodeId) {
       this.connection.send({ t: "interact", nodeId: this.interactNodeId });
     } else if (this.nearWater()) {
       this.connection.send({ t: "drink" });

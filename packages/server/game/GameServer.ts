@@ -11,6 +11,7 @@ import {
   HP_PER_LEVEL,
   MANA_PER_LEVEL,
   MANA_REGEN_PER_S,
+  SIT_MANA_REGEN_MULT,
   HP_REGEN_PER_S,
   HUNGER_DECAY_PER_S,
   THIRST_DECAY_PER_S,
@@ -121,6 +122,7 @@ interface QueuedInput {
   moveZ: number;
   jump: boolean;
   sprint: boolean;
+  block: boolean;
   yaw: number;
 }
 
@@ -154,6 +156,8 @@ interface PlayerState {
   dirty: boolean;
   pvp: boolean;
   mount: "horse" | "raft" | null;
+  blocking: boolean;
+  sitting: string | null; // structure id being rested at
   shrineCooldowns: Map<string, number>; // shrine id -> ready-at ms
   partyId: string | null;
   pendingInviteFrom: string | null; // inviter character id
@@ -363,6 +367,8 @@ export class GameServer {
       dirty: true,
       pvp: false,
       mount: null,
+      blocking: false,
+      sitting: null,
       shrineCooldowns: new Map(),
       partyId: null,
       pendingInviteFrom: null,
@@ -484,6 +490,9 @@ export class GameServer {
       case "mount":
         this.handleMount(player);
         break;
+      case "sit":
+        this.handleSit(player);
+        break;
       case "quest":
         this.handleQuestAction(player, parsed.action, parsed.questId);
         break;
@@ -544,12 +553,40 @@ export class GameServer {
     }
   }
 
-  /** Travel mounts are dropped the moment a player fights or is struck. */
+  /** Travel mounts (and resting at a campfire) end the moment a player
+   *  fights or is struck. */
   private dismountForCombat(player: PlayerState): void {
+    let changed = false;
     if (player.mount) {
       player.mount = null;
-      this.sendSelf(player);
+      changed = true;
     }
+    if (player.sitting) {
+      player.sitting = null;
+      changed = true;
+    }
+    if (changed) this.sendSelf(player);
+  }
+
+  /** Sit at (or stand up from) the nearest campfire -- rests movement and
+   *  boosts mana regen (see tickVitals). Bare toggle, mirrors handleMount. */
+  private handleSit(player: PlayerState): void {
+    if (player.dead) return;
+    if (player.sitting) {
+      player.sitting = null;
+      player.dirty = true;
+      this.sendSelf(player);
+      return;
+    }
+    const nearest = this.structures.find((s) => dist2D(player.move.x, player.move.z, s.x, s.z) < 4);
+    if (!nearest) {
+      this.sendEvent(player, { t: "event", kind: "error", message: "No campfire nearby" });
+      return;
+    }
+    if (player.mount) player.mount = null; // can't ride and sit at once
+    player.sitting = nearest.id;
+    player.dirty = true;
+    this.sendSelf(player);
   }
 
   // ============================ quests ============================
@@ -1324,6 +1361,7 @@ export class GameServer {
       player.mana = this.maxMana(player);
       this.sendEvent(player, { t: "event", kind: "levelup", amount: player.level });
       this.broadcastChat("system", `${player.name} reached level ${player.level}!`);
+      this.setActionAnim(player, "cheer", 1500);
     }
     player.dirty = true;
     this.sendSelf(player);
@@ -1333,7 +1371,7 @@ export class GameServer {
     if (player.dead) return;
     // Single choke point for all incoming damage (melee, mob attacks, spells,
     // aura DoTs) so equipped armor passively mitigates everything uniformly.
-    const amount = rawAmount * armorMitigation(this.computeStats(player).armor);
+    const amount = rawAmount * armorMitigation(this.computeStats(player).armor) * (player.blocking ? 0.5 : 1);
     this.dismountForCombat(player);
     player.hp -= amount;
     player.dirty = true;
@@ -1423,13 +1461,22 @@ export class GameServer {
     }
     for (const input of inputs) {
       player.yaw = input.yaw;
+      player.blocking = input.block;
+      // Sitting breaks the instant real movement input arrives -- checked
+      // before zeroing below, so standing up and walking away happens in the
+      // same tick instead of a dead frame.
+      const wantsMove = input.moveX !== 0 || input.moveZ !== 0;
+      if (player.sitting && wantsMove) player.sitting = null;
+      const rooted = player.sitting !== null || input.block;
+      const moveX = rooted ? 0 : input.moveX;
+      const moveZ = rooted ? 0 : input.moveZ;
       player.move = stepMovement(
         player.move,
-        { moveX: input.moveX, moveZ: input.moveZ, jump: input.jump, sprint: input.sprint, mount: player.mount },
+        { moveX, moveZ, jump: input.jump, sprint: input.sprint, mount: player.mount },
         TICK_DT,
       );
       player.lastAckSeq = input.seq;
-      player.lastMoveMag = Math.hypot(input.moveX, input.moveZ);
+      player.lastMoveMag = Math.hypot(moveX, moveZ);
     }
     player.dirty = true;
   }
@@ -1438,7 +1485,8 @@ export class GameServer {
     if (player.dead) return;
     player.hunger = clamp(player.hunger - HUNGER_DECAY_PER_S * TICK_DT, 0, 100);
     player.thirst = clamp(player.thirst - THIRST_DECAY_PER_S * TICK_DT, 0, 100);
-    player.mana = clamp(player.mana + MANA_REGEN_PER_S * TICK_DT, 0, this.maxMana(player));
+    const manaMult = player.sitting !== null ? SIT_MANA_REGEN_MULT : 1;
+    player.mana = clamp(player.mana + MANA_REGEN_PER_S * manaMult * TICK_DT, 0, this.maxMana(player));
 
     if (player.hunger <= 0 || player.thirst <= 0) {
       player.hp -= STARVATION_DPS * TICK_DT;
@@ -1774,8 +1822,11 @@ export class GameServer {
 
   private playerAnim(player: PlayerState): AnimState {
     if (player.dead) return "dead";
+    if (player.sitting) return "sit";
+    if (player.blocking) return "block";
     if (player.casting) return "cast";
     if (player.actionAnim) return player.actionAnim;
+    if (player.move.vy !== 0) return "jump";
     if (player.move.y < WATER_LEVEL - 0.4) return "swim";
     if (player.lastMoveMag > 0.1) return "run";
     return "idle";
@@ -1802,6 +1853,7 @@ export class GameServer {
       castingSpell: player.casting?.spellId ?? null,
       castEndsAt: player.casting?.endsAt ?? null,
       mount: player.mount,
+      sitting: player.sitting !== null,
       auras: player.activeAuras.map((a) => ({ auraId: a.auraId, expiresAt: a.expiresAt })),
     };
   }

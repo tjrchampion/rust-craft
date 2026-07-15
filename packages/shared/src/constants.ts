@@ -40,6 +40,7 @@ export const BASE_MAX_MANA = 100;
 export const HP_PER_LEVEL = 5;
 export const MANA_PER_LEVEL = 5;
 export const MANA_REGEN_PER_S = 2.5;
+export const SIT_MANA_REGEN_MULT = 4; // resting at a campfire
 export const HP_REGEN_PER_S = 0.5; // only while fed & watered
 export const HUNGER_DECAY_PER_S = 100 / (25 * 60); // empty in ~25 min
 export const THIRST_DECAY_PER_S = 100 / (18 * 60); // empty in ~18 min

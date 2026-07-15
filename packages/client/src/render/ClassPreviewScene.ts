@@ -87,11 +87,11 @@ export class ClassPreviewScene {
     });
   }
 
-  /** Play a one-shot flourish animation on the currently visible model. */
+  /** Play a celebratory flourish animation on the currently visible model. */
   flourish(): void {
     const model = this.activeId ? this.models.get(this.activeId) : null;
     if (!model?.loaded) return;
-    model.play(this.activeId === "mage" || this.activeId === "cleric" ? "cast" : "attack");
+    model.play("cheer");
   }
 
   private onPointerDown = (e: PointerEvent): void => {

@@ -14,6 +14,7 @@ export interface FrameActions {
   lookY: number;
   jump: boolean;
   sprint: boolean;
+  block: boolean; // V (held): shield block -- roots movement, halves damage
   /** Edge-triggered (true on the frame they fire). */
   interactPressed: boolean;
   attackPressed: boolean;
@@ -146,6 +147,8 @@ export class InputManager {
     let jump = this.keys.has("Space");
     // Hold Shift to run; walk otherwise.
     let sprint = this.keys.has("ShiftLeft") || this.keys.has("ShiftRight");
+    // Hold V to raise a shield block.
+    let block = this.keys.has("KeyV");
 
     const pressed = (code: string) => this.pressedQueue.has(code);
     let interactPressed = pressed("KeyE");
@@ -238,6 +241,7 @@ export class InputManager {
       lookY = 0;
       jump = false;
       sprint = false;
+      block = false;
       attackPressed = false;
       castSlot = null;
       interactPressed = false;
@@ -253,6 +257,7 @@ export class InputManager {
       lookY,
       jump,
       sprint,
+      block,
       interactPressed,
       attackPressed,
       castSlot,

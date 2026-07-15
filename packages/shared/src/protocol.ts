@@ -16,6 +16,7 @@ export const InputMsg = z.object({
   moveZ: z.number().min(-3).max(3),
   jump: z.boolean(),
   sprint: z.boolean(),
+  block: z.boolean(),
   yaw: z.number(),
 });
 
@@ -85,6 +86,8 @@ export const PartyMsg = z.object({
 
 export const MountMsg = z.object({ t: z.literal("mount") });
 
+export const SitMsg = z.object({ t: z.literal("sit") });
+
 export const QuestMsg = z.object({
   t: z.literal("quest"),
   action: z.enum(["accept", "decline", "turnin"]),
@@ -108,12 +111,24 @@ export const ClientMsg = z.discriminatedUnion("t", [
   PartyMsg,
   MountMsg,
   QuestMsg,
+  SitMsg,
 ]);
 export type ClientMsg = z.infer<typeof ClientMsg>;
 
 // ============ Server -> Client (plain types; server is trusted) ============
 
-export type AnimState = "idle" | "run" | "swim" | "attack" | "gather" | "cast" | "dead";
+export type AnimState =
+  | "idle"
+  | "run"
+  | "swim"
+  | "attack"
+  | "gather"
+  | "cast"
+  | "dead"
+  | "block"
+  | "sit"
+  | "cheer"
+  | "jump";
 
 export interface PlayerSnap {
   id: string; // character id
@@ -237,6 +252,7 @@ export interface SelfState {
   castingSpell: string | null;
   castEndsAt: number | null; // server time ms
   mount: "horse" | "raft" | null;
+  sitting: boolean;
   auras: { auraId: string; expiresAt: number }[];
 }
 

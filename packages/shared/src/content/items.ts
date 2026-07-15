@@ -38,6 +38,12 @@ export interface ItemDef {
    *  (e.g. the Ranger's bow — Ranger.glb ships without one, unlike every
    *  other class's rig which already bundles all its weapon variants). */
   weaponProp?: { url: string; bone: string };
+  /** Gear (weapon slot only): override clip(s) for the basic melee swing
+   *  while this weapon is equipped, e.g. a dual-wield chop for twin daggers. */
+  attackAnim?: string[];
+  /** Gear (weapon slot only): override clip(s) for spellcasting while this
+   *  weapon is equipped, e.g. a bow draw-and-loose instead of hand-waving. */
+  castAnim?: string[];
 }
 
 export const ITEMS: Record<string, ItemDef> = {
@@ -163,6 +169,7 @@ export const ITEMS: Record<string, ItemDef> = {
     slot: "weapon",
     statModifiers: { agility: 4, critChance: 0.03 },
     weaponModel: ["Knife", "Knife_Offhand"],
+    attackAnim: ["Dualwield_Melee_Attack_Chop"],
   },
   blessed_mace: {
     id: "blessed_mace",
@@ -187,6 +194,7 @@ export const ITEMS: Record<string, ItemDef> = {
     // separator in animation property-path syntax), so the bone is named
     // "handslotl" at runtime even though the source glTF calls it "handslot.l".
     weaponProp: { url: "/assets/models/props/bow_withString.glb", bone: "handslotl" },
+    castAnim: ["2H_Ranged_Shoot", "Spellcast_Shoot"],
   },
   grove_staff: {
     id: "grove_staff",

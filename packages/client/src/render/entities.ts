@@ -460,15 +460,17 @@ export class EntityManager {
         entity.group.rotation.y = yaw;
       }
 
-      entity.model.play(
-        logicalFromState(
-          entity.anim,
-          entity.speed,
-          entity.kind === "mob" ? 3 : 3.5,
-          entity.localMoveX,
-          entity.localMoveY,
-        ),
+      const logical = logicalFromState(
+        entity.anim,
+        entity.speed,
+        entity.kind === "mob" ? 3 : 3.5,
+        entity.localMoveX,
+        entity.localMoveY,
       );
+      const weapon = entity.weaponId ? itemDef(entity.weaponId) : null;
+      const overrides =
+        logical === "attack" ? weapon?.attackAnim : logical === "cast" ? weapon?.castAnim : undefined;
+      entity.model.play(logical, overrides);
       entity.model.update(dt);
     }
 
@@ -523,6 +525,16 @@ export class EntityManager {
       dn.sprite.position.y += dt * 1.6;
       (dn.sprite.material as THREE.SpriteMaterial).opacity = 1 - age * age;
     }
+  }
+
+  /** Is any placed structure (currently only campfires) within `maxDist` of
+   *  (x,z)? Client-side hint for the "Sit" prompt -- the server independently
+   *  re-validates proximity in handleSit. */
+  structureNear(x: number, z: number, maxDist: number): boolean {
+    for (const group of this.structures.values()) {
+      if (Math.hypot(group.position.x - x, group.position.z - z) < maxDist) return true;
+    }
+    return false;
   }
 
   // ============================ targeting ============================

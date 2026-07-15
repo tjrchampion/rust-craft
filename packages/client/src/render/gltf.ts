@@ -157,6 +157,9 @@ export interface AnimSpec {
   walkBack?: string[];
   hit?: string[];
   jump?: string[];
+  block?: string[];
+  sit?: string[];
+  cheer?: string[];
 }
 
 export const PLAYER_ANIMS: AnimSpec = {
@@ -172,6 +175,9 @@ export const PLAYER_ANIMS: AnimSpec = {
   walkBack: ["Walking_Backwards"],
   hit: ["Hit_A"],
   jump: ["Jump_Idle"],
+  block: ["Block"],
+  sit: ["Sit_Floor_Idle"],
+  cheer: ["Cheer"],
 };
 
 export const WOLF_ANIMS: AnimSpec = {
@@ -354,28 +360,31 @@ export class AnimatedModel {
     return this.mixer !== null;
   }
 
-  private findAction(logical: LogicalAnim): THREE.AnimationAction | null {
-    for (const name of this.spec[logical] ?? []) {
+  private findAction(names: string[] | undefined): THREE.AnimationAction | null {
+    for (const name of names ?? []) {
       const found = this.actions.get(name);
       if (found) return found;
     }
     return null;
   }
 
-  /** Crossfade to a logical animation. One-shots (attack/gather/hit) auto-return to idle. */
-  play(logical: LogicalAnim): void {
+  /** Crossfade to a logical animation. One-shots (attack/gather/hit) auto-return to idle.
+   *  `overrideNames` (e.g. a weapon's attackAnim/castAnim) is tried before the rig's own
+   *  generic clip for that logical -- lets equipped gear reskin attack/cast poses. */
+  play(logical: LogicalAnim, overrideNames?: string[]): void {
     if (!this.mixer) return;
     const now = performance.now();
     const oneShot = logical === "attack" || logical === "gather" || logical === "hit";
     if (!oneShot && now < this.oneShotUntil) return; // let the swing finish
     if (logical === this.currentLogical && !oneShot) return;
 
-    let action = this.findAction(logical);
+    let action = overrideNames?.length ? this.findAction(overrideNames) : null;
+    if (!action) action = this.findAction(this.spec[logical]);
     let resolved = logical;
     if (!action) {
       const fallback = ANIM_FALLBACK[logical];
       if (fallback) {
-        action = this.findAction(fallback);
+        action = this.findAction(this.spec[fallback]);
         resolved = fallback;
       }
     }
@@ -438,6 +447,12 @@ export function logicalFromState(
   switch (serverAnim) {
     case "dead":
       return "dead";
+    case "sit":
+      return "sit";
+    case "block":
+      return "block";
+    case "cheer":
+      return "cheer";
     case "jump":
       return "jump";
     case "cast":
