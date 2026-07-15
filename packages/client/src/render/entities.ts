@@ -546,7 +546,7 @@ export class EntityManager {
         s.mesh.rotation.x += s.spin * dt;
         s.mesh.rotation.y += s.spin * dt * 0.7;
       }
-      (s.mesh.material as THREE.ShaderMaterial).uniforms.uOpacity.value = 1 - age;
+      (s.mesh.material as THREE.ShaderMaterial).uniforms.uOpacity!.value = 1 - age;
     }
 
     for (let i = this.groundBursts.length - 1; i >= 0; i--) {

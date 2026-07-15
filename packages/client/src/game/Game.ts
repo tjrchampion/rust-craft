@@ -41,7 +41,7 @@ import { AnimatedModel, PLAYER_ANIMS, logicalFromState } from "../render/gltf";
 import { buildWorldStatic, buildVillage, animateSettlements, type SettlementHandles } from "../render/settlements";
 import { NpcManager } from "../render/npcs";
 import { sound } from "./sound";
-import { game as ui } from "../ui/gameState.svelte";
+import { game as ui, type CharacterTab } from "../ui/gameState.svelte";
 
 const CAMERA_DISTANCE = 6.5;
 const CAMERA_HEIGHT = 2.2;
@@ -204,6 +204,7 @@ export class Game {
         ui.selfName = msg.name;
         ui.names.set(msg.selfId, "You");
         this.selfClassId = msg.classId;
+        ui.classId = msg.classId;
         void this.avatar.loadFrom(playerModelUrl(msg.classId), 1.8);
         ui.self = msg.self;
         ui.inventory = msg.inventory;
@@ -390,7 +391,7 @@ export class Game {
 
   /** The unified action bar: a slot either holds a real item (select it, same
    *  as before) or a spell marker ("spell:<id>", see the assignSpell flow in
-   *  InventoryPanel) -- cast it directly instead. */
+   *  CharacterScreen) -- cast it directly instead. */
   private useHotbarSlot(slot: number): void {
     const entry = ui.inventory.find((i) => i.container === "hotbar" && i.slot === slot);
     if (entry?.itemId.startsWith("spell:")) {
@@ -454,19 +455,25 @@ export class Game {
 
     const dead = ui.self?.dead ?? false;
 
-    // Inventory toggle + menu navigation forwarding (keyboard & gamepad)
+    // Character screen toggle (Tab/I opens on the Inventory tab; K jumps
+    // straight to the Spell Book tab). Both close the screen if it's already
+    // open showing that same tab, otherwise they open it / switch tabs --
+    // one shared full-page panel, not separate modals.
     if (actions.inventoryPressed && !dead) {
-      ui.inventoryOpen = !ui.inventoryOpen;
-      if (ui.inventoryOpen) ui.spellbookOpen = false;
-      this.setUiMode(ui.inventoryOpen || ui.spellbookOpen);
+      if (ui.inventoryOpen && ui.activeTab === "inventory") ui.inventoryOpen = false;
+      else {
+        ui.inventoryOpen = true;
+        ui.activeTab = "inventory";
+      }
+      this.setUiMode(ui.inventoryOpen);
     }
-
-    // Spellbook toggle -- its own modal, mutually exclusive with Inventory
-    // (both render a centered panel, so stacking them looks broken).
     if (actions.spellbookPressed && !dead) {
-      ui.spellbookOpen = !ui.spellbookOpen;
-      if (ui.spellbookOpen) ui.inventoryOpen = false;
-      this.setUiMode(ui.spellbookOpen || ui.inventoryOpen);
+      if (ui.inventoryOpen && ui.activeTab === "spellbook") ui.inventoryOpen = false;
+      else {
+        ui.inventoryOpen = true;
+        ui.activeTab = "spellbook";
+      }
+      this.setUiMode(ui.inventoryOpen);
     }
 
     // Dedicated gamepad Start button: a direct, always-available pause-menu
@@ -486,15 +493,7 @@ export class Game {
     // panel's own cancel handling before the system-menu precedence chain
     // below gets a look, so a single Escape press never does two things.
     let escapeConsumedByPanel = false;
-    const activePanel = ui.inventoryOpen
-      ? "inventory"
-      : ui.spellbookOpen
-        ? "spellbook"
-        : ui.systemMenuOpen
-          ? "system"
-          : ui.questOffer
-            ? "quest"
-            : null;
+    const activePanel = ui.inventoryOpen ? "inventory" : ui.systemMenuOpen ? "system" : ui.questOffer ? "quest" : null;
     if (activePanel) {
       const cancel = actions.menuCancel && !(activePanel === "inventory" && actions.inventoryPressed);
       const nav = {
@@ -526,7 +525,7 @@ export class Game {
 
     // World map toggles with M, but only from a clean slate — it doesn't
     // stack on top of another panel.
-    if (actions.mapPressed && !ui.inventoryOpen && !ui.spellbookOpen && !ui.systemMenuOpen && !ui.questOffer && !ui.chatOpen) {
+    if (actions.mapPressed && !ui.inventoryOpen && !ui.systemMenuOpen && !ui.questOffer && !ui.chatOpen) {
       this.setWorldMapOpen(!ui.worldMapOpen);
     }
 
@@ -543,7 +542,7 @@ export class Game {
         this.closeQuestDialog();
       } else if (this.entities.getTargetId()) {
         this.entities.setTarget(null);
-      } else if (!ui.inventoryOpen && !ui.spellbookOpen && !ui.chatOpen) {
+      } else if (!ui.inventoryOpen && !ui.chatOpen) {
         this.setSystemMenuOpen(true);
       }
     }
@@ -966,16 +965,12 @@ export class Game {
 
   setSystemMenuOpen(open: boolean): void {
     ui.systemMenuOpen = open;
-    this.setUiMode(
-      open || ui.inventoryOpen || ui.spellbookOpen || ui.chatOpen || ui.questOffer !== null || ui.worldMapOpen,
-    );
+    this.setUiMode(open || ui.inventoryOpen || ui.chatOpen || ui.questOffer !== null || ui.worldMapOpen);
   }
 
   setWorldMapOpen(open: boolean): void {
     ui.worldMapOpen = open;
-    this.setUiMode(
-      open || ui.inventoryOpen || ui.spellbookOpen || ui.chatOpen || ui.questOffer !== null || ui.systemMenuOpen,
-    );
+    this.setUiMode(open || ui.inventoryOpen || ui.chatOpen || ui.questOffer !== null || ui.systemMenuOpen);
   }
 
   get inputManager(): InputManager {

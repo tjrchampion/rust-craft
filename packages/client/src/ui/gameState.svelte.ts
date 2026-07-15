@@ -2,6 +2,7 @@ import type { SelfState, ItemSnap, PartyMemberSnap, QuestOfferInfo, QuestLogEntr
 import type { TargetInfo } from "../render/entities";
 
 export type ChatChannel = "realm" | "party" | "system";
+export type CharacterTab = "inventory" | "spellbook" | "craft" | "system";
 
 export interface ChatLine {
   channel: ChatChannel;
@@ -31,6 +32,7 @@ class GameState {
   self = $state<SelfState | null>(null);
   selfName = $state("");
   selfId = $state("");
+  classId = $state("");
   inventory = $state<ItemSnap[]>([]);
   learnedSpells = $state<string[]>([]);
   selectedSlot = $state(0);
@@ -43,8 +45,12 @@ class GameState {
   playerZ = $state(0);
   questMarkers = $state<QuestMarker[]>([]);
   lastDevice = $state<"kbm" | "gamepad">("kbm");
+  /** Master flag for the unified full-page character screen (Inventory /
+   *  Spell Book / Crafting / System tabs) -- which tab is showing is
+   *  tracked separately in `activeTab` so Tab and K can both open the same
+   *  screen on a different starting tab. */
   inventoryOpen = $state(false);
-  spellbookOpen = $state(false);
+  activeTab = $state<CharacterTab>("inventory");
   chatOpen = $state(false);
   systemMenuOpen = $state(false);
   worldMapOpen = $state(false);
@@ -103,7 +109,7 @@ class GameState {
     this.toasts = [];
     this.interactLabel = null;
     this.inventoryOpen = false;
-    this.spellbookOpen = false;
+    this.activeTab = "inventory";
     this.chatOpen = false;
     this.worldMapOpen = false;
     this.disconnected = false;

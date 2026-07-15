@@ -19,15 +19,17 @@ export interface FrameActions {
   interactPressed: boolean;
   attackPressed: boolean;
   inventoryPressed: boolean;
-  spellbookPressed: boolean; // K: toggle spellbook modal
+  spellbookPressed: boolean; // K: toggle Spell Book tab
+  craftingPressed: boolean; // J: toggle Crafting tab
+  systemPressed: boolean; // O: toggle System tab
   chatPressed: boolean;
   respawnPressed: boolean;
   pvpTogglePressed: boolean;
   mountPressed: boolean; // G: toggle mount / raft
   targetPressed: boolean; // CapsLock: cycle/clear nearest enemy
-  clearTargetPressed: boolean; // Escape
+  clearTargetPressed: boolean; // gamepad B only -- keyboard has no bind (Escape does nothing but exit fullscreen)
   mapPressed: boolean; // M: toggle world map
-  systemMenuPressed: boolean; // gamepad Start only -- dedicated pause-menu toggle
+  systemMenuPressed: boolean; // gamepad Start only -- toggle the System tab
   hotbarDelta: number; // -1 | 0 | 1 from wheel / dpad
   /** Direct selection into the unified 10-slot action bar: 0-5 are number
    *  keys 1-6, 6-9 are Q/Z/X/C. Game.ts decides cast-vs-select by checking
@@ -164,6 +166,8 @@ export class InputManager {
     let attackPressed = this.mouseAttackQueued || pressed("KeyF");
     let inventoryPressed = pressed("Tab") || pressed("KeyI");
     const spellbookPressed = pressed("KeyK");
+    const craftingPressed = pressed("KeyJ");
+    const systemPressed = pressed("KeyO");
     const chatPressed = pressed("Enter");
     let respawnPressed = pressed("KeyR");
     let pvpTogglePressed = pressed("KeyP");
@@ -173,7 +177,7 @@ export class InputManager {
     // CapsLock cycles to / clears the nearest enemy target.
     let targetPressed = this.capsQueued;
     this.capsQueued = false;
-    let clearTargetPressed = pressed("Escape");
+    let clearTargetPressed = false; // gamepad-only, see FrameActions doc comment
     let hotbarDelta = Math.sign(this.wheelDelta);
     let hotbarSlot: number | null = null;
     for (let i = 1; i <= 6; i++) {
@@ -189,7 +193,7 @@ export class InputManager {
     let menuLeft = pressed("ArrowLeft");
     let menuRight = pressed("ArrowRight");
     let menuConfirm = pressed("Enter") || pressed("KeyE");
-    let menuCancel = pressed("Escape") || pressed("Tab") || pressed("KeyI");
+    let menuCancel = pressed("Tab") || pressed("KeyI");
 
     // --- gamepad (standard mapping) ---
     if (pad) {
@@ -323,6 +327,8 @@ export class InputManager {
       attackPressed,
       inventoryPressed,
       spellbookPressed,
+      craftingPressed,
+      systemPressed,
       chatPressed,
       respawnPressed,
       pvpTogglePressed,

@@ -4,8 +4,7 @@
   import { promptLabel } from "./padGlyphs";
   import Vitals from "./Vitals.svelte";
   import Hotbar from "./Hotbar.svelte";
-  import InventoryPanel from "./InventoryPanel.svelte";
-  import SpellbookModal from "./SpellbookModal.svelte";
+  import CharacterScreen from "./CharacterScreen.svelte";
   import Chat from "./Chat.svelte";
   import TopBar from "./TopBar.svelte";
   import Party from "./Party.svelte";
@@ -95,10 +94,7 @@
   {/if}
 
   {#if game.inventoryOpen}
-    <InventoryPanel />
-  {/if}
-  {#if game.spellbookOpen}
-    <SpellbookModal />
+    <CharacterScreen />
   {/if}
   <QuestDialog />
   <SystemMenu />

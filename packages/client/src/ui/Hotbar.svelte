@@ -27,7 +27,7 @@
 
   // One unified action bar -- a slot either holds a real item (rendered as
   // before) or a spell marker ("spell:<id>", see the assignSpell flow in
-  // SpellbookModal), rendered via the spell icon/name instead.
+  // CharacterScreen's Spell Book tab), rendered via the spell icon/name instead.
   const slots = $derived(
     Array.from({ length: HOTBAR_SLOTS }, (_, i) => {
       const item = game.inventory.find((it) => it.container === "hotbar" && it.slot === i);
