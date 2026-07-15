@@ -1,7 +1,7 @@
 import type { BaseStats } from "../sim/actorStats";
 import type { GearSlot } from "./items";
 
-export type ClassId = "warrior" | "mage" | "rogue" | "cleric";
+export type ClassId = "warrior" | "mage" | "rogue" | "cleric" | "ranger";
 
 /**
  * Classes are pure data blueprints applied ONLY at character creation --
@@ -67,6 +67,18 @@ export const CLASSES: Record<ClassId, ClassTemplate> = {
     startingGear: [
       { slot: "weapon", itemId: "blessed_mace" },
       { slot: "chest", itemId: "cloth_robe" },
+    ],
+  },
+  ranger: {
+    id: "ranger",
+    name: "Ranger",
+    description: "A keen-eyed hunter who strikes from afar with bow and blade.",
+    resourceLabel: "Focus",
+    baseStats: { power: 9, armor: 3, agility: 9, vitality: 5 },
+    startingSpells: ["quick_shot", "piercing_shot", "heal"],
+    startingGear: [
+      { slot: "weapon", itemId: "hunting_bow" },
+      { slot: "chest", itemId: "leather_armor" },
     ],
   },
 };

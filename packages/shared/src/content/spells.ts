@@ -114,6 +114,27 @@ export const SPELLS: Record<string, SpellDef> = {
     targeting: { kind: "projectile", range: 26, projectileSpeed: 30 },
     effects: [{ type: "damage", base: 9, powerScale: 1.9, damageType: "holy" }],
   },
+  quick_shot: {
+    id: "quick_shot",
+    name: "Quick Shot",
+    castTimeS: 0.6,
+    resourceCost: 15,
+    cooldownS: 2,
+    targeting: { kind: "projectile", range: 32, projectileSpeed: 34 },
+    effects: [{ type: "damage", base: 7, powerScale: 1.7, damageType: "physical" }],
+  },
+  piercing_shot: {
+    id: "piercing_shot",
+    name: "Piercing Shot",
+    castTimeS: 1.6,
+    resourceCost: 26,
+    cooldownS: 5,
+    targeting: { kind: "projectile", range: 30, projectileSpeed: 28 },
+    effects: [
+      { type: "damage", base: 11, powerScale: 2.1, damageType: "physical" },
+      { type: "applyAura", auraId: "bleeding" },
+    ],
+  },
 };
 
 export function spellDef(id: string): SpellDef {

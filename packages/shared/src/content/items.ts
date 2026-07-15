@@ -30,6 +30,14 @@ export interface ItemDef {
   slot?: GearSlot;
   /** Gear: passive stat modifiers applied while equipped in `slot`. */
   statModifiers?: StatModifiers;
+  /** Gear (weapon slot only): GLTF node name(s) to show on the wearer's rig
+   *  while equipped — e.g. ["Knife","Knife_Offhand"] for twin daggers. */
+  weaponModel?: string[];
+  /** Gear (weapon slot only): a separate prop GLTF to attach onto a named
+   *  hand-socket bone, for weapons not baked into the wearer's own rig
+   *  (e.g. the Ranger's bow — Ranger.glb ships without one, unlike every
+   *  other class's rig which already bundles all its weapon variants). */
+  weaponProp?: { url: string; bone: string };
 }
 
 export const ITEMS: Record<string, ItemDef> = {
@@ -135,6 +143,8 @@ export const ITEMS: Record<string, ItemDef> = {
     stack: 1,
     slot: "weapon",
     statModifiers: { power: 3, agility: 1 },
+    // Warrior's rig (Barbarian.glb) has no sword mesh, only axes.
+    weaponModel: ["2H_Axe"],
   },
   apprentice_staff: {
     id: "apprentice_staff",
@@ -143,6 +153,7 @@ export const ITEMS: Record<string, ItemDef> = {
     stack: 1,
     slot: "weapon",
     statModifiers: { power: 4 },
+    weaponModel: ["2H_Staff"],
   },
   twin_daggers: {
     id: "twin_daggers",
@@ -151,6 +162,7 @@ export const ITEMS: Record<string, ItemDef> = {
     stack: 1,
     slot: "weapon",
     statModifiers: { agility: 4, critChance: 0.03 },
+    weaponModel: ["Knife", "Knife_Offhand"],
   },
   blessed_mace: {
     id: "blessed_mace",
@@ -159,6 +171,22 @@ export const ITEMS: Record<string, ItemDef> = {
     stack: 1,
     slot: "weapon",
     statModifiers: { power: 3, vitality: 1 },
+    // Cleric's rig (Knight.glb) has no mace mesh, only swords/shields.
+    weaponModel: ["1H_Sword", "Round_Shield"],
+  },
+  hunting_bow: {
+    id: "hunting_bow",
+    name: "Hunting Bow",
+    type: "gear",
+    stack: 1,
+    slot: "weapon",
+    statModifiers: { agility: 4, critChance: 0.04 },
+    // Ranger.glb doesn't bundle a bow mesh like the other rigs bundle their
+    // weapons — attach the pack's standalone bow prop onto the left hand.
+    // Note: THREE's GLTFLoader strips "." from node names (it's a reserved
+    // separator in animation property-path syntax), so the bone is named
+    // "handslotl" at runtime even though the source glTF calls it "handslot.l".
+    weaponProp: { url: "/assets/models/props/bow_withString.glb", bone: "handslotl" },
   },
   leather_armor: {
     id: "leather_armor",

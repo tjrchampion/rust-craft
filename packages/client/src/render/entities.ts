@@ -1,9 +1,9 @@
 import * as THREE from "three";
 import type { PlayerSnap, MobSnap, ProjectileSnap, StructureSnap, AnimState, ClassId } from "@rustcraft/shared";
-import { wrapAngle, mobDef } from "@rustcraft/shared";
+import { wrapAngle, mobDef, itemDef } from "@rustcraft/shared";
 import { buildNameplate, buildProjectile, buildCampfire, buildHorse, buildRaft, spellColor } from "./models";
 import { AnimatedModel, PLAYER_ANIMS, mobModelSpec, logicalFromState } from "./gltf";
-import { CLASS_MODEL_URLS } from "./classModels";
+import { CLASS_MODEL_URLS, CLASS_WEAPON_NODES } from "./classModels";
 
 const INTERP_DELAY_MS = 130;
 const DESPAWN_AFTER_MS = 1200;
@@ -20,6 +20,7 @@ interface RemoteEntity {
   kind: "player" | "mob";
   id: string;
   name: string | null;
+  classId: string;
   group: THREE.Group;
   model: AnimatedModel;
   nameplate?: THREE.Sprite;
@@ -36,6 +37,7 @@ interface RemoteEntity {
   maxHp: number;
   mount: "horse" | "raft" | null;
   mountMesh: THREE.Group | null;
+  weaponId: string | null;
 }
 
 export interface TargetInfo {
@@ -186,6 +188,7 @@ export class EntityManager {
       kind,
       id,
       name: plateName,
+      classId: classId ?? "warrior",
       group,
       model,
       nameplate,
@@ -201,6 +204,7 @@ export class EntityManager {
       maxHp: 1,
       mount: null,
       mountMesh: null,
+      weaponId: null,
     };
     this.entities.set(id, entity);
     return entity;
@@ -242,6 +246,17 @@ export class EntityManager {
     entity.nameplate = plate;
   }
 
+  /** Show whichever weapon-mesh variant matches the player's currently
+   *  equipped weapon item, hiding every other variant baked into their rig. */
+  private setWeapon(entity: RemoteEntity, weaponId: string | null): void {
+    if (entity.weaponId === weaponId) return;
+    entity.weaponId = weaponId;
+    const allKnown = CLASS_WEAPON_NODES[entity.classId as ClassId] ?? [];
+    const def = weaponId ? itemDef(weaponId) : null;
+    entity.model.setWeapon(def?.weaponModel ?? [], allKnown);
+    void entity.model.setWeaponProp(def?.weaponProp ?? null);
+  }
+
   applyPlayers(players: PlayerSnap[], selfId: string, now: number): void {
     for (const snap of players) {
       if (snap.id === selfId) continue;
@@ -257,6 +272,7 @@ export class EntityManager {
       entity.maxHp = snap.maxHp;
       this.setPvp(entity, snap.pvp);
       this.setMount(entity, snap.mount);
+      this.setWeapon(entity, snap.weaponId);
       entity.samples.push({ t: now, x: snap.x, y: snap.y, z: snap.z, yaw: snap.yaw });
       if (entity.samples.length > 12) entity.samples.shift();
       if (entity.hpBar) paintHpBar(entity.hpBar, snap.hp / snap.maxHp);

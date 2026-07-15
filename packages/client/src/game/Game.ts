@@ -23,6 +23,7 @@ import {
   type MoveState,
   type ServerMsg,
   type SelfState,
+  type ItemSnap,
 } from "@rustcraft/shared";
 import { Connection } from "../net/connection";
 import { InputManager } from "../input/input";
@@ -33,6 +34,7 @@ import { buildNameplate, buildHorse, buildRaft, type MountParts } from "../rende
 import { NodeManager } from "../render/nodes";
 import { GrassField } from "../render/grass";
 import { EntityManager, playerModelUrl } from "../render/entities";
+import { CLASS_WEAPON_NODES } from "../render/classModels";
 import { AnimatedModel, PLAYER_ANIMS, logicalFromState } from "../render/gltf";
 import { buildWorldStatic, buildVillage, animateSettlements, type SettlementHandles } from "../render/settlements";
 import { NpcManager } from "../render/npcs";
@@ -85,6 +87,7 @@ export class Game {
   private currentMount: "horse" | "raft" | null = null;
 
   private selfId = "";
+  private selfClassId = "warrior";
   private avatar: AnimatedModel;
   private move: MoveState = { x: 0, y: 4, z: 0, vy: 0, grounded: true };
   /** Decaying render offset that absorbs reconcile corrections smoothly. */
@@ -196,11 +199,13 @@ export class Game {
         ui.selfId = msg.selfId;
         ui.selfName = msg.name;
         ui.names.set(msg.selfId, "You");
+        this.selfClassId = msg.classId;
         void this.avatar.loadFrom(playerModelUrl(msg.classId), 1.8);
         ui.self = msg.self;
         ui.inventory = msg.inventory;
         ui.learnedSpells = msg.learnedSpells;
         ui.selectedSlot = msg.selectedSlot;
+        this.applyEquippedWeapon(msg.inventory);
         ui.timeOfDay = msg.timeOfDay;
         this.move = { x: msg.self.x, y: msg.self.y, z: msg.self.z, vy: msg.self.vy, grounded: msg.self.grounded };
         this.depletedNodeIds = msg.depletedNodes;
@@ -235,6 +240,7 @@ export class Game {
         ui.inventory = msg.items;
         ui.learnedSpells = msg.learnedSpells;
         ui.selectedSlot = msg.selectedSlot;
+        this.applyEquippedWeapon(msg.items);
         break;
       case "nodeUpdate":
         this.nodes?.setDepleted(msg.nodeId, msg.depleted);
@@ -360,6 +366,16 @@ export class Game {
         if (msg.message) ui.toast(msg.message);
         break;
     }
+  }
+
+  /** Show whichever weapon-mesh variant matches the equip slot's current
+   *  item, hiding every other variant baked into the local avatar's rig. */
+  private applyEquippedWeapon(items: ItemSnap[]): void {
+    const weapon = items.find((i) => i.container === "equip" && i.slot === 0);
+    const def = weapon ? itemDef(weapon.itemId) : null;
+    const allKnown = CLASS_WEAPON_NODES[this.selfClassId as keyof typeof CLASS_WEAPON_NODES] ?? [];
+    this.avatar.setWeapon(def?.weaponModel ?? [], allKnown);
+    void this.avatar.setWeaponProp(def?.weaponProp ?? null);
   }
 
   /** Server ack + authoritative state: rewind & replay unacked inputs. */

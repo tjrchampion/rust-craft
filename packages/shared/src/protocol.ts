@@ -128,6 +128,7 @@ export interface PlayerSnap {
   anim: AnimState;
   pvp: boolean;
   mount: "horse" | "raft" | null;
+  weaponId: string | null;
 }
 
 export interface PartyMemberSnap {

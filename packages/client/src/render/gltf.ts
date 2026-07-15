@@ -12,6 +12,7 @@ export const PLAYER_MODELS = [
   "/assets/models/Barbarian.glb",
   "/assets/models/Mage.glb",
   "/assets/models/Rogue.glb",
+  "/assets/models/Ranger.glb",
 ];
 export const WOLF_MODEL = "/assets/models/Wolf.glb";
 
@@ -187,9 +188,60 @@ export class AnimatedModel {
   private innerScene: THREE.Object3D | null = null;
   private footY = 0;
   private liftY = 0;
+  private pendingWeapon: { visible: string[]; all: string[] } | null = null;
+  private attachedProp: THREE.Object3D | null = null;
+  private attachedPropUrl: string | null = null;
+  private pendingProp: { url: string; bone: string } | null = null;
 
   constructor(spec: AnimSpec) {
     this.spec = spec;
+  }
+
+  /** Attach a separate GLTF prop onto a named bone — for weapons not baked
+   *  into the wearer's own rig (e.g. the Ranger's bow). Pass `null` to
+   *  detach whatever's currently attached. */
+  async setWeaponProp(prop: { url: string; bone: string } | null): Promise<void> {
+    const url = prop?.url ?? null;
+    if (this.attachedPropUrl === url) return;
+    this.attachedPropUrl = url;
+    if (this.attachedProp) {
+      this.attachedProp.parent?.remove(this.attachedProp);
+      this.attachedProp = null;
+    }
+    // Remember what we ultimately want attached (even before the rig itself
+    // has finished loading) so loadFrom's completion can retry once the
+    // bone it needs actually exists.
+    this.pendingProp = prop;
+    if (prop) await this.tryApplyProp(prop, prop.url);
+  }
+
+  private async tryApplyProp(prop: { url: string; bone: string }, url: string): Promise<void> {
+    const gltf = await load(prop.url);
+    if (this.attachedPropUrl !== url) return; // superseded by a newer request
+    if (this.attachedProp) return; // an overlapping call already attached it
+    if (!this.innerScene) return; // loadFrom's completion will retry
+    const propScene = SkeletonUtils.clone(gltf.scene);
+    const bone = this.innerScene.getObjectByName(prop.bone);
+    if (bone) {
+      bone.add(propScene);
+      this.attachedProp = propScene;
+      this.pendingProp = null;
+    }
+  }
+
+  /** Show only `visible` among `allKnown` weapon/shield/accessory nodes —
+   *  every KayKit rig bakes in multiple weapon-mesh variants parented to the
+   *  same hand socket, all visible by default, so equipping a specific item
+   *  means hiding every other known variant and showing just this one. */
+  setWeapon(visible: string[], allKnown: string[]): void {
+    if (!this.innerScene) {
+      this.pendingWeapon = { visible, all: allKnown };
+      return;
+    }
+    const scene = this.innerScene;
+    scene.traverse((o) => {
+      if (allKnown.includes(o.name)) o.visible = visible.includes(o.name);
+    });
   }
 
   /** Raise the model above its feet (e.g. to seat a rider on a mount). */
@@ -267,6 +319,13 @@ export class AnimatedModel {
       if (!this.actions.has(bare)) this.actions.set(bare, this.mixer.clipAction(clip));
     }
     this.play("idle");
+    if (this.pendingWeapon) {
+      this.setWeapon(this.pendingWeapon.visible, this.pendingWeapon.all);
+      this.pendingWeapon = null;
+    }
+    if (this.pendingProp) {
+      void this.tryApplyProp(this.pendingProp, this.pendingProp.url);
+    }
   }
 
   get loaded(): boolean {
@@ -329,6 +388,11 @@ export function logicalFromState(
     case "dead":
       return "dead";
     case "cast":
+      // Casting no longer roots the player in place server-side, so prefer
+      // the movement clip while actually walking/running -- otherwise the
+      // avatar would glide through the world stuck in the cast pose.
+      if (speed > runThreshold) return "run";
+      if (speed > 0.35) return "walk";
       return "cast";
     case "attack":
       return "attack";

@@ -145,7 +145,7 @@ interface PlayerState {
   inputQueue: QueuedInput[];
   lastAckSeq: number;
   lastMoveMag: number;
-  casting: { spellId: string; endsAt: number; startX: number; startZ: number } | null;
+  casting: { spellId: string; endsAt: number } | null;
   spellCooldowns: Map<string, number>; // spellId -> ready-at ms
   meleeReadyAt: number;
   gatherReadyAt: number;
@@ -1013,8 +1013,6 @@ export class GameServer {
     player.casting = {
       spellId,
       endsAt: now + spell.castTimeS * 1000,
-      startX: player.move.x,
-      startZ: player.move.z,
     };
     this.setActionAnim(player, "cast", spell.castTimeS * 1000);
     this.sendSelf(player);
@@ -1382,12 +1380,10 @@ export class GameServer {
       }
       this.tickVitals(player, now);
       this.tickPlayerAuras(player, now);
-      if (player.casting) {
-        const movedFar =
-          dist2D(player.move.x, player.move.z, player.casting.startX, player.casting.startZ) > 0.6;
-        if (movedFar) this.cancelCast(player);
-        else if (now >= player.casting.endsAt) this.finishCast(player);
-      }
+      // Casting no longer cancels on movement -- players can walk/kite while
+      // channeling, matching modern MMO combat instead of forcing a stop.
+      // Taking damage still interrupts a cast (see damagePlayer).
+      if (player.casting && now >= player.casting.endsAt) this.finishCast(player);
       if (player.actionAnim && now > player.actionAnimUntil) player.actionAnim = null;
     }
 
@@ -1833,6 +1829,7 @@ export class GameServer {
           anim: this.playerAnim(other),
           pvp: other.pvp,
           mount: other.mount,
+          weaponId: findItem(other.inventory, "equip", 0)?.itemId ?? null,
         });
       }
 

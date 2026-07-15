@@ -1,7 +1,7 @@
 import * as THREE from "three";
-import { CLASS_IDS, type ClassId } from "@rustcraft/shared";
+import { CLASS_IDS, classDef, itemDef, type ClassId } from "@rustcraft/shared";
 import { AnimatedModel, PLAYER_ANIMS } from "./gltf";
-import { CLASS_MODEL_URLS } from "./classModels";
+import { CLASS_MODEL_URLS, CLASS_WEAPON_NODES } from "./classModels";
 
 /**
  * Small self-contained turntable viewer for the character-creation screen:
@@ -68,6 +68,10 @@ export class ClassPreviewScene {
       this.scene.add(model.group);
       this.models.set(id, model);
       await model.loadFrom(CLASS_MODEL_URLS[id], 1.75);
+      const weaponGear = classDef(id).startingGear.find((g) => g.slot === "weapon");
+      const def = weaponGear ? itemDef(weaponGear.itemId) : null;
+      model.setWeapon(def?.weaponModel ?? [], CLASS_WEAPON_NODES[id] ?? []);
+      void model.setWeaponProp(def?.weaponProp ?? null);
     }
     return model;
   }
