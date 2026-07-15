@@ -208,6 +208,12 @@
     top: 16px;
     left: 24px;
     z-index: 3;
+    /* Purely decorative wordmark. transform:scale shrinks what's painted
+       but not the underlying layout box, which stays at the logo's full
+       untransformed height — without this, that invisible overhang sits
+       above the sidebar in the stack and silently swallows clicks on the
+       class list underneath it. */
+    pointer-events: none;
   }
   /* Its own corner (not stacked under the Logo) so it can't end up behind
      the sidebar panel — Logo has a transform:scale that shrinks it visually

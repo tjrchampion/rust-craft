@@ -1047,6 +1047,22 @@ export class GameServer {
 
     if (spell.targeting.kind === "self") {
       this.applySpellEffects(player, null, spell.effects);
+      // Instant self spells (e.g. Battle Fury) have no cast bar and no
+      // damage/heal number of their own to confirm they fired — without
+      // this, casting one is completely silent and looks like nothing
+      // happened. Mirror the swing animation + a burst of spell-colored
+      // particles around the caster that projectile/channeled spells
+      // already get for free.
+      this.setActionAnim(player, "attack");
+      this.broadcastNear(player.move.x, player.move.z, {
+        t: "event",
+        kind: "spellHit",
+        spellId: spell.id,
+        sourceId: player.id,
+        x: player.move.x,
+        y: player.move.y + 1,
+        z: player.move.z,
+      });
       this.sendSelf(player);
       return;
     }
@@ -1054,6 +1070,20 @@ export class GameServer {
     if (spell.targeting.kind === "melee") {
       const target = this.findMeleeTarget(player, spell.targeting.range);
       if (target.mob || target.foe) this.applySpellEffects(player, target, spell.effects);
+      // Same reasoning as above: instant melee spells (Rend, Backstab,
+      // Poison Strike) never triggered a swing animation, sound, or
+      // particle burst before, unlike a plain attack — pressing the spell
+      // key looked like it did nothing, especially with no target in range.
+      this.setActionAnim(player, "attack");
+      this.broadcastNear(player.move.x, player.move.z, {
+        t: "event",
+        kind: "spellHit",
+        spellId: spell.id,
+        sourceId: player.id,
+        x: player.move.x,
+        y: player.move.y + 1,
+        z: player.move.z,
+      });
       this.sendSelf(player);
       return;
     }

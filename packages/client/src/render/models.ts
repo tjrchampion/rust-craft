@@ -472,12 +472,19 @@ const DAMAGE_TYPE_COLORS: Record<DamageType, number> = {
   physical: 0xd8d8d8,
 };
 const DEFAULT_SPELL_COLOR = 0xffb347;
+const HEAL_COLOR = 0x7be07b;
 
 /** Visual color for a spell's projectile/particles, keyed off its primary
- *  damage type — so every school of magic reads as visually distinct. */
+ *  damage type — so every school of magic reads as visually distinct. Heals
+ *  get a dedicated green (matching the existing heal damage-number color)
+ *  regardless of class; pure buff/aura spells with neither fall back to a
+ *  warm default so instant self spells (e.g. Battle Fury) still get a burst. */
 export function spellColor(spellId: string): number {
-  const damageType = spellDef(spellId).effects.find((e) => e.type === "damage")?.damageType;
-  return damageType ? DAMAGE_TYPE_COLORS[damageType] : DEFAULT_SPELL_COLOR;
+  const effects = spellDef(spellId).effects;
+  const damageType = effects.find((e) => e.type === "damage")?.damageType;
+  if (damageType) return DAMAGE_TYPE_COLORS[damageType];
+  if (effects.some((e) => e.type === "heal")) return HEAL_COLOR;
+  return DEFAULT_SPELL_COLOR;
 }
 
 export function buildProjectile(color = 0xffb347): THREE.Group {

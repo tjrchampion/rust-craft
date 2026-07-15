@@ -61,6 +61,12 @@ interface Spark {
   lifeMs: number;
 }
 
+interface GroundBurst {
+  mesh: THREE.Mesh;
+  born: number;
+  lifeMs: number;
+}
+
 function buildDamageSprite(text: string, color: string): THREE.Sprite {
   const canvas = document.createElement("canvas");
   canvas.width = 128;
@@ -116,6 +122,7 @@ export class EntityManager {
   private structures = new Map<string, THREE.Group>();
   private damageNumbers: DamageNumber[] = [];
   private sparks: Spark[] = [];
+  private groundBursts: GroundBurst[] = [];
   private raycaster = new THREE.Raycaster();
   private targetId: string | null = null;
   private targetRing: THREE.Mesh;
@@ -298,6 +305,14 @@ export class EntityManager {
     }
   }
 
+  /** Public entry point for melee/self spells (Rend, Battle Fury, Heal, …)
+   *  which have no projectile of their own to carry a burst — spawned
+   *  directly around the caster instead, colored the same way projectile
+   *  spells are. */
+  spawnSpellBurst(x: number, y: number, z: number, spellId: string): void {
+    this.spawnBurst(new THREE.Vector3(x, y, z), spellColor(spellId), 14);
+  }
+
   /** Small colored spark, fading and drifting — used for projectile trails. */
   private spawnTrailSpark(pos: THREE.Vector3, color: number): void {
     const mesh = new THREE.Mesh(
@@ -337,6 +352,20 @@ export class EntityManager {
         lifeMs: 420,
       });
     }
+    this.spawnGroundRing(pos, color);
+  }
+
+  /** Flat ring that expands outward on the ground and fades — a shockwave
+   *  accompanying every burst (projectile impact, melee/self spellcast). */
+  private spawnGroundRing(pos: THREE.Vector3, color: number): void {
+    const mesh = new THREE.Mesh(
+      new THREE.RingGeometry(0.4, 0.6, 32),
+      new THREE.MeshBasicMaterial({ color, transparent: true, side: THREE.DoubleSide, depthWrite: false }),
+    );
+    mesh.rotation.x = -Math.PI / 2;
+    mesh.position.set(pos.x, pos.y - 0.9, pos.z);
+    this.scene.add(mesh);
+    this.groundBursts.push({ mesh, born: performance.now(), lifeMs: 500 });
   }
 
   addStructure(snap: StructureSnap): void {
@@ -423,6 +452,19 @@ export class EntityManager {
       s.mesh.position.y += s.vy * dt;
       s.mesh.position.z += s.vz * dt;
       (s.mesh.material as THREE.MeshBasicMaterial).opacity = 1 - age;
+    }
+
+    for (let i = this.groundBursts.length - 1; i >= 0; i--) {
+      const g = this.groundBursts[i]!;
+      const age = (now - g.born) / g.lifeMs;
+      if (age >= 1) {
+        this.scene.remove(g.mesh);
+        this.groundBursts.splice(i, 1);
+        continue;
+      }
+      const scale = 1 + age * 4;
+      g.mesh.scale.set(scale, scale, 1);
+      (g.mesh.material as THREE.MeshBasicMaterial).opacity = 1 - age;
     }
 
     for (const group of this.structures.values()) {
@@ -536,10 +578,12 @@ export class EntityManager {
     for (const p of this.projectiles.values()) this.scene.remove(p.group);
     for (const s of this.structures.values()) this.scene.remove(s);
     for (const s of this.sparks) this.scene.remove(s.mesh);
+    for (const g of this.groundBursts) this.scene.remove(g.mesh);
     this.entities.clear();
     this.projectiles.clear();
     this.structures.clear();
     this.sparks.length = 0;
+    this.groundBursts.length = 0;
     this.setTarget(null);
   }
 }

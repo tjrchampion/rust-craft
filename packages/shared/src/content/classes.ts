@@ -27,7 +27,7 @@ export const CLASSES: Record<ClassId, ClassTemplate> = {
     description: "A frontline fighter who trades spells for raw steel and grit.",
     resourceLabel: "Stamina",
     baseStats: { power: 8, armor: 10, agility: 4, vitality: 8 },
-    startingSpells: ["rend", "charge"],
+    startingSpells: ["rend", "charge", "heal"],
     startingGear: [
       { slot: "weapon", itemId: "iron_sword" },
       { slot: "chest", itemId: "leather_armor" },
@@ -39,7 +39,7 @@ export const CLASSES: Record<ClassId, ClassTemplate> = {
     description: "Channels elemental power at range, fragile up close.",
     resourceLabel: "Mana",
     baseStats: { power: 10, armor: 2, agility: 3, vitality: 4 },
-    startingSpells: ["firebolt", "frostbolt"],
+    startingSpells: ["firebolt", "frostbolt", "heal"],
     startingGear: [
       { slot: "weapon", itemId: "apprentice_staff" },
       { slot: "chest", itemId: "cloth_robe" },
@@ -51,7 +51,7 @@ export const CLASSES: Record<ClassId, ClassTemplate> = {
     description: "Fast and precise, striking hardest from the shadows.",
     resourceLabel: "Energy",
     baseStats: { power: 7, armor: 4, agility: 10, vitality: 5 },
-    startingSpells: ["backstab", "poison_strike"],
+    startingSpells: ["backstab", "poison_strike", "heal"],
     startingGear: [
       { slot: "weapon", itemId: "twin_daggers" },
       { slot: "chest", itemId: "leather_armor" },

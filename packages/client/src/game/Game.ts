@@ -11,6 +11,7 @@ import {
   itemDef,
   mobDef,
   nodeTypeDef,
+  spellDef,
   zoneAt,
   generateVillages,
   generateRegionTwoNodes,
@@ -343,6 +344,14 @@ export class Game {
         break;
       case "spellHit":
         sound.play("spellHit");
+        // Melee/self instant spells carry sourceId (see GameServer's
+        // resolveSpell) and have no projectile of their own to spawn a
+        // burst on impact — do it here instead. Projectile hits already
+        // get their burst from applyProjectiles' own removal handling, so
+        // skip those (no sourceId) to avoid a double flash.
+        if (msg.sourceId && msg.spellId && msg.x !== undefined && msg.y !== undefined && msg.z !== undefined) {
+          this.entities.spawnSpellBurst(msg.x, msg.y, msg.z, msg.spellId);
+        }
         break;
       case "castStart":
         if (msg.sourceId === this.selfId) sound.play("castStart");
@@ -475,6 +484,11 @@ export class Game {
         if (spellId) {
           this.faceTarget();
           this.connection.send({ t: "cast", spellId });
+          // Instant spells (melee/self) resolve server-side with no cast
+          // bar, so the server's own "casting" pose never kicks in for
+          // them — play the swing predictively here, same as a plain
+          // attack, so pressing the key doesn't look like nothing happened.
+          if (spellDef(spellId).castTimeS <= 0) this.avatar.play("attack");
         }
       }
       if (actions.interactPressed) {
