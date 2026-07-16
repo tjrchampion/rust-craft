@@ -126,7 +126,8 @@ export class Game {
    *  arrives before the server has processed the dodge message looks like
    *  several meters of unexplained drift and gets pulled straight back.
    *  Cleared once enough time has passed for the round trip to complete. */
-  private pendingDodge: { x: number; z: number; until: number; waitSeq: number } | null = null;
+  private pendingDodges: Array<{ dx: number, dz: number, until: number, waitSeq: number }> = [];
+  private lastDodgeTime: number = 0;
   private accumulator = 0;
   private lastFrame = performance.now();
   private jumpQueued = false;
@@ -457,7 +458,6 @@ export class Game {
     this.connection.send({ t: "selectSlot", slot });
   }
 
-  /** Server ack + authoritative state: rewind & replay unacked inputs. */
 /** Server ack + authoritative state: rewind & replay unacked inputs. */
   private reconcile(self: SelfState): void {
     this.pending = this.pending.filter((p) => p.seq > self.ackSeq);
@@ -466,15 +466,19 @@ export class Game {
     // A dodge round-trip hasn't necessarily finished yet -- assume the
     // server's position is about to include it too, so the gap it opens up
     // isn't mistaken for drift and reconciled straight back out.
-    if (this.pendingDodge) {
-      // FIX: If the server has acknowledged an input sequence sent AFTER the dodge, 
-      // we mathematically know the server's state natively includes the dodge. Clear it!
-      if (self.ackSeq >= this.pendingDodge.waitSeq || performance.now() >= this.pendingDodge.until) {
-        this.pendingDodge = null;
-      } else {
-        // Server hasn't processed the dodge yet, keep adding the visual offset
-        serverState.x += this.pendingDodge.x;
-        serverState.z += this.pendingDodge.z;
+    if (this.pendingDodges && this.pendingDodges.length > 0) {
+      const now = performance.now();
+
+      // 1. Remove any dodges the server has officially processed (ackSeq caught up) 
+      // or that have timed out (500ms safety net).
+      this.pendingDodges = this.pendingDodges.filter(d => 
+        self.ackSeq < d.waitSeq && now < d.until
+      );
+
+      // 2. Apply the visual offset ONLY for dodges the server hasn't seen yet
+      for (const d of this.pendingDodges) {
+        serverState.x += d.dx;
+        serverState.z += d.dz;
       }
     }
 
@@ -509,7 +513,11 @@ export class Game {
       }
       this.move = replayed;
     }
-    if (self.dead) this.pending = [];
+    
+    if (self.dead) {
+      this.pending = [];
+      this.pendingDodges = []; // Clear dodge queue if dead
+    }
   }
 
   private frame = (now: number): void => {
@@ -819,18 +827,7 @@ export class Game {
     this.connection.send({ t: "input", seq, ...input, yaw: this.cameraYaw });
   }
 
-  /** Predicted locally (position + animation + burst) exactly like a normal
-   *  attack swing, then confirmed server-side (see GameServer.handleDodge) --
-   *  the server is authoritative on charges/distance, so a reconcile will
-   *  correct this if the two ever disagree. Direction comes from whatever
-   *  movement keys are held (same camera-relative transform as stepLocal),
-   *  defaulting to straight forward when no input is held. */
-/** Predicted locally (position + animation + burst) exactly like a normal
-   * attack swing, then confirmed server-side (see GameServer.handleDodge) --
-   * the server is authoritative on charges/distance, so a reconcile will
-   * correct this if the two ever disagree. Direction comes from whatever
-   * movement keys are held (same camera-relative transform as stepLocal),
-   * defaulting to straight forward when no input is held. */
+
 /** Predicted locally (position + animation + burst) exactly like a normal
    * attack swing, then confirmed server-side (see GameServer.handleDodge) --
    * the server is authoritative on charges/distance, so a reconcile will
@@ -840,8 +837,16 @@ export class Game {
   private tryDodge(actions: ReturnType<InputManager["sample"]>): void {
     if (!ui.self || ui.self.dodgeCharges <= 0) return;
 
-    // FIX 1: Deduct the charge locally immediately to prevent multi-dash 
-    // prediction spam before the server responds.
+    const now = performance.now();
+
+    // FIX 6: Add a local cooldown to match the server's anti-spam cooldown.
+    // This prevents the client from predicting dodges the server will reject.
+    if (now - this.lastDodgeTime < 400) return;
+    
+    // Update the cooldown tracker immediately
+    this.lastDodgeTime = now;
+
+    // Deduct the charge locally to prevent prediction spam before the server responds.
     ui.self.dodgeCharges--;
 
     const hasInput = Math.abs(actions.moveX) > 0.05 || Math.abs(actions.moveY) > 0.05;
@@ -863,7 +868,7 @@ export class Game {
     const rawTx = oldX + nx * DODGE_DISTANCE;
     const rawTz = oldZ + nz * DODGE_DISTANCE;
 
-    // FIX 2: Clamp target locally to match server world bounds so we don't 
+    // Clamp target locally to match server world bounds so we don't 
     // predict dodging out of bounds and snap back.
     const tx = clamp(rawTx, WORLD_MIN_X, WORLD_MAX_X);
     const tz = clamp(rawTz, WORLD_MIN_Z, WORLD_MAX_Z);
@@ -873,38 +878,27 @@ export class Game {
     this.move.y = Math.max(oldY, terrainHeight(tx, tz));
 
     // `this.move` (used for hit-detection/server-sync) jumps straight to the
-    // target, but ease the *render* across the burst instead of a hard cut --
-    // same decaying posError already used to smooth reconcile corrections.
+    // target, but ease the *render* across the burst instead of a hard cut.
     this.posError.x += oldX - tx;
-    this.posError.y += oldY - this.move.y; // FIX 3: Smooth out terrain height changes
+    this.posError.y += oldY - this.move.y; // Smooth out terrain height changes
     this.posError.z += oldZ - tz;
 
-    // FIX 5: Grab the sequence number of the most recent input we've sent
+    // Grab the sequence number of the most recent input we've sent
     // so we know exactly when the server has processed this dodge.
-    const currentSeq = this.pending[this.pending.length - 1]?.seq ?? 0;
-    const now = performance.now();
+    const currentSeq = this.pending.length > 0 ? this.pending[this.pending.length - 1].seq : 0;
 
-    // See pendingDodge's doc comment: reconcile() needs to know a dodge is
-    // in flight for a little while, or it'll treat this jump as drift and
-    // pull the player straight back before the server's own update arrives.
-    if (this.pendingDodge && now < this.pendingDodge.until) {
-      this.pendingDodge.x += tx - oldX;
-      this.pendingDodge.z += tz - oldZ;
-      this.pendingDodge.until = now + 500;
-      this.pendingDodge.waitSeq = currentSeq + 1; // Update sequence tracker
-    } else {
-      this.pendingDodge = { 
-        x: tx - oldX, 
-        z: tz - oldZ, 
-        until: now + 500,
-        waitSeq: currentSeq + 1 // Add sequence tracker
-      };
-    }
+    // Instead of overwriting a single object, we push each dodge into a queue.
+    this.pendingDodges.push({
+      dx: tx - oldX,
+      dz: tz - oldZ,
+      until: now + 500, // Visual safety net fallback
+      waitSeq: currentSeq + 1
+    });
 
     this.avatar.play(dodgeLogicalFor(this.cameraYaw, nx, nz));
     this.entities.spawnDodgeBurst(tx, this.move.y, tz, nx, nz);
     
-    // FIX 4: Send our predicted tx and tz to the server. The server will now
+    // Send our predicted tx and tz to the server. The server will now
     // validate this distance to eliminate latency-based rubberbanding.
     this.connection.send({ t: "dodge", dirX: nx, dirZ: nz, tx: tx, tz: tz });
   }
