@@ -198,6 +198,7 @@ interface PlayerState {
   pendingInviteFrom: string | null; // inviter character id
   questProgress: Map<string, { status: "active" | "completed"; progress: number }>;
   activeAuras: ActiveAura[];
+  currentTargetId: string | null;
 }
 
 interface MobState {
@@ -444,6 +445,7 @@ export class GameServer {
       pendingInviteFrom: null,
       questProgress: new Map(persisted.questProgress.map((q) => [q.questId, { status: q.status, progress: q.progress }])),
       activeAuras: [],
+      currentTargetId: null,
     };
 
     this.players.set(player.id, player);
@@ -557,6 +559,9 @@ export class GameServer {
           player.selectedSlot = parsed.slot;
           this.sendInventory(player);
         }
+        break;
+      case "selectTarget":
+        player.currentTargetId = parsed.targetId;
         break;
       case "place":
         void this.handlePlace(player, parsed.container, parsed.slot);
@@ -2103,6 +2108,19 @@ export class GameServer {
       const def = mobDef(pet.type);
       let target = pet.targetId ? this.mobs.get(pet.targetId) : undefined;
       if (target && target.respawnAt !== null) target = undefined;
+
+      // If owner has targeted a valid enemy, check if it's close enough in range
+      let ownerTarget = owner.currentTargetId ? this.mobs.get(owner.currentTargetId) : undefined;
+      if (ownerTarget && ownerTarget.respawnAt !== null) ownerTarget = undefined;
+
+      if (ownerTarget) {
+        const distToOwnerTarget = dist2D(owner.move.x, owner.move.z, ownerTarget.x, ownerTarget.z);
+        if (distToOwnerTarget < 18) {
+          target = ownerTarget;
+          pet.targetId = ownerTarget.id;
+        }
+      }
+
       if (!target) pet.targetId = null;
 
       if (!target) {
@@ -2126,7 +2144,9 @@ export class GameServer {
         const d = dist2D(pet.x, pet.z, target.x, target.z);
         pet.yaw = turnToward(pet.yaw, Math.atan2(target.x - pet.x, target.z - pet.z), MOB_TURN_STEP);
         if (d > def.attackRange) {
-          this.moveMob(pet, target.x, target.z, def.speed * 1.15);
+          const isOwnerTarget = owner.currentTargetId === target.id;
+          const speedMult = isOwnerTarget ? 1.6 : 1.15;
+          this.moveMob(pet, target.x, target.z, def.speed * speedMult);
         } else if (now >= pet.attackReadyAt) {
           pet.attackReadyAt = now + def.attackCooldownS * 1000;
           pet.actionAnimUntil = now + ANIM_ACTION_MS;
@@ -2144,7 +2164,7 @@ export class GameServer {
         if (d > 3) pet.following = true;
         else if (d < 1.2) pet.following = false;
         if (pet.following) {
-          this.moveMob(pet, owner.move.x, owner.move.z, def.speed * 1.2);
+          this.moveMob(pet, owner.move.x, owner.move.z, def.speed * 0.85);
         }
       }
     }

@@ -8,4 +8,10 @@ describe("protocol validation", () => {
     expect(ClientMsg.safeParse({ t: "dodge", dirX: 0.5, dirZ: -0.5 }).success).toBe(true);
     expect(ClientMsg.safeParse({ t: "dodge", dirX: 0.5, dirZ: -0.5, tx: 10, tz: 10 }).success).toBe(false);
   });
+
+  it("selectTarget messages allow string targetId or null", () => {
+    expect(ClientMsg.safeParse({ t: "selectTarget", targetId: "enemy-123" }).success).toBe(true);
+    expect(ClientMsg.safeParse({ t: "selectTarget", targetId: null }).success).toBe(true);
+    expect(ClientMsg.safeParse({ t: "selectTarget", targetId: 123 }).success).toBe(false);
+  });
 });

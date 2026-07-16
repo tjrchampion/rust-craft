@@ -607,7 +607,7 @@ export class Game {
       } else if (ui.questOffer) {
         this.closeQuestDialog();
       } else if (this.entities.getTargetId()) {
-        this.entities.setTarget(null);
+        this.selectTarget(null);
       }
     }
 
@@ -760,21 +760,26 @@ export class Game {
       );
       const cur = this.entities.getTargetId();
       if (enemies.length === 0) {
-        this.entities.setTarget(null);
+        this.selectTarget(null);
       } else if (!cur || !enemies.includes(cur)) {
-        this.entities.setTarget(enemies[0]!);
+        this.selectTarget(enemies[0]!);
         sound.play("target");
       } else if (enemies.length === 1) {
         // Only the current target is near → deselect it.
-        this.entities.setTarget(null);
+        this.selectTarget(null);
       } else {
         const next = (enemies.indexOf(cur) + 1) % enemies.length;
-        this.entities.setTarget(enemies[next]!);
+        this.selectTarget(enemies[next]!);
         sound.play("target");
       }
     }
     // Publish target info to the HUD (auto-clears on death/despawn).
     ui.target = this.entities.entityInfo(this.entities.getTargetId());
+  }
+
+  private selectTarget(id: string | null): void {
+    this.entities.setTarget(id);
+    this.connection.send({ t: "selectTarget", targetId: id });
   }
 
   /** Snap facing toward the current target so melee/spells connect. */

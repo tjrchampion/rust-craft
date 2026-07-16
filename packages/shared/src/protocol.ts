@@ -121,6 +121,13 @@ export const DodgeMsg = z
   })
   .strict();
 
+export const SelectTargetMsg = z
+  .object({
+    t: z.literal("selectTarget"),
+    targetId: z.string().max(64).nullable(),
+  })
+  .strict();
+
 export const ClientMsg = z.discriminatedUnion("t", [
   InputMsg,
   InteractMsg,
@@ -141,6 +148,7 @@ export const ClientMsg = z.discriminatedUnion("t", [
   SitMsg,
   AssignSpellMsg,
   DodgeMsg,
+  SelectTargetMsg,
 ]);
 export type ClientMsg = z.infer<typeof ClientMsg>;
 
