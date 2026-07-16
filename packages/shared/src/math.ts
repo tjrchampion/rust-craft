@@ -37,6 +37,16 @@ export function wrapAngle(a: number): number {
   return a;
 }
 
+/** Rotate `current` toward `target` by at most `maxStep` radians (shortest
+ *  direction) instead of snapping straight to it -- bounds a mob/pet's turn
+ *  rate so a close, jittery target angle (small position noise translates to
+ *  large atan2 swings at short range) doesn't make it visibly snap-spin. */
+export function turnToward(current: number, target: number, maxStep: number): number {
+  const delta = wrapAngle(target - current);
+  if (Math.abs(delta) <= maxStep) return target;
+  return current + Math.sign(delta) * maxStep;
+}
+
 /** Shortest distance from a point to a line segment, in 2D (xz plane). */
 export function distPointToSegment(
   px: number,

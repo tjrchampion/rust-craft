@@ -40,6 +40,7 @@ import {
   dist3D,
   clamp,
   wrapAngle,
+  turnToward,
   hash2,
   itemDef,
   RECIPES,
@@ -55,6 +56,7 @@ import {
   armorMitigation,
   applyAura,
   expireAuras,
+  removeAura,
   aggregateAuraModifiers,
   collectDueTicks,
   type ClientMsg,
@@ -65,6 +67,7 @@ import {
   type SelfState,
   type PlayerSnap,
   type MobSnap,
+  type PetSnap,
   type ProjectileSnap,
   type StructureSnap,
   type NpcSnap,
@@ -110,6 +113,13 @@ const GATHER_RANGE = 4.5;
 const MAX_INPUTS_PER_TICK = 5; // drain input bursts so ack stays current
 const MAX_INPUT_QUEUE = 60; // ~3s of buffer; don't drop legit inputs
 const ANIM_ACTION_MS = 450;
+// Max radians a mob/pet may rotate per tick, rather than snapping straight to
+// the raw target angle -- at close range a tiny position wobble in the
+// target (player prediction noise, strafing) swings atan2's result wildly,
+// which read as a spinning/jittery facing. 10 rad/s is still a near-instant
+// turn for normal chase distances; it only visibly kicks in for that
+// close-range case.
+const MOB_TURN_STEP = 10 * TICK_DT;
 
 interface PeerLike {
   id: string;
@@ -186,6 +196,29 @@ interface MobState {
   activeAuras: ActiveAura[];
 }
 
+/** A summoned companion (currently just Beast Mastery's wolf) -- deliberately
+ *  not a MobState: it follows its owner rather than leashing to a home
+ *  point, never respawns (dying just removes it), and its kill/loot credit
+ *  goes to the owner, not itself. */
+interface PetState {
+  id: string;
+  ownerId: string;
+  type: string; // mobDef key, e.g. "wolf" -- reused for model/base stats
+  x: number;
+  y: number;
+  z: number;
+  yaw: number;
+  hp: number;
+  targetId: string | null; // a mob id, or null while idle/following
+  attackReadyAt: number;
+  actionAnimUntil: number;
+  /** Hysteresis flag for the owner-follow behavior (see tickPets) -- a
+   *  single distance threshold made the pet flicker between idle/run every
+   *  tick whenever the gap hovered right at the boundary, which is exactly
+   *  what happens continuously while the owner runs. */
+  following: boolean;
+}
+
 interface Projectile {
   id: string;
   spellId: string;
@@ -208,6 +241,7 @@ export class GameServer {
   private players = new Map<string, PlayerState>();
   private peerToChar = new Map<string, string>();
   private mobs = new Map<string, MobState>();
+  private pets = new Map<string, PetState>();
   private projectiles = new Map<string, Projectile>();
   private structures: StructureSnap[] = [];
   private nodes = new Map<string, WorldNode>();
@@ -352,7 +386,12 @@ export class GameServer {
       thirst: persisted.thirst,
       xp: persisted.xp,
       level: persisted.level,
-      learnedSpells: [...persisted.learnedSpells],
+      // Union with the class's current startingSpells so existing characters
+      // pick up newly-added class abilities (e.g. Beast Mastery) without a
+      // DB migration -- never removes anything a character already learned.
+      learnedSpells: [
+        ...new Set([...persisted.learnedSpells, ...classDef((persisted.classId as ClassId) ?? "warrior").startingSpells]),
+      ],
       inventory: persisted.inventory,
       selectedSlot: 0,
       dead: persisted.hp <= 0,
@@ -1094,6 +1133,7 @@ export class GameServer {
 
     if (spell.targeting.kind === "self") {
       this.applySpellEffects(player, null, spell.effects);
+      if (spell.summon) this.spawnPet(player, spell.summon.petType);
       // Instant self spells (e.g. Battle Fury) have no cast bar and no
       // damage/heal number of their own to confirm they fired — without
       // this, casting one is completely silent and looks like nothing
@@ -1507,15 +1547,16 @@ export class GameServer {
 
     this.tickProjectiles();
     this.tickMobs(now);
+    this.tickPets(now);
     this.tickNodeRespawns(now);
 
-    if (this.tickCount % 2 === 0) {
-      this.sendSnapshots();
-    } else {
-      // Off-tick: send just the self-ack so clients reconcile at a full 20Hz,
-      // keeping the pending-input window (and any rubberband) small.
-      for (const player of this.players.values()) this.sendSelf(player);
-    }
+    // Full 20Hz broadcast (sendSnapshots already includes each viewer's own
+    // self-ack) -- previously throttled to every 2nd tick, but that 100ms
+    // cadence forced a large client-side interpolation buffer to avoid
+    // stutter, which in turn made remote mobs/pets feel visibly laggy next
+    // to the player's own zero-latency prediction. Halving the cadence gap
+    // lets the buffer shrink back down without reintroducing the stutter.
+    this.sendSnapshots();
     // Party frames refresh at 0.5 Hz — enough for out-of-range member HP.
     if (this.tickCount % 40 === 0) {
       for (const partyId of this.parties.keys()) this.broadcastPartyState(partyId);
@@ -1690,21 +1731,24 @@ export class GameServer {
         }
       }
 
-      const target = mob.targetId ? this.players.get(mob.targetId) : undefined;
+      // A mob's target may be a player OR a pet (whichever last damaged it --
+      // see damageMob/damageMobFromPet) -- resolve either into one shape so
+      // the chase/attack logic below doesn't need to care which it is.
+      const target = mob.targetId ? this.mobTargetInfo(mob.targetId) : null;
       if (mob.targetId && (!target || target.dead)) {
         mob.targetId = null;
       }
 
       if (target && !target.dead && distHome < def.leashRange) {
         // Chase / attack.
-        const d = dist2D(mob.x, mob.z, target.move.x, target.move.z);
-        mob.yaw = Math.atan2(target.move.x - mob.x, target.move.z - mob.z);
+        const d = dist2D(mob.x, mob.z, target.x, target.z);
+        mob.yaw = turnToward(mob.yaw, Math.atan2(target.x - mob.x, target.z - mob.z), MOB_TURN_STEP);
         if (d > def.attackRange) {
-          this.moveMob(mob, target.move.x, target.move.z, def.speed);
+          this.moveMob(mob, target.x, target.z, def.speed);
         } else if (now >= mob.attackReadyAt) {
           mob.attackReadyAt = now + def.attackCooldownS * 1000;
           mob.actionAnimUntil = now + ANIM_ACTION_MS;
-          this.damagePlayer(target, def.damage, mob.id);
+          this.applyMobAttack(mob, mob.targetId!, def.damage);
         }
       } else {
         if (mob.targetId) mob.targetId = null; // leash: give up
@@ -1729,7 +1773,184 @@ export class GameServer {
     }
   }
 
-  private moveMob(mob: MobState, tx: number, tz: number, speed: number): void {
+  /** Resolves a mob's targetId to whichever it actually is -- a player or a
+   *  pet -- in one normalized shape, so tickMobs' chase/attack logic doesn't
+   *  need two parallel branches for who it's fighting. */
+  private mobTargetInfo(id: string): { x: number; z: number; dead: boolean } | null {
+    const player = this.players.get(id);
+    if (player) return { x: player.move.x, z: player.move.z, dead: player.dead };
+    const pet = this.pets.get(id);
+    if (pet) return { x: pet.x, z: pet.z, dead: pet.hp <= 0 };
+    return null;
+  }
+
+  private findPetByOwner(ownerId: string): PetState | undefined {
+    for (const pet of this.pets.values()) if (pet.ownerId === ownerId) return pet;
+    return undefined;
+  }
+
+  /** A mob's attack lands on whichever kind of target it resolved to. */
+  private applyMobAttack(mob: MobState, targetId: string, damage: number): void {
+    const player = this.players.get(targetId);
+    if (player) {
+      this.damagePlayer(player, damage, mob.id);
+      return;
+    }
+    const pet = this.pets.get(targetId);
+    if (pet) this.damagePet(pet, damage, mob.id);
+  }
+
+  /** Mirrors damageMob, but for a pet's attacker: aggro snaps to the pet
+   *  (so the mob retaliates against it, not the owner) and kill credit
+   *  (loot/xp/quest progress) goes to the pet's owner instead. */
+  private damageMobFromPet(mob: MobState, amount: number, pet: PetState): void {
+    mob.hp -= amount;
+    mob.targetId = pet.id;
+    this.broadcastNear(mob.x, mob.z, {
+      t: "event",
+      kind: "damage",
+      sourceId: pet.id,
+      targetId: mob.id,
+      amount,
+      x: mob.x,
+      y: mob.y + 1,
+      z: mob.z,
+    });
+    if (mob.hp <= 0) {
+      const owner = this.players.get(pet.ownerId);
+      if (owner) {
+        this.killMob(mob, owner);
+      } else {
+        const def = mobDef(mob.type);
+        mob.respawnAt = Date.now() + def.respawnS * 1000;
+        mob.targetId = null;
+        mob.hp = 0;
+      }
+    }
+  }
+
+  /** Mirrors damagePlayer for a pet on the receiving end -- no armor
+   *  mitigation (mobs don't mitigate against pets either), and death just
+   *  removes it (no respawn/leash) and clears the owner's damage buff. */
+  private damagePet(pet: PetState, rawAmount: number, sourceId: string): void {
+    pet.hp -= rawAmount;
+    this.broadcastNear(pet.x, pet.z, {
+      t: "event",
+      kind: "damage",
+      sourceId,
+      targetId: pet.id,
+      amount: rawAmount,
+      x: pet.x,
+      y: pet.y + 1,
+      z: pet.z,
+    });
+    if (pet.hp <= 0) {
+      pet.hp = 0;
+      this.pets.delete(pet.id);
+      const owner = this.players.get(pet.ownerId);
+      if (owner) {
+        owner.activeAuras = removeAura(owner.activeAuras, "beast_mastery_buff");
+        this.sendSelf(owner);
+      }
+    }
+  }
+
+  /** Beast Mastery et al: replace whatever pet this player already has (only
+   *  one at a time) with a fresh one at full health beside them. */
+  private spawnPet(owner: PlayerState, petType: string): void {
+    for (const [id, existing] of this.pets) {
+      if (existing.ownerId === owner.id) this.pets.delete(id);
+    }
+    const def = mobDef(petType);
+    const ang = owner.yaw + Math.PI / 3;
+    const x = owner.move.x + Math.sin(ang) * 1.5;
+    const z = owner.move.z + Math.cos(ang) * 1.5;
+    const id = `pet_${owner.id}_${Date.now()}`;
+    this.pets.set(id, {
+      id,
+      ownerId: owner.id,
+      type: petType,
+      x,
+      y: terrainHeight(x, z),
+      z,
+      yaw: owner.yaw,
+      hp: def.maxHp,
+      targetId: null,
+      attackReadyAt: 0,
+      actionAnimUntil: 0,
+      following: false,
+    });
+  }
+
+  /** Pets: no leash/home/respawn -- follow the owner, defend them (or
+   *  proactively engage whatever's nearby and hostile), and simply vanish on
+   *  death or if the owner disconnects. Re-summoning (spawnPet) is the only
+   *  way to get a new one, gated by the spell's own cooldown. */
+  private tickPets(now: number): void {
+    for (const [id, pet] of this.pets) {
+      const owner = this.players.get(pet.ownerId);
+      if (!owner || owner.dead || pet.hp <= 0) {
+        this.pets.delete(id);
+        if (owner) {
+          owner.activeAuras = removeAura(owner.activeAuras, "beast_mastery_buff");
+          this.sendSelf(owner);
+        }
+        continue;
+      }
+
+      const def = mobDef(pet.type);
+      let target = pet.targetId ? this.mobs.get(pet.targetId) : undefined;
+      if (target && target.respawnAt !== null) target = undefined;
+      if (!target) pet.targetId = null;
+
+      if (!target) {
+        // Prefer whatever's already attacking the owner (defend); else the
+        // nearest hostile within the pet's own aggro range (proactive).
+        let bestDist = Infinity;
+        for (const mob of this.mobs.values()) {
+          if (mob.respawnAt !== null) continue;
+          const mobDefC = mobDef(mob.type);
+          const d = dist2D(owner.move.x, owner.move.z, mob.x, mob.z);
+          const inRange = mob.targetId === owner.id ? d < mobDefC.leashRange : d < mobDefC.aggroRange;
+          if (inRange && d < bestDist) {
+            bestDist = d;
+            target = mob;
+          }
+        }
+        if (target) pet.targetId = target.id;
+      }
+
+      if (target) {
+        const d = dist2D(pet.x, pet.z, target.x, target.z);
+        pet.yaw = turnToward(pet.yaw, Math.atan2(target.x - pet.x, target.z - pet.z), MOB_TURN_STEP);
+        if (d > def.attackRange) {
+          this.moveMob(pet, target.x, target.z, def.speed * 1.15);
+        } else if (now >= pet.attackReadyAt) {
+          pet.attackReadyAt = now + def.attackCooldownS * 1000;
+          pet.actionAnimUntil = now + ANIM_ACTION_MS;
+          const dmg = def.damage + this.computeStats(owner).power * 0.3;
+          this.damageMobFromPet(target, dmg, pet);
+        }
+      } else {
+        const d = dist2D(pet.x, pet.z, owner.move.x, owner.move.z);
+        // Hysteresis, not a single threshold: a lone "d > 3" cutoff made the
+        // pet flip between idle and run every tick whenever the gap hovered
+        // right at the boundary -- which it constantly does while the owner
+        // runs continuously. It still catches up gradually rather than
+        // matching sprint speed -- trailing behind and eventually closing
+        // the gap is the intended look, not an instant snap back to heel.
+        if (d > 3) pet.following = true;
+        else if (d < 1.2) pet.following = false;
+        if (pet.following) {
+          this.moveMob(pet, owner.move.x, owner.move.z, def.speed * 1.2);
+        }
+      }
+    }
+  }
+
+  /** Shared by mobs and pets -- both are just an x/y/z/yaw position that
+   *  steps toward a target each tick, so the type only needs those fields. */
+  private moveMob(mob: { x: number; y: number; z: number; yaw: number }, tx: number, tz: number, speed: number): void {
     const dx = tx - mob.x;
     const dz = tz - mob.z;
     const d = Math.hypot(dx, dz);
@@ -1742,7 +1963,7 @@ export class GameServer {
     mob.x = nx;
     mob.z = nz;
     mob.y = ny;
-    mob.yaw = Math.atan2(dx, dz);
+    mob.yaw = turnToward(mob.yaw, Math.atan2(dx, dz), MOB_TURN_STEP);
   }
 
   private tickNodeRespawns(now: number): void {
@@ -1886,7 +2107,11 @@ export class GameServer {
       } else if (effect.type === "heal") {
         const healTarget = landsOnCaster ? caster : (target?.foe ?? null);
         if (!healTarget) continue;
-        const amount = (effect.base ?? 0) + stats.power * (effect.powerScale ?? 0);
+        const rawAmount = (effect.base ?? 0) + stats.power * (effect.powerScale ?? 0);
+        // A self-heal with an active pet out splits its pool between the two
+        // instead of stacking a free splash heal on top of the usual amount.
+        const pet = landsOnCaster ? this.findPetByOwner(caster.id) : undefined;
+        const amount = pet ? rawAmount * 0.65 : rawAmount;
         healTarget.hp = Math.min(this.maxHp(healTarget), healTarget.hp + amount);
         healTarget.dirty = true;
         this.broadcastNear(healTarget.move.x, healTarget.move.z, {
@@ -1900,6 +2125,20 @@ export class GameServer {
           z: healTarget.move.z,
         });
         if (healTarget !== caster) this.sendSelf(healTarget);
+        if (pet) {
+          const petAmount = rawAmount * 0.35;
+          pet.hp = Math.min(mobDef(pet.type).maxHp, pet.hp + petAmount);
+          this.broadcastNear(pet.x, pet.z, {
+            t: "event",
+            kind: "heal",
+            sourceId: caster.id,
+            targetId: pet.id,
+            amount: petAmount,
+            x: pet.x,
+            y: pet.y + 1.5,
+            z: pet.z,
+          });
+        }
       } else if (effect.type === "applyAura" && effect.auraId) {
         if (landsOnCaster) {
           caster.activeAuras = applyAura(caster.activeAuras, effect.auraId, caster.id, now);
@@ -2008,6 +2247,25 @@ export class GameServer {
         });
       }
 
+      const pets: PetSnap[] = [];
+      for (const pet of this.pets.values()) {
+        if (dist2D(px, pz, pet.x, pet.z) > INTEREST_RADIUS) continue;
+        const owner = this.players.get(pet.ownerId);
+        pets.push({
+          id: pet.id,
+          ownerId: pet.ownerId,
+          type: pet.type,
+          name: owner ? `${owner.name}'s Wolf` : "Wolf",
+          x: pet.x,
+          y: pet.y,
+          z: pet.z,
+          yaw: pet.yaw,
+          hp: pet.hp,
+          maxHp: mobDef(pet.type).maxHp,
+          anim: pet.actionAnimUntil > now ? "attack" : pet.targetId || pet.following ? "run" : "idle",
+        });
+      }
+
       const projectiles: ProjectileSnap[] = [];
       for (const proj of this.projectiles.values()) {
         if (dist2D(px, pz, proj.x, proj.z) > INTEREST_RADIUS) continue;
@@ -2026,6 +2284,7 @@ export class GameServer {
         timeOfDay: this.timeOfDay(),
         players,
         mobs,
+        pets,
         projectiles,
         npcs,
       });

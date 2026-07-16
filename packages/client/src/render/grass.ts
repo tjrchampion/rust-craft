@@ -83,49 +83,84 @@ export class GrassField {
   private villages = generateVillages();
   private pois = generatePois();
   private paths = generatePaths();
+  // Chunks that are wanted but not yet built, in FIFO order. Building a
+  // chunk walks ~121 cells of noise/collision checks each -- doing every
+  // newly-visible chunk in one go (e.g. a dozen+ right after a fast move)
+  // blocked the main thread for hundreds of ms in one frame. Queuing them
+  // and draining a small, fixed number per call instead spreads that same
+  // cost across many frames, each barely noticeable on its own.
+  private pendingKeys: string[] = [];
+  private queued = new Set<string>();
+  private static readonly BUILDS_PER_CALL = 2;
 
   constructor(scene: THREE.Scene) {
     this.scene = scene;
   }
 
-  /** Spatial windowing (throttled); call once per frame. */
+  /** Spatial windowing (throttled) + a bounded build-queue drain; call once
+   *  per frame -- the window recompute is throttled to 600ms, but the queue
+   *  drain below runs every call so newly-queued chunks start appearing
+   *  within a frame or two instead of waiting out the next 600ms window. */
   update(px: number, pz: number, timeMs: number): void {
-    if (timeMs - this.lastWindowUpdate < 600) return;
-    this.lastWindowUpdate = timeMs;
+    if (timeMs - this.lastWindowUpdate >= 600) {
+      this.lastWindowUpdate = timeMs;
 
-    const cx0 = Math.floor((px + HALF) / CHUNK_M);
-    const cz0 = Math.floor((pz + HALF) / CHUNK_M);
-    const reach = Math.ceil(VISIBLE_RADIUS / CHUNK_M) + 1;
+      const cx0 = Math.floor((px + HALF) / CHUNK_M);
+      const cz0 = Math.floor((pz + HALF) / CHUNK_M);
+      const reach = Math.ceil(VISIBLE_RADIUS / CHUNK_M) + 1;
 
-    const wanted = new Set<string>();
-    for (let dx = -reach; dx <= reach; dx++) {
-      for (let dz = -reach; dz <= reach; dz++) {
-        const cx = cx0 + dx;
-        const cz = cz0 + dz;
-        if (cx < 0 || cz < 0 || cx >= CHUNKS_PER_SIDE || cz >= CHUNKS_PER_SIDE) continue;
-        const centerX = -HALF + (cx + 0.5) * CHUNK_M;
-        const centerZ = -HALF + (cz + 0.5) * CHUNK_M;
-        if (dist2D(px, pz, centerX, centerZ) > VISIBLE_RADIUS + CHUNK_M * 0.71) continue;
-        wanted.add(`${cx}_${cz}`);
+      const wanted = new Set<string>();
+      for (let dx = -reach; dx <= reach; dx++) {
+        for (let dz = -reach; dz <= reach; dz++) {
+          const cx = cx0 + dx;
+          const cz = cz0 + dz;
+          if (cx < 0 || cz < 0 || cx >= CHUNKS_PER_SIDE || cz >= CHUNKS_PER_SIDE) continue;
+          const centerX = -HALF + (cx + 0.5) * CHUNK_M;
+          const centerZ = -HALF + (cz + 0.5) * CHUNK_M;
+          if (dist2D(px, pz, centerX, centerZ) > VISIBLE_RADIUS + CHUNK_M * 0.71) continue;
+          wanted.add(`${cx}_${cz}`);
+        }
+      }
+
+      for (const key of wanted) {
+        if (this.inScene.has(key)) continue;
+        const mesh = this.built.get(key);
+        if (mesh !== undefined) {
+          // Already built earlier (e.g. revisited) -- re-adding is cheap.
+          if (mesh) this.scene.add(mesh);
+          this.inScene.add(key);
+        } else if (!this.queued.has(key)) {
+          this.queued.add(key);
+          this.pendingKeys.push(key);
+        }
+      }
+      for (const key of this.inScene) {
+        if (wanted.has(key)) continue;
+        const mesh = this.built.get(key);
+        if (mesh) this.scene.remove(mesh);
+        this.inScene.delete(key);
+      }
+      // Drop any still-queued chunks the player has since moved away from --
+      // no point spending the build budget on chunks no longer in view.
+      if (this.pendingKeys.length > 0) {
+        this.pendingKeys = this.pendingKeys.filter((key) => {
+          if (wanted.has(key)) return true;
+          this.queued.delete(key);
+          return false;
+        });
       }
     }
 
-    for (const key of wanted) {
-      if (this.inScene.has(key)) continue;
-      let mesh = this.built.get(key);
-      if (mesh === undefined) {
-        const [cx, cz] = key.split("_").map(Number) as [number, number];
-        mesh = this.buildChunk(cx, cz);
-        this.built.set(key, mesh);
-      }
+    let budget = GrassField.BUILDS_PER_CALL;
+    while (budget-- > 0 && this.pendingKeys.length > 0) {
+      const key = this.pendingKeys.shift()!;
+      this.queued.delete(key);
+      if (this.built.has(key)) continue; // safety net, shouldn't happen
+      const [cx, cz] = key.split("_").map(Number) as [number, number];
+      const mesh = this.buildChunk(cx, cz);
+      this.built.set(key, mesh);
       if (mesh) this.scene.add(mesh);
       this.inScene.add(key);
-    }
-    for (const key of this.inScene) {
-      if (wanted.has(key)) continue;
-      const mesh = this.built.get(key);
-      if (mesh) this.scene.remove(mesh);
-      this.inScene.delete(key);
     }
   }
 

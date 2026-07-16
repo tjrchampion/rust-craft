@@ -33,7 +33,8 @@ export interface FrameActions {
   hotbarDelta: number; // -1 | 0 | 1 from wheel / dpad
   /** Direct selection into the unified 10-slot action bar: 0-5 are number
    *  keys 1-6, 6-9 are Q/Z/X/C. Game.ts decides cast-vs-select by checking
-   *  what's actually socketed in that slot. */
+   *  what's actually socketed in that slot. On gamepad, reached via the
+   *  LB/RB chords documented on lbHeldSince below. */
   hotbarSlot: number | null;
   menuUp: boolean;
   menuDown: boolean;
@@ -41,6 +42,10 @@ export interface FrameActions {
   menuRight: boolean;
   menuConfirm: boolean;
   menuCancel: boolean;
+  /** Gamepad LB/RB only, no keyboard equivalent -- cycle tabs (Inventory /
+   *  Spell Book / Crafting / System) while the character screen is open. */
+  tabPrevPressed: boolean;
+  tabNextPressed: boolean;
 }
 
 const GAMEPAD_DEADZONE = 0.18;
@@ -67,12 +72,19 @@ export class InputManager {
   private pointerLocked = false;
   private prevPadButtons: boolean[] = [];
   private canvas: HTMLCanvasElement;
-  /** LB tap-vs-hold-chord disambiguation: a bare tap cycles/snaps target, but
-   *  holding LB and pressing A/B/X/Y casts spell slot 0/1/2/3 instead -- the
-   *  tap's target-cycle only fires on release, and only if no chord fired
-   *  during the hold. Same deferred-edge idea as the CapsLock debounce below. */
+  /** LB/RB tap-vs-hold-chord disambiguation: a bare tap keeps the button's
+   *  normal meaning (LB = cycle/snap target, RB = attack), but holding it
+   *  down and pressing a face button or d-pad direction jumps to an action-
+   *  bar slot instead -- the bare-tap action only fires on release, and only
+   *  if no chord fired during the hold. Same deferred-edge idea as the
+   *  CapsLock debounce below. Between the two modifiers, all 10 unified
+   *  action-bar slots (1-6, Q, Z, X, C) are reachable on a 4-face-button pad:
+   *  LB+{A,B,X,Y} -> slots 0-3, LB+dpad{Up,Down,Left,Right} -> slots 4-7,
+   *  RB+{A,B} -> slots 8-9. */
   private lbHeldSince: number | null = null;
   private lbChordUsed = false;
+  private rbHeldSince: number | null = null;
+  private rbChordUsed = false;
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -174,6 +186,8 @@ export class InputManager {
     let mountPressed = pressed("KeyG");
     let mapPressed = pressed("KeyM");
     let systemMenuPressed = false; // gamepad-only, no keyboard equivalent needed
+    let tabPrevPressed = false; // gamepad-only, no keyboard equivalent needed
+    let tabNextPressed = false; // gamepad-only, no keyboard equivalent needed
     // CapsLock cycles to / clears the nearest enemy target.
     let targetPressed = this.capsQueued;
     this.capsQueued = false;
@@ -229,12 +243,20 @@ export class InputManager {
       // Run by default; hold L3 to walk carefully.
       if (padHeld(10)) sprint = false;
 
-      // LB (btn 4): a bare tap cycles/snaps target; holding it and pressing
-      // A/B/X/Y selects action-bar slot 6/7/8/9 instead (the Q/Z/X/C slots --
-      // same unified bar as keyboard, just reached via a chord since a
-      // controller has nowhere near 10 free buttons). The tap only fires on
-      // release (and only if no chord fired during the hold), so we can't
-      // know a plain tap was "just a tap" until the button comes back up.
+      // LB/RB also cycle tabs (Inventory/Spell Book/Crafting/System) when the
+      // character screen is open -- a plain press-edge, not the deferred
+      // tap-vs-hold dance below, since there's no competing chord meaning to
+      // disambiguate against while a menu (not gameplay) is what's active.
+      // Game.ts only acts on these while that screen is actually open.
+      tabPrevPressed = padPressed(4);
+      tabNextPressed = padPressed(5);
+
+      // LB (btn 4): a bare tap cycles/snaps target; held, it turns the face
+      // buttons and d-pad into action-bar slots 0-3 (1/2/3/4) and 4-7
+      // (5/6/Q/Z). RB (btn 5): a bare tap attacks (same as RT); held, it
+      // turns A/B into slots 8-9 (X/C). Either bare-tap action only fires on
+      // release, and only if no chord fired during the hold -- we can't know
+      // a plain tap was "just a tap" until the button comes back up.
       const lbHeld = padHeld(4);
       if (lbHeld && this.lbHeldSince === null) {
         this.lbHeldSince = performance.now();
@@ -242,16 +264,28 @@ export class InputManager {
       }
       if (lbHeld) {
         if (padPressed(0)) {
-          hotbarSlot = 6;
+          hotbarSlot = 0;
           this.lbChordUsed = true;
         } else if (padPressed(1)) {
-          hotbarSlot = 7;
+          hotbarSlot = 1;
           this.lbChordUsed = true;
         } else if (padPressed(2)) {
-          hotbarSlot = 8;
+          hotbarSlot = 2;
           this.lbChordUsed = true;
         } else if (padPressed(3)) {
-          hotbarSlot = 9;
+          hotbarSlot = 3;
+          this.lbChordUsed = true;
+        } else if (padPressed(12)) {
+          hotbarSlot = 4;
+          this.lbChordUsed = true;
+        } else if (padPressed(13)) {
+          hotbarSlot = 5;
+          this.lbChordUsed = true;
+        } else if (padPressed(14)) {
+          hotbarSlot = 6;
+          this.lbChordUsed = true;
+        } else if (padPressed(15)) {
+          hotbarSlot = 7;
           this.lbChordUsed = true;
         }
       }
@@ -261,24 +295,46 @@ export class InputManager {
         this.lbChordUsed = false;
       }
 
-      // Face buttons double as the chord layer above -- only fire their own
-      // action when LB isn't being held as a modifier this frame.
-      if (!lbHeld) {
+      const rbHeld = padHeld(5);
+      if (rbHeld && this.rbHeldSince === null) {
+        this.rbHeldSince = performance.now();
+        this.rbChordUsed = false;
+      }
+      if (rbHeld) {
+        if (padPressed(0)) {
+          hotbarSlot = 8;
+          this.rbChordUsed = true;
+        } else if (padPressed(1)) {
+          hotbarSlot = 9;
+          this.rbChordUsed = true;
+        }
+      }
+      if (!rbHeld && this.rbHeldSince !== null) {
+        if (!this.rbChordUsed) attackPressed = true;
+        this.rbHeldSince = null;
+        this.rbChordUsed = false;
+      }
+
+      // Face buttons and d-pad double as the chord layers above -- only fire
+      // their own bare action when neither LB nor RB is being held as a
+      // modifier this frame.
+      if (!lbHeld && !rbHeld) {
         jump ||= padPressed(0); // A / Cross
         clearTargetPressed ||= padPressed(1); // B: clear target -> close panels -> open menu
         interactPressed ||= padPressed(2); // X / Square
-        if (hotbarSlot === null && padPressed(3)) hotbarSlot = 6; // Y / Triangle: same slot as bare Q
       }
-      attackPressed ||= padPressed(7) || padPressed(5); // RT or RB
+      if (!lbHeld) {
+        mountPressed ||= padPressed(12); // dpad up: toggle mount
+        pvpTogglePressed ||= padPressed(13); // dpad down: toggle PvP
+        if (padPressed(14)) hotbarDelta -= 1; // dpad left
+        if (padPressed(15)) hotbarDelta += 1; // dpad right
+      }
+      attackPressed ||= padPressed(7); // RT (RB's own attack-tap is handled above via the chord dance)
       block ||= padHeld(6); // LT (held): shield block
       inventoryPressed ||= padPressed(8); // Back/View: inventory
       systemMenuPressed ||= padPressed(9); // Start: dedicated pause menu
       respawnPressed ||= padPressed(0);
-      mountPressed ||= padPressed(12); // dpad up: toggle mount
-      pvpTogglePressed ||= padPressed(13); // dpad down: toggle PvP
       mapPressed ||= padPressed(11); // R3: toggle world map
-      if (padPressed(14)) hotbarDelta -= 1; // dpad left
-      if (padPressed(15)) hotbarDelta += 1; // dpad right
 
       menuUp ||= padPressed(12) || (this.edgeAxis(pad, 1, -1) ?? false);
       menuDown ||= padPressed(13) || (this.edgeAxis(pad, 1, 1) ?? false);
@@ -345,6 +401,8 @@ export class InputManager {
       menuRight,
       menuConfirm,
       menuCancel,
+      tabPrevPressed,
+      tabNextPressed,
     };
   }
 

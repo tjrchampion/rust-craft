@@ -64,6 +64,7 @@ const SPELL_ICONS: Record<string, string> = {
   entangling_roots: "🌱",
   hammer_of_wrath: "🔨",
   holy_shield: "🛡️",
+  beast_mastery: "🐺",
 };
 
 const MOB_ICONS: Record<string, string> = {

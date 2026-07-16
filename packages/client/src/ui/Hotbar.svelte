@@ -6,14 +6,14 @@
   import { HOTBAR_SLOTS, itemDef, spellDef } from "@rustcraft/shared";
 
   const SPELL_PREFIX = "spell:";
-  const KEY_LABELS = ["1", "2", "3", "4", "5", "6"];
-  // Slots 6-9 (Q/Z/X/C) are also reachable on gamepad: 6 = bare Y tap, 7-9 = LB-hold chord.
-  const PAD_LABELS = ["Y", "LB+B", "LB+X", "LB+Y"];
-  const KBM_LETTER_LABELS = ["Q", "Z", "X", "C"];
+  // Keyboard: 1-6, then Q/Z/X/C. Gamepad: every slot needs LB or RB as a
+  // modifier since a controller has nowhere near 10 free buttons -- see the
+  // full scheme documented on InputManager.lbHeldSince.
+  const KBM_LABELS = ["1", "2", "3", "4", "5", "6", "Q", "Z", "X", "C"];
+  const PAD_LABELS = ["LB+A", "LB+B", "LB+X", "LB+Y", "LB+↑", "LB+↓", "LB+←", "LB+→", "RB+A", "RB+B"];
 
   function keyLabel(i: number): string {
-    if (i < 6) return KEY_LABELS[i]!;
-    return promptLabel(PAD_LABELS[i - 6] ?? "", KBM_LETTER_LABELS[i - 6] ?? "");
+    return promptLabel(PAD_LABELS[i] ?? "", KBM_LABELS[i] ?? "");
   }
 
   // Cooldown sweeps need a periodic re-render since nothing else about the

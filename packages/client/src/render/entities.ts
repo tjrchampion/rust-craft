@@ -1,11 +1,15 @@
 import * as THREE from "three";
-import type { PlayerSnap, MobSnap, ProjectileSnap, StructureSnap, AnimState, ClassId } from "@rustcraft/shared";
+import type { PlayerSnap, MobSnap, PetSnap, ProjectileSnap, StructureSnap, AnimState, ClassId } from "@rustcraft/shared";
 import { wrapAngle, mobDef, itemDef, auraDef } from "@rustcraft/shared";
 import { buildNameplate, buildCampfire, buildHorse, buildRaft } from "./models";
 import { AnimatedModel, PLAYER_ANIMS, mobModelSpec, logicalFromState } from "./gltf";
 import { CLASS_MODEL_URLS, CLASS_WEAPON_NODES } from "./classModels";
 import { buildSchoolProjectile, buildSchoolParticle, schoolProfile, spellSchool, type School } from "./vfx";
 
+// Snapshots broadcast at a full 20Hz (see GameServer.tick), so 2 snapshot
+// intervals (100ms) plus a little slack for jitter is enough buffer to avoid
+// stutter without making remote mobs/pets feel laggy next to the player's
+// own zero-latency client-side prediction.
 const INTERP_DELAY_MS = 130;
 const DESPAWN_AFTER_MS = 1200;
 
@@ -18,7 +22,7 @@ interface Sample {
 }
 
 interface RemoteEntity {
-  kind: "player" | "mob";
+  kind: "player" | "mob" | "pet";
   id: string;
   name: string | null;
   classId: string;
@@ -52,7 +56,7 @@ export interface TargetInfo {
   name: string;
   hp: number;
   maxHp: number;
-  kind: "player" | "mob";
+  kind: "player" | "mob" | "pet";
   hostile: boolean;
 }
 
@@ -107,7 +111,7 @@ function buildHpBar(): THREE.Sprite {
   const sprite = new THREE.Sprite(
     new THREE.SpriteMaterial({ map: texture, transparent: true, depthWrite: false }),
   );
-  sprite.scale.set(1.4, 0.18, 1);
+  sprite.scale.set(1.0, 0.13, 1);
   return sprite;
 }
 
@@ -131,7 +135,7 @@ function buildDebuffIcons(): THREE.Sprite {
   const sprite = new THREE.Sprite(
     new THREE.SpriteMaterial({ map: texture, transparent: true, depthWrite: false }),
   );
-  sprite.scale.set(1.4, 0.35, 1);
+  sprite.scale.set(1.0, 0.25, 1);
   sprite.visible = false;
   return sprite;
 }
@@ -194,7 +198,7 @@ export class EntityManager {
   }
 
   private createEntity(
-    kind: "player" | "mob",
+    kind: "player" | "mob" | "pet",
     id: string,
     name: string | null,
     now: number,
@@ -215,8 +219,11 @@ export class EntityManager {
       const spec = mobModelSpec(def.render.model);
       model = new AnimatedModel(spec.anims);
       void model.loadFrom(spec.url, def.render.height, def.render.tint);
-      plateColor = def.render.color;
-      plateName = def.name;
+      // A pet reuses the wild mob's model but keeps the caller's own display
+      // name ("<Owner>'s Wolf") and a friendly nameplate color instead of
+      // the wild mobDef's own name/color.
+      plateColor = kind === "pet" ? "#7be07b" : def.render.color;
+      plateName = kind === "pet" ? name : def.name;
       // Nameplate/HP bar sit above the model's normalized height.
       plateY = def.render.height + 0.7;
       barY = def.render.height + 0.4;
@@ -233,7 +240,7 @@ export class EntityManager {
     hpBar.position.y = barY;
     group.add(hpBar);
     const debuffIcons = buildDebuffIcons();
-    debuffIcons.position.y = plateY + 0.3;
+    debuffIcons.position.y = plateY + 0.22;
     group.add(debuffIcons);
     this.scene.add(group);
 
@@ -353,6 +360,35 @@ export class EntityManager {
       if (entity.samples.length > 12) entity.samples.shift();
       if (entity.hpBar) paintHpBar(entity.hpBar, snap.hp / snap.maxHp);
       this.updateDebuffs(entity, snap.debuffs);
+    }
+  }
+
+  /** Summoned companions (Beast Mastery's wolf, etc.) -- rendered exactly
+   *  like a mob (same model/hp-bar pipeline) but keyed by pet id and named
+   *  after the owner instead of the mobDef.
+   *
+   *  Tried rebasing your own pet onto your locally-predicted position
+   *  (to remove the mismatch against your own zero-latency movement) --
+   *  reverted: instrumented logging showed the raw server position never
+   *  jumps, but the rebased one jumped ~0.68m almost every tick while
+   *  sprinting (double the expected per-tick distance), i.e. the rebase
+   *  math itself was the source of a real, visible teleport, not a fix
+   *  for one. Back to the plain snapshot coordinate for every pet. */
+  applyPets(pets: PetSnap[], now: number): void {
+    for (const snap of pets) {
+      let entity = this.entities.get(snap.id);
+      if (!entity) {
+        entity = this.createEntity("pet", snap.id, snap.name, now, snap.type);
+        entity.lastX = snap.x;
+        entity.lastZ = snap.z;
+      }
+      entity.lastSeen = now;
+      entity.anim = snap.anim;
+      entity.hp = snap.hp;
+      entity.maxHp = snap.maxHp;
+      entity.samples.push({ t: now, x: snap.x, y: snap.y, z: snap.z, yaw: snap.yaw });
+      if (entity.samples.length > 12) entity.samples.shift();
+      if (entity.hpBar) paintHpBar(entity.hpBar, snap.hp / snap.maxHp);
     }
   }
 
@@ -563,7 +599,7 @@ export class EntityManager {
       const logical = logicalFromState(
         entity.anim,
         entity.speed,
-        entity.kind === "mob" ? 3 : 3.5,
+        entity.kind === "player" ? 3.5 : 3,
         entity.localMoveX,
         entity.localMoveY,
       );
@@ -718,6 +754,7 @@ export class EntityManager {
     const v = new THREE.Vector3();
     for (const e of this.entities.values()) {
       if (e.id === selfId) continue;
+      if (e.kind === "pet") continue; // friendly, never a valid enemy target
       if (e.kind === "mob" ? e.hp <= 0 : !e.pvp) continue;
       const d = Math.hypot(e.group.position.x - fromX, e.group.position.z - fromZ);
       if (d > maxRange) continue;

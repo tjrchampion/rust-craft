@@ -40,6 +40,10 @@ export interface SpellDef {
   cooldownS: number;
   targeting: SpellTargeting;
   effects: SpellEffect[];
+  /** Spawns (or replaces) a companion pet fighting alongside the caster --
+   *  a spell-level effect, not a per-target one, so it lives here rather
+   *  than in `effects`. `petType` keys into content/mobs.ts for model/stats. */
+  summon?: { petType: string };
 }
 
 export const SPELLS: Record<string, SpellDef> = {
@@ -396,6 +400,16 @@ export const SPELLS: Record<string, SpellDef> = {
     cooldownS: 16,
     targeting: { kind: "self", range: 0 },
     effects: [{ type: "applyAura", auraId: "holy_shield", landsOn: "caster" }],
+  },
+  beast_mastery: {
+    id: "beast_mastery",
+    name: "Beast Mastery",
+    castTimeS: 0,
+    resourceCost: 30,
+    cooldownS: 45,
+    targeting: { kind: "self", range: 0 },
+    effects: [{ type: "applyAura", auraId: "beast_mastery_buff", landsOn: "caster" }],
+    summon: { petType: "wolf" },
   },
 };
 

@@ -46,6 +46,8 @@ import { game as ui, type CharacterTab } from "../ui/gameState.svelte";
 const CAMERA_DISTANCE = 6.5;
 const CAMERA_HEIGHT = 2.2;
 const GATHER_RANGE = 4.0;
+/** Left-to-right tab order for gamepad LB/RB cycling in the character screen. */
+const TAB_ORDER: CharacterTab[] = ["inventory", "spellbook", "craft", "system"];
 
 interface PendingInput {
   seq: number;
@@ -96,6 +98,16 @@ export class Game {
   private move: MoveState = { x: 0, y: 4, z: 0, vy: 0, grounded: true };
   /** Decaying render offset that absorbs reconcile corrections smoothly. */
   private posError = new THREE.Vector3();
+  /** `this.move` right before the most recently completed 20Hz sim tick --
+   *  the render position lerps from here to `this.move` using the
+   *  leftover accumulator fraction, so the camera/avatar advance every
+   *  rendered frame instead of holding still for ~2 of every 3 frames at
+   *  60fps (20Hz sim / 60fps render). That static-then-jump stepping is
+   *  invisible on its own (nothing to compare it to) but reads as judder
+   *  the instant something else on screen (a mob, your pet) is moving via
+   *  smooth per-frame interpolation -- worse the faster you move, since a
+   *  bigger per-tick step is more visible held static for those 2 frames. */
+  private tickRenderFrom = { x: 0, y: 4, z: 0 };
   private cameraYaw = 0;
   private cameraPitch = -0.35;
   private inputSeq = 0;
@@ -229,6 +241,7 @@ export class Game {
         }
         this.entities.applyPlayers(msg.players, this.selfId, now);
         this.entities.applyMobs(msg.mobs, now);
+        this.entities.applyPets(msg.pets, now);
         this.entities.applyProjectiles(msg.projectiles);
         for (const npc of msg.npcs) this.npcManager.applySnap(npc);
         ui.questMarkers = this.npcManager.questMarkers();
@@ -429,6 +442,10 @@ export class Game {
         this.posError.z += ez;
       } else {
         this.posError.set(0, 0, 0); // genuine teleport/large desync: snap
+        // Also drop the tick-interpolation reference, or the next render
+        // would glide from the pre-teleport spot to here over the leftover
+        // accumulator fraction instead of snapping immediately.
+        this.tickRenderFrom = { x: replayed.x, y: replayed.y, z: replayed.z };
       }
       this.move = replayed;
     }
@@ -460,6 +477,15 @@ export class Game {
     if (actions.craftingPressed && !dead) this.toggleTab("craft");
     if (actions.systemPressed && !dead) this.toggleTab("system");
     if (actions.systemMenuPressed && !dead) this.toggleTab("system");
+
+    // LB/RB cycle between tabs while the character screen is open -- the
+    // same two bumpers that chord-select action-bar slots during gameplay,
+    // repurposed here since there's nothing for them to modify in a menu.
+    if (ui.inventoryOpen && (actions.tabPrevPressed || actions.tabNextPressed)) {
+      const i = TAB_ORDER.indexOf(ui.activeTab);
+      const delta = actions.tabNextPressed ? 1 : -1;
+      ui.activeTab = TAB_ORDER[(i + delta + TAB_ORDER.length) % TAB_ORDER.length]!;
+    }
 
     // Menu navigation forwarding (keyboard & gamepad) -- generalized across
     // every modal panel (they all call setUiMode(true) when open), so the
@@ -558,6 +584,9 @@ export class Game {
     // Fixed-step prediction + input streaming (20 Hz)
     this.accumulator += dt;
     while (this.accumulator >= TICK_DT) {
+      this.tickRenderFrom.x = this.move.x;
+      this.tickRenderFrom.y = this.move.y;
+      this.tickRenderFrom.z = this.move.z;
       this.accumulator -= TICK_DT;
       if (!dead && ui.connected) this.stepLocal(actions);
     }
@@ -567,9 +596,15 @@ export class Game {
     const decay = Math.exp(-dt * 12);
     this.posError.multiplyScalar(decay);
     if (this.posError.lengthSq() < 1e-6) this.posError.set(0, 0, 0);
-    const rx = this.move.x + this.posError.x;
-    const ry = this.move.y + this.posError.y;
-    const rz = this.move.z + this.posError.z;
+    // Render between the last two completed ticks instead of holding at
+    // whichever one most recently finished -- see tickRenderFrom's comment.
+    const tickAlpha = Math.min(1, this.accumulator / TICK_DT);
+    const smoothX = this.tickRenderFrom.x + (this.move.x - this.tickRenderFrom.x) * tickAlpha;
+    const smoothY = this.tickRenderFrom.y + (this.move.y - this.tickRenderFrom.y) * tickAlpha;
+    const smoothZ = this.tickRenderFrom.z + (this.move.z - this.tickRenderFrom.z) * tickAlpha;
+    const rx = smoothX + this.posError.x;
+    const ry = smoothY + this.posError.y;
+    const rz = smoothZ + this.posError.z;
     ui.playerX = rx;
     ui.playerZ = rz;
 

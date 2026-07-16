@@ -469,7 +469,9 @@ export function buildNameplate(name: string, color = "#ffffff"): THREE.Sprite {
   canvas.width = 256;
   canvas.height = 64;
   const ctx = canvas.getContext("2d")!;
-  ctx.font = "bold 28px system-ui, sans-serif";
+  // Cinzel matches the display font used for the player's own name in the
+  // top-left vitals frame (see theme.css's --rc-display) for consistency.
+  ctx.font = "700 24px Cinzel, Georgia, serif";
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   ctx.shadowColor = "rgba(0,0,0,0.9)";
@@ -480,6 +482,6 @@ export function buildNameplate(name: string, color = "#ffffff"): THREE.Sprite {
   const sprite = new THREE.Sprite(
     new THREE.SpriteMaterial({ map: texture, transparent: true, depthWrite: false }),
   );
-  sprite.scale.set(2.6, 0.65, 1);
+  sprite.scale.set(1.85, 0.46, 1);
   return sprite;
 }

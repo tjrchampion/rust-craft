@@ -28,6 +28,12 @@ export function expireAuras(actives: ActiveAura[], now: number): ActiveAura[] {
   return actives.filter((a) => a.expiresAt > now);
 }
 
+/** Explicitly drop an aura before its timer would naturally expire it --
+ *  e.g. clearing a pet's damage buff the instant the pet dies. */
+export function removeAura(actives: ActiveAura[], auraId: string): ActiveAura[] {
+  return actives.filter((a) => a.auraId !== auraId);
+}
+
 /** Every active aura's passive stat contribution, for computeActorStats. */
 export function aggregateAuraModifiers(actives: ActiveAura[]): StatModifiers[] {
   return actives.map((a) => auraDef(a.auraId).statModifiers ?? {});

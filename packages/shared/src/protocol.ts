@@ -182,6 +182,22 @@ export interface MobSnap {
   debuffs: string[];
 }
 
+export interface PetSnap {
+  id: string;
+  ownerId: string;
+  /** mobDef key used for the pet's model/render (e.g. "wolf") -- pets reuse
+   *  the same wild-mob visuals rather than needing their own asset. */
+  type: string;
+  name: string;
+  x: number;
+  y: number;
+  z: number;
+  yaw: number;
+  hp: number;
+  maxHp: number;
+  anim: AnimState;
+}
+
 export interface StructureSnap {
   id: string;
   type: string;
@@ -296,6 +312,7 @@ export type ServerMsg =
       timeOfDay: number;
       players: PlayerSnap[];
       mobs: MobSnap[];
+      pets: PetSnap[];
       projectiles: ProjectileSnap[];
       npcs: NpcSnap[];
       removedPlayers?: string[];

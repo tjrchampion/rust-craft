@@ -75,7 +75,7 @@ export const CLASSES: Record<ClassId, ClassTemplate> = {
     description: "A keen-eyed hunter who strikes from afar with bow and blade.",
     resourceLabel: "Focus",
     baseStats: { power: 9, armor: 3, agility: 9, vitality: 5 },
-    startingSpells: ["quick_shot", "piercing_shot", "heal", "volley", "aimed_shot", "serpent_sting"],
+    startingSpells: ["quick_shot", "piercing_shot", "heal", "volley", "aimed_shot", "serpent_sting", "beast_mastery"],
     startingGear: [
       { slot: "weapon", itemId: "hunting_bow" },
       { slot: "chest", itemId: "leather_armor" },

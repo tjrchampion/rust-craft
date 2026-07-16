@@ -144,6 +144,17 @@ export const AURAS: Record<string, AuraDef> = {
     icon: "🛡️",
     positive: true,
   },
+  /** Lasts as long as the summoned wolf is alive, not a fixed time -- the
+   *  server clears it explicitly (removeAura) the moment the pet dies or
+   *  its owner disconnects, rather than letting it time out on its own. */
+  beast_mastery_buff: {
+    id: "beast_mastery_buff",
+    name: "Beast Mastery",
+    durationS: 24 * 60 * 60,
+    statModifiers: { power: 4 },
+    icon: "🐺",
+    positive: true,
+  },
 };
 
 export function auraDef(id: string): AuraDef {
