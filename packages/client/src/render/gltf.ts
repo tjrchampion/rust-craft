@@ -160,6 +160,10 @@ export interface AnimSpec {
   block?: string[];
   sit?: string[];
   cheer?: string[];
+  dodgeForward?: string[];
+  dodgeBackward?: string[];
+  dodgeLeft?: string[];
+  dodgeRight?: string[];
 }
 
 export const PLAYER_ANIMS: AnimSpec = {
@@ -178,6 +182,13 @@ export const PLAYER_ANIMS: AnimSpec = {
   block: ["Block"],
   sit: ["Sit_Floor_Idle"],
   cheer: ["Cheer"],
+  // Warrior/mage/rogue/cleric rigs have dedicated dodge clips; ranger/druid/
+  // paladin don't, so they fall back to the chop swing as a stand-in burst
+  // animation (still reads fine at dodge's brief on-screen duration).
+  dodgeForward: ["Dodge_Forward", "2H_Melee_Attack_Chop"],
+  dodgeBackward: ["Dodge_Backward", "2H_Melee_Attack_Chop"],
+  dodgeLeft: ["Dodge_Left", "2H_Melee_Attack_Chop"],
+  dodgeRight: ["Dodge_Right", "2H_Melee_Attack_Chop"],
 };
 
 export const WOLF_ANIMS: AnimSpec = {
@@ -374,7 +385,14 @@ export class AnimatedModel {
   play(logical: LogicalAnim, overrideNames?: string[]): void {
     if (!this.mixer) return;
     const now = performance.now();
-    const oneShot = logical === "attack" || logical === "gather" || logical === "hit";
+    const oneShot =
+      logical === "attack" ||
+      logical === "gather" ||
+      logical === "hit" ||
+      logical === "dodgeForward" ||
+      logical === "dodgeBackward" ||
+      logical === "dodgeLeft" ||
+      logical === "dodgeRight";
     if (!oneShot && now < this.oneShotUntil) return; // let the swing finish
     if (logical === this.currentLogical && !oneShot) return;
 
@@ -434,6 +452,20 @@ function directionalMove(localMoveX: number, localMoveY: number, running: boolea
   }
   if (localMoveY > 0.15) return "walkBack";
   return running ? "run" : "walk";
+}
+
+/** Which directional dodge clip matches a world-space dodge direction, given
+ *  the dodger's own facing -- same inverse camera-relative rotation used to
+ *  derive localMoveX/localMoveY for remote entities (see EntityManager's
+ *  update loop), just applied to a one-shot direction instead of a per-frame
+ *  velocity delta. */
+export function dodgeLogicalFor(yaw: number, dirX: number, dirZ: number): LogicalAnim {
+  const cos = Math.cos(yaw);
+  const sin = Math.sin(yaw);
+  const localX = -cos * dirX + sin * dirZ; // + = dodging to their right
+  const localY = -sin * dirX - cos * dirZ; // + = dodging backward
+  if (Math.abs(localX) > Math.abs(localY)) return localX > 0 ? "dodgeRight" : "dodgeLeft";
+  return localY > 0 ? "dodgeBackward" : "dodgeForward";
 }
 
 /** Map server anim + observed speed/direction to a logical clip. */

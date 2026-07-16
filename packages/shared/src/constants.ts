@@ -54,6 +54,20 @@ export const UNARMED_GATHER_POWER = 1;
 export const MELEE_RANGE = 2.2;
 export const MELEE_COOLDOWN_S = 0.8;
 export const RESPAWN_HP_FRACTION = 0.5;
+// Hold-E-to-revive a dead player. Shared so the client's progress bar
+// duration and interact-range detection can't drift from the server's own
+// authoritative hold-time/range checks.
+export const REVIVE_HOLD_S = 3;
+export const REVIVE_RANGE = 4.5;
+export const REVIVE_HP_FRACTION = 0.5;
+
+// A quick directional burst movement. Charge-based (not a flat cooldown):
+// up to DODGE_MAX_CHARGES uses banked at once, each recharging individually
+// over DODGE_CHARGE_REGEN_S -- so spamming drains the bank, then you're
+// waiting on a per-charge trickle instead of one long shared cooldown.
+export const DODGE_DISTANCE = 2.5;
+export const DODGE_MAX_CHARGES = 4;
+export const DODGE_CHARGE_REGEN_S = 4;
 
 // Progression
 export const MAX_LEVEL = 20;

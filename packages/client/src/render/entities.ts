@@ -2,7 +2,7 @@ import * as THREE from "three";
 import type { PlayerSnap, MobSnap, PetSnap, ProjectileSnap, StructureSnap, AnimState, ClassId } from "@rustcraft/shared";
 import { wrapAngle, mobDef, itemDef, auraDef } from "@rustcraft/shared";
 import { buildNameplate, buildCampfire, buildHorse, buildRaft } from "./models";
-import { AnimatedModel, PLAYER_ANIMS, mobModelSpec, logicalFromState } from "./gltf";
+import { AnimatedModel, PLAYER_ANIMS, mobModelSpec, logicalFromState, dodgeLogicalFor } from "./gltf";
 import { CLASS_MODEL_URLS, CLASS_WEAPON_NODES } from "./classModels";
 import { buildSchoolProjectile, buildSchoolParticle, schoolProfile, spellSchool, type School } from "./vfx";
 
@@ -526,6 +526,44 @@ export class EntityManager {
     this.groundBursts.push({ mesh, born: performance.now(), lifeMs });
   }
 
+  /** A quick puff of dust kicked up behind a dodge -- plain sphere particles
+   *  rather than the spell-school-flavored burst system, since dodge isn't
+   *  tied to any school. */
+  spawnDodgeBurst(x: number, y: number, z: number, dirX: number, dirZ: number): void {
+    const color = 0xcabf9e;
+    for (let i = 0; i < 10; i++) {
+      const mesh = new THREE.Mesh(
+        new THREE.SphereGeometry(0.12 + Math.random() * 0.08, 6, 6),
+        new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.75 }),
+      );
+      const spread = (Math.random() - 0.5) * 1.2;
+      mesh.position.set(x - dirX * spread * 0.3, y + 0.2 + Math.random() * 0.4, z - dirZ * spread * 0.3);
+      this.scene.add(mesh);
+      const speed = 0.6 + Math.random() * 1.2;
+      this.sparks.push({
+        mesh,
+        vx: -dirX * speed * 0.5 + (Math.random() - 0.5) * 0.8,
+        vy: 0.4 + Math.random() * 0.6,
+        vz: -dirZ * speed * 0.5 + (Math.random() - 0.5) * 0.8,
+        gravity: 2.5,
+        drag: 2,
+        spin: 0,
+        born: performance.now(),
+        lifeMs: 380,
+      });
+    }
+  }
+
+  /** Trigger a remote player's directional one-shot dodge animation --
+   *  resolved from their known facing + the broadcast world-space direction,
+   *  same as attack/hit reactions are triggered off other broadcast events. */
+  playDodge(id: string, dirX: number, dirZ: number): void {
+    const entity = this.entities.get(id);
+    if (!entity) return;
+    const logical = dodgeLogicalFor(entity.group.rotation.y, dirX, dirZ);
+    entity.model.play(logical);
+  }
+
   addStructure(snap: StructureSnap): void {
     if (this.structures.has(snap.id)) return;
     const group = buildCampfire();
@@ -641,7 +679,12 @@ export class EntityManager {
         s.mesh.rotation.x += s.spin * dt;
         s.mesh.rotation.y += s.spin * dt * 0.7;
       }
-      (s.mesh.material as THREE.ShaderMaterial).uniforms.uOpacity!.value = 1 - age;
+      // School particles are shader-based (uOpacity uniform); the plain dodge
+      // burst uses a bare MeshBasicMaterial instead -- fade whichever kind
+      // this spark actually has rather than assuming one shape for both.
+      const mat = s.mesh.material as THREE.ShaderMaterial & THREE.MeshBasicMaterial;
+      if (mat.uniforms?.uOpacity) mat.uniforms.uOpacity.value = 1 - age;
+      else mat.opacity = 1 - age;
     }
 
     for (let i = this.groundBursts.length - 1; i >= 0; i--) {
@@ -714,6 +757,23 @@ export class EntityManager {
     const e = this.entities.get(id);
     if (!e) return null;
     return out.copy(e.group.position);
+  }
+
+  /** Nearest dead player within range, for the hold-E-to-revive prompt.
+   *  `anim === "dead"` is how a dead player's snapshot already renders
+   *  (see applyPlayers), so no separate tracking is needed here. */
+  nearestDeadPlayer(x: number, z: number, maxRange: number): { id: string; name: string } | null {
+    let best: { id: string; name: string } | null = null;
+    let bestDist = maxRange;
+    for (const e of this.entities.values()) {
+      if (e.kind !== "player" || e.anim !== "dead") continue;
+      const d = Math.hypot(e.group.position.x - x, e.group.position.z - z);
+      if (d < bestDist) {
+        bestDist = d;
+        best = { id: e.id, name: e.name ?? "someone" };
+      }
+    }
+    return best;
   }
 
   /** Flinch reaction on taking damage -- a one-shot, so it's safe to call on

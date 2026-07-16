@@ -18,6 +18,12 @@ export const InputMsg = z.object({
   sprint: z.boolean(),
   block: z.boolean(),
   yaw: z.number(),
+  /** Character id being revived while E is held over a dead player, or null.
+   *  Re-sent every tick alongside movement -- releasing E (or the client's
+   *  interact target changing) naturally stops it, which is what lets the
+   *  server treat "stopped arriving" as "channel canceled" with no separate
+   *  cancel message needed. */
+  revivingId: z.string().max(64).nullable(),
 });
 
 export const InteractMsg = z.object({
@@ -88,7 +94,7 @@ export const PvpMsg = z.object({
 
 export const PartyMsg = z.object({
   t: z.literal("party"),
-  action: z.enum(["invite", "accept", "decline", "leave"]),
+  action: z.enum(["invite", "accept", "decline", "leave", "disband"]),
   /** Target character name for invite. */
   name: z.string().max(24).optional(),
 });
@@ -101,6 +107,16 @@ export const QuestMsg = z.object({
   t: z.literal("quest"),
   action: z.enum(["accept", "decline", "turnin"]),
   questId: z.string().max(32),
+});
+
+/** A quick directional burst -- dirX/dirZ is a world-space direction (not
+ *  necessarily unit length; the server normalizes it) computed the same way
+ *  regular movement input already is, so it lines up with the same forward/
+ *  right basis as everything else instead of needing its own convention. */
+export const DodgeMsg = z.object({
+  t: z.literal("dodge"),
+  dirX: z.number().min(-1.5).max(1.5),
+  dirZ: z.number().min(-1.5).max(1.5),
 });
 
 export const ClientMsg = z.discriminatedUnion("t", [
@@ -122,6 +138,7 @@ export const ClientMsg = z.discriminatedUnion("t", [
   QuestMsg,
   SitMsg,
   AssignSpellMsg,
+  DodgeMsg,
 ]);
 export type ClientMsg = z.infer<typeof ClientMsg>;
 
@@ -166,6 +183,17 @@ export interface PartyMemberSnap {
   hp: number;
   maxHp: number;
   online: boolean;
+  leader: boolean;
+}
+
+/** One entry in the realm-wide online roster (Party tab's invite list) --
+ *  deliberately lighter than PartyMemberSnap (no hp/maxHp) since it covers
+ *  every connected player, not just party members currently in view. */
+export interface RosterEntry {
+  id: string;
+  name: string;
+  level: number;
+  classId: string;
 }
 
 export interface MobSnap {
@@ -282,10 +310,20 @@ export interface SelfState {
   ackSeq: number;
   castingSpell: string | null;
   castEndsAt: number | null; // server time ms
+  /** Someone is channeling a revive on you, or you're channeling one on
+   *  someone else -- either way this is *your own* SelfState, so it always
+   *  reflects a revive *you* are performing, mirroring castingSpell/
+   *  castEndsAt's shape so the client can reuse the same countdown math. */
+  revivingTargetId: string | null;
+  revivingEndsAt: number | null; // server time ms
   mount: "horse" | "raft" | null;
   sitting: boolean;
   auras: { auraId: string; expiresAt: number }[];
   spellCooldowns: { spellId: string; readyAt: number }[];
+  dodgeCharges: number;
+  /** When the *next* charge refills (server time ms) -- null while already
+   *  at DODGE_MAX_CHARGES, since there's nothing left to count down to. */
+  dodgeNextChargeAt: number | null;
 }
 
 export type ServerMsg =
@@ -332,6 +370,8 @@ export type ServerMsg =
         | "xp"
         | "levelup"
         | "death"
+        | "revive" // sourceId revived targetId
+        | "dodge" // sourceId dodged in world-space direction dirX/dirZ
         | "castStart"
         | "spellHit"
         | "learnSpell"
@@ -345,6 +385,8 @@ export type ServerMsg =
       x?: number;
       y?: number;
       z?: number;
+      dirX?: number;
+      dirZ?: number;
     }
   | { t: "chat"; channel: "realm" | "party" | "system"; from: string; text: string }
   | {
@@ -355,6 +397,7 @@ export type ServerMsg =
       inviteFrom?: string;
     }
   | { t: "pvp"; enabled: boolean }
+  | { t: "roster"; players: RosterEntry[] }
   | { t: "questOffer"; npcId: string; npcName: string; offers: QuestOfferInfo[] }
   | { t: "questLog"; quests: QuestLogEntry[] }
   | { t: "questComplete"; questId: string; questName: string; xp: number; items: { itemId: string; qty: number }[] }

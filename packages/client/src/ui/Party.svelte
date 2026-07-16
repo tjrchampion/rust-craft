@@ -3,6 +3,7 @@
   import { getGame } from "../game/instance";
 
   const otherMembers = $derived((game.party ?? []).filter((m) => m.id !== game.selfId));
+  const amLeader = $derived((game.party ?? []).find((m) => m.id === game.selfId)?.leader ?? false);
 </script>
 
 <!-- PvP indicator -->
@@ -29,13 +30,20 @@
     <div class="party-title rc-frame-title">Party</div>
     {#each otherMembers as member (member.id)}
       <div class="member rc-frame" class:offline={!member.online}>
-        <div class="member-name">{member.name} <span class="lvl">lv{member.level}</span></div>
+        <div class="member-name">
+          {#if member.leader}<span class="crown" title="Party leader">👑</span>{/if}
+          {member.name} <span class="lvl">lv{member.level}</span>
+        </div>
         <div class="member-bar">
           <div class="member-fill" style="width: {Math.min(100, (member.hp / member.maxHp) * 100)}%"></div>
         </div>
       </div>
     {/each}
-    <button class="rc-btn leave" onclick={() => getGame()?.sendParty("leave")}>Leave Party</button>
+    {#if amLeader}
+      <button class="rc-btn leave" onclick={() => getGame()?.sendParty("disband")}>Disband Party</button>
+    {:else}
+      <button class="rc-btn leave" onclick={() => getGame()?.sendParty("leave")}>Leave Party</button>
+    {/if}
   </div>
 {/if}
 
@@ -107,6 +115,10 @@
     font-size: 12px;
     color: var(--rc-parchment);
     margin-bottom: 3px;
+  }
+  .crown {
+    font-size: 10px;
+    margin-right: 1px;
   }
   .lvl {
     color: var(--rc-ink-dim);

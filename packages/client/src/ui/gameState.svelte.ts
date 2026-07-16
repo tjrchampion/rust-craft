@@ -1,8 +1,8 @@
-import type { SelfState, ItemSnap, PartyMemberSnap, QuestOfferInfo, QuestLogEntry } from "@rustcraft/shared";
+import type { SelfState, ItemSnap, PartyMemberSnap, RosterEntry, QuestOfferInfo, QuestLogEntry } from "@rustcraft/shared";
 import type { TargetInfo } from "../render/entities";
 
 export type ChatChannel = "realm" | "party" | "system";
-export type CharacterTab = "inventory" | "spellbook" | "craft" | "system";
+export type CharacterTab = "inventory" | "spellbook" | "craft" | "party" | "system";
 
 export interface ChatLine {
   channel: ChatChannel;
@@ -64,6 +64,9 @@ class GameState {
   target = $state<TargetInfo | null>(null);
   party = $state<PartyMemberSnap[] | null>(null);
   pendingInvite = $state<string | null>(null);
+  /** Every currently-connected player in the realm, for the Party tab's
+   *  invite list -- distinct from `party`, which is just the current group. */
+  roster = $state<RosterEntry[]>([]);
   combatLog = $state<{ text: string; at: number }[]>([]);
   /** id -> display name, for combat-log attribution (not reactive). */
   names = new Map<string, string>();
@@ -122,6 +125,7 @@ class GameState {
     this.target = null;
     this.party = null;
     this.pendingInvite = null;
+    this.roster = [];
     this.combatLog = [];
     this.names.clear();
     this.questOffer = null;

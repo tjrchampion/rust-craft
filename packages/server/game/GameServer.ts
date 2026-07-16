@@ -21,6 +21,16 @@ import {
   MELEE_RANGE,
   MELEE_COOLDOWN_S,
   RESPAWN_HP_FRACTION,
+  REVIVE_HOLD_S,
+  REVIVE_RANGE,
+  REVIVE_HP_FRACTION,
+  DODGE_DISTANCE,
+  DODGE_MAX_CHARGES,
+  DODGE_CHARGE_REGEN_S,
+  WORLD_MIN_X,
+  WORLD_MAX_X,
+  WORLD_MIN_Z,
+  WORLD_MAX_Z,
   MAX_LEVEL,
   xpForLevel,
   HOTBAR_SLOTS,
@@ -71,6 +81,7 @@ import {
   type ProjectileSnap,
   type StructureSnap,
   type NpcSnap,
+  type RosterEntry,
   type NpcSpec,
   type QuestOfferInfo,
   type QuestLogEntry,
@@ -110,6 +121,8 @@ const DAY_LENGTH_S = 1800; // full day/night cycle — slow, ambient pacing
 const SAVE_INTERVAL_MS = 30_000;
 const GATHER_COOLDOWN_S = 0.55;
 const GATHER_RANGE = 4.5;
+const REVIVE_HOLD_MS = REVIVE_HOLD_S * 1000;
+const DODGE_CHARGE_REGEN_MS = DODGE_CHARGE_REGEN_S * 1000;
 const MAX_INPUTS_PER_TICK = 5; // drain input bursts so ack stays current
 const MAX_INPUT_QUEUE = 60; // ~3s of buffer; don't drop legit inputs
 const ANIM_ACTION_MS = 450;
@@ -135,6 +148,7 @@ interface QueuedInput {
   sprint: boolean;
   block: boolean;
   yaw: number;
+  revivingId: string | null;
 }
 
 interface PlayerState {
@@ -159,6 +173,16 @@ interface PlayerState {
   lastAckSeq: number;
   lastMoveMag: number;
   casting: { spellId: string; endsAt: number } | null;
+  /** A revive this player is channeling on a dead target (holding E) --
+   *  distinct from `casting`, since it's driven by continuous held-input
+   *  rather than a single cast message. See tickPlayerMovement. */
+  reviving: { targetId: string; startedAt: number } | null;
+  dodgeCharges: number;
+  /** One regen-completion timestamp (server ms) per charge currently missing,
+   *  oldest first -- each consumed charge recharges on its own clock rather
+   *  than sharing one cooldown, so the queue can have up to DODGE_MAX_CHARGES
+   *  entries at once. selfState() surfaces only queue[0] to the client. */
+  dodgeChargeQueue: number[];
   spellCooldowns: Map<string, number>; // spellId -> ready-at ms
   meleeReadyAt: number;
   gatherReadyAt: number;
@@ -250,7 +274,10 @@ export class GameServer {
   private shrines = new Map<string, { x: number; y: number; z: number }>();
   private villages: { x: number; z: number }[] = [];
   private npcs: NpcSpec[] = []; // static base data; marker recomputed per-viewer
-  private parties = new Map<string, Set<string>>(); // partyId -> character ids
+  // Persists until the leader explicitly disbands it -- an ordinary member
+  // leaving just removes them; if the leader leaves, leadership passes to
+  // another member rather than ending the party (see leaveParty).
+  private parties = new Map<string, { leaderId: string; members: Set<string> }>();
   private partySeq = 0;
   /** Ashenpeak (region 2) stays dormant — not generated, not ticked — until a
    *  player first walks through the valley; then it's resident for the rest
@@ -399,6 +426,9 @@ export class GameServer {
       lastAckSeq: 0,
       lastMoveMag: 0,
       casting: null,
+      reviving: null,
+      dodgeCharges: DODGE_MAX_CHARGES,
+      dodgeChargeQueue: [],
       spellCooldowns: new Map(),
       meleeReadyAt: 0,
       gatherReadyAt: 0,
@@ -418,6 +448,18 @@ export class GameServer {
 
     this.players.set(player.id, player);
     this.peerToChar.set(peer.id, player.id);
+    this.broadcastRoster();
+
+    // Disconnecting doesn't remove you from your party (see leaveParty) --
+    // reconnecting just needs to re-link this fresh PlayerState back to
+    // whichever party still lists your character id as a member.
+    for (const [partyId, party] of this.parties) {
+      if (party.members.has(player.id)) {
+        player.partyId = partyId;
+        this.broadcastPartyState(partyId);
+        break;
+      }
+    }
 
     this.sendTo(peer, {
       t: "welcome",
@@ -451,8 +493,12 @@ export class GameServer {
   private async removePlayer(charId: string, save: boolean): Promise<void> {
     const player = this.players.get(charId);
     if (!player) return;
-    this.leaveParty(player, true);
+    // Delete before leaveParty so its party broadcast (which checks
+    // this.players to report each member online/offline) already sees this
+    // player as gone, instead of momentarily reporting them still online.
     this.players.delete(charId);
+    this.leaveParty(player, true);
+    this.broadcastRoster();
     for (const mob of this.mobs.values()) {
       if (mob.targetId === charId) mob.targetId = null;
     }
@@ -538,6 +584,9 @@ export class GameServer {
         break;
       case "quest":
         this.handleQuestAction(player, parsed.action, parsed.questId);
+        break;
+      case "dodge":
+        this.handleDodge(player, parsed.dirX, parsed.dirZ);
         break;
     }
   }
@@ -813,7 +862,7 @@ export class GameServer {
 
   private handleParty(
     player: PlayerState,
-    action: "invite" | "accept" | "decline" | "leave",
+    action: "invite" | "accept" | "decline" | "leave" | "disband",
     name?: string,
   ): void {
     switch (action) {
@@ -829,7 +878,7 @@ export class GameServer {
           this.sendEvent(player, { t: "event", kind: "error", message: `${target.name} is already in a party` });
           return;
         }
-        const partySize = player.partyId ? (this.parties.get(player.partyId)?.size ?? 0) : 1;
+        const partySize = player.partyId ? (this.parties.get(player.partyId)?.members.size ?? 0) : 1;
         if (partySize >= 5) {
           this.sendEvent(player, { t: "event", kind: "error", message: "Party is full" });
           return;
@@ -854,15 +903,15 @@ export class GameServer {
         let partyId = inviter.partyId;
         if (!partyId) {
           partyId = `party_${++this.partySeq}`;
-          this.parties.set(partyId, new Set([inviter.id]));
+          this.parties.set(partyId, { leaderId: inviter.id, members: new Set([inviter.id]) });
           inviter.partyId = partyId;
         }
-        const members = this.parties.get(partyId)!;
-        if (members.size >= 5) {
+        const party = this.parties.get(partyId)!;
+        if (party.members.size >= 5) {
           this.sendEvent(player, { t: "event", kind: "error", message: "Party is full" });
           return;
         }
-        members.add(player.id);
+        party.members.add(player.id);
         player.partyId = partyId;
         this.broadcastPartyState(partyId);
         this.sendToParty(partyId, {
@@ -887,46 +936,85 @@ export class GameServer {
         this.sendPartyState(player);
         break;
       }
+      case "disband": {
+        const partyId = player.partyId;
+        const party = partyId ? this.parties.get(partyId) : undefined;
+        if (!party) return;
+        if (party.leaderId !== player.id) {
+          this.sendEvent(player, { t: "event", kind: "error", message: "Only the party leader can disband the party" });
+          return;
+        }
+        for (const memberId of party.members) {
+          const member = this.players.get(memberId);
+          if (!member) continue;
+          member.partyId = null;
+          this.sendPartyState(member);
+        }
+        this.sendToParty(partyId!, { t: "chat", channel: "party", from: "system", text: `${player.name} disbanded the party.` });
+        this.parties.delete(partyId!);
+        break;
+      }
       case "leave":
         this.leaveParty(player, false);
         break;
     }
   }
 
+  /** A regular member leaving just removes them -- the party persists for
+   *  everyone else (see the class-level comment on `parties`). Only two
+   *  cases actually end the party entry: the leader leaving while genuinely
+   *  alone (nobody to hand leadership to), or an explicit "disband". If the
+   *  leader leaves with others still in the party, leadership passes to
+   *  whoever has been in the party longest (Set iteration order).
+   *
+   *  Disconnecting is *not* leaving -- membership (and leadership) survives
+   *  a closed tab/crash, and `join` re-links a reconnecting character back
+   *  into its party automatically. This only removes someone via the
+   *  explicit "leave"/"disband" actions; a disconnect just tells the rest
+   *  of the party this member dropped offline (partyMembersOf already
+   *  reports `online: false` for a member id not currently in `players`). */
   private leaveParty(player: PlayerState, disconnecting: boolean): void {
     const partyId = player.partyId;
     if (!partyId) return;
-    const members = this.parties.get(partyId);
+    if (disconnecting) {
+      this.broadcastPartyState(partyId);
+      return;
+    }
+    const party = this.parties.get(partyId);
     player.partyId = null;
-    if (!disconnecting) this.sendPartyState(player);
-    if (!members) return;
-    members.delete(player.id);
+    this.sendPartyState(player);
+    if (!party) return;
+    party.members.delete(player.id);
     this.sendToParty(partyId, {
       t: "chat",
       channel: "party",
       from: "system",
       text: `${player.name} left the party.`,
     });
-    if (members.size <= 1) {
-      // Disband: a party of one is no party at all.
-      for (const memberId of members) {
-        const member = this.players.get(memberId);
-        if (member) {
-          member.partyId = null;
-          this.sendPartyState(member);
-        }
-      }
+    if (party.members.size === 0) {
       this.parties.delete(partyId);
-    } else {
-      this.broadcastPartyState(partyId);
+      return;
     }
+    if (party.leaderId === player.id) {
+      const nextLeader = this.players.get([...party.members][0]!);
+      party.leaderId = [...party.members][0]!;
+      if (nextLeader) {
+        this.sendToParty(partyId, {
+          t: "chat",
+          channel: "party",
+          from: "system",
+          text: `${nextLeader.name} is now the party leader.`,
+        });
+      }
+    }
+    this.broadcastPartyState(partyId);
   }
 
   private partyMembersOf(player: PlayerState) {
     if (!player.partyId) return null;
-    const ids = this.parties.get(player.partyId);
-    if (!ids) return null;
-    return [...ids].map((id) => {
+    const party = this.parties.get(player.partyId);
+    if (!party) return null;
+    return [...party.members].map((id) => {
       const member = this.players.get(id);
       return member
         ? {
@@ -936,8 +1024,9 @@ export class GameServer {
             hp: member.hp,
             maxHp: this.maxHp(member),
             online: true,
+            leader: id === party.leaderId,
           }
-        : { id, name: "…", level: 0, hp: 0, maxHp: 1, online: false };
+        : { id, name: "…", level: 0, hp: 0, maxHp: 1, online: false, leader: id === party.leaderId };
     });
   }
 
@@ -946,19 +1035,34 @@ export class GameServer {
   }
 
   private broadcastPartyState(partyId: string): void {
-    const ids = this.parties.get(partyId);
-    if (!ids) return;
+    const party = this.parties.get(partyId);
+    if (!party) return;
+    const ids = party.members;
     for (const id of ids) {
       const member = this.players.get(id);
       if (member) this.sendPartyState(member);
     }
   }
 
+  /** Realm-wide online roster for the Party tab's invite list -- every
+   *  currently-connected player, not just party members. Broadcast on
+   *  join/leave (instant) and piggybacked on the existing 0.5Hz party-frame
+   *  tick (levels can change while someone's already online). */
+  private broadcastRoster(): void {
+    const players: RosterEntry[] = [...this.players.values()].map((p) => ({
+      id: p.id,
+      name: p.name,
+      level: p.level,
+      classId: p.classId,
+    }));
+    this.broadcast({ t: "roster", players });
+  }
+
   private sendToParty(partyId: string, msg: ServerMsg): void {
-    const ids = this.parties.get(partyId);
-    if (!ids) return;
+    const party = this.parties.get(partyId);
+    if (!party) return;
     const data = JSON.stringify(msg);
-    for (const id of ids) {
+    for (const id of party.members) {
       const member = this.players.get(id);
       if (member) {
         try {
@@ -1073,6 +1177,49 @@ export class GameServer {
     if (held && itemDef(held.itemId).maxDurability) damageDurability(player.inventory, held, 1);
     if (bestFoe) this.damagePlayer(bestFoe, damage, player.id);
     else if (bestMob) this.damageMob(bestMob, damage, player);
+  }
+
+  /** dirX/dirZ is a world-space direction from the client (see DodgeMsg) --
+   *  not necessarily unit length, and near-zero (e.g. no input held) falls
+   *  back to the player's current facing rather than producing no movement. */
+  private handleDodge(player: PlayerState, dirX: number, dirZ: number): void {
+    if (player.dead || player.dodgeCharges <= 0) return;
+    const now = Date.now();
+    const mag = Math.hypot(dirX, dirZ);
+    const nx = mag < 0.01 ? Math.sin(player.yaw) : dirX / mag;
+    const nz = mag < 0.01 ? Math.cos(player.yaw) : dirZ / mag;
+
+    player.dodgeCharges -= 1;
+    player.dodgeChargeQueue.push(now + DODGE_CHARGE_REGEN_MS);
+
+    const tx = clamp(player.move.x + nx * DODGE_DISTANCE, WORLD_MIN_X, WORLD_MAX_X);
+    const tz = clamp(player.move.z + nz * DODGE_DISTANCE, WORLD_MIN_Z, WORLD_MAX_Z);
+    player.move.x = tx;
+    player.move.z = tz;
+    player.move.y = Math.max(player.move.y, terrainHeight(tx, tz));
+    player.dirty = true;
+    this.sendSelf(player);
+    
+    this.broadcastNear(tx, tz, {
+      t: "event",
+      kind: "dodge",
+      sourceId: player.id,
+      dirX: nx,
+      dirZ: nz,
+      x: tx,
+      y: player.move.y,
+      z: tz,
+    });
+  }
+
+  /** Ticks each missing charge's individual regen timer, refilling one at a
+   *  time as they complete (see PlayerState.dodgeChargeQueue). */
+  private tickDodgeCharges(player: PlayerState, now: number): void {
+    while (player.dodgeChargeQueue.length > 0 && now >= player.dodgeChargeQueue[0]!) {
+      player.dodgeChargeQueue.shift();
+      player.dodgeCharges = Math.min(DODGE_MAX_CHARGES, player.dodgeCharges + 1);
+      player.dirty = true;
+    }
   }
 
   private handleCastStart(player: PlayerState, spellId: string): void {
@@ -1496,6 +1643,7 @@ export class GameServer {
     player.hp -= amount;
     player.dirty = true;
     this.cancelCast(player);
+    this.cancelRevive(player);
     this.broadcastNear(player.move.x, player.move.z, {
       t: "event",
       kind: "damage",
@@ -1509,6 +1657,7 @@ export class GameServer {
     if (player.hp <= 0) {
       player.hp = 0;
       player.dead = true;
+      player.reviving = null;
       this.sendEvent(player, { t: "event", kind: "death" });
       const killer = this.players.get(sourceId);
       this.broadcastChat(
@@ -1529,7 +1678,7 @@ export class GameServer {
     const now = Date.now();
 
     for (const player of this.players.values()) {
-      this.tickPlayerMovement(player);
+      this.tickPlayerMovement(player, now);
       if (
         !this.regionTwoActive &&
         dist2D(player.move.x, player.move.z, REGION_TWO_GATE_X, REGION_TWO_GATE_Z) < REGION_TWO_TRIGGER_RADIUS
@@ -1538,6 +1687,7 @@ export class GameServer {
       }
       this.tickVitals(player, now);
       this.tickPlayerAuras(player, now);
+      this.tickDodgeCharges(player, now);
       // Casting no longer cancels on movement -- players can walk/kite while
       // channeling, matching modern MMO combat instead of forcing a stop.
       // Taking damage still interrupts a cast (see damagePlayer).
@@ -1560,10 +1710,11 @@ export class GameServer {
     // Party frames refresh at 0.5 Hz — enough for out-of-range member HP.
     if (this.tickCount % 40 === 0) {
       for (const partyId of this.parties.keys()) this.broadcastPartyState(partyId);
+      this.broadcastRoster();
     }
   }
 
-  private tickPlayerMovement(player: PlayerState): void {
+  private tickPlayerMovement(player: PlayerState, now: number): void {
     if (player.dead) {
       player.inputQueue.length = 0;
       player.lastMoveMag = 0;
@@ -1599,7 +1750,58 @@ export class GameServer {
       player.lastAckSeq = input.seq;
       player.lastMoveMag = Math.hypot(moveX, moveZ);
     }
+    // Only the final queued input's intent matters here (same as yaw/
+    // blocking above) -- re-evaluated every tick against the *current*
+    // position, so releasing E, moving out of range, or the target no
+    // longer being dead all naturally end the channel with no separate
+    // cancel message needed.
+    this.updateRevive(player, inputs[inputs.length - 1]!.revivingId, now);
     player.dirty = true;
+  }
+
+  private updateRevive(player: PlayerState, targetId: string | null, now: number): void {
+    if (!targetId) {
+      this.cancelRevive(player);
+      return;
+    }
+    const target = this.players.get(targetId);
+    if (!target || !target.dead || dist2D(player.move.x, player.move.z, target.move.x, target.move.z) > REVIVE_RANGE) {
+      this.cancelRevive(player);
+      return;
+    }
+    if (!player.reviving || player.reviving.targetId !== targetId) {
+      player.reviving = { targetId, startedAt: now };
+      this.sendSelf(player);
+      return;
+    }
+    if (now - player.reviving.startedAt >= REVIVE_HOLD_MS) {
+      this.completeRevive(player, target);
+    }
+  }
+
+  private completeRevive(reviver: PlayerState, target: PlayerState): void {
+    reviver.reviving = null;
+    target.dead = false;
+    target.hp = this.maxHp(target) * REVIVE_HP_FRACTION;
+    target.dirty = true;
+    this.sendSelf(target);
+    this.sendSelf(reviver);
+    this.broadcastNear(target.move.x, target.move.z, {
+      t: "event",
+      kind: "revive",
+      sourceId: reviver.id,
+      targetId: target.id,
+      x: target.move.x,
+      y: target.move.y + 1.5,
+      z: target.move.z,
+    });
+    this.broadcastChat("system", `${reviver.name} revived ${target.name}.`);
+  }
+
+  private cancelRevive(player: PlayerState): void {
+    if (!player.reviving) return;
+    player.reviving = null;
+    this.sendSelf(player);
   }
 
   private tickVitals(player: PlayerState, now: number): void {
@@ -2184,12 +2386,16 @@ export class GameServer {
       ackSeq: player.lastAckSeq,
       castingSpell: player.casting?.spellId ?? null,
       castEndsAt: player.casting?.endsAt ?? null,
+      revivingTargetId: player.reviving?.targetId ?? null,
+      revivingEndsAt: player.reviving ? player.reviving.startedAt + REVIVE_HOLD_MS : null,
       mount: player.mount,
       sitting: player.sitting !== null,
       auras: player.activeAuras.map((a) => ({ auraId: a.auraId, expiresAt: a.expiresAt })),
       spellCooldowns: [...player.spellCooldowns]
         .filter(([, readyAt]) => readyAt > Date.now())
         .map(([spellId, readyAt]) => ({ spellId, readyAt })),
+      dodgeCharges: player.dodgeCharges,
+      dodgeNextChargeAt: player.dodgeChargeQueue[0] ?? null,
     };
   }
 

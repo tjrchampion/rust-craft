@@ -2,7 +2,7 @@
   import { game } from "./gameState.svelte";
   import { app } from "./appState.svelte";
   import { promptLabel } from "./padGlyphs";
-  import { spellDef } from "@rustcraft/shared";
+  import { spellDef, REVIVE_HOLD_S } from "@rustcraft/shared";
   import Vitals from "./Vitals.svelte";
   import AuraBar from "./AuraBar.svelte";
   import Hotbar from "./Hotbar.svelte";
@@ -33,6 +33,21 @@
       // Date.now(), or any client/server clock skew throws this off.
       const remaining = endsAt - game.serverTimeOffset - Date.now();
       castProgress = totalMs > 0 ? Math.min(1, Math.max(0, 1 - remaining / totalMs)) : 1;
+    }, 40);
+    return () => clearInterval(interval);
+  });
+
+  let reviveProgress = $state(0);
+  $effect(() => {
+    if (!game.self?.revivingTargetId || !game.self.revivingEndsAt) {
+      reviveProgress = 0;
+      return;
+    }
+    const endsAt = game.self.revivingEndsAt;
+    const totalMs = REVIVE_HOLD_S * 1000;
+    const interval = setInterval(() => {
+      const remaining = endsAt - game.serverTimeOffset - Date.now();
+      reviveProgress = Math.min(1, Math.max(0, 1 - remaining / totalMs));
     }, 40);
     return () => clearInterval(interval);
   });
@@ -83,6 +98,13 @@
     <div class="castbar">
       <div class="castbar-fill" style="width: {castProgress * 100}%"></div>
       <span>{game.self.castingSpell}</span>
+    </div>
+  {/if}
+
+  {#if game.self?.revivingTargetId}
+    <div class="castbar revivebar">
+      <div class="castbar-fill" style="width: {reviveProgress * 100}%"></div>
+      <span>Reviving {game.nameOf(game.self.revivingTargetId)}…</span>
     </div>
   {/if}
 
@@ -267,5 +289,12 @@
     font-size: 12px;
     line-height: 18px;
     text-shadow: 0 1px 2px #000;
+  }
+  .revivebar {
+    bottom: 27%;
+    border-color: rgba(120, 220, 140, 0.6);
+  }
+  .revivebar .castbar-fill {
+    background: linear-gradient(90deg, #2e8a3a, #5ec46a);
   }
 </style>

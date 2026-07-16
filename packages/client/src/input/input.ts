@@ -17,7 +17,15 @@ export interface FrameActions {
   block: boolean; // V (held): shield block -- roots movement, halves damage
   /** Edge-triggered (true on the frame they fire). */
   interactPressed: boolean;
+  /** Level-triggered (true every frame the button/key is down) -- for the
+   *  hold-to-revive channel, which needs a duration, not just an edge. */
+  interactHeld: boolean;
   attackPressed: boolean;
+  /** Double-tap W/A/S/D on keyboard, Y/Triangle (btn 3) on gamepad -- a
+   *  quick directional burst move. Not bound to gamepad B: B is already
+   *  essential (clear target, plus the LB/RB hotbar chords), so Y is used
+   *  instead even though the original ask was for B. */
+  dodgePressed: boolean;
   inventoryPressed: boolean;
   spellbookPressed: boolean; // K: toggle Spell Book tab
   craftingPressed: boolean; // J: toggle Crafting tab
@@ -49,6 +57,9 @@ export interface FrameActions {
 }
 
 const GAMEPAD_DEADZONE = 0.18;
+/** Window between two taps of the same movement key to count as a
+ *  double-tap-to-dodge, rather than two unrelated presses. */
+const DOUBLE_TAP_MS = 280;
 const STICK_LOOK_SPEED = 2.6; // rad/s at full deflection
 const MOUSE_SENSITIVITY = 0.0024;
 
@@ -85,6 +96,8 @@ export class InputManager {
   private lbChordUsed = false;
   private rbHeldSince: number | null = null;
   private rbChordUsed = false;
+  /** Timestamp of the last tap of each WASD key, for double-tap-to-dodge. */
+  private lastTapTime: Partial<Record<string, number>> = {};
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -142,6 +155,17 @@ export class InputManager {
     return t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement;
   }
 
+  /** True the frame a movement key is tapped twice within DOUBLE_TAP_MS --
+   *  drives keyboard dodge instead of a dedicated key. Direction itself
+   *  still comes from whichever WASD keys are held (see Game.tryDodge), so
+   *  this only needs to detect the double-tap edge, not track which key. */
+  private checkDoubleTap(code: string): boolean {
+    const now = performance.now();
+    const last = this.lastTapTime[code] ?? 0;
+    this.lastTapTime[code] = now;
+    return now - last < DOUBLE_TAP_MS;
+  }
+
   /** Debounced CapsLock edge (handles the macOS on/off-only quirk). */
   private queueCaps(): void {
     const now = performance.now();
@@ -175,7 +199,15 @@ export class InputManager {
 
     const pressed = (code: string) => this.pressedQueue.has(code);
     let interactPressed = pressed("KeyE");
-    let attackPressed = this.mouseAttackQueued || pressed("KeyF");
+    let interactHeld = this.keys.has("KeyE");
+    let attackPressed = this.mouseAttackQueued;
+    // Double-tap W/A/S/D to dodge (rather than a dedicated key) -- direction
+    // comes from whichever of those keys is actually held at the moment of
+    // the second tap, same as any other movement input.
+    let dodgePressed = false;
+    for (const code of ["KeyW", "KeyA", "KeyS", "KeyD"]) {
+      if (pressed(code) && this.checkDoubleTap(code)) dodgePressed = true;
+    }
     let inventoryPressed = pressed("Tab") || pressed("KeyI");
     const spellbookPressed = pressed("KeyK");
     const craftingPressed = pressed("KeyJ");
@@ -322,6 +354,8 @@ export class InputManager {
         jump ||= padPressed(0); // A / Cross
         clearTargetPressed ||= padPressed(1); // B: clear target -> close panels -> open menu
         interactPressed ||= padPressed(2); // X / Square
+        interactHeld ||= padHeld(2);
+        dodgePressed ||= padPressed(3); // Y / Triangle
       }
       if (!lbHeld) {
         mountPressed ||= padPressed(12); // dpad up: toggle mount
@@ -365,7 +399,9 @@ export class InputManager {
       pvpTogglePressed = false;
       mountPressed = false;
       attackPressed = false;
+      dodgePressed = false;
       interactPressed = false;
+      interactHeld = false;
       targetPressed = false;
       hotbarDelta = 0;
       hotbarSlot = null;
@@ -380,7 +416,9 @@ export class InputManager {
       sprint,
       block,
       interactPressed,
+      interactHeld,
       attackPressed,
+      dodgePressed,
       inventoryPressed,
       spellbookPressed,
       craftingPressed,

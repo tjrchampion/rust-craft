@@ -21,6 +21,12 @@ import {
   REGION_TWO_GATE_X,
   REGION_TWO_GATE_Z,
   REGION_TWO_TRIGGER_RADIUS,
+  REVIVE_RANGE,
+  DODGE_DISTANCE,
+  WORLD_MIN_X, 
+  WORLD_MAX_X, 
+  WORLD_MIN_Z, 
+  WORLD_MAX_Z,
   type MoveState,
   type ServerMsg,
   type SelfState,
@@ -37,7 +43,7 @@ import { NodeManager } from "../render/nodes";
 import { GrassField } from "../render/grass";
 import { EntityManager, playerModelUrl } from "../render/entities";
 import { CLASS_WEAPON_NODES } from "../render/classModels";
-import { AnimatedModel, PLAYER_ANIMS, logicalFromState } from "../render/gltf";
+import { AnimatedModel, PLAYER_ANIMS, logicalFromState, dodgeLogicalFor } from "../render/gltf";
 import { buildWorldStatic, buildVillage, animateSettlements, type SettlementHandles } from "../render/settlements";
 import { NpcManager } from "../render/npcs";
 import { sound } from "./sound";
@@ -47,7 +53,7 @@ const CAMERA_DISTANCE = 6.5;
 const CAMERA_HEIGHT = 2.2;
 const GATHER_RANGE = 4.0;
 /** Left-to-right tab order for gamepad LB/RB cycling in the character screen. */
-const TAB_ORDER: CharacterTab[] = ["inventory", "spellbook", "craft", "system"];
+const TAB_ORDER: CharacterTab[] = ["inventory", "spellbook", "craft", "party", "system"];
 
 interface PendingInput {
   seq: number;
@@ -57,6 +63,7 @@ interface PendingInput {
   sprint: boolean;
   block: boolean;
   mount: "horse" | "raft" | null;
+  revivingId: string | null;
 }
 
 export class Game {
@@ -112,6 +119,14 @@ export class Game {
   private cameraPitch = -0.35;
   private inputSeq = 0;
   private pending: PendingInput[] = [];
+  /** A locally-predicted dodge displacement not yet reflected in the
+   *  server's own position -- dodge isn't part of the continuous `pending`
+   *  input stream (see PendingInput), so reconcile() can't replay it the
+   *  way it replays ordinary movement. Without this, a "self" packet that
+   *  arrives before the server has processed the dodge message looks like
+   *  several meters of unexplained drift and gets pulled straight back.
+   *  Cleared once enough time has passed for the round trip to complete. */
+  private pendingDodge: { x: number; z: number; until: number; waitSeq: number } | null = null;
   private accumulator = 0;
   private lastFrame = performance.now();
   private jumpQueued = false;
@@ -275,12 +290,20 @@ export class Game {
         break;
       case "party":
         ui.party = msg.members;
-        if (msg.inviteFrom) ui.pendingInvite = msg.inviteFrom;
-        else if (!msg.members) ui.pendingInvite = null;
+        // inviteFrom is only ever set on the one message meant to show the
+        // prompt -- every other party update (accept confirmation, leave,
+        // disband, the periodic refresh) omits it, so clearing unless it's
+        // present is always correct (was previously gated on `!msg.members`
+        // too, which never fired on accept since the join confirmation
+        // *has* members, leaving the stale invite banner stuck on screen).
+        ui.pendingInvite = msg.inviteFrom ?? null;
         break;
       case "pvp":
         ui.pvpEnabled = msg.enabled;
         ui.toast(msg.enabled ? "PvP enabled — you can be attacked!" : "PvP disabled");
+        break;
+      case "roster":
+        ui.roster = msg.players;
         break;
       case "questOffer":
         ui.questOffer = { npcId: msg.npcId, npcName: msg.npcName, offers: msg.offers };
@@ -368,6 +391,13 @@ export class Game {
         ui.addCombat("You died");
         sound.play("death");
         break;
+      case "revive":
+        if (msg.targetId === this.selfId) {
+          ui.toast(`${ui.nameOf(msg.sourceId)} revived you!`);
+          sound.play("levelup");
+        }
+        ui.addCombat(`${ui.nameOf(msg.sourceId)} revived ${ui.nameOf(msg.targetId)}`);
+        break;
       case "spellHit":
         sound.play("spellHit");
         // Melee/self instant spells carry sourceId (see GameServer's
@@ -381,6 +411,15 @@ export class Game {
         break;
       case "castStart":
         if (msg.sourceId === this.selfId) sound.play("castStart");
+        break;
+      case "dodge":
+        // Our own dodge is already predicted (see tryDodge) -- this broadcast
+        // only needs to drive *other* players' animation + burst, same as
+        // hit reactions are triggered off other players' damage events.
+        if (msg.sourceId && msg.sourceId !== this.selfId && msg.x !== undefined && msg.dirX !== undefined && msg.dirZ !== undefined) {
+          this.entities.playDodge(msg.sourceId, msg.dirX, msg.dirZ);
+          this.entities.spawnDodgeBurst(msg.x, msg.y ?? 0, msg.z ?? 0, msg.dirX, msg.dirZ);
+        }
         break;
       case "error":
         if (msg.message) ui.toast(msg.message);
@@ -419,16 +458,36 @@ export class Game {
   }
 
   /** Server ack + authoritative state: rewind & replay unacked inputs. */
+/** Server ack + authoritative state: rewind & replay unacked inputs. */
   private reconcile(self: SelfState): void {
     this.pending = this.pending.filter((p) => p.seq > self.ackSeq);
     const serverState: MoveState = { x: self.x, y: self.y, z: self.z, vy: self.vy, grounded: self.grounded };
+    
+    // A dodge round-trip hasn't necessarily finished yet -- assume the
+    // server's position is about to include it too, so the gap it opens up
+    // isn't mistaken for drift and reconciled straight back out.
+    if (this.pendingDodge) {
+      // FIX: If the server has acknowledged an input sequence sent AFTER the dodge, 
+      // we mathematically know the server's state natively includes the dodge. Clear it!
+      if (self.ackSeq >= this.pendingDodge.waitSeq || performance.now() >= this.pendingDodge.until) {
+        this.pendingDodge = null;
+      } else {
+        // Server hasn't processed the dodge yet, keep adding the visual offset
+        serverState.x += this.pendingDodge.x;
+        serverState.z += this.pendingDodge.z;
+      }
+    }
+
     const drift = dist2D(serverState.x, serverState.z, this.move.x, this.move.z);
+    
     // Replay pending inputs from the server state; adopt result if we drifted.
     let replayed = serverState;
     for (const p of this.pending) {
       replayed = stepMovement(replayed, p, TICK_DT);
     }
+    
     const replayDrift = dist2D(replayed.x, replayed.z, this.move.x, this.move.z) + Math.abs(replayed.y - this.move.y);
+    
     if (replayDrift > 0.02 || drift > 3) {
       // Adopt the authoritative position, but fold the correction into a
       // decaying render error so the camera eases across it instead of
@@ -436,6 +495,7 @@ export class Game {
       const ex = this.move.x - replayed.x;
       const ey = this.move.y - replayed.y;
       const ez = this.move.z - replayed.z;
+      
       if (Math.hypot(ex, ez) < 2.5) {
         this.posError.x += ex;
         this.posError.y += ey;
@@ -557,6 +617,7 @@ export class Game {
         this.connection.send({ t: "attack" });
         this.avatar.play("attack");
       }
+      if (actions.dodgePressed) this.tryDodge(actions);
       if (actions.interactPressed) {
         if (this.interactNodeId) {
           this.avatar.play("gather");
@@ -719,7 +780,7 @@ export class Game {
     // Send an immediate facing input so the server updates yaw before it
     // resolves the attack/cast message that follows this frame.
     const seq = ++this.inputSeq;
-    const input = { moveX: 0, moveZ: 0, jump: false, sprint: false, block: false };
+    const input = { moveX: 0, moveZ: 0, jump: false, sprint: false, block: false, revivingId: null };
     this.pending.push({ seq, ...input, mount: ui.self?.mount ?? null });
     this.connection.send({ t: "input", seq, ...input, yaw });
   }
@@ -743,6 +804,7 @@ export class Game {
       jump: this.jumpQueued,
       sprint: actions.sprint,
       block: actions.block,
+      revivingId: actions.interactHeld ? this.reviveTargetId : null,
     };
     this.jumpQueued = false;
     const mount = ui.self?.mount ?? null;
@@ -755,6 +817,96 @@ export class Game {
     // omits mount (server is authoritative on mount state).
     this.move = stepMovement(this.move, { ...input, mount }, TICK_DT);
     this.connection.send({ t: "input", seq, ...input, yaw: this.cameraYaw });
+  }
+
+  /** Predicted locally (position + animation + burst) exactly like a normal
+   *  attack swing, then confirmed server-side (see GameServer.handleDodge) --
+   *  the server is authoritative on charges/distance, so a reconcile will
+   *  correct this if the two ever disagree. Direction comes from whatever
+   *  movement keys are held (same camera-relative transform as stepLocal),
+   *  defaulting to straight forward when no input is held. */
+/** Predicted locally (position + animation + burst) exactly like a normal
+   * attack swing, then confirmed server-side (see GameServer.handleDodge) --
+   * the server is authoritative on charges/distance, so a reconcile will
+   * correct this if the two ever disagree. Direction comes from whatever
+   * movement keys are held (same camera-relative transform as stepLocal),
+   * defaulting to straight forward when no input is held. */
+/** Predicted locally (position + animation + burst) exactly like a normal
+   * attack swing, then confirmed server-side (see GameServer.handleDodge) --
+   * the server is authoritative on charges/distance, so a reconcile will
+   * correct this if the two ever disagree. Direction comes from whatever
+   * movement keys are held (same camera-relative transform as stepLocal),
+   * defaulting to straight forward when no input is held. */
+  private tryDodge(actions: ReturnType<InputManager["sample"]>): void {
+    if (!ui.self || ui.self.dodgeCharges <= 0) return;
+
+    // FIX 1: Deduct the charge locally immediately to prevent multi-dash 
+    // prediction spam before the server responds.
+    ui.self.dodgeCharges--;
+
+    const hasInput = Math.abs(actions.moveX) > 0.05 || Math.abs(actions.moveY) > 0.05;
+    const moveX = hasInput ? actions.moveX : 0;
+    const moveY = hasInput ? actions.moveY : -1; // -1 = W = forward
+    const sin = Math.sin(this.cameraYaw);
+    const cos = Math.cos(this.cameraYaw);
+    const dirX = -moveX * cos - moveY * sin;
+    const dirZ = moveX * sin - moveY * cos;
+    const mag = Math.hypot(dirX, dirZ) || 1;
+    const nx = dirX / mag;
+    const nz = dirZ / mag;
+
+    const oldX = this.move.x;
+    const oldY = this.move.y; // Store old Y for smoothing
+    const oldZ = this.move.z;
+    
+    // Calculate raw target
+    const rawTx = oldX + nx * DODGE_DISTANCE;
+    const rawTz = oldZ + nz * DODGE_DISTANCE;
+
+    // FIX 2: Clamp target locally to match server world bounds so we don't 
+    // predict dodging out of bounds and snap back.
+    const tx = clamp(rawTx, WORLD_MIN_X, WORLD_MAX_X);
+    const tz = clamp(rawTz, WORLD_MIN_Z, WORLD_MAX_Z);
+
+    this.move.x = tx;
+    this.move.z = tz;
+    this.move.y = Math.max(oldY, terrainHeight(tx, tz));
+
+    // `this.move` (used for hit-detection/server-sync) jumps straight to the
+    // target, but ease the *render* across the burst instead of a hard cut --
+    // same decaying posError already used to smooth reconcile corrections.
+    this.posError.x += oldX - tx;
+    this.posError.y += oldY - this.move.y; // FIX 3: Smooth out terrain height changes
+    this.posError.z += oldZ - tz;
+
+    // FIX 5: Grab the sequence number of the most recent input we've sent
+    // so we know exactly when the server has processed this dodge.
+    const currentSeq = this.pending[this.pending.length - 1]?.seq ?? 0;
+    const now = performance.now();
+
+    // See pendingDodge's doc comment: reconcile() needs to know a dodge is
+    // in flight for a little while, or it'll treat this jump as drift and
+    // pull the player straight back before the server's own update arrives.
+    if (this.pendingDodge && now < this.pendingDodge.until) {
+      this.pendingDodge.x += tx - oldX;
+      this.pendingDodge.z += tz - oldZ;
+      this.pendingDodge.until = now + 500;
+      this.pendingDodge.waitSeq = currentSeq + 1; // Update sequence tracker
+    } else {
+      this.pendingDodge = { 
+        x: tx - oldX, 
+        z: tz - oldZ, 
+        until: now + 500,
+        waitSeq: currentSeq + 1 // Add sequence tracker
+      };
+    }
+
+    this.avatar.play(dodgeLogicalFor(this.cameraYaw, nx, nz));
+    this.entities.spawnDodgeBurst(tx, this.move.y, tz, nx, nz);
+    
+    // FIX 4: Send our predicted tx and tz to the server. The server will now
+    // validate this distance to eliminate latency-based rubberbanding.
+    this.connection.send({ t: "dodge", dirX: nx, dirZ: nz, tx: tx, tz: tz });
   }
 
   private animateSelf(dt: number, actions: ReturnType<InputManager["sample"]>): void {
@@ -819,6 +971,15 @@ export class Game {
       this.nearCampfire = false;
       return;
     }
+    // A downed ally takes priority over routine gathering/interaction.
+    const dead = this.entities.nearestDeadPlayer(this.move.x, this.move.z, REVIVE_RANGE);
+    if (dead) {
+      ui.interactLabel = `Hold to Revive ${dead.name}`;
+      this.reviveTargetId = dead.id;
+      this.interactNodeId = null;
+      return;
+    }
+    this.reviveTargetId = null;
     const node =
       this.nodes.findTarget(this.move.x, this.move.y, this.move.z, this.cameraYaw, GATHER_RANGE) ??
       this.regionTwoNodes?.findTarget(this.move.x, this.move.y, this.move.z, this.cameraYaw, GATHER_RANGE) ??
@@ -858,6 +1019,7 @@ export class Game {
   }
 
   private interactNodeId: string | null = null;
+  private reviveTargetId: string | null = null;
   private nearCampfire = false;
 
   private nearWater(): boolean {
@@ -910,7 +1072,7 @@ export class Game {
     this.connection.send({ t: "chat", channel, text });
   }
 
-  sendParty(action: "invite" | "accept" | "decline" | "leave", name?: string): void {
+  sendParty(action: "invite" | "accept" | "decline" | "leave" | "disband", name?: string): void {
     this.connection.send({ t: "party", action, name });
   }
 

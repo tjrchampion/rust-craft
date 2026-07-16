@@ -28,6 +28,7 @@
     { id: "inventory", label: "Inventory" },
     { id: "spellbook", label: "Spell Book" },
     { id: "craft", label: "Crafting" },
+    { id: "party", label: "Party" },
     { id: "system", label: "System" },
   ];
   const EQUIP_LABELS: Record<string, string> = { weapon: "Weapon", head: "Head", chest: "Chest" };
@@ -64,6 +65,9 @@
   );
   const learnedSpells = $derived(game.learnedSpells);
   const classInfo = $derived(game.classId ? classDef(game.classId) : null);
+  const partyMemberIds = $derived(new Set((game.party ?? []).map((m) => m.id)));
+  const invitablePlayers = $derived(game.roster.filter((p) => p.id !== game.selfId && !partyMemberIds.has(p.id)));
+  const amLeader = $derived((game.party ?? []).find((m) => m.id === game.selfId)?.leader ?? false);
 
   function count(itemId: string): number {
     return game.inventory.reduce((n, it) => (it.itemId === itemId ? n + it.qty : n), 0);
@@ -206,9 +210,10 @@
       spellCursor = Math.min(learnedSpells.length - 1, Math.max(0, spellCursor + dy));
     } else if (game.activeTab === "craft") {
       craftCursor = Math.min(recipes.length - 1, Math.max(0, craftCursor + dy));
-    } else {
+    } else if (game.activeTab === "system") {
       systemCursor = Math.min(systemActions.length - 1, Math.max(0, systemCursor + dy));
     }
+    // Party tab has no gamepad cursor yet -- mouse/click only for now.
   }
 
   function confirm(): void {
@@ -217,7 +222,7 @@
       const spellId = learnedSpells[spellCursor];
       if (spellId) pickSpell(spellId);
     } else if (game.activeTab === "craft") activateCraft(craftCursor);
-    else systemActions[systemCursor]?.();
+    else if (game.activeTab === "system") systemActions[systemCursor]?.();
   }
 
   onMount(() => {
@@ -403,6 +408,46 @@
                 </span>
               </button>
             {/each}
+          </div>
+        </div>
+      {:else if game.activeTab === "party"}
+        <div class="col party-tab-col">
+          <h3>Your Party</h3>
+          {#if game.party && game.party.length > 0}
+            <div class="party-list">
+              {#each game.party as member (member.id)}
+                <div class="party-member" class:offline={!member.online}>
+                  <span class="pm-name">
+                    {#if member.leader}<span class="crown" title="Party leader">👑</span>{/if}
+                    {member.name} <span class="lvl">lv{member.level}</span>
+                  </span>
+                  <div class="pm-bar">
+                    <div class="pm-fill" style="width: {Math.min(100, (member.hp / member.maxHp) * 100)}%"></div>
+                  </div>
+                </div>
+              {/each}
+            </div>
+            {#if amLeader}
+              <button class="rc-btn ghost leave-btn" onclick={() => getGame()?.sendParty("disband")}>Disband Party</button>
+            {:else}
+              <button class="rc-btn ghost leave-btn" onclick={() => getGame()?.sendParty("leave")}>Leave Party</button>
+            {/if}
+          {:else}
+            <div class="empty-note">You're not in a party yet.</div>
+          {/if}
+        </div>
+        <div class="col roster-col">
+          <h3>Online Players</h3>
+          <div class="roster-list">
+            {#each invitablePlayers as p (p.id)}
+              <div class="roster-row">
+                <span class="roster-name">{p.name} <span class="lvl">lv{p.level}</span></span>
+                <button class="rc-btn invite-btn" onclick={() => getGame()?.sendParty("invite", p.name)}>Invite</button>
+              </div>
+            {/each}
+            {#if invitablePlayers.length === 0}
+              <div class="empty-note">No other players online right now.</div>
+            {/if}
           </div>
         </div>
       {:else}
@@ -773,6 +818,88 @@
   }
   .ingredients .missing {
     color: #ff8a80;
+  }
+  /* ---- Party tab ---- */
+  .party-tab-col {
+    width: 260px;
+  }
+  .party-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .party-member {
+    background: rgba(255, 255, 255, 0.04);
+    border: 2px solid rgba(255, 255, 255, 0.1);
+    border-radius: 6px;
+    padding: 8px 12px;
+  }
+  .party-member.offline {
+    opacity: 0.45;
+  }
+  .pm-name {
+    display: block;
+    font-size: 13px;
+    color: #dce6f2;
+    margin-bottom: 5px;
+  }
+  .crown {
+    font-size: 11px;
+    margin-right: 2px;
+  }
+  .pm-bar {
+    height: 8px;
+    background: rgba(0, 0, 0, 0.6);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+  .pm-fill {
+    height: 100%;
+    background: linear-gradient(180deg, #5ec46a, #2e8a3a);
+    transition: width 0.3s ease-out;
+  }
+  .leave-btn {
+    margin-top: 4px;
+    padding: 8px 12px;
+    font-size: 12px;
+    background: transparent;
+    border: 1px dashed var(--rc-gold-dim);
+  }
+  .roster-col {
+    flex: 1;
+  }
+  .roster-list {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    overflow-y: auto;
+  }
+  .roster-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    background: rgba(255, 255, 255, 0.04);
+    border: 2px solid rgba(255, 255, 255, 0.1);
+    border-radius: 6px;
+    padding: 8px 12px;
+    color: #dce6f2;
+  }
+  .roster-name {
+    font-size: 13px;
+  }
+  .invite-btn {
+    padding: 5px 12px;
+    font-size: 11px;
+  }
+  .lvl {
+    color: var(--rc-ink-dim);
+    font-size: 10px;
+  }
+  .empty-note {
+    color: #6b7686;
+    font-size: 12.5px;
+    font-style: italic;
   }
   /* ---- System tab ---- */
   .system-col {
