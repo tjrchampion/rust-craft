@@ -160,45 +160,8 @@ export function schoolProfile(school: School): SchoolProfile {
   return SCHOOL_VFX[school] ?? DEFAULT_PROFILE;
 }
 
-/** Rim-lit glow shader -- particles brighten toward their silhouette edge
- *  instead of reading as flat-shaded balls, and fade via a uOpacity uniform
- *  the caller drives directly (additive blending, so the fade also softens
- *  overlap instead of showing hard cutout edges). */
-function buildGlowMaterial(color: number): THREE.ShaderMaterial {
-  return new THREE.ShaderMaterial({
-    uniforms: {
-      uColor: { value: new THREE.Color(color) },
-      uOpacity: { value: 1 },
-    },
-    vertexShader: `
-      varying vec3 vNormal;
-      varying vec3 vViewPos;
-      void main() {
-        vNormal = normalize(normalMatrix * normal);
-        vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
-        vViewPos = -mvPosition.xyz;
-        gl_Position = projectionMatrix * mvPosition;
-      }
-    `,
-    fragmentShader: `
-      uniform vec3 uColor;
-      uniform float uOpacity;
-      varying vec3 vNormal;
-      varying vec3 vViewPos;
-      void main() {
-        vec3 viewDir = normalize(vViewPos);
-        float rim = 1.0 - max(dot(viewDir, normalize(vNormal)), 0.0);
-        float glow = pow(rim, 1.5) * 1.5 + 0.45;
-        gl_FragColor = vec4(uColor * glow, uOpacity);
-      }
-    `,
-    transparent: true,
-    depthWrite: false,
-    blending: THREE.AdditiveBlending,
-  });
-}
-
 const geoCache = new Map<ParticleGeo, THREE.BufferGeometry>();
+const glowMaterialCache = new Map<number, THREE.MeshBasicMaterial>();
 function particleGeometry(shape: ParticleGeo): THREE.BufferGeometry {
   let geo = geoCache.get(shape);
   if (!geo) {
@@ -213,6 +176,20 @@ function particleGeometry(shape: ParticleGeo): THREE.BufferGeometry {
     geoCache.set(shape, geo);
   }
   return geo;
+}
+
+function buildGlowMaterial(color: number): THREE.MeshBasicMaterial {
+  const cached = glowMaterialCache.get(color);
+  if (cached) return cached.clone();
+  const material = new THREE.MeshBasicMaterial({
+    color,
+    transparent: true,
+    opacity: 1,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+  });
+  glowMaterialCache.set(color, material);
+  return material.clone();
 }
 
 /** A single glowing particle mesh sized for `profile`, ready to be positioned

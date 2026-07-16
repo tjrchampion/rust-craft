@@ -113,11 +113,13 @@ export const QuestMsg = z.object({
  *  necessarily unit length; the server normalizes it) computed the same way
  *  regular movement input already is, so it lines up with the same forward/
  *  right basis as everything else instead of needing its own convention. */
-export const DodgeMsg = z.object({
-  t: z.literal("dodge"),
-  dirX: z.number().min(-1.5).max(1.5),
-  dirZ: z.number().min(-1.5).max(1.5),
-});
+export const DodgeMsg = z
+  .object({
+    t: z.literal("dodge"),
+    dirX: z.number().min(-1.5).max(1.5),
+    dirZ: z.number().min(-1.5).max(1.5),
+  })
+  .strict();
 
 export const ClientMsg = z.discriminatedUnion("t", [
   InputMsg,

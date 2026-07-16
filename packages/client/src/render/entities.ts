@@ -4,7 +4,7 @@ import { wrapAngle, mobDef, itemDef, auraDef } from "@rustcraft/shared";
 import { buildNameplate, buildCampfire, buildHorse, buildRaft } from "./models";
 import { AnimatedModel, PLAYER_ANIMS, mobModelSpec, logicalFromState, dodgeLogicalFor } from "./gltf";
 import { CLASS_MODEL_URLS, CLASS_WEAPON_NODES } from "./classModels";
-import { buildSchoolProjectile, buildSchoolParticle, schoolProfile, spellSchool, type School } from "./vfx";
+import { buildSchoolProjectile, buildSchoolParticle, SCHOOL_VFX, schoolProfile, spellSchool, type School } from "./vfx";
 
 // Snapshots broadcast at a full 20Hz (see GameServer.tick), so 2 snapshot
 // intervals (100ms) plus a little slack for jitter is enough buffer to avoid
@@ -66,6 +66,7 @@ interface DamageNumber {
 }
 
 interface Spark {
+  school: School;
   mesh: THREE.Mesh;
   vx: number;
   vy: number;
@@ -78,6 +79,7 @@ interface Spark {
 }
 
 interface GroundBurst {
+  school: School;
   mesh: THREE.Mesh;
   born: number;
   lifeMs: number;
@@ -179,6 +181,8 @@ export class EntityManager {
   private damageNumbers: DamageNumber[] = [];
   private sparks: Spark[] = [];
   private groundBursts: GroundBurst[] = [];
+  private sparkPools = new Map<School, Spark[]>();
+  private groundBurstPools = new Map<School, GroundBurst[]>();
   private raycaster = new THREE.Raycaster();
   private targetId: string | null = null;
   private targetRing: THREE.Mesh;
@@ -195,6 +199,37 @@ export class EntityManager {
     this.targetRing.visible = false;
     this.targetRing.renderOrder = 2;
     this.scene.add(this.targetRing);
+  }
+
+  /** Create the spell VFX materials/geometries once up front so the first
+   *  spell burst no longer pays their initialization cost on the critical
+   *  frame. */
+  prewarmVfx(): void {
+    for (const school of Object.keys(SCHOOL_VFX) as Array<keyof typeof SCHOOL_VFX>) {
+      const profile = schoolProfile(school);
+      const pool = this.sparkPools.get(school) ?? [];
+      const burstPool = this.groundBurstPools.get(school) ?? [];
+      for (let i = 0; i < profile.count * 3; i++) {
+        const mesh = buildSchoolParticle(profile);
+        mesh.visible = false;
+        pool.push({ school, mesh, vx: 0, vy: 0, vz: 0, gravity: 0, drag: 0, spin: 0, born: 0, lifeMs: 1 });
+      }
+      for (let i = 0; i < 2; i++) {
+        const mesh = new THREE.Mesh(
+          new THREE.RingGeometry(0.4, 0.6, 32),
+          new THREE.MeshBasicMaterial({ color: profile.ringColor, transparent: true, side: THREE.DoubleSide, depthWrite: false }),
+        );
+        mesh.rotation.x = -Math.PI / 2;
+        mesh.visible = false;
+        burstPool.push({ school, mesh, born: 0, lifeMs: 1 });
+      }
+      this.sparkPools.set(school, pool);
+      this.groundBurstPools.set(school, burstPool);
+      const projectile = buildSchoolProjectile(school);
+      projectile.visible = false;
+      this.scene.add(projectile);
+      this.scene.remove(projectile);
+    }
   }
 
   private createEntity(
@@ -437,21 +472,35 @@ export class EntityManager {
   /** Small school-colored spark, fading and drifting — used for projectile trails. */
   private spawnTrailSpark(pos: THREE.Vector3, school: School): void {
     const profile = schoolProfile(school);
-    const mesh = buildSchoolParticle(profile);
-    mesh.scale.setScalar(profile.particleSize * 0.6);
-    mesh.position.copy(pos);
-    this.scene.add(mesh);
-    this.sparks.push({
-      mesh,
-      vx: (Math.random() - 0.5) * 0.4,
-      vy: (Math.random() - 0.5) * 0.4,
-      vz: (Math.random() - 0.5) * 0.4,
-      gravity: profile.gravity * 0.3,
-      drag: profile.drag,
-      spin: profile.spin,
-      born: performance.now(),
-      lifeMs: 260,
-    });
+    const pool = this.sparkPools.get(school);
+    const spark = pool?.pop();
+    if (!spark) {
+      const mesh = buildSchoolParticle(profile);
+      mesh.visible = false;
+      this.scene.add(mesh);
+      this.sparks.push({ school, mesh, vx: 0, vy: 0, vz: 0, gravity: profile.gravity * 0.3, drag: profile.drag, spin: profile.spin, born: performance.now(), lifeMs: 260 });
+      return;
+    }
+    spark.mesh.visible = true;
+    spark.mesh.scale.setScalar(profile.particleSize * 0.6);
+    spark.mesh.position.copy(pos);
+    const material = spark.mesh.material as THREE.MeshBasicMaterial;
+    material.opacity = 1;
+    material.transparent = true;
+    material.depthWrite = false;
+    material.blending = THREE.AdditiveBlending;
+    material.color.set(profile.color);
+    material.needsUpdate = true;
+    spark.vx = (Math.random() - 0.5) * 0.4;
+    spark.vy = (Math.random() - 0.5) * 0.4;
+    spark.vz = (Math.random() - 0.5) * 0.4;
+    spark.gravity = profile.gravity * 0.3;
+    spark.drag = profile.drag;
+    spark.spin = profile.spin;
+    spark.born = performance.now();
+    spark.lifeMs = 260;
+    this.scene.add(spark.mesh);
+    this.sparks.push(spark);
   }
 
   /** Burst of school-flavored particles — used when a projectile lands or a
@@ -461,8 +510,10 @@ export class EntityManager {
    *  Shadow wisps look like they're being sucked toward the impact point. */
   private spawnBurst(pos: THREE.Vector3, school: School): void {
     const profile = schoolProfile(school);
+    const pool = this.sparkPools.get(school) ?? [];
     for (let i = 0; i < profile.count; i++) {
-      const mesh = buildSchoolParticle(profile);
+      const spark = pool.pop();
+      const mesh = spark ? spark.mesh : buildSchoolParticle(profile);
       const ang = Math.random() * Math.PI * 2;
       let vx: number;
       let vy: number;
@@ -496,26 +547,53 @@ export class EntityManager {
         vy = Math.sin(upAng) * spd;
         vz = Math.sin(ang) * Math.cos(upAng) * spd;
       }
-      mesh.position.copy(spawnPos);
-      this.scene.add(mesh);
-      this.sparks.push({
-        mesh,
-        vx,
-        vy,
-        vz,
-        gravity: profile.gravity,
-        drag: profile.drag,
-        spin: profile.spin,
-        born: performance.now(),
-        lifeMs: profile.lifeMs,
-      });
+      if (spark) {
+        spark.mesh.visible = true;
+        spark.mesh.scale.setScalar(profile.particleSize);
+        spark.mesh.position.copy(spawnPos);
+        const material = spark.mesh.material as THREE.MeshBasicMaterial;
+        material.opacity = 1;
+        material.transparent = true;
+        material.depthWrite = false;
+        material.blending = THREE.AdditiveBlending;
+        material.color.set(profile.color);
+        material.needsUpdate = true;
+        spark.vx = vx;
+        spark.vy = vy;
+        spark.vz = vz;
+        spark.gravity = profile.gravity;
+        spark.drag = profile.drag;
+        spark.spin = profile.spin;
+        spark.born = performance.now();
+        spark.lifeMs = profile.lifeMs;
+        this.scene.add(spark.mesh);
+        this.sparks.push(spark);
+      } else {
+        mesh.position.copy(spawnPos);
+        this.scene.add(mesh);
+        this.sparks.push({ school, mesh, vx, vy, vz, gravity: profile.gravity, drag: profile.drag, spin: profile.spin, born: performance.now(), lifeMs: profile.lifeMs });
+      }
     }
-    this.spawnGroundRing(pos, profile.ringColor, profile.ringDuration);
+    this.spawnGroundRing(pos, profile.ringColor, profile.ringDuration, school);
   }
 
   /** Flat ring that expands outward on the ground and fades — a shockwave
    *  accompanying every burst (projectile impact, melee/self spellcast). */
-  private spawnGroundRing(pos: THREE.Vector3, color: number, lifeMs: number): void {
+  private spawnGroundRing(pos: THREE.Vector3, color: number, lifeMs: number, school: School): void {
+    const pool = this.groundBurstPools.get(school);
+    const groundBurst = pool?.pop();
+    if (groundBurst) {
+      groundBurst.mesh.visible = true;
+      (groundBurst.mesh.material as THREE.MeshBasicMaterial).color.set(color);
+      (groundBurst.mesh.material as THREE.MeshBasicMaterial).opacity = 1;
+      groundBurst.mesh.position.set(pos.x, pos.y - 0.9, pos.z);
+      groundBurst.mesh.scale.set(1, 1, 1);
+      groundBurst.born = performance.now();
+      groundBurst.lifeMs = lifeMs;
+      this.scene.add(groundBurst.mesh);
+      this.groundBursts.push(groundBurst);
+      return;
+    }
     const mesh = new THREE.Mesh(
       new THREE.RingGeometry(0.4, 0.6, 32),
       new THREE.MeshBasicMaterial({ color, transparent: true, side: THREE.DoubleSide, depthWrite: false }),
@@ -523,7 +601,7 @@ export class EntityManager {
     mesh.rotation.x = -Math.PI / 2;
     mesh.position.set(pos.x, pos.y - 0.9, pos.z);
     this.scene.add(mesh);
-    this.groundBursts.push({ mesh, born: performance.now(), lifeMs });
+    this.groundBursts.push({ school, mesh, born: performance.now(), lifeMs });
   }
 
   /** A quick puff of dust kicked up behind a dodge -- plain sphere particles
@@ -541,6 +619,7 @@ export class EntityManager {
       this.scene.add(mesh);
       const speed = 0.6 + Math.random() * 1.2;
       this.sparks.push({
+        school: "buff",
         mesh,
         vx: -dirX * speed * 0.5 + (Math.random() - 0.5) * 0.8,
         vy: 0.4 + Math.random() * 0.6,
@@ -661,7 +740,9 @@ export class EntityManager {
       const s = this.sparks[i]!;
       const age = (now - s.born) / s.lifeMs;
       if (age >= 1) {
+        s.mesh.visible = false;
         this.scene.remove(s.mesh);
+        this.sparkPools.get(s.school)?.push(s);
         this.sparks.splice(i, 1);
         continue;
       }
@@ -679,19 +760,17 @@ export class EntityManager {
         s.mesh.rotation.x += s.spin * dt;
         s.mesh.rotation.y += s.spin * dt * 0.7;
       }
-      // School particles are shader-based (uOpacity uniform); the plain dodge
-      // burst uses a bare MeshBasicMaterial instead -- fade whichever kind
-      // this spark actually has rather than assuming one shape for both.
-      const mat = s.mesh.material as THREE.ShaderMaterial & THREE.MeshBasicMaterial;
-      if (mat.uniforms?.uOpacity) mat.uniforms.uOpacity.value = 1 - age;
-      else mat.opacity = 1 - age;
+      const mat = s.mesh.material as THREE.MeshBasicMaterial;
+      mat.opacity = 1 - age;
     }
 
     for (let i = this.groundBursts.length - 1; i >= 0; i--) {
       const g = this.groundBursts[i]!;
       const age = (now - g.born) / g.lifeMs;
       if (age >= 1) {
+        g.mesh.visible = false;
         this.scene.remove(g.mesh);
+        this.groundBurstPools.get(g.school)?.push(g);
         this.groundBursts.splice(i, 1);
         continue;
       }

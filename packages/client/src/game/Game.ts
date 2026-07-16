@@ -185,6 +185,7 @@ export class Game {
     this.scene.add(this.avatar.group);
 
     this.entities = new EntityManager(this.scene);
+    this.entities.prewarmVfx();
     this.input = new InputManager(canvas);
 
     window.addEventListener("resize", this.onResize);
@@ -885,7 +886,7 @@ export class Game {
 
     // Grab the sequence number of the most recent input we've sent
     // so we know exactly when the server has processed this dodge.
-    const currentSeq = this.pending.length > 0 ? this.pending[this.pending.length - 1].seq : 0;
+    const currentSeq = this.pending.length > 0 ? this.pending[this.pending.length - 1]!.seq : 0;
 
     // Instead of overwriting a single object, we push each dodge into a queue.
     this.pendingDodges.push({
@@ -897,10 +898,10 @@ export class Game {
 
     this.avatar.play(dodgeLogicalFor(this.cameraYaw, nx, nz));
     this.entities.spawnDodgeBurst(tx, this.move.y, tz, nx, nz);
-    
-    // Send our predicted tx and tz to the server. The server will now
-    // validate this distance to eliminate latency-based rubberbanding.
-    this.connection.send({ t: "dodge", dirX: nx, dirZ: nz, tx: tx, tz: tz });
+
+    // Send the normalized dodge direction only; the server owns the final
+    // movement resolution and collision/charge validation.
+    this.connection.send({ t: "dodge", dirX: nx, dirZ: nz });
   }
 
   private animateSelf(dt: number, actions: ReturnType<InputManager["sample"]>): void {
