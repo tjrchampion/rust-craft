@@ -202,12 +202,23 @@ export function buildSchoolParticle(profile: SchoolProfile): THREE.Mesh {
   return mesh;
 }
 
+export const projectilePools = new Map<School, THREE.Group[]>();
+
 /** School-flavored projectile core: shape + glow vary (Frost = tumbling
  *  shard, Arcane = spinning ring/sigil, others = a glowing orb) so bolts in
  *  flight already read as their school before they land. */
-export function buildSchoolProjectile(school: School): THREE.Group {
+export function buildSchoolProjectile(school: School, forceNew = false): THREE.Group {
+  if (!forceNew) {
+    const pool = projectilePools.get(school);
+    const group = pool?.pop();
+    if (group) {
+      group.rotation.set(0, 0, 0);
+      return group;
+    }
+  }
+
   const profile = schoolProfile(school);
-  const group = new THREE.Group();
+  const newGroup = new THREE.Group();
   const geo =
     school === "frost"
       ? new THREE.OctahedronGeometry(0.22, 0)
@@ -215,9 +226,19 @@ export function buildSchoolProjectile(school: School): THREE.Group {
         ? new THREE.TorusGeometry(0.18, 0.06, 6, 14)
         : new THREE.SphereGeometry(0.18, 8, 6);
   const core = new THREE.Mesh(geo, buildGlowMaterial(profile.color));
-  group.add(core);
+  core.name = "core";
+  newGroup.add(core);
   const light = new THREE.PointLight(profile.color, 6, 8, 1.8);
-  group.add(light);
-  group.userData.spinSpeed = school === "arcane" ? 6 : school === "frost" ? 3 : 0;
-  return group;
+  light.name = "light";
+  light.visible = true;
+  light.intensity = 0;
+  newGroup.add(light);
+  newGroup.userData.spinSpeed = school === "arcane" ? 6 : school === "frost" ? 3 : 0;
+  return newGroup;
+}
+
+export function recycleSchoolProjectile(school: School, group: THREE.Group): void {
+  const pool = projectilePools.get(school) ?? [];
+  pool.push(group);
+  projectilePools.set(school, pool);
 }

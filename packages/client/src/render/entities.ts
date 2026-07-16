@@ -4,7 +4,7 @@ import { wrapAngle, mobDef, itemDef, auraDef } from "@rustcraft/shared";
 import { buildNameplate, buildCampfire, buildHorse, buildRaft } from "./models";
 import { AnimatedModel, PLAYER_ANIMS, mobModelSpec, logicalFromState, dodgeLogicalFor } from "./gltf";
 import { CLASS_MODEL_URLS, CLASS_WEAPON_NODES } from "./classModels";
-import { buildSchoolProjectile, buildSchoolParticle, SCHOOL_VFX, schoolProfile, spellSchool, type School } from "./vfx";
+import { buildSchoolProjectile, recycleSchoolProjectile, buildSchoolParticle, SCHOOL_VFX, schoolProfile, spellSchool, type School, projectilePools } from "./vfx";
 
 // Snapshots broadcast at a full 20Hz (see GameServer.tick), so 2 snapshot
 // intervals (100ms) plus a little slack for jitter is enough buffer to avoid
@@ -85,7 +85,16 @@ interface GroundBurst {
   lifeMs: number;
 }
 
-function buildDamageSprite(text: string, color: string): THREE.Sprite {
+interface ProjectileInstance {
+  group: THREE.Group;
+  target: THREE.Vector3;
+  school: School;
+}
+
+function createDamageSprite(text: string, color: string): THREE.Sprite {
+  if (typeof document === "undefined") {
+    return new THREE.Sprite(new THREE.SpriteMaterial({ transparent: true }));
+  }
   const canvas = document.createElement("canvas");
   canvas.width = 128;
   canvas.height = 64;
@@ -103,6 +112,24 @@ function buildDamageSprite(text: string, color: string): THREE.Sprite {
   );
   sprite.scale.set(1.5, 0.75, 1);
   return sprite;
+}
+
+function getDamageSprite(text: string, color: string, pool: THREE.Sprite[]): THREE.Sprite {
+  const sprite = pool.pop();
+  if (sprite) {
+    const texture = (sprite.material as THREE.SpriteMaterial).map as THREE.CanvasTexture | undefined;
+    const canvas = texture?.image as HTMLCanvasElement | undefined;
+    const ctx = canvas?.getContext("2d");
+    if (ctx && texture) {
+      ctx.clearRect(0, 0, 128, 64);
+      ctx.fillStyle = color;
+      ctx.fillText(text, 64, 32);
+      texture.needsUpdate = true;
+    }
+    sprite.visible = true;
+    return sprite;
+  }
+  return createDamageSprite(text, color);
 }
 
 function buildHpBar(): THREE.Sprite {
@@ -176,9 +203,10 @@ export function playerModelUrl(classId: string): string {
 export class EntityManager {
   private scene: THREE.Scene;
   private entities = new Map<string, RemoteEntity>();
-  private projectiles = new Map<string, { group: THREE.Group; target: THREE.Vector3; school: School }>();
+  private projectiles = new Map<string, ProjectileInstance>();
   private structures = new Map<string, THREE.Group>();
   private damageNumbers: DamageNumber[] = [];
+  private damageNumberPool: THREE.Sprite[] = [];
   private sparks: Spark[] = [];
   private groundBursts: GroundBurst[] = [];
   private sparkPools = new Map<School, Spark[]>();
@@ -204,14 +232,15 @@ export class EntityManager {
   /** Create the spell VFX materials/geometries once up front so the first
    *  spell burst no longer pays their initialization cost on the critical
    *  frame. */
-  prewarmVfx(): void {
+  prewarmVfx(renderer?: THREE.WebGLRenderer, camera?: THREE.Camera): void {
     for (const school of Object.keys(SCHOOL_VFX) as Array<keyof typeof SCHOOL_VFX>) {
       const profile = schoolProfile(school);
       const pool = this.sparkPools.get(school) ?? [];
       const burstPool = this.groundBurstPools.get(school) ?? [];
       for (let i = 0; i < profile.count * 3; i++) {
         const mesh = buildSchoolParticle(profile);
-        mesh.visible = false;
+        mesh.visible = true;
+        this.scene.add(mesh);
         pool.push({ school, mesh, vx: 0, vy: 0, vz: 0, gravity: 0, drag: 0, spin: 0, born: 0, lifeMs: 1 });
       }
       for (let i = 0; i < 2; i++) {
@@ -220,15 +249,52 @@ export class EntityManager {
           new THREE.MeshBasicMaterial({ color: profile.ringColor, transparent: true, side: THREE.DoubleSide, depthWrite: false }),
         );
         mesh.rotation.x = -Math.PI / 2;
-        mesh.visible = false;
+        mesh.visible = true;
+        this.scene.add(mesh);
         burstPool.push({ school, mesh, born: 0, lifeMs: 1 });
       }
       this.sparkPools.set(school, pool);
       this.groundBurstPools.set(school, burstPool);
-      const projectile = buildSchoolProjectile(school);
-      projectile.visible = false;
-      this.scene.add(projectile);
-      this.scene.remove(projectile);
+      for (let i = 0; i < 2; i++) {
+        const projectile = buildSchoolProjectile(school, true);
+        projectile.visible = true;
+        const light = projectile.getObjectByName("light") as THREE.PointLight | undefined;
+        if (light) light.intensity = 6;
+        this.scene.add(projectile);
+        recycleSchoolProjectile(school, projectile);
+      }
+    }
+
+    // Prewarm damage numbers
+    for (let i = 0; i < 6; i++) {
+      const sprite = createDamageSprite("", "#ffffff");
+      sprite.visible = true;
+      this.scene.add(sprite);
+      this.damageNumberPool.push(sprite);
+    }
+
+    if (renderer && camera) {
+      renderer.compile(this.scene, camera);
+    }
+
+    // Now turn everything invisible
+    for (const pool of this.sparkPools.values()) {
+      for (const spark of pool) spark.mesh.visible = false;
+    }
+    for (const pool of this.groundBurstPools.values()) {
+      for (const burst of pool) burst.mesh.visible = false;
+    }
+    for (const pool of projectilePools.values()) {
+      for (const group of pool) {
+        group.visible = true;
+        const core = group.getObjectByName("core");
+        if (core) core.visible = false;
+        const light = group.getObjectByName("light") as THREE.PointLight | undefined;
+        if (light) light.intensity = 0;
+      }
+    }
+    for (const sprite of this.damageNumberPool) {
+      sprite.visible = false;
     }
   }
 
@@ -446,7 +512,14 @@ export class EntityManager {
         const school = spellSchool(snap.spellId);
         const group = buildSchoolProjectile(school);
         group.position.set(snap.x, snap.y, snap.z);
-        this.scene.add(group);
+        group.visible = true;
+        const core = group.getObjectByName("core");
+        if (core) core.visible = true;
+        const light = group.getObjectByName("light") as THREE.PointLight | undefined;
+        if (light) light.intensity = 6;
+        if (!group.parent) {
+          this.scene.add(group);
+        }
         proj = { group, target: new THREE.Vector3(snap.x, snap.y, snap.z), school };
         this.projectiles.set(snap.id, proj);
       }
@@ -455,7 +528,11 @@ export class EntityManager {
     for (const [id, proj] of this.projectiles) {
       if (!seen.has(id)) {
         this.spawnBurst(proj.group.position, proj.school);
-        this.scene.remove(proj.group);
+        const core = proj.group.getObjectByName("core");
+        if (core) core.visible = false;
+        const light = proj.group.getObjectByName("light") as THREE.PointLight | undefined;
+        if (light) light.intensity = 0;
+        recycleSchoolProjectile(proj.school, proj.group);
         this.projectiles.delete(id);
       }
     }
@@ -476,9 +553,28 @@ export class EntityManager {
     const spark = pool?.pop();
     if (!spark) {
       const mesh = buildSchoolParticle(profile);
-      mesh.visible = false;
+      mesh.visible = true;
+      mesh.position.copy(pos);
+      const material = mesh.material as THREE.MeshBasicMaterial;
+      material.opacity = 1;
+      material.transparent = true;
+      material.depthWrite = false;
+      material.blending = THREE.AdditiveBlending;
+      material.color.set(profile.color);
+      material.needsUpdate = true;
       this.scene.add(mesh);
-      this.sparks.push({ school, mesh, vx: 0, vy: 0, vz: 0, gravity: profile.gravity * 0.3, drag: profile.drag, spin: profile.spin, born: performance.now(), lifeMs: 260 });
+      this.sparks.push({
+        school,
+        mesh,
+        vx: (Math.random() - 0.5) * 0.4,
+        vy: (Math.random() - 0.5) * 0.4,
+        vz: (Math.random() - 0.5) * 0.4,
+        gravity: profile.gravity * 0.3,
+        drag: profile.drag,
+        spin: profile.spin,
+        born: performance.now(),
+        lifeMs: 260,
+      });
       return;
     }
     spark.mesh.visible = true;
@@ -499,7 +595,6 @@ export class EntityManager {
     spark.spin = profile.spin;
     spark.born = performance.now();
     spark.lifeMs = 260;
-    this.scene.add(spark.mesh);
     this.sparks.push(spark);
   }
 
@@ -566,7 +661,6 @@ export class EntityManager {
         spark.spin = profile.spin;
         spark.born = performance.now();
         spark.lifeMs = profile.lifeMs;
-        this.scene.add(spark.mesh);
         this.sparks.push(spark);
       } else {
         mesh.position.copy(spawnPos);
@@ -590,7 +684,6 @@ export class EntityManager {
       groundBurst.mesh.scale.set(1, 1, 1);
       groundBurst.born = performance.now();
       groundBurst.lifeMs = lifeMs;
-      this.scene.add(groundBurst.mesh);
       this.groundBursts.push(groundBurst);
       return;
     }
@@ -661,9 +754,13 @@ export class EntityManager {
   }
 
   spawnDamageNumber(x: number, y: number, z: number, amount: number, color = "#ffd0d0"): void {
-    const sprite = buildDamageSprite(String(Math.round(amount)), color);
+    const sprite = getDamageSprite(String(Math.round(amount)), color, this.damageNumberPool);
     sprite.position.set(x + (Math.random() - 0.5) * 0.6, y, z + (Math.random() - 0.5) * 0.6);
-    this.scene.add(sprite);
+    (sprite.material as THREE.SpriteMaterial).opacity = 1;
+    if (!sprite.parent) {
+      this.scene.add(sprite);
+    }
+    sprite.visible = true;
     this.damageNumbers.push({ sprite, born: performance.now() });
   }
 
@@ -741,7 +838,6 @@ export class EntityManager {
       const age = (now - s.born) / s.lifeMs;
       if (age >= 1) {
         s.mesh.visible = false;
-        this.scene.remove(s.mesh);
         this.sparkPools.get(s.school)?.push(s);
         this.sparks.splice(i, 1);
         continue;
@@ -769,7 +865,6 @@ export class EntityManager {
       const age = (now - g.born) / g.lifeMs;
       if (age >= 1) {
         g.mesh.visible = false;
-        this.scene.remove(g.mesh);
         this.groundBurstPools.get(g.school)?.push(g);
         this.groundBursts.splice(i, 1);
         continue;
@@ -788,7 +883,8 @@ export class EntityManager {
       const dn = this.damageNumbers[i]!;
       const age = (now - dn.born) / 900;
       if (age >= 1) {
-        this.scene.remove(dn.sprite);
+        dn.sprite.visible = false;
+        this.damageNumberPool.push(dn.sprite);
         this.damageNumbers.splice(i, 1);
         continue;
       }
@@ -921,15 +1017,32 @@ export class EntityManager {
 
   clear(): void {
     for (const e of this.entities.values()) this.scene.remove(e.group);
-    for (const p of this.projectiles.values()) this.scene.remove(p.group);
+    for (const p of this.projectiles.values()) {
+      const core = p.group.getObjectByName("core");
+      if (core) core.visible = false;
+      const light = p.group.getObjectByName("light") as THREE.PointLight | undefined;
+      if (light) light.intensity = 0;
+      recycleSchoolProjectile(p.school, p.group);
+    }
     for (const s of this.structures.values()) this.scene.remove(s);
-    for (const s of this.sparks) this.scene.remove(s.mesh);
-    for (const g of this.groundBursts) this.scene.remove(g.mesh);
+    for (const s of this.sparks) {
+      s.mesh.visible = false;
+      this.sparkPools.get(s.school)?.push(s);
+    }
+    for (const g of this.groundBursts) {
+      g.mesh.visible = false;
+      this.groundBurstPools.get(g.school)?.push(g);
+    }
+    for (const dn of this.damageNumbers) {
+      dn.sprite.visible = false;
+      this.damageNumberPool.push(dn.sprite);
+    }
     this.entities.clear();
     this.projectiles.clear();
     this.structures.clear();
     this.sparks.length = 0;
     this.groundBursts.length = 0;
+    this.damageNumbers.length = 0;
     this.setTarget(null);
   }
 }

@@ -185,7 +185,7 @@ export class Game {
     this.scene.add(this.avatar.group);
 
     this.entities = new EntityManager(this.scene);
-    this.entities.prewarmVfx();
+    this.entities.prewarmVfx(this.renderer, this.camera);
     this.input = new InputManager(canvas);
 
     window.addEventListener("resize", this.onResize);
