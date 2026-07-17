@@ -50,6 +50,7 @@ export interface FrameActions {
   menuRight: boolean;
   menuConfirm: boolean;
   menuCancel: boolean;
+  menuClear: boolean;
   /** Gamepad LB/RB only, no keyboard equivalent -- cycle tabs (Inventory /
    *  Spell Book / Crafting / System) while the character screen is open. */
   tabPrevPressed: boolean;
@@ -246,6 +247,7 @@ export class InputManager {
     let menuRight = pressed("ArrowRight");
     let menuConfirm = pressed("Enter") || pressed("KeyE");
     let menuCancel = pressed("Tab") || pressed("KeyI");
+    let menuClear = pressed("KeyX") || pressed("Backspace") || pressed("Delete");
 
     // --- gamepad (standard mapping) ---
     if (pad) {
@@ -382,6 +384,7 @@ export class InputManager {
       menuRight ||= padPressed(15) || (this.edgeAxis(pad, 0, 1) ?? false);
       menuConfirm ||= padPressed(0); // A
       menuCancel ||= padPressed(1); // B
+      menuClear ||= padPressed(2); // X / Square
 
       this.prevPadButtons = pad.buttons.map((_, i) => padHeld(i));
       this.prevAxes = [...pad.axes];
@@ -445,6 +448,7 @@ export class InputManager {
       menuRight,
       menuConfirm,
       menuCancel,
+      menuClear,
       tabPrevPressed,
       tabNextPressed,
     };

@@ -334,8 +334,8 @@
     const existing = slotSpellId(idx);
     if (existing) movingSpell = existing;
   }
-  function clearHotbarSpell(idx: number, e: MouseEvent): void {
-    e.stopPropagation();
+  function clearHotbarSpell(idx: number, e?: MouseEvent): void {
+    e?.stopPropagation();
     getGame()?.sendAssignSpell(null, idx);
     if (movingSpell && slotSpellId(idx) === movingSpell) movingSpell = null;
   }
@@ -548,13 +548,18 @@
 
   onMount(() => {
     const onNav = (e: Event) => {
-      const d = (e as CustomEvent<{ up: boolean; down: boolean; left: boolean; right: boolean; confirm: boolean; cancel: boolean }>).detail;
+      const d = (e as CustomEvent<{ up: boolean; down: boolean; left: boolean; right: boolean; confirm: boolean; cancel: boolean; clear?: boolean }>).detail;
       if (d.cancel) {
         if (moving || movingSpell) {
           moving = null;
           movingSpell = null;
         } else close();
         return;
+      }
+      if (d.clear) {
+        if (game.activeTab === "spellbook" && spellBookFocus === "hotbar") {
+          clearHotbarSpell(spellHotbarCursor);
+        }
       }
       if (d.up) nav(0, -1);
       if (d.down) nav(0, 1);
@@ -568,7 +573,9 @@
 
   const hintKeys = $derived(
     promptLabel(
-      "Ⓐ select · Ⓑ close · LB/RB switch tabs · d-pad navigate",
+      game.activeTab === "spellbook" && spellBookFocus === "hotbar"
+        ? "Ⓐ select · Ⓑ close · Ⓧ clear · LB/RB switch tabs · d-pad navigate"
+        : "Ⓐ select · Ⓑ close · LB/RB switch tabs · d-pad navigate",
       "Click to select · press again or click ✕ to close",
     ),
   );

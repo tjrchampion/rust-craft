@@ -615,6 +615,7 @@ export class Game {
         right: actions.menuRight,
         confirm: actions.menuConfirm,
         cancel,
+        clear: actions.menuClear,
       };
       if (cancel) escapeConsumedByPanel = true;
       if (nav.confirm && ui.inventoryOpen && ui.activeTab === "system") {
@@ -626,7 +627,7 @@ export class Game {
           else void document.documentElement.requestFullscreen().catch(() => {});
         }
       }
-      if (nav.up || nav.down || nav.left || nav.right || nav.confirm || nav.cancel) {
+      if (nav.up || nav.down || nav.left || nav.right || nav.confirm || nav.cancel || nav.clear) {
         window.dispatchEvent(new CustomEvent("rc:menuNav", { detail: nav }));
       }
     }
