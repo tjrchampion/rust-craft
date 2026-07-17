@@ -53,7 +53,7 @@ const CAMERA_DISTANCE = 6.5;
 const CAMERA_HEIGHT = 2.2;
 const GATHER_RANGE = 4.0;
 /** Left-to-right tab order for gamepad LB/RB cycling in the character screen. */
-const TAB_ORDER: CharacterTab[] = ["inventory", "spellbook", "craft", "party", "system"];
+const TAB_ORDER: CharacterTab[] = ["inventory", "quests", "spellbook", "craft", "party", "system"];
 
 interface PendingInput {
   seq: number;

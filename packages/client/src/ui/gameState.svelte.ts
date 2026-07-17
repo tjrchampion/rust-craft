@@ -2,7 +2,7 @@ import type { SelfState, ItemSnap, PartyMemberSnap, RosterEntry, QuestOfferInfo,
 import type { TargetInfo } from "../render/entities";
 
 export type ChatChannel = "realm" | "party" | "system";
-export type CharacterTab = "inventory" | "spellbook" | "craft" | "party" | "system";
+export type CharacterTab = "inventory" | "quests" | "spellbook" | "craft" | "party" | "system";
 
 export interface ChatLine {
   channel: ChatChannel;
@@ -72,6 +72,20 @@ class GameState {
   names = new Map<string, string>();
   questOffer = $state<{ npcId: string; npcName: string; offers: QuestOfferInfo[] } | null>(null);
   questLog = $state<QuestLogEntry[]>([]);
+  untrackedQuests = $state<Set<string>>(new Set(typeof localStorage !== "undefined" ? JSON.parse(localStorage.getItem("rc:untracked-quests") ?? "[]") : []));
+
+  toggleQuestTrack(questId: string): void {
+    if (this.untrackedQuests.has(questId)) {
+      this.untrackedQuests.delete(questId);
+    } else {
+      this.untrackedQuests.add(questId);
+    }
+    this.untrackedQuests = new Set(this.untrackedQuests);
+    if (typeof localStorage !== "undefined") {
+      localStorage.setItem("rc:untracked-quests", JSON.stringify(Array.from(this.untrackedQuests)));
+    }
+  }
+
   currentZoneId = $state<string | null>(null);
   zoneBanner = $state<{ name: string; subtitle: string; key: number } | null>(null);
 

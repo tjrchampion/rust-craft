@@ -6,10 +6,18 @@
   import { itemIcon, spellIcon } from "./icons";
   import IconGlyph from "./IconGlyph.svelte";
   import { promptLabel } from "./padGlyphs";
+
+  const KBM_LABELS = ["1", "2", "3", "4", "5", "6", "Q", "Z", "X", "C"];
+  const PAD_LABELS = ["LB+A", "LB+B", "LB+X", "LB+Y", "LB+↑", "LB+↓", "LB+←", "LB+→", "RB+A", "RB+B"];
+
+  function keyLabel(i: number): string {
+    return promptLabel(PAD_LABELS[i] ?? "", KBM_LABELS[i] ?? "");
+  }
   import {
     RECIPES,
     itemDef,
     spellDef,
+    mobDef,
     auraDef,
     classDef,
     INVENTORY_SLOTS,
@@ -26,6 +34,7 @@
 
   const TABS: { id: CharacterTab; label: string }[] = [
     { id: "inventory", label: "Inventory" },
+    { id: "quests", label: "Quests" },
     { id: "spellbook", label: "Spell Book" },
     { id: "craft", label: "Crafting" },
     { id: "party", label: "Party" },
@@ -38,6 +47,9 @@
   let equipCursor = $state(0);
   let craftCursor = $state(0);
   let spellCursor = $state(0);
+  let spellBookFocus = $state<"spells" | "hotbar">("spells");
+  let spellHotbarCursor = $state(0);
+  let questsCursor = $state(0);
   let systemCursor = $state(0);
   /** Item picked up from inv/hotbar/equip (moved via sendMoveItem) -- also
    *  covers rearranging a spell already slotted in the hotbar, since both
@@ -53,6 +65,15 @@
   let hoveredSpell = $state<string | null>(null);
   let tooltipPos = $state({ x: 0, y: 0 });
   let isFullscreen = $state(!!document.fullscreenElement);
+
+  $effect(() => {
+    const _tab = game.activeTab;
+    moving = null;
+    movingSpell = null;
+    spellBookFocus = "spells";
+    spellHotbarCursor = 0;
+    questsCursor = 0;
+  });
 
   const invSlots = $derived(
     Array.from({ length: INVENTORY_SLOTS }, (_, i) => game.inventory.find((it) => it.container === "inventory" && it.slot === i)),
@@ -86,6 +107,14 @@
     game.activeTab = tab;
     moving = null;
     movingSpell = null;
+    spellBookFocus = "spells";
+    spellHotbarCursor = 0;
+    questsCursor = 0;
+  }
+
+  // ------------------------------------------------------------------- quests
+  function objectiveText(kind: "kill" | "gather", target: string): string {
+    return kind === "kill" ? mobDef(target).name : itemDef(target).name;
   }
 
   // ---------------------------------------------------------------- inventory
@@ -206,8 +235,24 @@
       const col = Math.min(cols - 1, Math.max(0, (invCursor % cols) + dx));
       const row = Math.min(rows - 1, Math.max(0, Math.floor(invCursor / cols) + dy));
       invCursor = row * cols + col;
+    } else if (game.activeTab === "quests") {
+      questsCursor = Math.min(game.questLog.length - 1, Math.max(0, questsCursor + dy));
     } else if (game.activeTab === "spellbook") {
-      spellCursor = Math.min(learnedSpells.length - 1, Math.max(0, spellCursor + dy));
+      if (spellBookFocus === "spells") {
+        if (dy > 0 && spellCursor === learnedSpells.length - 1) {
+          spellBookFocus = "hotbar";
+          spellHotbarCursor = 0;
+        } else {
+          spellCursor = Math.min(learnedSpells.length - 1, Math.max(0, spellCursor + dy));
+        }
+      } else if (spellBookFocus === "hotbar") {
+        if (dy < 0) {
+          spellBookFocus = "spells";
+          spellCursor = learnedSpells.length - 1;
+        } else {
+          spellHotbarCursor = Math.min(9, Math.max(0, spellHotbarCursor + dx));
+        }
+      }
     } else if (game.activeTab === "craft") {
       craftCursor = Math.min(recipes.length - 1, Math.max(0, craftCursor + dy));
     } else if (game.activeTab === "system") {
@@ -218,9 +263,16 @@
 
   function confirm(): void {
     if (game.activeTab === "inventory") activateInv("inventory", invCursor);
-    else if (game.activeTab === "spellbook") {
-      const spellId = learnedSpells[spellCursor];
-      if (spellId) pickSpell(spellId);
+    else if (game.activeTab === "quests") {
+      const q = game.questLog[questsCursor];
+      if (q) game.toggleQuestTrack(q.id);
+    } else if (game.activeTab === "spellbook") {
+      if (spellBookFocus === "spells") {
+        const spellId = learnedSpells[spellCursor];
+        if (spellId) pickSpell(spellId);
+      } else {
+        activateHotbarForSpell(spellHotbarCursor);
+      }
     } else if (game.activeTab === "craft") activateCraft(craftCursor);
     else if (game.activeTab === "system") systemActions[systemCursor]?.();
   }
@@ -333,7 +385,40 @@
                   <IconGlyph value={itemIcon(item.itemId)} size={20} />
                   {#if item.qty > 1}<span class="qty">{item.qty}</span>{/if}
                 {/if}
+                <span class="num">{keyLabel(i)}</span>
               </button>
+            {/each}
+          </div>
+        </div>
+      {:else if game.activeTab === "quests"}
+        <div class="quests-tab">
+          <h3>Active Quests</h3>
+          <div class="quest-list">
+            {#each game.questLog as q, i (q.id)}
+              <button
+                class="quest-row"
+                class:cursor={questsCursor === i}
+                onclick={() => {
+                  questsCursor = i;
+                  game.toggleQuestTrack(q.id);
+                }}
+              >
+                <div class="quest-row-main">
+                  <div class="quest-row-title">
+                    <span class="quest-row-check">{game.untrackedQuests.has(q.id) ? "☐" : "☑"}</span>
+                    <span class="quest-row-name" class:done={q.status === "complete"}>{q.name}</span>
+                  </div>
+                  <div class="quest-row-desc">
+                    {objectiveText(q.objectiveKind, q.objectiveTarget)}
+                    <span class="quest-row-count">({q.progress}/{q.objectiveCount})</span>
+                  </div>
+                </div>
+                <div class="quest-row-status" class:done={q.status === "complete"}>
+                  {q.status === "complete" ? "Complete" : "In Progress"}
+                </div>
+              </button>
+            {:else}
+              <div class="empty-quests">No active quests. Visit NPCs in towns to accept tasks.</div>
             {/each}
           </div>
         </div>
@@ -345,11 +430,12 @@
               {@const spell = spellDef(spellId)}
               <button
                 class="spell-row"
-                class:cursor={spellCursor === i}
+                class:cursor={spellBookFocus === "spells" && spellCursor === i}
                 class:moving={movingSpell === spellId}
                 onmouseenter={(e) => showTooltip(spellId, e)}
                 onmouseleave={hideTooltip}
                 onclick={() => {
+                  spellBookFocus = "spells";
                   spellCursor = i;
                   pickSpell(spellId);
                 }}
@@ -367,8 +453,13 @@
                 class="cell big"
                 class:spell={spellId !== null}
                 class:moving={spellId !== null && movingSpell === spellId}
+                class:cursor={spellBookFocus === "hotbar" && spellHotbarCursor === i}
                 class:first={i === 6}
-                onclick={() => activateHotbarForSpell(i)}
+                onclick={() => {
+                  spellBookFocus = "hotbar";
+                  spellHotbarCursor = i;
+                  activateHotbarForSpell(i);
+                }}
               >
                 {#if spellId}
                   <IconGlyph value={spellIcon(spellId)} size={28} />
@@ -376,6 +467,7 @@
                 {:else if item}
                   <IconGlyph value={itemIcon(item.itemId)} size={28} />
                 {/if}
+                <span class="num">{keyLabel(i)}</span>
               </button>
             {/each}
           </div>
@@ -658,6 +750,16 @@
     color: #fff;
     text-shadow: 0 1px 2px #000;
   }
+  .num {
+    position: absolute;
+    left: 4px;
+    top: 2px;
+    font-size: 9px;
+    font-family: var(--rc-display);
+    font-weight: 700;
+    color: var(--rc-gold);
+    text-shadow: 0 1px 2px #000;
+  }
   /* ---- Spellbook tab ---- */
   .spellbook-tab {
     display: flex;
@@ -901,6 +1003,96 @@
     font-size: 12.5px;
     font-style: italic;
   }
+  /* ---- Quests tab ---- */
+  .quests-tab {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+  }
+  .quest-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    overflow-y: auto;
+    flex: 1;
+    padding-right: 4px;
+  }
+  .quest-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: rgba(255, 255, 255, 0.04);
+    border: 2px solid rgba(255, 255, 255, 0.1);
+    border-radius: 6px;
+    padding: 10px 14px;
+    cursor: pointer;
+    color: #dce6f2;
+    text-align: left;
+    transition: background-color 0.2s, border-color 0.2s;
+  }
+  .quest-row.cursor {
+    border-color: #ffd66e;
+    box-shadow: 0 0 10px rgba(255, 214, 110, 0.4);
+  }
+  .quest-row-main {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .quest-row-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .quest-row-check {
+    font-size: 16px;
+    color: var(--rc-gold);
+    line-height: 1;
+  }
+  .quest-row-name {
+    font-family: var(--rc-display);
+    font-weight: 700;
+    font-size: 14px;
+    color: var(--rc-parchment);
+  }
+  .quest-row-name.done {
+    color: #8fd48f;
+    text-decoration: line-through;
+    opacity: 0.8;
+  }
+  .quest-row-desc {
+    font-size: 11px;
+    color: var(--rc-ink-dim);
+  }
+  .quest-row-count {
+    color: var(--rc-gold);
+    font-weight: 700;
+    margin-left: 4px;
+  }
+  .quest-row-status {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    color: var(--rc-gold);
+    background: rgba(201, 162, 75, 0.12);
+    border: 1px solid rgba(201, 162, 75, 0.25);
+    padding: 3px 8px;
+    border-radius: 4px;
+  }
+  .quest-row-status.done {
+    color: #8fd48f;
+    background: rgba(143, 212, 143, 0.12);
+    border-color: rgba(143, 212, 143, 0.25);
+  }
+  .empty-quests {
+    font-size: 13px;
+    color: var(--rc-ink-dim);
+    text-align: center;
+    padding: 40px 20px;
+    font-style: italic;
+  }
+
   /* ---- System tab ---- */
   .system-col {
     width: 280px;

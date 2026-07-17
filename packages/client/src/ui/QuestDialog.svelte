@@ -32,11 +32,21 @@
     getGame()?.closeQuestDialog();
   }
 
+  function acceptQuest(id: string): void {
+    getGame()?.sendQuestAction("accept", id);
+    close();
+  }
+
+  function turnInQuest(id: string): void {
+    getGame()?.sendQuestAction("turnin", id);
+    close();
+  }
+
   function activate(): void {
     const o = visible[cursor];
     if (!o) return;
-    if (o.status === "available") getGame()?.sendQuestAction("accept", o.id);
-    else if (o.status === "complete") getGame()?.sendQuestAction("turnin", o.id);
+    if (o.status === "available") acceptQuest(o.id);
+    else if (o.status === "complete") turnInQuest(o.id);
   }
 
   onMount(() => {
@@ -92,9 +102,9 @@
           </div>
 
           {#if o.status === "available"}
-            <button class="rc-btn primary" onclick={() => getGame()?.sendQuestAction("accept", o.id)}>Accept</button>
+            <button class="rc-btn primary" onclick={() => acceptQuest(o.id)}>Accept</button>
           {:else if o.status === "complete"}
-            <button class="rc-btn primary" onclick={() => getGame()?.sendQuestAction("turnin", o.id)}>Turn In</button>
+            <button class="rc-btn primary" onclick={() => turnInQuest(o.id)}>Turn In</button>
           {:else if o.status === "active"}
             <div class="in-progress">In Progress</div>
           {:else if o.status === "locked"}

@@ -47,7 +47,7 @@ const SPELL_ICONS: Record<string, string> = {
   flame_nova: "🔥",
   fan_of_knives: "🔪",
   circle_of_healing: "💛",
-  volley: "🏹",
+  volley: "🌧️",
   thorn_burst: "🌵",
   consecration: "🕯️",
   execute: "💥",
