@@ -22,6 +22,7 @@ import {
   REGION_TWO_GATE_X,
   REGION_TWO_GATE_Z,
   DUNGEON_ARENA_RADIUS,
+  DUNGEON_WALL_RADIUS,
 } from "./constants";
 import { dist2D, clamp, distPointToSegment } from "./math";
 
@@ -730,6 +731,17 @@ export interface DungeonLayoutSpec {
    *  chosen DungeonTierDef's mobTable (see packages/shared/src/content/
    *  dungeons.ts), not baked into the layout itself. */
   mobSpawns: { localX: number; localZ: number }[];
+  /** Flat interior floor height -- the enclosed room ignores the outdoor
+   *  noise-based terrain entirely once built (see dungeonFloorHeightAt). */
+  floorY: number;
+  /** Direction from center toward the portal/entry -- where the wall ring's
+   *  doorway gap faces. */
+  doorwayAngle: number;
+  /** Seeded per-portal interior columns and rubble/decoration -- unique per
+   *  portal (not just per tier) so future same-tier portals won't look like
+   *  carbon copies of each other. */
+  pillars: { localX: number; localZ: number }[];
+  rubble: { localX: number; localZ: number; rot: number }[];
 }
 
 const dungeonLayoutCache = new Map<string, DungeonLayoutSpec>();
@@ -745,10 +757,12 @@ export function generateDungeonLayout(portalId: string): DungeonLayoutSpec {
   if (!portal || portal.arenaX === undefined || portal.arenaZ === undefined) {
     throw new Error(`Unknown dungeon portal: ${portalId}`);
   }
-  const center = { x: portal.arenaX, y: terrainHeight(portal.arenaX, portal.arenaZ), z: portal.arenaZ };
+  const floorY = terrainHeight(portal.arenaX, portal.arenaZ);
+  const center = { x: portal.arenaX, y: floorY, z: portal.arenaZ };
   const dx = center.x - portal.x;
   const dz = center.z - portal.z;
   const mag = Math.hypot(dx, dz) || 1;
+  const doorwayAngle = Math.atan2(dx, dz);
   const entryPoint = {
     x: center.x - (dx / mag) * (DUNGEON_ARENA_RADIUS - 8),
     z: center.z - (dz / mag) * (DUNGEON_ARENA_RADIUS - 8),
@@ -761,9 +775,55 @@ export function generateDungeonLayout(portalId: string): DungeonLayoutSpec {
     const dist = 10 + rng() * (DUNGEON_ARENA_RADIUS - 20);
     mobSpawns.push({ localX: Math.sin(angle) * dist, localZ: Math.cos(angle) * dist });
   }
-  const layout: DungeonLayoutSpec = { id: portalId, center, entryPoint, mobSpawns };
+  const pillars: { localX: number; localZ: number }[] = [];
+  const pillarCount = 4;
+  for (let i = 0; i < pillarCount; i++) {
+    const angle = (i / pillarCount) * Math.PI * 2 + rng() * 0.5;
+    const dist = 14 + rng() * (DUNGEON_WALL_RADIUS - 20);
+    pillars.push({ localX: Math.sin(angle) * dist, localZ: Math.cos(angle) * dist });
+  }
+  const rubble: { localX: number; localZ: number; rot: number }[] = [];
+  const rubbleCount = 8;
+  for (let i = 0; i < rubbleCount; i++) {
+    const angle = rng() * Math.PI * 2;
+    const dist = 12 + rng() * (DUNGEON_WALL_RADIUS - 18);
+    rubble.push({ localX: Math.sin(angle) * dist, localZ: Math.cos(angle) * dist, rot: rng() * Math.PI * 2 });
+  }
+  const layout: DungeonLayoutSpec = {
+    id: portalId,
+    center,
+    entryPoint,
+    mobSpawns,
+    floorY,
+    doorwayAngle,
+    pillars,
+    rubble,
+  };
   dungeonLayoutCache.set(portalId, layout);
   return layout;
+}
+
+/** Flat interior floor height if (x,z) is inside any dungeon's wall ring,
+ *  else null (falls through to terrainHeight) -- mirrors bridgeHeightAt's
+ *  override pattern in sim/movement.ts. */
+export function dungeonFloorHeightAt(x: number, z: number): number | null {
+  for (const p of generatePois()) {
+    if (p.type !== "dungeon_portal" || p.arenaX === undefined || p.arenaZ === undefined) continue;
+    if (dist2D(x, z, p.arenaX, p.arenaZ) < DUNGEON_WALL_RADIUS) {
+      return generateDungeonLayout(p.id).floorY;
+    }
+  }
+  return null;
+}
+
+/** Which dungeon portal's interior room (x,z) is inside, if any -- same
+ *  scan as dungeonFloorHeightAt, for client-side "am I indoors" checks. */
+export function dungeonPortalAt(x: number, z: number): PoiSpec | null {
+  for (const p of generatePois()) {
+    if (p.type !== "dungeon_portal" || p.arenaX === undefined || p.arenaZ === undefined) continue;
+    if (dist2D(x, z, p.arenaX, p.arenaZ) < DUNGEON_WALL_RADIUS) return p;
+  }
+  return null;
 }
 
 // ============================ bridges ============================

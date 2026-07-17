@@ -10,6 +10,11 @@ export interface DungeonTierDef {
    *  per-player, not per-kill -- see distributeDungeonRewards). */
   rewardXp: number;
   rewardItems: { itemId: string; min: number; max: number; chance?: number }[];
+  /** Visual theme for the enclosed interior room -- see
+   *  render/dungeonInterior.ts on the client. */
+  theme: "ruins" | "ice";
+  zoneName: string;
+  zoneSubtitle: string;
 }
 
 export const DUNGEON_TIERS: DungeonTierDef[] = [
@@ -26,6 +31,9 @@ export const DUNGEON_TIERS: DungeonTierDef[] = [
       { itemId: "ancient_dust", min: 2, max: 4 },
       { itemId: "bandage", min: 1, max: 3, chance: 0.6 },
     ],
+    theme: "ruins",
+    zoneName: "Sunken Vault",
+    zoneSubtitle: "A hand-carved chamber, sealed off from the world outside",
   },
   {
     // Ashenpeak -- reuses the region's own tier-3/4 roster, gated behind a
@@ -46,6 +54,9 @@ export const DUNGEON_TIERS: DungeonTierDef[] = [
       { itemId: "hide", min: 3, max: 6 },
       { itemId: "runic_healing_potion", min: 1, max: 2, chance: 0.7 },
     ],
+    theme: "ice",
+    zoneName: "Frostbound Crypt",
+    zoneSubtitle: "Ice creeps over cracked stone, older and colder than the peak above",
   },
 ];
 

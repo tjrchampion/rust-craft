@@ -1,7 +1,17 @@
 import * as THREE from "three";
 import { GLTFLoader, type GLTF } from "three/examples/jsm/loaders/GLTFLoader.js";
-import { generateVillages, generatePois, mulberry32, hashString, terrainHeight, TIER_NAMES } from "@rustcraft/shared";
+import {
+  generateVillages,
+  generatePois,
+  generateDungeonLayout,
+  mulberry32,
+  hashString,
+  terrainHeight,
+  TIER_NAMES,
+  dungeonTierDef,
+} from "@rustcraft/shared";
 import { buildShrine, buildStump, buildCampfire, buildNameplate, buildRock } from "./models";
+import { buildDungeonInterior } from "./dungeonInterior";
 
 const loader = new GLTFLoader();
 const cache = new Map<string, Promise<GLTF>>();
@@ -165,6 +175,7 @@ export interface SettlementHandles {
   shrines: { id: string; x: number; y: number; z: number }[];
   dungeonPortals: { id: string; x: number; y: number; z: number; tier: number }[];
   crystals: THREE.Object3D[];
+  signs: THREE.Object3D[];
 }
 
 /** Construct a single village's buildings, clutter and nameplate. Cheap to
@@ -173,7 +184,8 @@ export function buildVillage(
   scene: THREE.Scene,
   village: ReturnType<typeof generateVillages>[number],
   withSigns = true,
-): void {
+): THREE.Object3D[] {
+  const signs: THREE.Object3D[] = [];
   for (const b of village.buildings) {
     void placeBuilding(scene, b.type, b.x, b.y, b.z, b.yaw, b.scale);
   }
@@ -183,7 +195,9 @@ export function buildVillage(
     sign.scale.set(7, 1.75, 1);
     sign.position.set(village.x, (village.buildings[0]?.y ?? 4) + 9, village.z);
     scene.add(sign);
+    signs.push(sign);
   }
+  return signs;
 }
 
 /** Ruins, shrines, camps, and the watchtower — modest in count,
@@ -192,6 +206,7 @@ export function buildWorldStatic(scene: THREE.Scene, withSigns = true): Settleme
   const shrines: { id: string; x: number; y: number; z: number }[] = [];
   const dungeonPortals: { id: string; x: number; y: number; z: number; tier: number }[] = [];
   const crystals: THREE.Object3D[] = [];
+  const signs: THREE.Object3D[] = [];
 
   for (const poi of generatePois()) {
     for (const b of poi.buildings) {
@@ -206,8 +221,8 @@ export function buildWorldStatic(scene: THREE.Scene, withSigns = true): Settleme
       const crystal = shrine.getObjectByName("crystal");
       if (crystal) crystals.push(crystal);
     } else if (poi.type === "dungeon_portal") {
-      // Reuses the shrine mesh for now (visually close enough for a first
-      // pass) -- the nameplate is what actually distinguishes it in-world.
+      // The gateway itself -- reuses the shrine mesh as the outdoor
+      // "trigger" object -- the nameplate distinguishes it in-world.
       const portal = buildShrine();
       portal.position.set(poi.x, poi.y, poi.z);
       portal.rotation.y = poi.yaw;
@@ -221,6 +236,7 @@ export function buildWorldStatic(scene: THREE.Scene, withSigns = true): Settleme
         sign.scale.set(5.5, 1.4, 1);
         sign.position.set(poi.x, poi.y + 4.5, poi.z);
         scene.add(sign);
+        signs.push(sign);
       }
     } else if (poi.type === "camp") {
       const fireX = poi.x + 2;
@@ -245,22 +261,27 @@ export function buildWorldStatic(scene: THREE.Scene, withSigns = true): Settleme
         rubble.position.set(rx, terrainHeight(rx, rz), rz);
         scene.add(rubble);
       }
-    } else if (poi.type === "tower" && withSigns) {
       const sign = buildNameplate("Old Watchtower", "#d8c9a8");
       sign.scale.set(6, 1.5, 1);
       sign.position.set(poi.x, poi.y + 18, poi.z);
       scene.add(sign);
+      signs.push(sign);
     }
   }
 
-  return { shrines, dungeonPortals, crystals };
+  return { shrines, dungeonPortals, crystals, signs };
 }
 
 /** Everything at once — used by the title screen fly-over, which has no
  *  player position to stream around and wants the whole world visible. */
 export function buildSettlements(scene: THREE.Scene, withSigns = true): SettlementHandles {
-  for (const village of generateVillages()) buildVillage(scene, village, withSigns);
-  return buildWorldStatic(scene, withSigns);
+  const allSigns: THREE.Object3D[] = [];
+  for (const village of generateVillages()) {
+    allSigns.push(...buildVillage(scene, village, withSigns));
+  }
+  const handles = buildWorldStatic(scene, withSigns);
+  handles.signs.push(...allSigns);
+  return handles;
 }
 
 /** Animate shrine crystals; call per-frame with elapsed time. */

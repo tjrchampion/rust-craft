@@ -134,9 +134,71 @@
     Array.from({ length: EQUIP_SLOTS.length }, (_, i) => game.inventory.find((it) => it.container === "equip" && it.slot === i)),
   );
   const learnedSpells = $derived(game.learnedSpells);
+
+  let spellElements = $state<(HTMLElement | null)[]>([]);
+  let hotbarElements = $state<(HTMLElement | null)[]>([]);
+
+  // Expose system state to window for controller fullscreen support
+  $effect(() => {
+    (window as any).__systemTabSub = systemTabSub;
+    (window as any).__systemSubFocus = systemSubFocus;
+    (window as any).__systemCursor = systemCursor;
+  });
+
+  const classInfo = $derived(game.classId ? classDef(game.classId) : null);
+  const classSpells = $derived(classInfo ? classInfo.startingSpells : []);
+  const spellsToShow = $derived.by(() => {
+    const list = [...classSpells];
+    for (const spellId of game.learnedSpells) {
+      if (!list.includes(spellId)) {
+        list.push(spellId);
+      }
+    }
+    return list;
+  });
+
+  const isSpellLocked = (spellId: string) => {
+    const def = spellDef(spellId);
+    const req = def.requiredLevel ?? 1;
+    const playerLvl = game.self?.level ?? 1;
+    return playerLvl < req;
+  };
+
+  // Controller-driven spell tooltip synchronization
+  $effect(() => {
+    const tab = game.activeTab;
+    const focus = spellBookFocus;
+    const cursor = spellCursor;
+    const hotbarCursor = spellHotbarCursor;
+
+    // Reset/clear tooltip when tab changes or if not focused on spells/hotbar
+    hoveredSpell = null;
+
+    if (tab === "spellbook") {
+      if (focus === "spells") {
+        const spellId = spellsToShow[cursor];
+        const el = spellElements[cursor];
+        if (spellId && el) {
+          hoveredSpell = spellId;
+          const r = el.getBoundingClientRect();
+          tooltipPos = { x: Math.min(r.right + 10, window.innerWidth - 280), y: r.top };
+        }
+      } else if (focus === "hotbar") {
+        const spellId = slotSpellId(hotbarCursor);
+        const el = hotbarElements[hotbarCursor];
+        if (spellId && el) {
+          hoveredSpell = spellId;
+          const r = el.getBoundingClientRect();
+          tooltipPos = { x: Math.min(r.right + 10, window.innerWidth - 280), y: r.top };
+        }
+      }
+    }
+  });
+
   const craftingSlots = $derived(
     Array.from({ length: 9 }, (_, i) => game.inventory.find((it) => it.container === "crafting" && it.slot === i))
   );
+
   const matchedRecipe = $derived.by(() => {
     const active = craftingSlots.filter(it => it !== undefined && it.qty > 0);
     if (active.length === 0) return null;
@@ -145,16 +207,10 @@
       if (it) totals[it.itemId] = (totals[it.itemId] ?? 0) + it.qty;
     }
     for (const recipe of Object.values(RECIPES)) {
-      const ingTotals: Record<string, number> = {};
-      for (const ing of recipe.ingredients) {
-        ingTotals[ing.itemId] = (ingTotals[ing.itemId] ?? 0) + ing.qty;
-      }
-      const gridKeys = Object.keys(totals);
-      const ingKeys = Object.keys(ingTotals);
-      if (gridKeys.length !== ingKeys.length) continue;
       let match = true;
-      for (const key of gridKeys) {
-        if (totals[key] !== ingTotals[key]) {
+      for (const ing of recipe.ingredients) {
+        const total = totals[ing.itemId] ?? 0;
+        if (total < ing.qty) {
           match = false;
           break;
         }
@@ -163,7 +219,7 @@
     }
     return null;
   });
-  const classInfo = $derived(game.classId ? classDef(game.classId) : null);
+
   const partyMemberIds = $derived(new Set((game.party ?? []).map((m) => m.id)));
   const invitablePlayers = $derived(game.roster.filter((p) => p.id !== game.selfId && !partyMemberIds.has(p.id)));
   const amLeader = $derived((game.party ?? []).find((m) => m.id === game.selfId)?.leader ?? false);
@@ -264,6 +320,7 @@
     return spellIdOf(hotbarSlots[idx]);
   }
   function pickSpell(spellId: string): void {
+    if (isSpellLocked(spellId)) return;
     movingSpell = movingSpell === spellId ? null : spellId;
   }
   function activateHotbarForSpell(idx: number): void {
@@ -661,12 +718,16 @@
         <div class="spellbook-tab">
           <h3>Known Spells</h3>
           <div class="spell-list">
-            {#each learnedSpells as spellId, i (spellId)}
+            {#each spellsToShow as spellId, i (spellId)}
               {@const spell = spellDef(spellId)}
+              {@const locked = isSpellLocked(spellId)}
               <button
+                bind:this={spellElements[i]}
                 class="spell-row"
                 class:cursor={spellBookFocus === "spells" && spellCursor === i}
                 class:moving={movingSpell === spellId}
+                class:locked={locked}
+                disabled={locked}
                 onmouseenter={(e) => showTooltip(spellId, e)}
                 onmouseleave={hideTooltip}
                 onclick={() => {
@@ -677,6 +738,9 @@
               >
                 <IconGlyph value={spellIcon(spellId)} size={26} />
                 <span class="name">{spell.name}</span>
+                {#if locked}
+                  <span class="lock-req">Req. Lvl {spell.requiredLevel ?? 1} 🔒</span>
+                {/if}
               </button>
             {/each}
           </div>
@@ -685,6 +749,7 @@
             {#each hotbarSlots as item, i (i)}
               {@const spellId = slotSpellId(i)}
               <button
+                bind:this={hotbarElements[i]}
                 class="cell big"
                 class:spell={spellId !== null}
                 class:moving={spellId !== null && movingSpell === spellId}
@@ -1210,6 +1275,17 @@
   .spell-row .name {
     font-size: 13px;
     font-weight: 600;
+  }
+  .spell-row.locked {
+    opacity: 0.5;
+    filter: grayscale(80%);
+    cursor: not-allowed !important;
+  }
+  .lock-req {
+    margin-left: auto;
+    font-size: 11px;
+    font-weight: bold;
+    color: var(--rc-gold-dim);
   }
   /* Floating tooltip -- fixed-position (viewport coordinates set inline via
      JS from the hovered row's own rect), so it renders above absolutely

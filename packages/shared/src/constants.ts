@@ -82,6 +82,13 @@ export const DUNGEON_MOB_MULT_PER_EXTRA_PLAYER = 0.35; // +35% hp/damage per pla
 export const DUNGEON_ABANDON_TIMEOUT_MS = 5 * 60 * 1000; // GC an instance nobody is connected to
 export const DUNGEON_WIPE_EJECT_MS = 15 * 1000; // eject a fully-dead party if nobody revives in time
 
+// Every portal's arena is a real enclosed room built on top of the same
+// reserved rectangle above -- these size the walls/floor/ceiling, inside
+// the larger DUNGEON_ARENA_RADIUS exclusion buffer.
+export const DUNGEON_WALL_RADIUS = 38; // interior room radius
+export const DUNGEON_WALL_HEIGHT = 16; // tall enough to fully occlude sky/horizon
+export const DUNGEON_DOORWAY_HALF_ANGLE = 0.28; // radians, gap in the wall ring for the entrance
+
 // Progression
 export const MAX_LEVEL = 20;
 export function xpForLevel(level: number): number {

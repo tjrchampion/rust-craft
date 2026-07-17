@@ -8,6 +8,9 @@ import {
   generateBridges,
   generateRegionTwoNodes,
   generateRegionTwoMobSpawns,
+  generateDungeonLayout,
+  dungeonFloorHeightAt,
+  dungeonPortalAt,
   distPointToSegment,
 } from "../src/worldgen";
 import {
@@ -20,7 +23,7 @@ import {
   RIVER_HALF_WIDTH,
   PASS_HALF_WIDTH,
 } from "../src/terrain";
-import { WATER_LEVEL, VALLEY_START_Z, REGION_TWO_MAX_Z } from "../src/constants";
+import { WATER_LEVEL, VALLEY_START_Z, REGION_TWO_MAX_Z, DUNGEON_WALL_RADIUS } from "../src/constants";
 import { dist2D } from "../src/math";
 import { mobDef } from "../src/content/mobs";
 
@@ -294,5 +297,52 @@ describe("region two (Ashenpeak)", () => {
     }
     expect(generateNodes().length).toBeGreaterThan(0);
     expect(generateMobSpawns().length).toBeGreaterThan(0);
+  });
+});
+
+describe("dungeon interiors", () => {
+  const portals = generatePois().filter((p) => p.type === "dungeon_portal");
+
+  it("has at least two dungeon portals to test", () => {
+    expect(portals.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("dungeonFloorHeightAt returns the layout's flat floorY within the wall radius, null far away", () => {
+    for (const portal of portals) {
+      const layout = generateDungeonLayout(portal.id);
+      expect(dungeonFloorHeightAt(portal.arenaX!, portal.arenaZ!)).toBe(layout.floorY);
+      const nearEdge = portal.arenaX! + (DUNGEON_WALL_RADIUS - 2);
+      expect(dungeonFloorHeightAt(nearEdge, portal.arenaZ!)).toBe(layout.floorY);
+      const farAway = portal.arenaX! + DUNGEON_WALL_RADIUS + 200;
+      expect(dungeonFloorHeightAt(farAway, portal.arenaZ!)).toBeNull();
+    }
+  });
+
+  it("dungeonPortalAt identifies the correct portal within its wall radius, null far away", () => {
+    for (const portal of portals) {
+      expect(dungeonPortalAt(portal.arenaX!, portal.arenaZ!)?.id).toBe(portal.id);
+      const farAway = portal.arenaX! + DUNGEON_WALL_RADIUS + 200;
+      expect(dungeonPortalAt(farAway, portal.arenaZ!)).toBeNull();
+    }
+  });
+
+  it("pillars/rubble are deterministic and differ between distinct portals", () => {
+    const [a, b] = portals;
+    const layoutA1 = generateDungeonLayout(a!.id);
+    const layoutA2 = generateDungeonLayout(a!.id);
+    expect(layoutA1.pillars).toEqual(layoutA2.pillars);
+    expect(layoutA1.rubble).toEqual(layoutA2.rubble);
+
+    const layoutB = generateDungeonLayout(b!.id);
+    expect(layoutB.pillars).not.toEqual(layoutA1.pillars);
+    expect(layoutB.rubble).not.toEqual(layoutA1.rubble);
+  });
+
+  it("doorwayAngle points from the room center back toward the portal's own outdoor position", () => {
+    for (const portal of portals) {
+      const layout = generateDungeonLayout(portal.id);
+      const expected = Math.atan2(layout.center.x - portal.x, layout.center.z - portal.z);
+      expect(layout.doorwayAngle).toBeCloseTo(expected, 5);
+    }
   });
 });

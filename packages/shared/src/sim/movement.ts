@@ -1,5 +1,5 @@
 import { terrainHeight } from "../terrain";
-import { bridgeHeightAt } from "../worldgen";
+import { bridgeHeightAt, dungeonFloorHeightAt } from "../worldgen";
 import { clamp } from "../math";
 import {
   WALK_SPEED,
@@ -35,6 +35,7 @@ export interface MoveInput {
   sprint: boolean;
   /** Server-authoritative mount state, injected identically on client + server. */
   mount?: MountKind;
+  inDungeon?: boolean;
 }
 
 /**
@@ -71,8 +72,9 @@ export function stepMovement(state: MoveState, input: MoveInput, dt: number): Mo
   z = clamp(z, WORLD_MIN_Z, WORLD_MAX_Z);
 
   // A bridge deck overrides the carved river trench so players walk the
-  // span instead of wading through the water beneath it.
-  const ground = bridgeHeightAt(x, z) ?? terrainHeight(x, z);
+  // span instead of wading through the water beneath it; a dungeon's flat
+  // interior floor overrides the outdoor noise-based terrain the same way.
+  const ground = bridgeHeightAt(x, z) ?? (input.inDungeon ? dungeonFloorHeightAt(x, z) : null) ?? terrainHeight(x, z);
   // A raft rides on the surface; a swimmer treads just below it.
   const surfaceY = mount === "raft" ? WATER_LEVEL - 0.1 : WATER_LEVEL - 1.1;
   const floatY = Math.max(ground, surfaceY);

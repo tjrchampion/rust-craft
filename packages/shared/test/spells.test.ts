@@ -52,4 +52,12 @@ describe("spells", () => {
       }
     }
   });
+
+  it("every spell has a requiredLevel between 1 and 10", () => {
+    for (const spell of Object.values(SPELLS)) {
+      expect(spell.requiredLevel).toBeDefined();
+      expect(spell.requiredLevel).toBeGreaterThanOrEqual(1);
+      expect(spell.requiredLevel).toBeLessThanOrEqual(10);
+    }
+  });
 });

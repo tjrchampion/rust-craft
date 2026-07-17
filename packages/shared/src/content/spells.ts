@@ -44,6 +44,7 @@ export interface SpellDef {
    *  a spell-level effect, not a per-target one, so it lives here rather
    *  than in `effects`. `petType` keys into content/mobs.ts for model/stats. */
   summon?: { petType: string };
+  requiredLevel?: number;
 }
 
 export const SPELLS: Record<string, SpellDef> = {
@@ -58,6 +59,7 @@ export const SPELLS: Record<string, SpellDef> = {
       { type: "damage", base: 8, powerScale: 1.9, damageType: "fire" },
       { type: "applyAura", auraId: "burning" },
     ],
+    requiredLevel: 1,
   },
   frostbolt: {
     id: "frostbolt",
@@ -70,6 +72,7 @@ export const SPELLS: Record<string, SpellDef> = {
       { type: "damage", base: 6, powerScale: 1.6, damageType: "frost" },
       { type: "applyAura", auraId: "chilled" },
     ],
+    requiredLevel: 2,
   },
   rend: {
     id: "rend",
@@ -82,6 +85,7 @@ export const SPELLS: Record<string, SpellDef> = {
       { type: "damage", base: 4, powerScale: 0.8, damageType: "physical" },
       { type: "applyAura", auraId: "bleeding" },
     ],
+    requiredLevel: 1,
   },
   charge: {
     id: "charge",
@@ -91,6 +95,7 @@ export const SPELLS: Record<string, SpellDef> = {
     cooldownS: 12,
     targeting: { kind: "self", range: 0 },
     effects: [{ type: "applyAura", auraId: "battle_fury", landsOn: "caster" }],
+    requiredLevel: 2,
   },
   backstab: {
     id: "backstab",
@@ -100,6 +105,7 @@ export const SPELLS: Record<string, SpellDef> = {
     cooldownS: 5,
     targeting: { kind: "melee", range: 2.2 },
     effects: [{ type: "damage", base: 8, powerScale: 2.6, damageType: "physical" }],
+    requiredLevel: 1,
   },
   poison_strike: {
     id: "poison_strike",
@@ -112,6 +118,7 @@ export const SPELLS: Record<string, SpellDef> = {
       { type: "damage", base: 3, powerScale: 0.7, damageType: "physical" },
       { type: "applyAura", auraId: "poisoned" },
     ],
+    requiredLevel: 2,
   },
   heal: {
     id: "heal",
@@ -121,6 +128,7 @@ export const SPELLS: Record<string, SpellDef> = {
     cooldownS: 4,
     targeting: { kind: "self", range: 0 },
     effects: [{ type: "heal", base: 10, powerScale: 2.4, landsOn: "caster" }],
+    requiredLevel: 1,
   },
   smite: {
     id: "smite",
@@ -130,6 +138,7 @@ export const SPELLS: Record<string, SpellDef> = {
     cooldownS: 3,
     targeting: { kind: "projectile", range: 26, projectileSpeed: 30 },
     effects: [{ type: "damage", base: 9, powerScale: 1.9, damageType: "holy" }],
+    requiredLevel: 1,
   },
   quick_shot: {
     id: "quick_shot",
@@ -139,6 +148,7 @@ export const SPELLS: Record<string, SpellDef> = {
     cooldownS: 2,
     targeting: { kind: "projectile", range: 32, projectileSpeed: 34 },
     effects: [{ type: "damage", base: 7, powerScale: 1.7, damageType: "physical" }],
+    requiredLevel: 1,
   },
   piercing_shot: {
     id: "piercing_shot",
@@ -151,6 +161,7 @@ export const SPELLS: Record<string, SpellDef> = {
       { type: "damage", base: 11, powerScale: 2.1, damageType: "physical" },
       { type: "applyAura", auraId: "bleeding" },
     ],
+    requiredLevel: 6,
   },
   wrath: {
     id: "wrath",
@@ -160,6 +171,7 @@ export const SPELLS: Record<string, SpellDef> = {
     cooldownS: 3,
     targeting: { kind: "projectile", range: 28, projectileSpeed: 24 },
     effects: [{ type: "damage", base: 9, powerScale: 2.0, damageType: "nature" }],
+    requiredLevel: 1,
   },
   regrowth: {
     id: "regrowth",
@@ -169,6 +181,7 @@ export const SPELLS: Record<string, SpellDef> = {
     cooldownS: 6,
     targeting: { kind: "self", range: 0 },
     effects: [{ type: "applyAura", auraId: "regrowth", landsOn: "caster" }],
+    requiredLevel: 2,
   },
   crusader_strike: {
     id: "crusader_strike",
@@ -178,6 +191,7 @@ export const SPELLS: Record<string, SpellDef> = {
     cooldownS: 5,
     targeting: { kind: "melee", range: 2.4 },
     effects: [{ type: "damage", base: 8, powerScale: 2.0, damageType: "holy" }],
+    requiredLevel: 1,
   },
   divine_favor: {
     id: "divine_favor",
@@ -187,6 +201,7 @@ export const SPELLS: Record<string, SpellDef> = {
     cooldownS: 12,
     targeting: { kind: "self", range: 0 },
     effects: [{ type: "applyAura", auraId: "divine_favor", landsOn: "caster" }],
+    requiredLevel: 2,
   },
   whirlwind: {
     id: "whirlwind",
@@ -196,6 +211,7 @@ export const SPELLS: Record<string, SpellDef> = {
     cooldownS: 8,
     targeting: { kind: "aoe", range: 0, radius: 4 },
     effects: [{ type: "damage", base: 5, powerScale: 1.1, damageType: "physical" }],
+    requiredLevel: 4,
   },
   flame_nova: {
     id: "flame_nova",
@@ -208,6 +224,7 @@ export const SPELLS: Record<string, SpellDef> = {
       { type: "damage", base: 5, powerScale: 1.2, damageType: "fire" },
       { type: "applyAura", auraId: "burning" },
     ],
+    requiredLevel: 4,
   },
   fan_of_knives: {
     id: "fan_of_knives",
@@ -217,6 +234,7 @@ export const SPELLS: Record<string, SpellDef> = {
     cooldownS: 8,
     targeting: { kind: "aoe", range: 0, radius: 4 },
     effects: [{ type: "damage", base: 4, powerScale: 1.2, damageType: "physical" }],
+    requiredLevel: 4,
   },
   circle_of_healing: {
     id: "circle_of_healing",
@@ -226,6 +244,7 @@ export const SPELLS: Record<string, SpellDef> = {
     cooldownS: 10,
     targeting: { kind: "aoe", range: 0, radius: 8 },
     effects: [{ type: "heal", base: 8, powerScale: 1.8 }],
+    requiredLevel: 4,
   },
   volley: {
     id: "volley",
@@ -235,6 +254,7 @@ export const SPELLS: Record<string, SpellDef> = {
     cooldownS: 8,
     targeting: { kind: "aoe", range: 0, radius: 6 },
     effects: [{ type: "damage", base: 6, powerScale: 1.3, damageType: "physical" }],
+    requiredLevel: 4,
   },
   thorn_burst: {
     id: "thorn_burst",
@@ -244,6 +264,7 @@ export const SPELLS: Record<string, SpellDef> = {
     cooldownS: 8,
     targeting: { kind: "aoe", range: 0, radius: 5 },
     effects: [{ type: "damage", base: 6, powerScale: 1.4, damageType: "nature" }],
+    requiredLevel: 4,
   },
   consecration: {
     id: "consecration",
@@ -253,6 +274,7 @@ export const SPELLS: Record<string, SpellDef> = {
     cooldownS: 8,
     targeting: { kind: "aoe", range: 0, radius: 5 },
     effects: [{ type: "damage", base: 6, powerScale: 1.3, damageType: "holy" }],
+    requiredLevel: 4,
   },
   execute: {
     id: "execute",
@@ -262,6 +284,7 @@ export const SPELLS: Record<string, SpellDef> = {
     cooldownS: 10,
     targeting: { kind: "melee", range: 2.6 },
     effects: [{ type: "damage", base: 8, powerScale: 1.4, damageType: "physical", executeScale: 3.0 }],
+    requiredLevel: 6,
   },
   shield_wall: {
     id: "shield_wall",
@@ -271,6 +294,7 @@ export const SPELLS: Record<string, SpellDef> = {
     cooldownS: 16,
     targeting: { kind: "self", range: 0 },
     effects: [{ type: "applyAura", auraId: "shield_wall", landsOn: "caster" }],
+    requiredLevel: 8,
   },
   arcane_blast: {
     id: "arcane_blast",
@@ -283,6 +307,7 @@ export const SPELLS: Record<string, SpellDef> = {
       { type: "damage", base: 11, powerScale: 2.2, damageType: "arcane" },
       { type: "applyAura", auraId: "arcane_silence" },
     ],
+    requiredLevel: 6,
   },
   blizzard: {
     id: "blizzard",
@@ -295,6 +320,7 @@ export const SPELLS: Record<string, SpellDef> = {
       { type: "damage", base: 5, powerScale: 1.2, damageType: "frost" },
       { type: "applyAura", auraId: "chilled" },
     ],
+    requiredLevel: 8,
   },
   eviscerate: {
     id: "eviscerate",
@@ -304,6 +330,7 @@ export const SPELLS: Record<string, SpellDef> = {
     cooldownS: 8,
     targeting: { kind: "melee", range: 2.2 },
     effects: [{ type: "damage", base: 7, powerScale: 1.3, damageType: "shadow", executeScale: 2.6 }],
+    requiredLevel: 6,
   },
   garrote: {
     id: "garrote",
@@ -316,6 +343,7 @@ export const SPELLS: Record<string, SpellDef> = {
       { type: "damage", base: 3, powerScale: 0.6, damageType: "shadow", lifestealPct: 0.5 },
       { type: "applyAura", auraId: "bleeding" },
     ],
+    requiredLevel: 8,
   },
   holy_fire: {
     id: "holy_fire",
@@ -328,6 +356,7 @@ export const SPELLS: Record<string, SpellDef> = {
       { type: "damage", base: 7, powerScale: 1.6, damageType: "holy" },
       { type: "applyAura", auraId: "holy_burn" },
     ],
+    requiredLevel: 6,
   },
   renew: {
     id: "renew",
@@ -337,6 +366,7 @@ export const SPELLS: Record<string, SpellDef> = {
     cooldownS: 8,
     targeting: { kind: "self", range: 0 },
     effects: [{ type: "applyAura", auraId: "renew", landsOn: "caster" }],
+    requiredLevel: 2,
   },
   aimed_shot: {
     id: "aimed_shot",
@@ -346,6 +376,7 @@ export const SPELLS: Record<string, SpellDef> = {
     cooldownS: 8,
     targeting: { kind: "projectile", range: 34, projectileSpeed: 36 },
     effects: [{ type: "damage", base: 8, powerScale: 1.5, damageType: "physical", executeScale: 2.4 }],
+    requiredLevel: 8,
   },
   serpent_sting: {
     id: "serpent_sting",
@@ -358,6 +389,7 @@ export const SPELLS: Record<string, SpellDef> = {
       { type: "damage", base: 4, powerScale: 0.9, damageType: "nature" },
       { type: "applyAura", auraId: "poisoned" },
     ],
+    requiredLevel: 2,
   },
   moonfire: {
     id: "moonfire",
@@ -370,6 +402,7 @@ export const SPELLS: Record<string, SpellDef> = {
       { type: "damage", base: 5, powerScale: 1.1, damageType: "arcane" },
       { type: "applyAura", auraId: "moonfire_burn" },
     ],
+    requiredLevel: 6,
   },
   entangling_roots: {
     id: "entangling_roots",
@@ -382,6 +415,7 @@ export const SPELLS: Record<string, SpellDef> = {
       { type: "damage", base: 3, powerScale: 0.6, damageType: "nature" },
       { type: "applyAura", auraId: "entangled" },
     ],
+    requiredLevel: 8,
   },
   hammer_of_wrath: {
     id: "hammer_of_wrath",
@@ -391,6 +425,7 @@ export const SPELLS: Record<string, SpellDef> = {
     cooldownS: 7,
     targeting: { kind: "projectile", range: 26, projectileSpeed: 30 },
     effects: [{ type: "damage", base: 6, powerScale: 1.3, damageType: "holy", executeScale: 2.8 }],
+    requiredLevel: 6,
   },
   holy_shield: {
     id: "holy_shield",
@@ -400,6 +435,7 @@ export const SPELLS: Record<string, SpellDef> = {
     cooldownS: 16,
     targeting: { kind: "self", range: 0 },
     effects: [{ type: "applyAura", auraId: "holy_shield", landsOn: "caster" }],
+    requiredLevel: 8,
   },
   beast_mastery: {
     id: "beast_mastery",
@@ -410,6 +446,7 @@ export const SPELLS: Record<string, SpellDef> = {
     targeting: { kind: "self", range: 0 },
     effects: [{ type: "applyAura", auraId: "beast_mastery_buff", landsOn: "caster" }],
     summon: { petType: "wolf" },
+    requiredLevel: 10,
   },
 };
 

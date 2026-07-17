@@ -25,16 +25,19 @@ import {
   DODGE_DISTANCE,
   DUNGEON_PORTAL_ACTIVATION_RADIUS,
   dungeonTierDef,
+  dungeonPortalAt,
+  generateDungeonLayout,
   TIER_NAMES,
   WORLD_MIN_X,
-  WORLD_MAX_X, 
-  WORLD_MIN_Z, 
+  WORLD_MAX_X,
+  WORLD_MIN_Z,
   WORLD_MAX_Z,
   type MoveState,
   type ServerMsg,
   type SelfState,
   type ItemSnap,
   type ItemDef,
+  type PoiSpec,
 } from "@rustcraft/shared";
 import { Connection } from "../net/connection";
 import { InputManager } from "../input/input";
@@ -48,6 +51,7 @@ import { EntityManager, playerModelUrl } from "../render/entities";
 import { CLASS_WEAPON_NODES } from "../render/classModels";
 import { AnimatedModel, PLAYER_ANIMS, logicalFromState, dodgeLogicalFor } from "../render/gltf";
 import { buildWorldStatic, buildVillage, animateSettlements, type SettlementHandles } from "../render/settlements";
+import { DUNGEON_THEME_COLORS, buildDungeonInterior } from "../render/dungeonInterior";
 import { NpcManager } from "../render/npcs";
 import { sound } from "./sound";
 import { game as ui, type CharacterTab } from "../ui/gameState.svelte";
@@ -67,6 +71,7 @@ interface PendingInput {
   block: boolean;
   mount: "horse" | "raft" | null;
   revivingId: string | null;
+  inDungeon?: boolean;
 }
 
 export class Game {
@@ -75,12 +80,19 @@ export class Game {
   private camera: THREE.PerspectiveCamera;
   private sun: THREE.DirectionalLight;
   private ambient: THREE.AmbientLight;
+  /** Set while standing inside a dungeon's enclosed room -- drives the
+   *  day/night override in updateDayNight (fixed themed lighting instead
+   *  of the outdoor sky/sun). */
+  private insideDungeonPortal: PoiSpec | null = null;
+  private activeDungeonGroup: THREE.Group | null = null;
+  private activeDungeonPortalId: string | null = null;
 
   private connection = new Connection();
   private input: InputManager;
   private nodes!: NodeManager;
   readonly entities!: EntityManager;
   private settlements!: SettlementHandles;
+  private overworldSigns: THREE.Object3D[] = [];
   private npcManager!: NpcManager;
   private grass: GrassField;
   private clouds: CloudField;
@@ -178,6 +190,7 @@ export class Game {
     this.clouds = buildClouds();
     this.scene.add(this.clouds.group);
     this.settlements = buildWorldStatic(this.scene);
+    this.overworldSigns.push(...this.settlements.signs);
     this.npcManager = new NpcManager(this.scene);
     this.grass = new GrassField(this.scene);
 
@@ -604,6 +617,15 @@ export class Game {
         cancel,
       };
       if (cancel) escapeConsumedByPanel = true;
+      if (nav.confirm && ui.inventoryOpen && ui.activeTab === "system") {
+        const sub = (window as any).__systemTabSub;
+        const focus = (window as any).__systemSubFocus;
+        const cursor = (window as any).__systemCursor;
+        if (sub === "game" && focus === "content" && cursor === 0) {
+          if (document.fullscreenElement) void document.exitFullscreen();
+          else void document.documentElement.requestFullscreen().catch(() => {});
+        }
+      }
       if (nav.up || nav.down || nav.left || nav.right || nav.confirm || nav.cancel) {
         window.dispatchEvent(new CustomEvent("rc:menuNav", { detail: nav }));
       }
@@ -750,16 +772,51 @@ export class Game {
     this.currentMount = want;
   }
 
-  /** Named-zone banner (WoW-style) + lazy village streaming as the player travels. */
   private updateZoneAndStreaming(x: number, z: number): void {
-    const zone = zoneAt(x, z);
+    this.insideDungeonPortal = ui.dungeonState ? dungeonPortalAt(x, z) : null;
+
+    const zone = zoneAt(x, z, !!this.insideDungeonPortal);
     ui.enterZone(zone.id, zone.name, zone.subtitle);
 
+    const showSigns = !this.insideDungeonPortal;
+    for (const sign of this.overworldSigns) {
+      if (sign.visible !== showSigns) {
+        sign.visible = showSigns;
+      }
+    }
+
+    if (this.insideDungeonPortal) {
+      if (this.activeDungeonPortalId !== this.insideDungeonPortal.id) {
+        if (this.activeDungeonGroup) {
+          this.scene.remove(this.activeDungeonGroup);
+          this.disposeHierarchy(this.activeDungeonGroup);
+          this.activeDungeonGroup = null;
+        }
+        this.activeDungeonPortalId = this.insideDungeonPortal.id;
+        this.activeDungeonGroup = new THREE.Group();
+        const layout = generateDungeonLayout(this.insideDungeonPortal.id);
+        const tier = this.insideDungeonPortal.dungeonTier ?? 0;
+        const theme = dungeonTierDef(tier).theme;
+        buildDungeonInterior(this.activeDungeonGroup, layout, theme);
+        this.scene.add(this.activeDungeonGroup);
+      }
+    } else {
+      if (this.activeDungeonGroup) {
+        this.scene.remove(this.activeDungeonGroup);
+        this.disposeHierarchy(this.activeDungeonGroup);
+        this.activeDungeonGroup = null;
+        this.activeDungeonPortalId = null;
+      }
+    }
     for (const village of generateVillages()) {
       if (this.streamedVillages.has(village.id)) continue;
       if (dist2D(x, z, village.x, village.z) < this.STREAM_RADIUS) {
         this.streamedVillages.add(village.id);
-        buildVillage(this.scene, village, true);
+        const vSigns = buildVillage(this.scene, village, true);
+        for (const sign of vSigns) {
+          sign.visible = !this.insideDungeonPortal;
+        }
+        this.overworldSigns.push(...vSigns);
       }
     }
 
@@ -854,13 +911,14 @@ export class Game {
     this.jumpQueued = false;
     const mount = ui.self?.mount ?? null;
 
+    const inDungeon = ui.dungeonState !== null;
     const seq = ++this.inputSeq;
-    this.pending.push({ seq, ...input, mount });
+    this.pending.push({ seq, ...input, mount, inDungeon });
     if (this.pending.length > 120) this.pending.shift();
 
     // Predict with the mount so speed matches the server; the wire message
     // omits mount (server is authoritative on mount state).
-    this.move = stepMovement(this.move, { ...input, mount }, TICK_DT);
+    this.move = stepMovement(this.move, { ...input, mount, inDungeon }, TICK_DT);
     this.connection.send({ t: "input", seq, ...input, yaw: this.cameraYaw });
   }
 
@@ -1094,6 +1152,29 @@ export class Game {
   }
 
   private updateDayNight(px: number, pz: number): void {
+    if (this.insideDungeonPortal) {
+      // Sealed chamber -- fixed themed torchlight regardless of the
+      // outdoor time of day, tight fog so the doorway gap doesn't reveal a
+      // jarring outdoor boundary.
+      const theme = DUNGEON_THEME_COLORS[dungeonTierDef(this.insideDungeonPortal.dungeonTier ?? 0).theme];
+      this.sun.intensity = 0;
+      this.ambient.intensity = 0.55;
+      this.ambient.color.set(theme.torchColor);
+      const sky = new THREE.Color(theme.ceilingTint).multiplyScalar(0.35);
+      (this.scene.background as THREE.Color).copy(sky);
+      this.scene.fog!.color.copy(sky);
+      if (this.scene.fog instanceof THREE.Fog) {
+        this.scene.fog.near = 4;
+        this.scene.fog.far = 55;
+      }
+      return;
+    }
+    if (this.scene.fog instanceof THREE.Fog) {
+      this.scene.fog.near = 120;
+      this.scene.fog.far = 620;
+    }
+    this.ambient.color.set(0x8899bb);
+
     const t = ui.timeOfDay; // 0..1, 0.5 = midnight-ish; 0.25 = noon-ish given +0.3 offset
     const angle = t * Math.PI * 2;
     const elevation = Math.sin(angle);
@@ -1220,6 +1301,19 @@ export class Game {
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(window.innerWidth, window.innerHeight);
   };
+
+  private disposeHierarchy(obj: THREE.Object3D): void {
+    obj.traverse((child) => {
+      if (child instanceof THREE.Mesh) {
+        if (child.geometry) child.geometry.dispose();
+        if (Array.isArray(child.material)) {
+          child.material.forEach((m) => m.dispose());
+        } else if (child.material) {
+          child.material.dispose();
+        }
+      }
+    });
+  }
 
   dispose(): void {
     this.disposed = true;

@@ -286,6 +286,14 @@ export function buildBiomeTree(biome: Biome, variant: number): THREE.Group {
   }
 }
 
+/** Small glowing octahedron, tinted per-use -- the shrine's crystal and the
+ *  ice-theme dungeon decoration both reuse this same shape. */
+export function buildCrystal(color = 0x9fd8ff, radius = 0.45): THREE.Mesh {
+  const crystal = new THREE.Mesh(new THREE.OctahedronGeometry(radius, 0), new THREE.MeshBasicMaterial({ color }));
+  crystal.name = "crystal";
+  return crystal;
+}
+
 export function buildShrine(): THREE.Group {
   const group = new THREE.Group();
   for (let i = 0; i < 5; i++) {
@@ -297,17 +305,39 @@ export function buildShrine(): THREE.Group {
     stone.castShadow = true;
     group.add(stone);
   }
-  const crystal = new THREE.Mesh(
-    new THREE.OctahedronGeometry(0.45, 0),
-    new THREE.MeshBasicMaterial({ color: 0x9fd8ff }),
-  );
-  crystal.name = "crystal";
+  const crystal = buildCrystal();
   crystal.position.y = 1.1;
   group.add(crystal);
   const light = new THREE.PointLight(0x9fd8ff, 10, 14, 1.6);
   light.position.y = 2;
   group.add(light);
   return group;
+}
+
+/** Wall-mounted torch: a stone bracket, an emissive flame, and a small
+ *  PointLight -- lighter-weight than buildCampfire since dungeon interiors
+ *  need several of these around the wall ring. */
+export function buildTorch(color = 0xff9a3e): THREE.Group {
+  const group = new THREE.Group();
+  const bracket = box(0.14, 0.5, 0.14, 0x4a4640);
+  bracket.position.y = 0.25;
+  group.add(bracket);
+  const flame = new THREE.Mesh(new THREE.ConeGeometry(0.14, 0.36, 6), new THREE.MeshBasicMaterial({ color }));
+  flame.name = "flame";
+  flame.position.y = 0.62;
+  group.add(flame);
+  const light = new THREE.PointLight(color, 6, 16, 1.8);
+  light.position.y = 0.7;
+  group.add(light);
+  return group;
+}
+
+/** Simple tapered stone column for dungeon interiors. */
+export function buildPillar(height: number, color = 0x8a867e): THREE.Mesh {
+  const pillar = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.75, height, 8), lambert(color));
+  pillar.position.y = height / 2;
+  pillar.castShadow = true;
+  return pillar;
 }
 
 export function buildStump(variant: number): THREE.Group {

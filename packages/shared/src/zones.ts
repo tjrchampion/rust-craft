@@ -1,6 +1,7 @@
-import { generateVillages, inDungeonReserve } from "./worldgen";
-import { SPAWN_POINT, VALLEY_START_Z, VALLEY_END_Z } from "./constants";
+import { generateVillages, generatePois } from "./worldgen";
+import { SPAWN_POINT, VALLEY_START_Z, VALLEY_END_Z, DUNGEON_ARENA_RADIUS } from "./constants";
 import { dist2D } from "./math";
+import { dungeonTierDef } from "./content/dungeons";
 
 export interface ZoneInfo {
   id: string;
@@ -29,11 +30,19 @@ const REGION_TWO_ZONE: ZoneInfo = {
   subtitle: "Where only the desperate and the deadly make their home",
 };
 
-const DUNGEON_ZONE: ZoneInfo = {
-  id: "z_dungeon",
-  name: "Sunken Vault",
-  subtitle: "A hand-carved chamber, sealed off from the world outside",
-};
+/** Which dungeon portal's reserved arena (x,z) falls within, if any -- same
+ *  exclusion radius as worldgen's inDungeonReserve, just also returning the
+ *  portal so its tier's own zone flavor can be looked up. */
+function dungeonZoneAt(x: number, z: number): ZoneInfo | null {
+  for (const p of generatePois()) {
+    if (p.type !== "dungeon_portal" || p.arenaX === undefined || p.arenaZ === undefined) continue;
+    if (dist2D(x, z, p.arenaX, p.arenaZ) < DUNGEON_ARENA_RADIUS) {
+      const tierDef = dungeonTierDef(p.dungeonTier!);
+      return { id: `z_dungeon_${p.id}`, name: tierDef.zoneName, subtitle: tierDef.zoneSubtitle };
+    }
+  }
+  return null;
+}
 
 /** Flavor subtitles cycle deterministically by village index. */
 const TERRITORY_SUBTITLES = [
@@ -65,8 +74,11 @@ export function generateZones(): ZoneInfo[] {
  * flat-radius safe zone; beyond it, territory is assigned to the nearest
  * village (a simple Voronoi split) so every point in the world has a name.
  */
-export function zoneAt(x: number, z: number): ZoneInfo {
-  if (inDungeonReserve(x, z)) return DUNGEON_ZONE;
+export function zoneAt(x: number, z: number, inDungeon = false): ZoneInfo {
+  if (inDungeon) {
+    const dungeonZone = dungeonZoneAt(x, z);
+    if (dungeonZone) return dungeonZone;
+  }
   if (z > VALLEY_END_Z) return REGION_TWO_ZONE;
   if (z > VALLEY_START_Z) return VALLEY_ZONE;
 

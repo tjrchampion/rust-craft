@@ -6,46 +6,70 @@ Welcome to the RustCraft Wiki! Below is the comprehensive guide to all systems, 
 
 ## Playable Classes
 
-Every class has unique stats and spell sets that define their playstyle:
+Every class has unique stats and spell sets that define their playstyle. Spells unlock automatically as you level up:
+
+### Warrior
+A frontline fighter who trades spells for raw steel and grit.
+- **Heal** (Level 1): Direct recovery spell to mend wounds.
+- **Rend** (Level 1): Melee strike dealing physical damage and applying a **Bleeding** aura.
+- **Battle Fury** (Level 2): Increases attack speed and power.
+- **Whirlwind** (Level 4): An area of effect (AoE) spin hitting all nearby targets.
+- **Execute** (Level 6): Finishing strike dealing extra damage to low-health targets.
+- **Shield Wall** (Level 8): Drastically reduces all damage taken.
 
 ### Mage
 Mages wield raw elemental forces to deal devastating damage from afar, at the cost of durability.
-- **Firebolt**: Primary spellcasting projectile dealing high Fire damage.
-- **Frostbolt**: Deals Frost damage and applies a **Chilled** slow aura to target.
-- **Arcane Intellect**: Buffs the caster's max mana and power.
-- **Polymorph**: Transforms target enemy into a harmless sheep, disabling their actions.
-- **Blink**: Teleports the caster forward to evade threat.
-- **Mirror Image**: Spawns mirror images to distract and damage foes.
-- **Blizzard**: Casts a massive ice storm area of effect (AoE) slowing all inside.
-- **Pyroblast**: Long cast time, massive fire damage projectile.
+- **Heal** (Level 1): Direct recovery spell to mend wounds.
+- **Firebolt** (Level 1): Primary fire projectile dealing high damage and applying a **Burning** aura.
+- **Frostbolt** (Level 2): Ice projectile dealing frost damage and applying a **Chilled** slow.
+- **Flame Nova** (Level 4): Fires a caster-centered wave of flame (AoE).
+- **Arcane Blast** (Level 6): High damage arcane projectile that applies **Arcane Silence**.
+- **Blizzard** (Level 8): Summons an ice storm AoE that slows and damages all inside.
+
+### Rogue
+Fast and precise, striking hardest from the shadows.
+- **Heal** (Level 1): Direct recovery spell to mend wounds.
+- **Backstab** (Level 1): Devastating physical melee strike.
+- **Poison Strike** (Level 2): Melee strike applying a nature **Poisoned** aura.
+- **Fan of Knives** (Level 4): Throws knives around the caster in an AoE.
+- **Eviscerate** (Level 6): Finisher strike dealing high shadow damage.
+- **Garrote** (Level 8): Melee strike applying a bleed and converting damage to health (Lifesteal).
+
+### Cleric
+A holy healer who mends allies and smites the wicked.
+- **Heal** (Level 1): Direct recovery spell to mend wounds.
+- **Smite** (Level 1): Ranged holy projectile nuke.
+- **Renew** (Level 2): Applies a holy healing-over-time (HoT) aura.
+- **Circle of Healing** (Level 4): Instantly heals all nearby party members (AoE).
+- **Holy Fire** (Level 6): Holy projectile nuke applying a burning aura.
 
 ### Ranger
-Rangers are agile bowmen accompanied by beast companions, specializing in physical ranged damage.
-- **Quick Shot**: Quick arrow strike with standard physical damage.
-- **Volley**: Showers arrows in a targeted area (AoE).
-- **Serpent Sting**: Applies a nature Damage-over-Time (DoT) bleed effect.
-- **Aimed Shot**: Focused physical shot dealing massive damage.
-- **Beast Mastery**: Summons a loyal wolf companion to fight beside you.
-- **Entangling Roots**: Entangles a target in place, rendering them stationary.
-- **Aspect of the Cheetah**: Greatly increases movement speed mult.
+Agile bowmen accompanied by beast companions, specializing in physical ranged damage.
+- **Heal** (Level 1): Direct recovery spell to mend wounds.
+- **Quick Shot** (Level 1): Fast physical arrow shot.
+- **Serpent Sting** (Level 2): Ranged nature shot applying a poisoned aura.
+- **Volley** (Level 4): Showers arrows in a targeted area (AoE).
+- **Piercing Shot** (Level 6): Heavy arrow shot applying a bleeding aura.
+- **Aimed Shot** (Level 8): Focused sniper shot dealing massive physical damage.
+- **Beast Mastery** (Level 10): Summons a loyal wolf companion to fight beside you.
 
 ### Druid
-Druids harness nature's wrath and restoration to support allies and self-heal.
-- **Regrowth**: Restores health instantly and leaves a Healing-over-Time (HoT) aura.
-- **Rejuvenation**: Standard HoT healing spell.
-- **Moonfire**: Instant fire-and-forget arcane DoT.
-- **Thorns**: Deals nature damage back to attackers who strike you.
-- **Healing Touch**: Direct burst healing spell.
-- **Hurricane**: Churns a wind storm AoE centered on target.
+Harnesses nature's Restoration and Wrath to support allies and self-heal.
+- **Heal** (Level 1): Direct recovery spell to mend wounds.
+- **Wrath** (Level 1): Primary nature nuke projectile.
+- **Regrowth** (Level 2): Instantly heals and applies a healing-over-time (HoT) aura.
+- **Thorn Burst** (Level 4): Fires a burst of sharp thorns around the caster (AoE).
+- **Moonfire** (Level 6): Arcane projectile applying a burning aura.
+- **Entangling Roots** (Level 8): Roots target in place, rendering them stationary.
 
 ### Paladin
-Paladins are armored guardians wielding holy power to shield and heal.
-- **Blessed Strike**: Powerful physical strike that restores health.
-- **Holy Light**: High-potency direct holy healing.
-- **Divine Shield**: Makes the Paladin completely immune to all damage.
-- **Hammer of Justice**: Bludgeons the enemy, stunning them in place.
-- **Lay on Hands**: Instantly heals the target for a massive amount of health.
-- **Consecration**: Consecrates the ground, dealing holy damage to all enemies inside.
+Armored guardians wielding holy power to shield and heal.
+- **Heal** (Level 1): Direct recovery spell to mend wounds.
+- **Crusader Strike** (Level 1): Holy melee strike.
+- **Divine Favor** (Level 2): Applies a holy buff aura boosting stats.
+- **Consecration** (Level 4): Consecrates the ground, dealing holy damage to all enemies inside (AoE).
+- **Hammer of Wrath** (Level 6): Holy execute projectile.
+- **Holy Shield** (Level 8): Applies a holy shield buff reducing incoming damage.
 
 ---
 

@@ -515,7 +515,7 @@ export class GameServer {
         const layout = generateDungeonLayout(instance.portalId);
         player.move = {
           x: layout.entryPoint.x,
-          y: terrainHeight(layout.entryPoint.x, layout.entryPoint.z),
+          y: layout.floorY,
           z: layout.entryPoint.z,
           vy: 0,
           grounded: true,
@@ -1339,7 +1339,7 @@ export class GameServer {
       const def = mobDef(type);
       const x = layout.center.x + spawn.localX;
       const z = layout.center.z + spawn.localZ;
-      const y = terrainHeight(x, z);
+      const y = layout.floorY;
       const mobId = `${instanceId}_${i}`;
       mobIds.add(mobId);
       this.mobs.set(mobId, {
@@ -1387,7 +1387,7 @@ export class GameServer {
       const spread = Math.min(3, members.length);
       const ex = layout.entryPoint.x + Math.sin(angle) * spread;
       const ez = layout.entryPoint.z + Math.cos(angle) * spread;
-      member.move = { x: ex, y: terrainHeight(ex, ez), z: ez, vy: 0, grounded: true };
+      member.move = { x: ex, y: layout.floorY, z: ez, vy: 0, grounded: true };
       member.dirty = true;
       // A live pet has to follow its owner into the instance, or it'd be
       // left behind fighting the (now filtered-out) overworld.
@@ -1696,11 +1696,15 @@ export class GameServer {
       this.sendEvent(player, { t: "event", kind: "error", message: "Spell not learned" });
       return;
     }
+    const spell = spellDef(spellId);
+    if (player.level < (spell.requiredLevel ?? 1)) {
+      this.sendEvent(player, { t: "event", kind: "error", message: `Requires level ${spell.requiredLevel ?? 1}` });
+      return;
+    }
     if (player.activeAuras.some((a) => auraDef(a.auraId).silences)) {
       this.sendEvent(player, { t: "event", kind: "error", message: "Silenced" });
       return;
     }
-    const spell = spellDef(spellId);
     const now = Date.now();
     if (now < (player.spellCooldowns.get(spellId) ?? 0)) return;
     if (player.mana < spell.resourceCost) {
@@ -1918,61 +1922,64 @@ export class GameServer {
     }
 
     // Verify ingredients are present in the grid in correct quantities
-    const ingredientTotals: Record<string, number> = {};
     for (const ing of recipe.ingredients) {
-      ingredientTotals[ing.itemId] = (ingredientTotals[ing.itemId] ?? 0) + ing.qty;
-    }
-
-    // Grid totals must exactly match ingredient totals (no extra items, exact quantities)
-    const gridKeys = Object.keys(gridTotals);
-    const ingKeys = Object.keys(ingredientTotals);
-    if (gridKeys.length !== ingKeys.length) {
-      this.sendEvent(player, { t: "event", kind: "error", message: "Incorrect ingredients in grid" });
-      return;
-    }
-
-    for (const key of gridKeys) {
-      if (gridTotals[key] !== ingredientTotals[key]) {
-        this.sendEvent(player, { t: "event", kind: "error", message: "Incorrect ingredient quantity" });
+      const total = gridTotals[ing.itemId] ?? 0;
+      if (total < ing.qty) {
+        this.sendEvent(player, { t: "event", kind: "error", message: `Requires at least ${ing.qty}x ${itemDef(ing.itemId).name} in the grid` });
         return;
       }
     }
 
     // Check inventory capacity first by copying inventory
-    const tempInv = JSON.parse(JSON.stringify(player.inventory));
-    // Remove ingredients from tempInv's crafting slots
-    for (let i = tempInv.length - 1; i >= 0; i--) {
-      if (tempInv[i].container === "crafting") {
-        tempInv.splice(i, 1);
-      }
-    }
-    const overflow = addItem(tempInv, recipe.output, recipe.outputQty);
-    if (overflow > 0) {
-      this.sendEvent(player, { t: "event", kind: "error", message: "Inventory full" });
-      return;
-    }
+    const tempInv: InvItem[] = JSON.parse(JSON.stringify(player.inventory));
 
-    // Actual execution: consume grid items
+    // Remove ingredients from tempInv's crafting slots
     for (const ing of recipe.ingredients) {
       let remaining = ing.qty;
-      for (let i = player.inventory.length - 1; i >= 0 && remaining > 0; i--) {
-        const item = player.inventory[i]!;
+      for (let i = tempInv.length - 1; i >= 0 && remaining > 0; i--) {
+        const item = tempInv[i]!;
         if (item.container === "crafting" && item.itemId === ing.itemId) {
           const take = Math.min(item.qty, remaining);
           item.qty -= take;
           remaining -= take;
           if (item.qty <= 0) {
-            player.inventory.splice(i, 1);
+            tempInv.splice(i, 1);
           }
         }
       }
     }
 
-    // Add output item to inventory/hotbar
-    const actualOverflow = addItem(player.inventory, recipe.output, recipe.outputQty);
+    // Extract all leftover/unneeded crafting items from tempInv to move them to inventory/hotbar
+    const itemsToReturn: { itemId: string; qty: number }[] = [];
+    for (let i = tempInv.length - 1; i >= 0; i--) {
+      const item = tempInv[i]!;
+      if (item.container === "crafting") {
+        itemsToReturn.push({ itemId: item.itemId, qty: item.qty });
+        tempInv.splice(i, 1);
+      }
+    }
+
+    // Try to add returned items back to the player's inventory slots in tempInv
+    for (const ret of itemsToReturn) {
+      const overflow = addItem(tempInv, ret.itemId, ret.qty);
+      if (overflow > 0) {
+        this.sendEvent(player, { t: "event", kind: "error", message: "Inventory full (cannot return extra ingredients)" });
+        return;
+      }
+    }
+
+    // Try to add recipe output to the inventory slots in tempInv
+    const outputOverflow = addItem(tempInv, recipe.output, recipe.outputQty);
+    if (outputOverflow > 0) {
+      this.sendEvent(player, { t: "event", kind: "error", message: "Inventory full" });
+      return;
+    }
+
+    // All checks passed! Update player inventory
+    player.inventory = tempInv;
     player.dirty = true;
     this.sendInventory(player);
-    this.sendEvent(player, { t: "event", kind: "gather", itemId: recipe.output, amount: recipe.outputQty - actualOverflow });
+    this.sendEvent(player, { t: "event", kind: "gather", itemId: recipe.output, amount: recipe.outputQty - outputOverflow });
   }
 
   private handleConsume(player: PlayerState, container: InvItem["container"], slot: number): void {
@@ -2055,7 +2062,14 @@ export class GameServer {
    *  this one's only job is planting a fresh spell-marker entry. */
   private handleAssignSpell(player: PlayerState, spellId: string | null, slot: number): void {
     if (player.dead || slot >= HOTBAR_SLOTS) return;
-    if (spellId !== null && !player.learnedSpells.includes(spellId)) return;
+    if (spellId !== null) {
+      if (!player.learnedSpells.includes(spellId)) return;
+      const spell = spellDef(spellId);
+      if (player.level < (spell.requiredLevel ?? 1)) {
+        this.sendEvent(player, { t: "event", kind: "error", message: `Requires level ${spell.requiredLevel ?? 1}` });
+        return;
+      }
+    }
     // Clear the destination slot, and any other hotbar slot already holding
     // this same spell -- a spell can only occupy one bar slot at a time, so
     // picking it from the spellbook again relocates it instead of
@@ -2264,11 +2278,12 @@ export class GameServer {
       return;
     }
     const inputs = player.inputQueue.splice(0, MAX_INPUTS_PER_TICK);
+    const inDungeon = player.instanceId !== null;
     if (inputs.length === 0) {
       // Keep physics ticking (falling, water) even without fresh input.
       player.move = stepMovement(
         player.move,
-        { moveX: 0, moveZ: 0, jump: false, sprint: false, mount: player.mount },
+        { moveX: 0, moveZ: 0, jump: false, sprint: false, mount: player.mount, inDungeon },
         TICK_DT,
       );
       player.lastMoveMag = 0;
@@ -2287,7 +2302,7 @@ export class GameServer {
       const moveZ = rooted ? 0 : input.moveZ;
       player.move = stepMovement(
         player.move,
-        { moveX, moveZ, jump: input.jump, sprint: input.sprint, mount: player.mount },
+        { moveX, moveZ, jump: input.jump, sprint: input.sprint, mount: player.mount, inDungeon },
         TICK_DT,
       );
       player.lastAckSeq = input.seq;
