@@ -1,4 +1,4 @@
-import { generateVillages } from "./worldgen";
+import { generateVillages, inDungeonReserve } from "./worldgen";
 import { SPAWN_POINT, VALLEY_START_Z, VALLEY_END_Z } from "./constants";
 import { dist2D } from "./math";
 
@@ -27,6 +27,12 @@ const REGION_TWO_ZONE: ZoneInfo = {
   id: "z_ashenpeak",
   name: "Ashenpeak",
   subtitle: "Where only the desperate and the deadly make their home",
+};
+
+const DUNGEON_ZONE: ZoneInfo = {
+  id: "z_dungeon",
+  name: "Sunken Vault",
+  subtitle: "A hand-carved chamber, sealed off from the world outside",
 };
 
 /** Flavor subtitles cycle deterministically by village index. */
@@ -60,6 +66,7 @@ export function generateZones(): ZoneInfo[] {
  * village (a simple Voronoi split) so every point in the world has a name.
  */
 export function zoneAt(x: number, z: number): ZoneInfo {
+  if (inDungeonReserve(x, z)) return DUNGEON_ZONE;
   if (z > VALLEY_END_Z) return REGION_TWO_ZONE;
   if (z > VALLEY_START_Z) return VALLEY_ZONE;
 

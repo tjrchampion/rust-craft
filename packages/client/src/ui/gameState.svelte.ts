@@ -88,6 +88,9 @@ class GameState {
 
   currentZoneId = $state<string | null>(null);
   zoneBanner = $state<{ name: string; subtitle: string; key: number } | null>(null);
+  /** null while in the open world; set for the life of a dungeon run --
+   *  drives the persistent HUD chip (see Hud.svelte). */
+  dungeonState = $state<{ tier: number; partySize: number; mobsRemaining: number | null } | null>(null);
 
   addChat(channel: ChatChannel, from: string, text: string): void {
     this.chatLog.push({ channel, from, text, at: Date.now() });
@@ -147,6 +150,7 @@ class GameState {
     this.currentZoneId = null;
     this.zoneBanner = null;
     this.questMarkers = [];
+    this.dungeonState = null;
   }
 }
 

@@ -69,6 +69,19 @@ export const DODGE_DISTANCE = 2.5;
 export const DODGE_MAX_CHARGES = 4;
 export const DODGE_CHARGE_REGEN_S = 4;
 
+// Dungeons: instanced encounters reached via a shrine portal. Every
+// concurrent run of a given portal reuses the exact same reserved arena
+// rectangle and mob-spawn layout -- there's no per-instance coordinate
+// space, so "instancing" is purely server-side visibility filtering by
+// instanceId (see GameServer's sameInstance guard). These constants keep
+// the client's exclusion-radius/activation-radius math in lockstep with
+// the server's own authoritative checks.
+export const DUNGEON_ARENA_RADIUS = 45; // exclusion radius from normal node/mob/POI scatter
+export const DUNGEON_PORTAL_ACTIVATION_RADIUS = 8; // must be this close to the portal to start/join
+export const DUNGEON_MOB_MULT_PER_EXTRA_PLAYER = 0.35; // +35% hp/damage per player beyond the first
+export const DUNGEON_ABANDON_TIMEOUT_MS = 5 * 60 * 1000; // GC an instance nobody is connected to
+export const DUNGEON_WIPE_EJECT_MS = 15 * 1000; // eject a fully-dead party if nobody revives in time
+
 // Progression
 export const MAX_LEVEL = 20;
 export function xpForLevel(level: number): number {

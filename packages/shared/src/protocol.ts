@@ -133,6 +133,15 @@ export const SelectTargetMsg = z
   })
   .strict();
 
+/** Activating a portal reuses InteractMsg (nodeId starting with
+ *  "poi_dungeon") -- this message is only for a manual early exit. */
+export const DungeonMsg = z
+  .object({
+    t: z.literal("dungeon"),
+    action: z.literal("leave"),
+  })
+  .strict();
+
 export const ClientMsg = z.discriminatedUnion("t", [
   InputMsg,
   InteractMsg,
@@ -155,6 +164,7 @@ export const ClientMsg = z.discriminatedUnion("t", [
   AssignSpellMsg,
   DodgeMsg,
   SelectTargetMsg,
+  DungeonMsg,
 ]);
 export type ClientMsg = z.infer<typeof ClientMsg>;
 
@@ -419,4 +429,12 @@ export type ServerMsg =
   | { t: "questOffer"; npcId: string; npcName: string; offers: QuestOfferInfo[] }
   | { t: "questLog"; quests: QuestLogEntry[] }
   | { t: "questComplete"; questId: string; questName: string; xp: number; items: { itemId: string; qty: number }[] }
+  | {
+      t: "dungeonState";
+      inDungeon: boolean;
+      tier: number | null;
+      partySize: number;
+      mobsRemaining: number | null;
+    }
+  | { t: "dungeonComplete"; tier: number; xp: number; items: { itemId: string; qty: number }[] }
   | { t: "error"; message: string };

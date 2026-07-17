@@ -2,7 +2,7 @@
   import { game } from "./gameState.svelte";
   import { app } from "./appState.svelte";
   import { promptLabel } from "./padGlyphs";
-  import { spellDef, REVIVE_HOLD_S } from "@rustcraft/shared";
+  import { spellDef, REVIVE_HOLD_S, TIER_NAMES } from "@rustcraft/shared";
   import Vitals from "./Vitals.svelte";
   import AuraBar from "./AuraBar.svelte";
   import Hotbar from "./Hotbar.svelte";
@@ -85,6 +85,17 @@
     <div class="mounted rc-frame">
       {game.self.mount === "horse" ? "🐎 Mounted" : "🛶 Rafting"}
       <span class="hint">{promptLabel("Back", "G")} to dismount</span>
+    </div>
+  {/if}
+
+  {#if game.dungeonState}
+    <div class="dungeon-chip rc-frame">
+      ⚔ {TIER_NAMES[game.dungeonState.tier]} Dungeon
+      {#if game.dungeonState.mobsRemaining !== null}
+        <span class="hint">
+          {game.dungeonState.mobsRemaining} remaining
+        </span>
+      {/if}
     </div>
   {/if}
 
@@ -204,6 +215,23 @@
     pointer-events: none;
   }
   .mounted .hint {
+    color: var(--rc-ink-dim);
+    font-size: 11px;
+    margin-left: 8px;
+  }
+  .dungeon-chip {
+    position: absolute;
+    top: 76px;
+    left: 50%;
+    transform: translateX(-50%);
+    padding: 5px 14px;
+    font-family: var(--rc-display);
+    font-weight: 700;
+    font-size: 13px;
+    color: #c583ff;
+    pointer-events: none;
+  }
+  .dungeon-chip .hint {
     color: var(--rc-ink-dim);
     font-size: 11px;
     margin-left: 8px;

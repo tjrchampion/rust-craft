@@ -16,3 +16,4 @@ export * from "./content/nodes";
 export * from "./content/quests";
 export * from "./content/classes";
 export * from "./content/auras";
+export * from "./content/dungeons";

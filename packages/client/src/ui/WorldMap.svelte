@@ -60,6 +60,7 @@
     tower: "#b9c2cf",
     camp: "#f2a65a",
     ruins: "#a9836a",
+    dungeon_portal: "#c583ff",
   };
 
   function close(): void {
@@ -120,6 +121,7 @@
         <span><span class="dot" style="background:{POI_COLOR.tower}"></span>Tower</span>
         <span><span class="dot" style="background:{POI_COLOR.camp}"></span>Camp</span>
         <span><span class="dot" style="background:{POI_COLOR.ruins}"></span>Ruins</span>
+        <span><span class="dot" style="background:{POI_COLOR.dungeon_portal}"></span>Dungeon</span>
       </div>
       <div class="hint">M to close</div>
     </div>

@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { GLTFLoader, type GLTF } from "three/examples/jsm/loaders/GLTFLoader.js";
-import { generateVillages, generatePois, mulberry32, hashString, terrainHeight } from "@rustcraft/shared";
+import { generateVillages, generatePois, mulberry32, hashString, terrainHeight, TIER_NAMES } from "@rustcraft/shared";
 import { buildShrine, buildStump, buildCampfire, buildNameplate, buildRock } from "./models";
 
 const loader = new GLTFLoader();
@@ -163,6 +163,7 @@ function scatterVillageClutter(
  */
 export interface SettlementHandles {
   shrines: { id: string; x: number; y: number; z: number }[];
+  dungeonPortals: { id: string; x: number; y: number; z: number; tier: number }[];
   crystals: THREE.Object3D[];
 }
 
@@ -189,6 +190,7 @@ export function buildVillage(
  *  so these stay eager rather than being streamed per-zone like villages. */
 export function buildWorldStatic(scene: THREE.Scene, withSigns = true): SettlementHandles {
   const shrines: { id: string; x: number; y: number; z: number }[] = [];
+  const dungeonPortals: { id: string; x: number; y: number; z: number; tier: number }[] = [];
   const crystals: THREE.Object3D[] = [];
 
   for (const poi of generatePois()) {
@@ -203,6 +205,23 @@ export function buildWorldStatic(scene: THREE.Scene, withSigns = true): Settleme
       shrines.push({ id: poi.id, x: poi.x, y: poi.y, z: poi.z });
       const crystal = shrine.getObjectByName("crystal");
       if (crystal) crystals.push(crystal);
+    } else if (poi.type === "dungeon_portal") {
+      // Reuses the shrine mesh for now (visually close enough for a first
+      // pass) -- the nameplate is what actually distinguishes it in-world.
+      const portal = buildShrine();
+      portal.position.set(poi.x, poi.y, poi.z);
+      portal.rotation.y = poi.yaw;
+      scene.add(portal);
+      const tier = poi.dungeonTier ?? 0;
+      dungeonPortals.push({ id: poi.id, x: poi.x, y: poi.y, z: poi.z, tier });
+      const crystal = portal.getObjectByName("crystal");
+      if (crystal) crystals.push(crystal);
+      if (withSigns) {
+        const sign = buildNameplate(`Dungeon Portal — ${TIER_NAMES[tier]}`, "#c583ff");
+        sign.scale.set(5.5, 1.4, 1);
+        sign.position.set(poi.x, poi.y + 4.5, poi.z);
+        scene.add(sign);
+      }
     } else if (poi.type === "camp") {
       const fireX = poi.x + 2;
       const fire = buildCampfire();
@@ -234,7 +253,7 @@ export function buildWorldStatic(scene: THREE.Scene, withSigns = true): Settleme
     }
   }
 
-  return { shrines, crystals };
+  return { shrines, dungeonPortals, crystals };
 }
 
 /** Everything at once — used by the title screen fly-over, which has no

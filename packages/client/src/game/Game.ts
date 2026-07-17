@@ -23,7 +23,10 @@ import {
   REGION_TWO_TRIGGER_RADIUS,
   REVIVE_RANGE,
   DODGE_DISTANCE,
-  WORLD_MIN_X, 
+  DUNGEON_PORTAL_ACTIVATION_RADIUS,
+  dungeonTierDef,
+  TIER_NAMES,
+  WORLD_MIN_X,
   WORLD_MAX_X, 
   WORLD_MIN_Z, 
   WORLD_MAX_Z,
@@ -321,6 +324,34 @@ export class Game {
         ui.questOffer = null;
         this.setUiMode(false);
         break;
+      case "dungeonState": {
+        const wasInDungeon = ui.dungeonState !== null;
+        if (msg.inDungeon && msg.tier !== null) {
+          ui.dungeonState = { tier: msg.tier, partySize: msg.partySize, mobsRemaining: msg.mobsRemaining };
+          // The server just teleported us in (or reconnected us mid-run) --
+          // clear anything tied to the old location, same as death already
+          // forces, since reconcile()'s large-desync snap handles the
+          // position jump itself with no extra code needed here.
+          if (!wasInDungeon) {
+            this.interactNodeId = null;
+            this.reviveTargetId = null;
+            this.entities.setTarget(null);
+            ui.inventoryOpen = false;
+            ui.worldMapOpen = false;
+            if (ui.questOffer) this.closeQuestDialog();
+          }
+        } else {
+          ui.dungeonState = null;
+        }
+        break;
+      }
+      case "dungeonComplete": {
+        const itemNames = msg.items.map((i) => `${i.qty}x ${itemDef(i.itemId).name}`).join(", ");
+        ui.toast(`Dungeon cleared! +${msg.xp} XP${itemNames ? ` — ${itemNames}` : ""}`);
+        ui.addCombat(`Cleared the dungeon — +${msg.xp} XP${itemNames ? `, ${itemNames}` : ""}`);
+        sound.play("levelup");
+        break;
+      }
       case "error":
         if (msg.message === "__disconnected__") {
           ui.disconnected = true;
@@ -1007,6 +1038,22 @@ export class Game {
         return;
       }
     }
+    // Dungeon portal nearby? Radius matches the server's own authoritative
+    // DUNGEON_PORTAL_ACTIVATION_RADIUS check -- the server still decides
+    // leader/party validity and sends an error toast if it's rejected, but
+    // the level requirement is worth surfacing upfront so it's not a
+    // surprise (this is purely cosmetic -- the server enforces it for real).
+    for (const portal of this.settlements.dungeonPortals) {
+      if (dist2D(this.move.x, this.move.z, portal.x, portal.z) < DUNGEON_PORTAL_ACTIVATION_RADIUS) {
+        const tierDef = dungeonTierDef(portal.tier);
+        const underLevel = (ui.self?.level ?? 1) < tierDef.minLevel;
+        ui.interactLabel = underLevel
+          ? `Enter ${TIER_NAMES[portal.tier]} Dungeon (Requires Level ${tierDef.minLevel})`
+          : `Enter ${TIER_NAMES[portal.tier]} Dungeon`;
+        this.interactNodeId = portal.id;
+        return;
+      }
+    }
     // Water nearby?
     if (this.nearWater()) {
       ui.interactLabel = "Drink";
@@ -1127,6 +1174,10 @@ export class Game {
 
   sendRespawn(): void {
     this.connection.send({ t: "respawn" });
+  }
+
+  leaveDungeon(): void {
+    this.connection.send({ t: "dungeon", action: "leave" });
   }
 
   setUiMode(open: boolean): void {

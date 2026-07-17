@@ -45,6 +45,13 @@ import {
   generatePois,
   generateVillages,
   generateNpcQuestGivers,
+  generateDungeonLayout,
+  dungeonTierDef,
+  pickDungeonMob,
+  DUNGEON_PORTAL_ACTIVATION_RADIUS,
+  DUNGEON_ABANDON_TIMEOUT_MS,
+  DUNGEON_WIPE_EJECT_MS,
+  TIER_NAMES,
   stepMovement,
   dist2D,
   dist3D,
@@ -91,6 +98,8 @@ import {
   type SpellEffect,
   type SpellDef,
   type ActiveAura,
+  type PoiSpec,
+  type DungeonLayoutSpec,
   ClientMsg as ClientMsgSchema,
 } from "@rustcraft/shared";
 import {
@@ -116,6 +125,7 @@ import {
   type PersistedPlayer,
   type QuestProgressEntry,
 } from "./persistence";
+import { type DungeonInstance, computeMobMultiplier } from "./dungeons";
 
 const DAY_LENGTH_S = 1800; // full day/night cycle — slow, ambient pacing
 const SAVE_INTERVAL_MS = 30_000;
@@ -199,6 +209,11 @@ interface PlayerState {
   questProgress: Map<string, { status: "active" | "completed"; progress: number }>;
   activeAuras: ActiveAura[];
   currentTargetId: string | null;
+  /** Which dungeon run this player is currently inside, or null while in
+   *  the open world -- see the sameInstance guard threaded through every
+   *  distance-based visibility/targeting site (sendSnapshots, broadcastNear,
+   *  tickMobs' aggro acquisition, findMeleeTarget, etc). */
+  instanceId: string | null;
 }
 
 interface MobState {
@@ -219,6 +234,15 @@ interface MobState {
   nextWanderAt: number;
   actionAnimUntil: number;
   activeAuras: ActiveAura[];
+  /** Null for every overworld mob; set for a mob spawned into a dungeon run
+   *  (see startDungeonInstance). Dungeon mobs never respawn on the normal
+   *  timer (respawnAt is set to Infinity on death instead) -- they're
+   *  deleted for real when the instance tears down. */
+  instanceId: string | null;
+  /** Party-size scaling applied at spawn (hp) and on every hit (damage) --
+   *  see computeMobMultiplier. 1 for every overworld mob. */
+  hpMult: number;
+  dmgMult: number;
 }
 
 /** A summoned companion (currently just Beast Mastery's wolf) -- deliberately
@@ -242,6 +266,10 @@ interface PetState {
    *  tick whenever the gap hovered right at the boundary, which is exactly
    *  what happens continuously while the owner runs. */
   following: boolean;
+  /** Mirrors the owner's instanceId (kept in sync on dungeon enter/leave) --
+   *  a pet has to be filtered the same way its owner is, for visibility and
+   *  for its own hostile-mob targeting scan (see tickPets). */
+  instanceId: string | null;
 }
 
 interface Projectile {
@@ -260,6 +288,9 @@ interface Projectile {
   speed: number;
   /** Homing target: a mob id or a (pvp) player id, or null for a straight shot. */
   homingId: string | null;
+  /** Inherited from the caster at creation -- a projectile fired inside a
+   *  dungeon must only be visible to, and only able to hit, that instance. */
+  instanceId: string | null;
 }
 
 export class GameServer {
@@ -280,6 +311,9 @@ export class GameServer {
   // another member rather than ending the party (see leaveParty).
   private parties = new Map<string, { leaderId: string; members: Set<string> }>();
   private partySeq = 0;
+  private dungeonPortals = new Map<string, PoiSpec>();
+  private dungeonInstances = new Map<string, DungeonInstance>();
+  private dungeonSeq = 0;
   /** Ashenpeak (region 2) stays dormant — not generated, not ticked — until a
    *  player first walks through the valley; then it's resident for the rest
    *  of this process's life (resets to dormant on a restart). */
@@ -316,11 +350,15 @@ export class GameServer {
         nextWanderAt: 0,
         actionAnimUntil: 0,
         activeAuras: [],
+        instanceId: null,
+        hpMult: 1,
+        dmgMult: 1,
       });
     }
 
     for (const poi of generatePois()) {
       if (poi.type === "shrine") this.shrines.set(poi.id, { x: poi.x, y: poi.y, z: poi.z });
+      else if (poi.type === "dungeon_portal") this.dungeonPortals.set(poi.id, poi);
     }
     this.villages = generateVillages().map((v) => ({ x: v.x, z: v.z }));
     this.npcs = generateNpcQuestGivers();
@@ -365,6 +403,9 @@ export class GameServer {
         nextWanderAt: 0,
         actionAnimUntil: 0,
         activeAuras: [],
+        instanceId: null,
+        hpMult: 1,
+        dmgMult: 1,
       });
     }
     console.log(`[game] region two activated: ${this.nodes.size} nodes total, ${this.mobs.size} mobs total`);
@@ -446,6 +487,7 @@ export class GameServer {
       questProgress: new Map(persisted.questProgress.map((q) => [q.questId, { status: q.status, progress: q.progress }])),
       activeAuras: [],
       currentTargetId: null,
+      instanceId: null,
     };
 
     this.players.set(player.id, player);
@@ -459,6 +501,27 @@ export class GameServer {
       if (party.members.has(player.id)) {
         player.partyId = partyId;
         this.broadcastPartyState(partyId);
+        break;
+      }
+    }
+
+    // Mirrors the party re-link above: disconnecting doesn't remove you from
+    // a dungeon run either (see removePlayer), so reconnecting just needs to
+    // re-attach this fresh PlayerState and drop them back at the layout's
+    // entry point, same as it was when they left.
+    for (const instance of this.dungeonInstances.values()) {
+      if (instance.memberIds.has(player.id)) {
+        player.instanceId = instance.id;
+        const layout = generateDungeonLayout(instance.portalId);
+        player.move = {
+          x: layout.entryPoint.x,
+          y: terrainHeight(layout.entryPoint.x, layout.entryPoint.z),
+          z: layout.entryPoint.z,
+          vy: 0,
+          grounded: true,
+        };
+        instance.lastActivityAt = Date.now();
+        this.sendDungeonState(player, instance);
         break;
       }
     }
@@ -530,6 +593,7 @@ export class GameServer {
         break;
       case "interact":
         if (parsed.nodeId.startsWith("poi_shrine")) this.handleShrine(player, parsed.nodeId);
+        else if (parsed.nodeId.startsWith("poi_dungeon")) this.handleDungeonPortal(player, parsed.nodeId);
         else if (parsed.nodeId.startsWith("npc_")) this.handleQuestGiverInteract(player, parsed.nodeId);
         else this.handleGather(player, parsed.nodeId);
         break;
@@ -595,6 +659,9 @@ export class GameServer {
         break;
       case "dodge":
         this.handleDodge(player, parsed.dirX, parsed.dirZ);
+        break;
+      case "dungeon":
+        this.handleDungeonLeave(player);
         break;
     }
   }
@@ -1197,6 +1264,287 @@ export class GameServer {
     }
   }
 
+  // ============================ dungeons ============================
+
+  /** True when two entities should be visible/targetable to each other --
+   *  both in the open world (instanceId null on each), or both tagged with
+   *  the same dungeon run. Threaded alongside every existing distance check
+   *  in sendSnapshots/broadcastNear/tickMobs/findMeleeTarget/etc, since a
+   *  dungeon's reserved rectangle sits at real (reused) world coordinates --
+   *  it's this check, not distance, that keeps concurrent runs (and the
+   *  overworld) from bleeding into each other. */
+  private sameInstance(a: { instanceId: string | null }, b: { instanceId: string | null }): boolean {
+    return a.instanceId === b.instanceId;
+  }
+
+  /** All party members (including the player themselves) currently online,
+   *  alive, and within `radius` of the player's own position -- factors out
+   *  the party+distance filter pattern already duplicated at several
+   *  existing call sites (quest-share, quest-progress, AoE heal). Returns
+   *  just [player] when they're not in a party. */
+  private nearbyPartyMembers(player: PlayerState, radius: number): PlayerState[] {
+    if (!player.partyId) return [player];
+    const party = this.parties.get(player.partyId);
+    if (!party) return [player];
+    const result: PlayerState[] = [];
+    for (const id of party.members) {
+      const member = this.players.get(id);
+      if (!member || member.dead) continue;
+      if (dist2D(player.move.x, player.move.z, member.move.x, member.move.z) > radius) continue;
+      result.push(member);
+    }
+    return result;
+  }
+
+  private handleDungeonPortal(player: PlayerState, portalId: string): void {
+    if (player.dead || player.instanceId) return;
+    const portal = this.dungeonPortals.get(portalId);
+    if (!portal || portal.dungeonTier === undefined) return;
+    if (dist2D(player.move.x, player.move.z, portal.x, portal.z) > DUNGEON_PORTAL_ACTIVATION_RADIUS) return;
+    const party = player.partyId ? this.parties.get(player.partyId) : null;
+    if (party && party.leaderId !== player.id) {
+      this.sendEvent(player, { t: "event", kind: "error", message: "Only the party leader can start the dungeon" });
+      return;
+    }
+    const tierDef = dungeonTierDef(portal.dungeonTier);
+    if (player.level < tierDef.minLevel) {
+      this.sendEvent(player, { t: "event", kind: "error", message: `Requires level ${tierDef.minLevel}` });
+      return;
+    }
+    const nearby = this.nearbyPartyMembers(player, DUNGEON_PORTAL_ACTIVATION_RADIUS).filter((m) => !m.instanceId);
+    const members = nearby.filter((m) => m.level >= tierDef.minLevel);
+    // The activating player already passed the check above and is always
+    // included; under-level party members are simply left behind (with
+    // their own toast) rather than blocking the whole group.
+    for (const m of nearby) {
+      if (m.level < tierDef.minLevel) {
+        this.sendEvent(m, { t: "event", kind: "error", message: `You must be level ${tierDef.minLevel} to enter this dungeon` });
+      }
+    }
+    this.startDungeonInstance(portal, members);
+  }
+
+  private startDungeonInstance(portal: PoiSpec, members: PlayerState[]): void {
+    if (members.length === 0) return;
+    const tier = portal.dungeonTier ?? 0;
+    const tierDef = dungeonTierDef(tier);
+    const layout = generateDungeonLayout(portal.id);
+    const instanceId = `dgn_${++this.dungeonSeq}`;
+    const mult = computeMobMultiplier(members.length);
+    const mobIds = new Set<string>();
+
+    for (let i = 0; i < layout.mobSpawns.length; i++) {
+      const spawn = layout.mobSpawns[i]!;
+      const type = pickDungeonMob(tierDef.mobTable);
+      const def = mobDef(type);
+      const x = layout.center.x + spawn.localX;
+      const z = layout.center.z + spawn.localZ;
+      const y = terrainHeight(x, z);
+      const mobId = `${instanceId}_${i}`;
+      mobIds.add(mobId);
+      this.mobs.set(mobId, {
+        id: mobId,
+        type,
+        x,
+        y,
+        z,
+        yaw: 0,
+        hp: def.maxHp * mult,
+        homeX: x,
+        homeZ: z,
+        targetId: null,
+        attackReadyAt: 0,
+        respawnAt: null,
+        wanderTx: x,
+        wanderTz: z,
+        nextWanderAt: 0,
+        actionAnimUntil: 0,
+        activeAuras: [],
+        instanceId,
+        hpMult: mult,
+        dmgMult: mult,
+      });
+    }
+
+    const instance: DungeonInstance = {
+      id: instanceId,
+      portalId: portal.id,
+      tier,
+      memberIds: new Set(members.map((m) => m.id)),
+      mobIds,
+      createdAt: Date.now(),
+      lastActivityAt: Date.now(),
+      cleared: false,
+      wipedAt: null,
+    };
+    this.dungeonInstances.set(instanceId, instance);
+
+    for (let i = 0; i < members.length; i++) {
+      const member = members[i]!;
+      member.instanceId = instanceId;
+      this.dismountForCombat(member);
+      const angle = (i / members.length) * Math.PI * 2;
+      const spread = Math.min(3, members.length);
+      const ex = layout.entryPoint.x + Math.sin(angle) * spread;
+      const ez = layout.entryPoint.z + Math.cos(angle) * spread;
+      member.move = { x: ex, y: terrainHeight(ex, ez), z: ez, vy: 0, grounded: true };
+      member.dirty = true;
+      // A live pet has to follow its owner into the instance, or it'd be
+      // left behind fighting the (now filtered-out) overworld.
+      for (const pet of this.pets.values()) {
+        if (pet.ownerId === member.id) pet.instanceId = instanceId;
+      }
+      this.sendSelf(member);
+      this.sendDungeonState(member, instance);
+    }
+
+    const announceText = `Entered the ${TIER_NAMES[tier]} dungeon.`;
+    const leaderPartyId = members[0]!.partyId;
+    if (leaderPartyId) {
+      this.sendToParty(leaderPartyId, { t: "chat", channel: "party", from: "system", text: announceText });
+    } else {
+      this.sendTo(members[0]!.peer, { t: "chat", channel: "system", from: "system", text: announceText });
+    }
+  }
+
+  private handleDungeonLeave(player: PlayerState): void {
+    if (!player.instanceId) return;
+    const instance = this.dungeonInstances.get(player.instanceId);
+    this.teleportOutOfDungeon(player, instance ?? null);
+    if (instance) {
+      instance.memberIds.delete(player.id);
+      if (instance.memberIds.size === 0) this.teardownInstance(instance.id);
+    }
+  }
+
+  private teleportOutOfDungeon(player: PlayerState, instance: DungeonInstance | null): void {
+    const portal = instance ? this.dungeonPortals.get(instance.portalId) : null;
+    const dest = portal ? { x: portal.x, z: portal.z } : this.nearestGraveyard(player.move.x, player.move.z);
+    player.instanceId = null;
+    player.move = { x: dest.x, y: terrainHeight(dest.x, dest.z), z: dest.z, vy: 0, grounded: true };
+    player.dirty = true;
+    for (const pet of this.pets.values()) {
+      if (pet.ownerId === player.id) pet.instanceId = null;
+    }
+    this.sendSelf(player);
+    this.sendDungeonState(player, null);
+  }
+
+  private sendDungeonState(player: PlayerState, instance: DungeonInstance | null): void {
+    if (!instance) {
+      this.sendTo(player.peer, { t: "dungeonState", inDungeon: false, tier: null, partySize: 0, mobsRemaining: null });
+      return;
+    }
+    let remaining = 0;
+    for (const mobId of instance.mobIds) {
+      const mob = this.mobs.get(mobId);
+      if (mob && mob.respawnAt === null) remaining++;
+    }
+    this.sendTo(player.peer, {
+      t: "dungeonState",
+      inDungeon: true,
+      tier: instance.tier,
+      partySize: instance.memberIds.size,
+      mobsRemaining: remaining,
+    });
+  }
+
+  private broadcastDungeonState(instance: DungeonInstance): void {
+    for (const id of instance.memberIds) {
+      const member = this.players.get(id);
+      if (member) this.sendDungeonState(member, instance);
+    }
+  }
+
+  /** Called after a dungeon mob dies -- first time every mob sharing that
+   *  instanceId is dead, distribute the run's one-time reward bundle
+   *  (per-kill loot/XP is suppressed for dungeon mobs -- see killMob). */
+  private checkDungeonCleared(instanceId: string): void {
+    const instance = this.dungeonInstances.get(instanceId);
+    if (!instance || instance.cleared) return;
+    for (const mobId of instance.mobIds) {
+      const mob = this.mobs.get(mobId);
+      if (mob && mob.respawnAt === null) return; // still someone alive
+    }
+    this.distributeDungeonRewards(instance);
+  }
+
+  private distributeDungeonRewards(instance: DungeonInstance): void {
+    instance.cleared = true;
+    const tierDef = dungeonTierDef(instance.tier);
+    const members = [...instance.memberIds].map((id) => this.players.get(id)).filter((p): p is PlayerState => !!p);
+    const xpEach = Math.round(tierDef.rewardXp / Math.max(1, members.length));
+    for (const member of members) {
+      this.grantXp(member, xpEach);
+      const items: { itemId: string; qty: number }[] = [];
+      for (const roll of tierDef.rewardItems) {
+        if (roll.chance !== undefined && Math.random() > roll.chance) continue;
+        const qty = roll.min + Math.floor(Math.random() * (roll.max - roll.min + 1));
+        if (qty <= 0) continue;
+        const got = qty - addItem(member.inventory, roll.itemId, qty);
+        if (got > 0) items.push({ itemId: roll.itemId, qty: got });
+      }
+      member.dirty = true;
+      this.sendInventory(member);
+      this.sendTo(member.peer, { t: "dungeonComplete", tier: instance.tier, xp: xpEach, items });
+      this.teleportOutOfDungeon(member, instance);
+    }
+    this.broadcastChat(
+      "system",
+      `${members.map((m) => m.name).join(", ")} cleared the ${TIER_NAMES[instance.tier]} dungeon!`,
+    );
+    this.teardownInstance(instance.id);
+  }
+
+  /** Called from damagePlayer's death branch (and tickVitals' starvation
+   *  death) -- if every member of this player's instance is now dead, start
+   *  the wipe-eject countdown. Also called from completeRevive, which is
+   *  what clears it back to null if someone revives in time. */
+  private checkDungeonWipe(instanceId: string): void {
+    const instance = this.dungeonInstances.get(instanceId);
+    if (!instance) return;
+    for (const id of instance.memberIds) {
+      const member = this.players.get(id);
+      if (member && !member.dead) {
+        instance.wipedAt = null;
+        return;
+      }
+    }
+    if (instance.wipedAt === null) instance.wipedAt = Date.now();
+  }
+
+  private teardownInstance(instanceId: string): void {
+    const instance = this.dungeonInstances.get(instanceId);
+    if (!instance) return;
+    for (const mobId of instance.mobIds) this.mobs.delete(mobId);
+    this.dungeonInstances.delete(instanceId);
+  }
+
+  /** Piggybacked on the existing 0.5Hz party-frame tick cadence (see tick()).
+   *  Tears down an instance nobody explicitly left but is truly empty
+   *  (fully disconnected past the abandon timeout), and ejects a fully-dead
+   *  party that nobody revived in time. */
+  private tickDungeons(now: number): void {
+    for (const instance of [...this.dungeonInstances.values()]) {
+      if (instance.memberIds.size === 0) {
+        this.teardownInstance(instance.id);
+        continue;
+      }
+      const anyoneConnected = [...instance.memberIds].some((id) => this.players.has(id));
+      if (!anyoneConnected && now - instance.lastActivityAt > DUNGEON_ABANDON_TIMEOUT_MS) {
+        this.teardownInstance(instance.id);
+        continue;
+      }
+      if (instance.wipedAt !== null && now - instance.wipedAt > DUNGEON_WIPE_EJECT_MS) {
+        for (const id of [...instance.memberIds]) {
+          const member = this.players.get(id);
+          if (member) this.teleportOutOfDungeon(member, instance);
+        }
+        this.teardownInstance(instance.id);
+      }
+    }
+  }
+
   // ============================ actions ============================
 
   private heldItem(player: PlayerState): InvItem | undefined {
@@ -1323,16 +1671,12 @@ export class GameServer {
     player.dirty = true;
     this.sendSelf(player);
     
-    this.broadcastNear(tx, tz, {
-      t: "event",
-      kind: "dodge",
-      sourceId: player.id,
-      dirX: nx,
-      dirZ: nz,
-      x: tx,
-      y: player.move.y,
-      z: tz,
-    });
+    this.broadcastNear(
+      tx,
+      tz,
+      { t: "event", kind: "dodge", sourceId: player.id, dirX: nx, dirZ: nz, x: tx, y: player.move.y, z: tz },
+      player.instanceId,
+    );
   }
 
   /** Ticks each missing charge's individual regen timer, refilling one at a
@@ -1374,12 +1718,12 @@ export class GameServer {
     };
     this.setActionAnim(player, "cast", spell.castTimeS * 1000);
     this.sendSelf(player);
-    this.broadcastNear(player.move.x, player.move.z, {
-      t: "event",
-      kind: "castStart",
-      sourceId: player.id,
-      spellId,
-    });
+    this.broadcastNear(
+      player.move.x,
+      player.move.z,
+      { t: "event", kind: "castStart", sourceId: player.id, spellId },
+      player.instanceId,
+    );
   }
 
   private cancelCast(player: PlayerState): void {
@@ -1411,15 +1755,12 @@ export class GameServer {
       // particles around the caster that projectile/channeled spells
       // already get for free.
       this.setActionAnim(player, "attack");
-      this.broadcastNear(player.move.x, player.move.z, {
-        t: "event",
-        kind: "spellHit",
-        spellId: spell.id,
-        sourceId: player.id,
-        x: player.move.x,
-        y: player.move.y + 1,
-        z: player.move.z,
-      });
+      this.broadcastNear(
+        player.move.x,
+        player.move.z,
+        { t: "event", kind: "spellHit", spellId: spell.id, sourceId: player.id, x: player.move.x, y: player.move.y + 1, z: player.move.z },
+        player.instanceId,
+      );
       this.sendSelf(player);
       return;
     }
@@ -1432,15 +1773,12 @@ export class GameServer {
       // particle burst before, unlike a plain attack — pressing the spell
       // key looked like it did nothing, especially with no target in range.
       this.setActionAnim(player, "attack");
-      this.broadcastNear(player.move.x, player.move.z, {
-        t: "event",
-        kind: "spellHit",
-        spellId: spell.id,
-        sourceId: player.id,
-        x: player.move.x,
-        y: player.move.y + 1,
-        z: player.move.z,
-      });
+      this.broadcastNear(
+        player.move.x,
+        player.move.z,
+        { t: "event", kind: "spellHit", spellId: spell.id, sourceId: player.id, x: player.move.x, y: player.move.y + 1, z: player.move.z },
+        player.instanceId,
+      );
       this.sendSelf(player);
       return;
     }
@@ -1455,6 +1793,7 @@ export class GameServer {
         this.applySpellEffects(player, { mob: null, foe: player }, spell.effects);
         for (const other of this.players.values()) {
           if (other.id === player.id || !player.partyId || other.partyId !== player.partyId) continue;
+          if (!this.sameInstance(player, other)) continue;
           if (dist2D(player.move.x, player.move.z, other.move.x, other.move.z) > r) continue;
           this.applySpellEffects(player, { mob: null, foe: other }, spell.effects);
         }
@@ -1462,6 +1801,7 @@ export class GameServer {
         // Every enemy in range takes the hit -- no single-best-match here,
         // unlike melee/projectile (which each resolve exactly one target).
         for (const mob of this.mobs.values()) {
+          if (!this.sameInstance(player, mob)) continue;
           if (mob.respawnAt === null && dist2D(player.move.x, player.move.z, mob.x, mob.z) <= r) {
             this.applySpellEffects(player, { mob, foe: null }, spell.effects);
           }
@@ -1469,21 +1809,19 @@ export class GameServer {
         if (player.pvp) {
           for (const other of this.players.values()) {
             if (other.id === player.id || other.dead || !other.pvp) continue;
+            if (!this.sameInstance(player, other)) continue;
             if (dist2D(player.move.x, player.move.z, other.move.x, other.move.z) > r) continue;
             this.applySpellEffects(player, { mob: null, foe: other }, spell.effects);
           }
         }
       }
       this.setActionAnim(player, "attack");
-      this.broadcastNear(player.move.x, player.move.z, {
-        t: "event",
-        kind: "spellHit",
-        spellId: spell.id,
-        sourceId: player.id,
-        x: player.move.x,
-        y: player.move.y + 1,
-        z: player.move.z,
-      });
+      this.broadcastNear(
+        player.move.x,
+        player.move.z,
+        { t: "event", kind: "spellHit", spellId: spell.id, sourceId: player.id, x: player.move.x, y: player.move.y + 1, z: player.move.z },
+        player.instanceId,
+      );
       this.sendSelf(player);
       return;
     }
@@ -1511,6 +1849,7 @@ export class GameServer {
       effects: spell.effects,
       speed: spell.targeting.projectileSpeed ?? 24,
       homingId,
+      instanceId: player.instanceId,
     });
     this.sendSelf(player);
   }
@@ -1532,12 +1871,13 @@ export class GameServer {
       }
     };
     for (const mob of this.mobs.values()) {
-      if (mob.respawnAt !== null) continue;
+      if (mob.respawnAt !== null || !this.sameInstance(player, mob)) continue;
       consider(mob.x, mob.z, mob.id);
     }
     if (player.pvp) {
       for (const other of this.players.values()) {
         if (other.id === player.id || other.dead || !other.pvp) continue;
+        if (!this.sameInstance(player, other)) continue;
         consider(other.move.x, other.move.z, other.id);
       }
     }
@@ -1775,25 +2115,36 @@ export class GameServer {
   private damageMob(mob: MobState, amount: number, attacker: PlayerState): void {
     mob.hp -= amount;
     mob.targetId = attacker.id;
-    this.broadcastNear(mob.x, mob.z, {
-      t: "event",
-      kind: "damage",
-      sourceId: attacker.id,
-      targetId: mob.id,
-      amount,
-      x: mob.x,
-      y: mob.y + 1,
-      z: mob.z,
-    });
+    this.broadcastNear(
+      mob.x,
+      mob.z,
+      { t: "event", kind: "damage", sourceId: attacker.id, targetId: mob.id, amount, x: mob.x, y: mob.y + 1, z: mob.z },
+      mob.instanceId,
+    );
     if (mob.hp <= 0) this.killMob(mob, attacker);
   }
 
   private killMob(mob: MobState, killer: PlayerState): void {
     const def = mobDef(mob.type);
-    mob.respawnAt = Date.now() + def.respawnS * 1000;
     mob.targetId = null;
     mob.hp = 0;
 
+    if (mob.instanceId) {
+      // Dungeon mobs never respawn on the normal timer -- they're deleted
+      // for real when the instance tears down (see teardownInstance) -- and
+      // per-kill loot/XP/quest progress is suppressed in favor of the
+      // single end-of-run reward bundle (see distributeDungeonRewards).
+      mob.respawnAt = Infinity;
+      const instance = this.dungeonInstances.get(mob.instanceId);
+      if (instance) {
+        instance.lastActivityAt = Date.now();
+        this.broadcastDungeonState(instance);
+        this.checkDungeonCleared(mob.instanceId);
+      }
+      return;
+    }
+
+    mob.respawnAt = Date.now() + def.respawnS * 1000;
     for (const loot of def.loot) {
       if (loot.chance !== undefined && Math.random() > loot.chance) continue;
       const qty = loot.min + Math.floor(Math.random() * (loot.max - loot.min + 1));
@@ -1838,16 +2189,12 @@ export class GameServer {
     player.dirty = true;
     this.cancelCast(player);
     this.cancelRevive(player);
-    this.broadcastNear(player.move.x, player.move.z, {
-      t: "event",
-      kind: "damage",
-      sourceId,
-      targetId: player.id,
-      amount,
-      x: player.move.x,
-      y: player.move.y + 1.5,
-      z: player.move.z,
-    });
+    this.broadcastNear(
+      player.move.x,
+      player.move.z,
+      { t: "event", kind: "damage", sourceId, targetId: player.id, amount, x: player.move.x, y: player.move.y + 1.5, z: player.move.z },
+      player.instanceId,
+    );
     if (player.hp <= 0) {
       player.hp = 0;
       player.dead = true;
@@ -1861,6 +2208,7 @@ export class GameServer {
       for (const mob of this.mobs.values()) {
         if (mob.targetId === player.id) mob.targetId = null;
       }
+      if (player.instanceId) this.checkDungeonWipe(player.instanceId);
     }
     this.sendSelf(player);
   }
@@ -1905,6 +2253,7 @@ export class GameServer {
     if (this.tickCount % 40 === 0) {
       for (const partyId of this.parties.keys()) this.broadcastPartyState(partyId);
       this.broadcastRoster();
+      this.tickDungeons(now);
     }
   }
 
@@ -1980,16 +2329,14 @@ export class GameServer {
     target.dirty = true;
     this.sendSelf(target);
     this.sendSelf(reviver);
-    this.broadcastNear(target.move.x, target.move.z, {
-      t: "event",
-      kind: "revive",
-      sourceId: reviver.id,
-      targetId: target.id,
-      x: target.move.x,
-      y: target.move.y + 1.5,
-      z: target.move.z,
-    });
+    this.broadcastNear(
+      target.move.x,
+      target.move.z,
+      { t: "event", kind: "revive", sourceId: reviver.id, targetId: target.id, x: target.move.x, y: target.move.y + 1.5, z: target.move.z },
+      target.instanceId,
+    );
     this.broadcastChat("system", `${reviver.name} revived ${target.name}.`);
+    if (target.instanceId) this.checkDungeonWipe(target.instanceId);
   }
 
   private cancelRevive(player: PlayerState): void {
@@ -2013,6 +2360,7 @@ export class GameServer {
         player.mount = null;
         this.sendEvent(player, { t: "event", kind: "death" });
         this.broadcastChat("system", `${player.name} starved to death.`);
+        if (player.instanceId) this.checkDungeonWipe(player.instanceId);
       }
     } else if (player.hunger > 30 && player.thirst > 30) {
       player.hp = clamp(player.hp + HP_REGEN_PER_S * TICK_DT, 0, this.maxHp(player));
@@ -2053,17 +2401,15 @@ export class GameServer {
       let hit = false;
       const owner = this.players.get(proj.ownerId);
       for (const mob of this.mobs.values()) {
-        if (mob.respawnAt !== null) continue;
+        if (mob.respawnAt !== null || !this.sameInstance(proj, mob)) continue;
         if (dist3D(proj.x, proj.y, proj.z, mob.x, mob.y + 0.8, mob.z) < 1.7) {
           if (owner) this.applySpellEffects(owner, { mob, foe: null }, proj.effects);
-          this.broadcastNear(proj.x, proj.z, {
-            t: "event",
-            kind: "spellHit",
-            spellId: proj.spellId,
-            x: proj.x,
-            y: proj.y,
-            z: proj.z,
-          });
+          this.broadcastNear(
+            proj.x,
+            proj.z,
+            { t: "event", kind: "spellHit", spellId: proj.spellId, x: proj.x, y: proj.y, z: proj.z },
+            proj.instanceId,
+          );
           hit = true;
           break;
         }
@@ -2072,16 +2418,15 @@ export class GameServer {
       if (!hit && owner?.pvp) {
         for (const other of this.players.values()) {
           if (other.id === proj.ownerId || other.dead || !other.pvp) continue;
+          if (!this.sameInstance(proj, other)) continue;
           if (dist3D(proj.x, proj.y, proj.z, other.move.x, other.move.y + 1.2, other.move.z) < 1.7) {
             if (owner) this.applySpellEffects(owner, { mob: null, foe: other }, proj.effects);
-            this.broadcastNear(proj.x, proj.z, {
-              t: "event",
-              kind: "spellHit",
-              spellId: proj.spellId,
-              x: proj.x,
-              y: proj.y,
-              z: proj.z,
-            });
+            this.broadcastNear(
+              proj.x,
+              proj.z,
+              { t: "event", kind: "spellHit", spellId: proj.spellId, x: proj.x, y: proj.y, z: proj.z },
+              proj.instanceId,
+            );
             hit = true;
             break;
           }
@@ -2099,9 +2444,12 @@ export class GameServer {
       const def = mobDef(mob.type);
 
       if (mob.respawnAt !== null) {
+        // Infinity for a dungeon mob (see killMob) -- `now >= mob.respawnAt`
+        // is never true, so it just stays inert until teardownInstance
+        // deletes it for real.
         if (now >= mob.respawnAt) {
           mob.respawnAt = null;
-          mob.hp = def.maxHp;
+          mob.hp = def.maxHp * mob.hpMult;
           mob.activeAuras = [];
           mob.x = mob.homeX;
           mob.z = mob.homeZ;
@@ -2121,6 +2469,7 @@ export class GameServer {
         for (const player of this.players.values()) {
           if (player.dead) continue;
           if (player.activeAuras.some((a) => a.auraId === "invisible")) continue;
+          if (!this.sameInstance(mob, player)) continue;
           if (dist2D(mob.x, mob.z, player.move.x, player.move.z) < def.aggroRange) {
             mob.targetId = player.id;
             break;
@@ -2145,13 +2494,13 @@ export class GameServer {
         } else if (now >= mob.attackReadyAt) {
           mob.attackReadyAt = now + def.attackCooldownS * 1000;
           mob.actionAnimUntil = now + ANIM_ACTION_MS;
-          this.applyMobAttack(mob, mob.targetId!, def.damage);
+          this.applyMobAttack(mob, mob.targetId!, def.damage * mob.dmgMult);
         }
       } else {
         if (mob.targetId) mob.targetId = null; // leash: give up
         if (distHome > 2 && distHome > def.leashRange * 0.5) {
           this.moveMob(mob, mob.homeX, mob.homeZ, def.speed * 0.9);
-          if (distHome > def.leashRange * 0.9) mob.hp = def.maxHp; // reset heal
+          if (distHome > def.leashRange * 0.9) mob.hp = def.maxHp * mob.hpMult; // reset heal
         } else {
           // Wander.
           if (now >= mob.nextWanderAt) {
@@ -2203,23 +2552,19 @@ export class GameServer {
   private damageMobFromPet(mob: MobState, amount: number, pet: PetState): void {
     mob.hp -= amount;
     mob.targetId = pet.id;
-    this.broadcastNear(mob.x, mob.z, {
-      t: "event",
-      kind: "damage",
-      sourceId: pet.id,
-      targetId: mob.id,
-      amount,
-      x: mob.x,
-      y: mob.y + 1,
-      z: mob.z,
-    });
+    this.broadcastNear(
+      mob.x,
+      mob.z,
+      { t: "event", kind: "damage", sourceId: pet.id, targetId: mob.id, amount, x: mob.x, y: mob.y + 1, z: mob.z },
+      mob.instanceId,
+    );
     if (mob.hp <= 0) {
       const owner = this.players.get(pet.ownerId);
       if (owner) {
         this.killMob(mob, owner);
       } else {
         const def = mobDef(mob.type);
-        mob.respawnAt = Date.now() + def.respawnS * 1000;
+        mob.respawnAt = mob.instanceId ? Infinity : Date.now() + def.respawnS * 1000;
         mob.targetId = null;
         mob.hp = 0;
       }
@@ -2231,16 +2576,12 @@ export class GameServer {
    *  removes it (no respawn/leash) and clears the owner's damage buff. */
   private damagePet(pet: PetState, rawAmount: number, sourceId: string): void {
     pet.hp -= rawAmount;
-    this.broadcastNear(pet.x, pet.z, {
-      t: "event",
-      kind: "damage",
-      sourceId,
-      targetId: pet.id,
-      amount: rawAmount,
-      x: pet.x,
-      y: pet.y + 1,
-      z: pet.z,
-    });
+    this.broadcastNear(
+      pet.x,
+      pet.z,
+      { t: "event", kind: "damage", sourceId, targetId: pet.id, amount: rawAmount, x: pet.x, y: pet.y + 1, z: pet.z },
+      pet.instanceId,
+    );
     if (pet.hp <= 0) {
       pet.hp = 0;
       this.pets.delete(pet.id);
@@ -2276,6 +2617,7 @@ export class GameServer {
       attackReadyAt: 0,
       actionAnimUntil: 0,
       following: false,
+      instanceId: owner.instanceId,
     });
   }
 
@@ -2295,6 +2637,11 @@ export class GameServer {
         continue;
       }
 
+      // Defensive re-sync every tick rather than trusting every dungeon
+      // enter/leave call site to have set it -- cheap, and a stale value
+      // here would let a pet see/fight across instance boundaries.
+      pet.instanceId = owner.instanceId;
+
       const def = mobDef(pet.type);
       let target = pet.targetId ? this.mobs.get(pet.targetId) : undefined;
       if (target && target.respawnAt !== null) target = undefined;
@@ -2302,6 +2649,7 @@ export class GameServer {
       // If owner has targeted a valid enemy, check if it's close enough in range
       let ownerTarget = owner.currentTargetId ? this.mobs.get(owner.currentTargetId) : undefined;
       if (ownerTarget && ownerTarget.respawnAt !== null) ownerTarget = undefined;
+      if (ownerTarget && !this.sameInstance(owner, ownerTarget)) ownerTarget = undefined;
 
       if (ownerTarget) {
         const distToOwnerTarget = dist2D(owner.move.x, owner.move.z, ownerTarget.x, ownerTarget.z);
@@ -2318,7 +2666,7 @@ export class GameServer {
         // nearest hostile within the pet's own aggro range (proactive).
         let bestDist = Infinity;
         for (const mob of this.mobs.values()) {
-          if (mob.respawnAt !== null) continue;
+          if (mob.respawnAt !== null || !this.sameInstance(owner, mob)) continue;
           const mobDefC = mobDef(mob.type);
           const d = dist2D(owner.move.x, owner.move.z, mob.x, mob.z);
           const inRange = mob.targetId === owner.id ? d < mobDefC.leashRange : d < mobDefC.aggroRange;
@@ -2463,7 +2811,7 @@ export class GameServer {
     let bestFoe: PlayerState | null = null;
     let bestDist = Infinity;
     for (const mob of this.mobs.values()) {
-      if (mob.respawnAt !== null) continue;
+      if (mob.respawnAt !== null || !this.sameInstance(player, mob)) continue;
       const d = dist3D(player.move.x, player.move.y, player.move.z, mob.x, mob.y, mob.z);
       if (d > range + 0.6 || !inCone(mob.x, mob.z)) continue;
       if (d < bestDist) {
@@ -2475,6 +2823,7 @@ export class GameServer {
     if (player.pvp) {
       for (const other of this.players.values()) {
         if (other.id === player.id || other.dead || !other.pvp) continue;
+        if (!this.sameInstance(player, other)) continue;
         const d = dist3D(player.move.x, player.move.y, player.move.z, other.move.x, other.move.y, other.move.z);
         if (d > range + 0.6 || !inCone(other.move.x, other.move.z)) continue;
         if (d < bestDist) {
@@ -2526,30 +2875,22 @@ export class GameServer {
         const amount = pet ? rawAmount * 0.65 : rawAmount;
         healTarget.hp = Math.min(this.maxHp(healTarget), healTarget.hp + amount);
         healTarget.dirty = true;
-        this.broadcastNear(healTarget.move.x, healTarget.move.z, {
-          t: "event",
-          kind: "heal",
-          sourceId: caster.id,
-          targetId: healTarget.id,
-          amount,
-          x: healTarget.move.x,
-          y: healTarget.move.y + 1.5,
-          z: healTarget.move.z,
-        });
+        this.broadcastNear(
+          healTarget.move.x,
+          healTarget.move.z,
+          { t: "event", kind: "heal", sourceId: caster.id, targetId: healTarget.id, amount, x: healTarget.move.x, y: healTarget.move.y + 1.5, z: healTarget.move.z },
+          healTarget.instanceId,
+        );
         if (healTarget !== caster) this.sendSelf(healTarget);
         if (pet) {
           const petAmount = rawAmount * 0.35;
           pet.hp = Math.min(mobDef(pet.type).maxHp, pet.hp + petAmount);
-          this.broadcastNear(pet.x, pet.z, {
-            t: "event",
-            kind: "heal",
-            sourceId: caster.id,
-            targetId: pet.id,
-            amount: petAmount,
-            x: pet.x,
-            y: pet.y + 1.5,
-            z: pet.z,
-          });
+          this.broadcastNear(
+            pet.x,
+            pet.z,
+            { t: "event", kind: "heal", sourceId: caster.id, targetId: pet.id, amount: petAmount, x: pet.x, y: pet.y + 1.5, z: pet.z },
+            pet.instanceId,
+          );
         }
       } else if (effect.type === "applyAura" && effect.auraId) {
         if (landsOnCaster) {
@@ -2625,6 +2966,7 @@ export class GameServer {
 
       const players: PlayerSnap[] = [];
       for (const other of allPlayers) {
+        if (!this.sameInstance(viewer, other)) continue;
         if (dist2D(px, pz, other.move.x, other.move.z) > INTEREST_RADIUS) continue;
         players.push({
           id: other.id,
@@ -2646,7 +2988,7 @@ export class GameServer {
 
       const mobs: MobSnap[] = [];
       for (const mob of this.mobs.values()) {
-        if (mob.respawnAt !== null) continue;
+        if (mob.respawnAt !== null || !this.sameInstance(viewer, mob)) continue;
         if (dist2D(px, pz, mob.x, mob.z) > INTEREST_RADIUS) continue;
         const def = mobDef(mob.type);
         mobs.push({
@@ -2665,6 +3007,7 @@ export class GameServer {
 
       const pets: PetSnap[] = [];
       for (const pet of this.pets.values()) {
+        if (!this.sameInstance(viewer, pet)) continue;
         if (dist2D(px, pz, pet.x, pet.z) > INTEREST_RADIUS) continue;
         const owner = this.players.get(pet.ownerId);
         pets.push({
@@ -2684,14 +3027,18 @@ export class GameServer {
 
       const projectiles: ProjectileSnap[] = [];
       for (const proj of this.projectiles.values()) {
+        if (!this.sameInstance(viewer, proj)) continue;
         if (dist2D(px, pz, proj.x, proj.z) > INTEREST_RADIUS) continue;
         projectiles.push({ id: proj.id, spellId: proj.spellId, x: proj.x, y: proj.y, z: proj.z });
       }
 
+      // NPCs (village quest givers) only ever exist in the open world.
       const npcs: NpcSnap[] = [];
-      for (const npc of this.npcs) {
-        if (dist2D(px, pz, npc.x, npc.z) > INTEREST_RADIUS) continue;
-        npcs.push(this.npcSnapFor(npc, viewer));
+      if (!viewer.instanceId) {
+        for (const npc of this.npcs) {
+          if (dist2D(px, pz, npc.x, npc.z) > INTEREST_RADIUS) continue;
+          npcs.push(this.npcSnapFor(npc, viewer));
+        }
       }
 
       this.sendTo(viewer.peer, {
@@ -2746,9 +3093,10 @@ export class GameServer {
     }
   }
 
-  private broadcastNear(x: number, z: number, msg: ServerMsg): void {
+  private broadcastNear(x: number, z: number, msg: ServerMsg, instanceId: string | null): void {
     const data = JSON.stringify(msg);
     for (const player of this.players.values()) {
+      if (player.instanceId !== instanceId) continue;
       if (dist2D(x, z, player.move.x, player.move.z) > INTEREST_RADIUS) continue;
       try {
         player.peer.send(data);
@@ -2841,6 +3189,9 @@ export class GameServer {
       nextWanderAt: 0,
       actionAnimUntil: 0,
       activeAuras: [],
+      instanceId: player.instanceId,
+      hpMult: 1,
+      dmgMult: 1,
     });
     return true;
   }
@@ -2852,6 +3203,29 @@ export class GameServer {
     addItem(player.inventory, itemId, qty);
     player.dirty = true;
     this.sendInventory(player);
+    return true;
+  }
+
+  /** Dev-only: teleport a connected character (verification tooling -- e.g.
+   *  reaching a far-flung dungeon portal without a long walk). */
+  debugTeleport(charId: string, x: number, z: number): boolean {
+    const player = this.players.get(charId);
+    if (!player) return false;
+    player.move = { x, y: terrainHeight(x, z), z, vy: 0, grounded: true };
+    player.dead = false;
+    player.hp = this.maxHp(player);
+    player.mana = this.maxMana(player);
+    player.hunger = 100;
+    player.thirst = 100;
+    // Ashenpeak is dense with hostile tier-3/4 mobs -- a teleport can easily
+    // drop a low-level test character right next to one. Grant a brief
+    // invisibility so verification isn't fighting random aggro.
+    player.activeAuras = applyAura(player.activeAuras, "invisible", player.id, Date.now());
+    for (const mob of this.mobs.values()) {
+      if (mob.targetId === charId) mob.targetId = null;
+    }
+    player.dirty = true;
+    this.sendSelf(player);
     return true;
   }
 

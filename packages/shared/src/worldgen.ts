@@ -19,6 +19,9 @@ import {
   WORLD_MAX_X,
   VALLEY_START_Z,
   REGION_TWO_MAX_Z,
+  REGION_TWO_GATE_X,
+  REGION_TWO_GATE_Z,
+  DUNGEON_ARENA_RADIUS,
 } from "./constants";
 import { dist2D, clamp, distPointToSegment } from "./math";
 
@@ -78,7 +81,7 @@ export interface PathSegment {
   bz: number;
 }
 
-export type PoiType = "ruins" | "shrine" | "camp" | "tower";
+export type PoiType = "ruins" | "shrine" | "camp" | "tower" | "dungeon_portal";
 
 export interface PoiSpec {
   id: string;
@@ -88,6 +91,14 @@ export interface PoiSpec {
   z: number;
   yaw: number;
   buildings: BuildingSpec[];
+  /** dungeon_portal only: which difficulty tier this portal leads to. */
+  dungeonTier?: number;
+  /** dungeon_portal only: center of the reserved arena rectangle this
+   *  portal's dungeon run takes place in (see inDungeonReserve /
+   *  generateDungeonLayout) -- distinct from the portal's own x/z, which is
+   *  a normal walkable overworld waypoint near, but outside, the arena. */
+  arenaX?: number;
+  arenaZ?: number;
 }
 
 const NODE_CELL = 14; // meters per scatter cell
@@ -279,6 +290,37 @@ export function generatePaths(): PathSegment[] {
 
 // ============================ points of interest ============================
 
+/** Finds a flat, clear rectangle within `bounds` to reserve for a dungeon
+ *  arena -- excluded from all normal node/mob/POI scatter (see
+ *  inDungeonReserve) so every concurrent run of the portal leading here can
+ *  safely reuse the identical geometry. Sampled directly within the given
+ *  region's own bounds (not the angle/radius-from-origin sweep the other
+ *  POI loops use), since a region can be a whole zone rather than a ring
+ *  around the origin. */
+function findDungeonArenaSite(
+  villages: VillageSpec[],
+  existingPois: PoiSpec[],
+  seedOffset: number,
+  bounds: ScatterBounds,
+): { x: number; z: number; y: number } | null {
+  const rng = mulberry32(ZONE_SEED * 13 + 6001 + seedOffset);
+  const margin = DUNGEON_ARENA_RADIUS + 20;
+  for (let attempt = 0; attempt < 300; attempt++) {
+    const x = bounds.minX + margin + rng() * Math.max(1, bounds.maxX - bounds.minX - margin * 2);
+    const z = bounds.minZ + margin + rng() * Math.max(1, bounds.maxZ - bounds.minZ - margin * 2);
+    if (!isBuildableSite(x, z)) continue;
+    if (terrainSlope(x, z) > 0.35) continue; // flat enough for a hand-placed arena
+    if (distToRiver(x, z) < RIVER_HALF_WIDTH + 10) continue;
+    if (dist2D(x, z, SPAWN_POINT.x, SPAWN_POINT.z) < SPAWN_CLEAR_RADIUS * 2) continue;
+    if (villages.some((v) => dist2D(x, z, v.x, v.z) < v.radius + DUNGEON_ARENA_RADIUS + 20)) continue;
+    if (existingPois.some((p) => dist2D(x, z, p.x, p.z) < DUNGEON_ARENA_RADIUS + 20)) continue;
+    // stay clear of the lazy-activation trigger point for region two itself
+    if (dist2D(x, z, REGION_TWO_GATE_X, REGION_TWO_GATE_Z) < DUNGEON_ARENA_RADIUS + 30) continue;
+    return { x, z, y: terrainHeight(x, z) };
+  }
+  return null;
+}
+
 let poisCache: PoiSpec[] | null = null;
 
 export function generatePois(): PoiSpec[] {
@@ -346,8 +388,61 @@ export function generatePois(): PoiSpec[] {
     }
   }
 
+  // Dungeon portal(s) -- one low-tier portal in Greenlands (reachable from
+  // spawn without a trek) and one high-tier portal deep in Ashenpeak,
+  // reusing that region's own tier-3/4 mob roster. Each portal is a normal
+  // walkable overworld waypoint; the arena it leads into is a separate
+  // reserved rectangle nearby (arenaX/arenaZ), excluded from all normal
+  // scatter (see inDungeonReserve below) so every concurrent run of a given
+  // portal can safely reuse the identical geometry.
+  {
+    const dungeonSpecs: { tier: number; bounds: ScatterBounds }[] = [
+      { tier: 0, bounds: REGION_ONE_BOUNDS },
+      { tier: 3, bounds: REGION_TWO_BOUNDS },
+    ];
+    for (let i = 0; i < dungeonSpecs.length; i++) {
+      const { tier, bounds } = dungeonSpecs[i]!;
+      const arena = findDungeonArenaSite(villages, pois, i, bounds);
+      if (!arena) continue;
+      const rng = mulberry32(ZONE_SEED * 13 + 7001 + i);
+      for (let attempt = 0; attempt < 60; attempt++) {
+        const angle = rng() * Math.PI * 2;
+        const dist = DUNGEON_ARENA_RADIUS + 15 + rng() * 25;
+        const x = arena.x + Math.sin(angle) * dist;
+        const z = arena.z + Math.cos(angle) * dist;
+        if (!isBuildableSite(x, z)) continue;
+        if (villages.some((v) => dist2D(x, z, v.x, v.z) < v.radius + 20)) continue;
+        if (pois.some((p) => dist2D(x, z, p.x, p.z) < 40)) continue;
+        const y = terrainHeight(x, z);
+        const yaw = Math.atan2(arena.x - x, arena.z - z); // face the arena
+        pois.push({
+          id: `poi_dungeon_${i}`,
+          type: "dungeon_portal",
+          x,
+          y,
+          z,
+          yaw,
+          buildings: [],
+          dungeonTier: tier,
+          arenaX: arena.x,
+          arenaZ: arena.z,
+        });
+        break;
+      }
+    }
+  }
+
   poisCache = pois;
   return pois;
+}
+
+/** True within a dungeon's reserved arena rectangle -- normal node/mob/POI
+ *  scatter must exclude this so the hand-placed dungeon encounter is the
+ *  only thing there, for every concurrent run alike. */
+export function inDungeonReserve(x: number, z: number): boolean {
+  return generatePois().some(
+    (p) => p.type === "dungeon_portal" && p.arenaX !== undefined && dist2D(x, z, p.arenaX, p.arenaZ!) < DUNGEON_ARENA_RADIUS,
+  );
 }
 
 // ============================ resource nodes ============================
@@ -420,6 +515,7 @@ export function generateNodes(bounds: ScatterBounds = REGION_ONE_BOUNDS, idPrefi
       if (pois.some((p) => dist2D(x, z, p.x, p.z) < POI_CLEAR)) continue;
       if (paths.some((s) => distPointToSegment(x, z, s.ax, s.az, s.bx, s.bz) < PATH_CLEAR)) continue;
       if (distToRiver(x, z) < RIVER_HALF_WIDTH + 2) continue;
+      if (inDungeonReserve(x, z)) continue;
 
       const roll = hash2(ZONE_SEED + 41 + seedSalt, cx, cz);
       const type = roll < mix.tree ? "tree" : roll < mix.rock ? "rock" : "berry_bush";
@@ -555,6 +651,7 @@ export function generateMobSpawns(
       if (villages.some((v) => dist2D(x, z, v.x, v.z) < v.radius + 20)) continue;
       if (ruins.some((r) => dist2D(x, z, r.x, r.z) < UNDEAD_RADIUS)) continue; // undead handled below
       if (distToRiver(x, z) < RIVER_HALF_WIDTH + 2) continue;
+      if (inDungeonReserve(x, z)) continue;
 
       const type = pickMob(biomeAt(x, z), hash2(ZONE_SEED + 61 + seedSalt, cx, cz));
       spawns.push({ id: `${idPrefix}${cx}_${cz}`, type, x, y, z });
@@ -577,6 +674,7 @@ export function generateMobSpawns(
       if (villages.some((v) => dist2D(x, z, v.x, v.z) < v.radius + 25)) continue;
       if (dist2D(x, z, SPAWN_POINT.x, SPAWN_POINT.z) < SPAWN_CLEAR_RADIUS * 2.2) continue;
       if (distToRiver(x, z) < RIVER_HALF_WIDTH + 2) continue;
+      if (inDungeonReserve(x, z)) continue;
       const roll = hash2(ZONE_SEED + 79, ri, i);
       const type = roll < 0.5 ? "skeleton_minion" : roll < 0.8 ? "skeleton_warrior" : "skeleton_rogue";
       spawns.push({ id: `u_${ri}_${i}`, type, x, y, z });
@@ -619,6 +717,53 @@ export function generateRegionTwoMobSpawns(): MobSpawn[] {
     (_biome, roll) => pickFromWeights(REGION_TWO_MOB_TABLE, roll),
   );
   return regionTwoMobSpawnsCache;
+}
+
+// ============================ dungeons ============================
+
+export interface DungeonLayoutSpec {
+  id: string;
+  center: { x: number; y: number; z: number };
+  entryPoint: { x: number; z: number };
+  /** Offsets from `center` -- tier-agnostic; which mob type actually
+   *  populates each point is decided at instance-creation time from the
+   *  chosen DungeonTierDef's mobTable (see packages/shared/src/content/
+   *  dungeons.ts), not baked into the layout itself. */
+  mobSpawns: { localX: number; localZ: number }[];
+}
+
+const dungeonLayoutCache = new Map<string, DungeonLayoutSpec>();
+
+/** One small hand-placed room layout per portal, reused identically by
+ *  every concurrent run of that portal -- instancing comes from
+ *  server-side visibility filtering (see GameServer's instanceId), not
+ *  from unique geometry per run, so a single fixed layout is enough. */
+export function generateDungeonLayout(portalId: string): DungeonLayoutSpec {
+  const cached = dungeonLayoutCache.get(portalId);
+  if (cached) return cached;
+  const portal = generatePois().find((p) => p.id === portalId && p.type === "dungeon_portal");
+  if (!portal || portal.arenaX === undefined || portal.arenaZ === undefined) {
+    throw new Error(`Unknown dungeon portal: ${portalId}`);
+  }
+  const center = { x: portal.arenaX, y: terrainHeight(portal.arenaX, portal.arenaZ), z: portal.arenaZ };
+  const dx = center.x - portal.x;
+  const dz = center.z - portal.z;
+  const mag = Math.hypot(dx, dz) || 1;
+  const entryPoint = {
+    x: center.x - (dx / mag) * (DUNGEON_ARENA_RADIUS - 8),
+    z: center.z - (dz / mag) * (DUNGEON_ARENA_RADIUS - 8),
+  };
+  const rng = mulberry32(hashString(portalId) ^ 0x2f6e2b1);
+  const mobSpawns: { localX: number; localZ: number }[] = [];
+  const count = 10;
+  for (let i = 0; i < count; i++) {
+    const angle = (i / count) * Math.PI * 2 + rng() * 0.3;
+    const dist = 10 + rng() * (DUNGEON_ARENA_RADIUS - 20);
+    mobSpawns.push({ localX: Math.sin(angle) * dist, localZ: Math.cos(angle) * dist });
+  }
+  const layout: DungeonLayoutSpec = { id: portalId, center, entryPoint, mobSpawns };
+  dungeonLayoutCache.set(portalId, layout);
+  return layout;
 }
 
 // ============================ bridges ============================
