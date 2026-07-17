@@ -137,6 +137,10 @@
   {/if}
   <QuestDialog />
   <WorldMap />
+
+  <div class="app-version">
+    {__APP_VERSION__}
+  </div>
 </div>
 
 <style>
@@ -324,5 +328,16 @@
   }
   .revivebar .castbar-fill {
     background: linear-gradient(90deg, #2e8a3a, #5ec46a);
+  }
+  .app-version {
+    position: absolute;
+    bottom: 8px;
+    right: 12px;
+    font-size: 10px;
+    color: var(--rc-ink-dim, rgba(220, 230, 242, 0.45));
+    font-family: monospace;
+    pointer-events: none;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+    letter-spacing: 0.5px;
   }
 </style>
