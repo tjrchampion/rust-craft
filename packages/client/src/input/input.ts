@@ -178,6 +178,12 @@ export class InputManager {
     if (this.pointerLocked) document.exitPointerLock();
   }
 
+  requestPointer(): void {
+    if (!this.pointerLocked) {
+      void this.canvas.requestPointerLock();
+    }
+  }
+
   get hasPointerLock(): boolean {
     return this.pointerLocked;
   }

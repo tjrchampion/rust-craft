@@ -47,15 +47,15 @@ export const CraftMsg = z.object({
 
 export const ConsumeMsg = z.object({
   t: z.literal("consume"),
-  container: z.enum(["inventory", "hotbar", "equip"]),
+  container: z.enum(["inventory", "hotbar", "equip", "crafting"]),
   slot: z.number().int().min(0).max(31),
 });
 
 export const MoveItemMsg = z.object({
   t: z.literal("moveItem"),
-  fromContainer: z.enum(["inventory", "hotbar", "equip"]),
+  fromContainer: z.enum(["inventory", "hotbar", "equip", "crafting"]),
   fromSlot: z.number().int().min(0).max(31),
-  toContainer: z.enum(["inventory", "hotbar", "equip"]),
+  toContainer: z.enum(["inventory", "hotbar", "equip", "crafting"]),
   toSlot: z.number().int().min(0).max(31),
 });
 
@@ -75,7 +75,7 @@ export const AssignSpellMsg = z.object({
 
 export const PlaceMsg = z.object({
   t: z.literal("place"),
-  container: z.enum(["inventory", "hotbar", "equip"]),
+  container: z.enum(["inventory", "hotbar", "equip", "crafting"]),
   slot: z.number().int().min(0).max(31),
 });
 
@@ -106,6 +106,11 @@ export const SitMsg = z.object({ t: z.literal("sit") });
 export const QuestMsg = z.object({
   t: z.literal("quest"),
   action: z.enum(["accept", "decline", "turnin"]),
+  questId: z.string().max(32),
+});
+
+export const ShareQuestMsg = z.object({
+  t: z.literal("shareQuest"),
   questId: z.string().max(32),
 });
 
@@ -145,6 +150,7 @@ export const ClientMsg = z.discriminatedUnion("t", [
   PartyMsg,
   MountMsg,
   QuestMsg,
+  ShareQuestMsg,
   SitMsg,
   AssignSpellMsg,
   DodgeMsg,
@@ -194,6 +200,8 @@ export interface PartyMemberSnap {
   maxHp: number;
   online: boolean;
   leader: boolean;
+  x?: number;
+  z?: number;
 }
 
 /** One entry in the realm-wide online roster (Party tab's invite list) --
@@ -294,7 +302,7 @@ export interface QuestLogEntry {
 }
 
 export interface ItemSnap {
-  container: "inventory" | "hotbar" | "equip";
+  container: "inventory" | "hotbar" | "equip" | "crafting";
   slot: number;
   itemId: string;
   qty: number;

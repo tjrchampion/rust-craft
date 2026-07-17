@@ -1,6 +1,6 @@
 import { itemDef, INVENTORY_SLOTS, HOTBAR_SLOTS, EQUIP_SLOTS, type ItemSnap } from "@rustcraft/shared";
 
-export type Container = "inventory" | "hotbar" | "equip";
+export type Container = "inventory" | "hotbar" | "equip" | "crafting";
 
 export { EQUIP_SLOTS };
 
@@ -15,6 +15,7 @@ export interface InvItem {
 function slotCount(container: Container): number {
   if (container === "inventory") return INVENTORY_SLOTS;
   if (container === "hotbar") return HOTBAR_SLOTS;
+  if (container === "crafting") return 9;
   return EQUIP_SLOTS.length;
 }
 

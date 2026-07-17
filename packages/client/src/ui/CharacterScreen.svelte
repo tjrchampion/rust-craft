@@ -6,6 +6,7 @@
   import { itemIcon, spellIcon } from "./icons";
   import IconGlyph from "./IconGlyph.svelte";
   import { promptLabel } from "./padGlyphs";
+  import { wikiMarkdown } from "./wikiContent";
 
   const KBM_LABELS = ["1", "2", "3", "4", "5", "6", "Q", "Z", "X", "C"];
   const PAD_LABELS = ["LB+A", "LB+B", "LB+X", "LB+Y", "LB+↑", "LB+↓", "LB+←", "LB+→", "RB+A", "RB+B"];
@@ -50,11 +51,53 @@
   let spellBookFocus = $state<"spells" | "hotbar">("spells");
   let spellHotbarCursor = $state(0);
   let questsCursor = $state(0);
+  let questSubFocus = $state<"track" | "share">("track");
+  let craftTabFocus = $state<"inventory" | "grid" | "output" | "clear">("inventory");
+  let craftGridCursor = $state(0);
+  let clearBtnFocus = $state(0);
   let systemCursor = $state(0);
+  let systemSubTabIdx = $state(0); // 0 = game, 1 = wiki
+  const systemTabSub = $derived(systemSubTabIdx === 0 ? "game" : "wiki");
+  let systemSubFocus = $state<"sidebar" | "content">("sidebar");
+  let wikiScrollContainer = $state<HTMLDivElement | null>(null);
+
+  interface WikiLine {
+    type: "h1" | "h2" | "h3" | "p" | "li" | "hr";
+    text: string;
+  }
+
+  function parseWiki(md: string): WikiLine[] {
+    const lines = md.split("\n");
+    const parsed: WikiLine[] = [];
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      if (trimmed === "---") {
+        parsed.push({ type: "hr", text: "" });
+      } else if (trimmed.startsWith("### ")) {
+        parsed.push({ type: "h3", text: trimmed.slice(4) });
+      } else if (trimmed.startsWith("## ")) {
+        parsed.push({ type: "h2", text: trimmed.slice(3) });
+      } else if (trimmed.startsWith("# ")) {
+        parsed.push({ type: "h1", text: trimmed.slice(2) });
+      } else if (trimmed.startsWith("- ")) {
+        parsed.push({ type: "li", text: trimmed.slice(2) });
+      } else {
+        parsed.push({ type: "p", text: trimmed });
+      }
+    }
+    return parsed;
+  }
+
+  const wikiParsed = parseWiki(wikiMarkdown);
+
+  function formatBoldText(text: string): string {
+    return text.replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>");
+  }
   /** Item picked up from inv/hotbar/equip (moved via sendMoveItem) -- also
    *  covers rearranging a spell already slotted in the hotbar, since both
    *  ends are "hotbar" and moveItem tolerates the "spell:" marker. */
-  let moving = $state<{ container: "inventory" | "hotbar" | "equip"; slot: number } | null>(null);
+  let moving = $state<{ container: "inventory" | "hotbar" | "equip" | "crafting"; slot: number } | null>(null);
   /** A spell picked from the Spell Book list (or an already-slotted hotbar
    *  cell), waiting for a hotbar slot to land on via sendAssignSpell. */
   let movingSpell = $state<string | null>(null);
@@ -73,6 +116,12 @@
     spellBookFocus = "spells";
     spellHotbarCursor = 0;
     questsCursor = 0;
+    questSubFocus = "track";
+    craftTabFocus = "inventory";
+    craftGridCursor = 0;
+    clearBtnFocus = 0;
+    systemSubTabIdx = 0;
+    systemSubFocus = "sidebar";
   });
 
   const invSlots = $derived(
@@ -85,6 +134,35 @@
     Array.from({ length: EQUIP_SLOTS.length }, (_, i) => game.inventory.find((it) => it.container === "equip" && it.slot === i)),
   );
   const learnedSpells = $derived(game.learnedSpells);
+  const craftingSlots = $derived(
+    Array.from({ length: 9 }, (_, i) => game.inventory.find((it) => it.container === "crafting" && it.slot === i))
+  );
+  const matchedRecipe = $derived.by(() => {
+    const active = craftingSlots.filter(it => it !== undefined && it.qty > 0);
+    if (active.length === 0) return null;
+    const totals: Record<string, number> = {};
+    for (const it of active) {
+      if (it) totals[it.itemId] = (totals[it.itemId] ?? 0) + it.qty;
+    }
+    for (const recipe of Object.values(RECIPES)) {
+      const ingTotals: Record<string, number> = {};
+      for (const ing of recipe.ingredients) {
+        ingTotals[ing.itemId] = (ingTotals[ing.itemId] ?? 0) + ing.qty;
+      }
+      const gridKeys = Object.keys(totals);
+      const ingKeys = Object.keys(ingTotals);
+      if (gridKeys.length !== ingKeys.length) continue;
+      let match = true;
+      for (const key of gridKeys) {
+        if (totals[key] !== ingTotals[key]) {
+          match = false;
+          break;
+        }
+      }
+      if (match) return recipe;
+    }
+    return null;
+  });
   const classInfo = $derived(game.classId ? classDef(game.classId) : null);
   const partyMemberIds = $derived(new Set((game.party ?? []).map((m) => m.id)));
   const invitablePlayers = $derived(game.roster.filter((p) => p.id !== game.selfId && !partyMemberIds.has(p.id)));
@@ -98,18 +176,45 @@
     return r.ingredients.every((ing) => count(ing.itemId) >= ing.qty);
   }
 
+  function clearCraftingGrid(): void {
+    const g = getGame();
+    if (!g) return;
+    for (let i = 0; i < 9; i++) {
+      const item = craftingSlots[i];
+      if (item) {
+        let targetSlot = -1;
+        for (let s = 0; s < INVENTORY_SLOTS; s++) {
+          if (!game.inventory.some(it => it.container === "inventory" && it.slot === s)) {
+            targetSlot = s;
+            break;
+          }
+        }
+        if (targetSlot !== -1) {
+          g.sendMoveItem("crafting", i, "inventory", targetSlot);
+        }
+      }
+    }
+  }
+
   function close(): void {
+    clearCraftingGrid();
     game.inventoryOpen = false;
     getGame()?.setUiMode(false);
   }
 
   function selectTab(tab: CharacterTab): void {
+    if (game.activeTab === "craft" && tab !== "craft") {
+      clearCraftingGrid();
+    }
     game.activeTab = tab;
     moving = null;
     movingSpell = null;
     spellBookFocus = "spells";
     spellHotbarCursor = 0;
     questsCursor = 0;
+    craftTabFocus = "inventory";
+    craftGridCursor = 0;
+    clearBtnFocus = 0;
   }
 
   // ------------------------------------------------------------------- quests
@@ -118,10 +223,17 @@
   }
 
   // ---------------------------------------------------------------- inventory
-  function activateInv(container: "inventory" | "hotbar" | "equip", idx: number): void {
+  function activateInv(container: "inventory" | "hotbar" | "equip" | "crafting", idx: number): void {
     const g = getGame();
     if (!g) return;
-    const slots = container === "inventory" ? invSlots : container === "hotbar" ? hotbarSlots : equipSlots;
+    const slots =
+      container === "inventory"
+        ? invSlots
+        : container === "hotbar"
+          ? hotbarSlots
+          : container === "crafting"
+            ? craftingSlots
+            : equipSlots;
     if (moving) {
       g.sendMoveItem(moving.container, moving.slot, container, idx);
       moving = null;
@@ -137,9 +249,9 @@
       return;
     }
     const def = itemDef(item.itemId);
-    if (def.type === "consumable" || def.type === "tome") {
+    if (container !== "crafting" && (def.type === "consumable" || def.type === "tome")) {
       g.sendConsume(container, idx);
-    } else if (def.type === "placeable") {
+    } else if (container !== "crafting" && def.type === "placeable") {
       g.sendPlace(container, idx);
       close();
     } else {
@@ -236,7 +348,13 @@
       const row = Math.min(rows - 1, Math.max(0, Math.floor(invCursor / cols) + dy));
       invCursor = row * cols + col;
     } else if (game.activeTab === "quests") {
-      questsCursor = Math.min(game.questLog.length - 1, Math.max(0, questsCursor + dy));
+      if (dx < 0) {
+        questSubFocus = "track";
+      } else if (dx > 0 && game.party && game.party.length > 0) {
+        questSubFocus = "share";
+      } else if (dy !== 0) {
+        questsCursor = Math.min(game.questLog.length - 1, Math.max(0, questsCursor + dy));
+      }
     } else if (game.activeTab === "spellbook") {
       if (spellBookFocus === "spells") {
         if (dy > 0 && spellCursor === learnedSpells.length - 1) {
@@ -254,9 +372,74 @@
         }
       }
     } else if (game.activeTab === "craft") {
-      craftCursor = Math.min(recipes.length - 1, Math.max(0, craftCursor + dy));
+      if (craftTabFocus === "inventory") {
+        const cols = 4;
+        const rows = INVENTORY_SLOTS / cols;
+        const col = (invCursor % cols);
+        const row = Math.floor(invCursor / cols);
+        if (dx > 0 && col === cols - 1) {
+          craftTabFocus = "grid";
+          craftGridCursor = Math.min(2, Math.floor(row / 2.5)) * 3;
+        } else {
+          const nextCol = Math.min(cols - 1, Math.max(0, col + dx));
+          const nextRow = Math.min(rows - 1, Math.max(0, row + dy));
+          invCursor = nextRow * cols + nextCol;
+        }
+      } else if (craftTabFocus === "grid") {
+        const cols = 3;
+        const rows = 3;
+        const col = (craftGridCursor % cols);
+        const row = Math.floor(craftGridCursor / cols);
+        if (dx < 0 && col === 0) {
+          craftTabFocus = "inventory";
+          invCursor = Math.min(7, Math.round(row * 3)) * 4 + 3;
+        } else if (dx > 0 && col === cols - 1) {
+          craftTabFocus = "output";
+        } else if (dy > 0 && row === rows - 1) {
+          craftTabFocus = "clear";
+          clearBtnFocus = 0;
+        } else {
+          const nextCol = Math.min(cols - 1, Math.max(0, col + dx));
+          const nextRow = Math.min(rows - 1, Math.max(0, row + dy));
+          craftGridCursor = nextRow * cols + nextCol;
+        }
+      } else if (craftTabFocus === "output") {
+        if (dx < 0) {
+          craftTabFocus = "grid";
+          craftGridCursor = 5;
+        } else if (dy > 0) {
+          craftTabFocus = "clear";
+          clearBtnFocus = 0;
+        }
+      } else if (craftTabFocus === "clear") {
+        if (dy < 0) {
+          craftTabFocus = "grid";
+          craftGridCursor = 7;
+        } else if (dx !== 0) {
+          clearBtnFocus = clearBtnFocus === 0 ? 1 : 0;
+        }
+      }
     } else if (game.activeTab === "system") {
-      systemCursor = Math.min(systemActions.length - 1, Math.max(0, systemCursor + dy));
+      if (systemSubFocus === "sidebar") {
+        if (dy !== 0) {
+          systemSubTabIdx = systemSubTabIdx === 0 ? 1 : 0;
+        } else if (dx > 0) {
+          systemSubFocus = "content";
+          systemCursor = 0;
+        }
+      } else if (systemSubFocus === "content") {
+        if (dx < 0) {
+          systemSubFocus = "sidebar";
+        } else {
+          if (systemTabSub === "game") {
+            systemCursor = Math.min(systemActions.length - 1, Math.max(0, systemCursor + dy));
+          } else if (systemTabSub === "wiki") {
+            if (wikiScrollContainer) {
+              wikiScrollContainer.scrollTop += dy * 40;
+            }
+          }
+        }
+      }
     }
     // Party tab has no gamepad cursor yet -- mouse/click only for now.
   }
@@ -265,7 +448,13 @@
     if (game.activeTab === "inventory") activateInv("inventory", invCursor);
     else if (game.activeTab === "quests") {
       const q = game.questLog[questsCursor];
-      if (q) game.toggleQuestTrack(q.id);
+      if (q) {
+        if (questSubFocus === "track") {
+          game.toggleQuestTrack(q.id);
+        } else if (questSubFocus === "share") {
+          getGame()?.sendShareQuest(q.id);
+        }
+      }
     } else if (game.activeTab === "spellbook") {
       if (spellBookFocus === "spells") {
         const spellId = learnedSpells[spellCursor];
@@ -273,8 +462,31 @@
       } else {
         activateHotbarForSpell(spellHotbarCursor);
       }
-    } else if (game.activeTab === "craft") activateCraft(craftCursor);
-    else if (game.activeTab === "system") systemActions[systemCursor]?.();
+    } else if (game.activeTab === "craft") {
+      if (craftTabFocus === "inventory") {
+        activateInv("inventory", invCursor);
+      } else if (craftTabFocus === "grid") {
+        activateInv("crafting", craftGridCursor);
+      } else if (craftTabFocus === "output") {
+        if (matchedRecipe) getGame()?.sendCraft(matchedRecipe.id);
+      } else if (craftTabFocus === "clear") {
+        if (clearBtnFocus === 0) {
+          if (matchedRecipe) getGame()?.sendCraft(matchedRecipe.id);
+        } else {
+          clearCraftingGrid();
+        }
+      }
+    }
+    else if (game.activeTab === "system") {
+      if (systemSubFocus === "sidebar") {
+        systemSubFocus = "content";
+        systemCursor = 0;
+      } else {
+        if (systemTabSub === "game") {
+          systemActions[systemCursor]?.();
+        }
+      }
+    }
   }
 
   onMount(() => {
@@ -395,28 +607,51 @@
           <h3>Active Quests</h3>
           <div class="quest-list">
             {#each game.questLog as q, i (q.id)}
-              <button
+              <div
                 class="quest-row"
-                class:cursor={questsCursor === i}
-                onclick={() => {
-                  questsCursor = i;
-                  game.toggleQuestTrack(q.id);
-                }}
+                class:row-active={questsCursor === i}
               >
-                <div class="quest-row-main">
+                <!-- Tracking toggle -->
+                <button
+                  class="quest-row-main"
+                  class:sub-cursor={questsCursor === i && questSubFocus === "track"}
+                  onclick={() => {
+                    questsCursor = i;
+                    questSubFocus = "track";
+                    game.toggleQuestTrack(q.id);
+                  }}
+                >
                   <div class="quest-row-title">
                     <span class="quest-row-check">{game.untrackedQuests.has(q.id) ? "☐" : "☑"}</span>
                     <span class="quest-row-name" class:done={q.status === "complete"}>{q.name}</span>
+                    <span class="quest-row-status" class:done={q.status === "complete"}>
+                      {q.status === "complete" ? "Complete" : "In Progress"}
+                    </span>
                   </div>
                   <div class="quest-row-desc">
                     {objectiveText(q.objectiveKind, q.objectiveTarget)}
                     <span class="quest-row-count">({q.progress}/{q.objectiveCount})</span>
                   </div>
+                </button>
+
+                <!-- Actions -->
+                <div class="quest-row-actions">
+                  {#if game.party && game.party.length > 0}
+                    <button
+                      class="rc-btn share-btn"
+                      class:selected={questsCursor === i && questSubFocus === "share"}
+                      disabled={q.status === "complete"}
+                      onclick={() => {
+                        questsCursor = i;
+                        questSubFocus = "share";
+                        getGame()?.sendShareQuest(q.id);
+                      }}
+                    >
+                      Share
+                    </button>
+                  {/if}
                 </div>
-                <div class="quest-row-status" class:done={q.status === "complete"}>
-                  {q.status === "complete" ? "Complete" : "In Progress"}
-                </div>
-              </button>
+              </div>
             {:else}
               <div class="empty-quests">No active quests. Visit NPCs in towns to accept tasks.</div>
             {/each}
@@ -473,39 +708,155 @@
           </div>
         </div>
       {:else if game.activeTab === "craft"}
-        <div class="col craft-col">
-          <h3>Crafting</h3>
-          <div class="recipes">
-            {#each recipes as recipe, i (recipe.id)}
+        <div class="craft-container">
+          <!-- Left: Backpack -->
+          <div class="col backpack-col">
+            <h3>Backpack</h3>
+            <div class="grid">
+              {#each invSlots as item, i (i)}
+                <button
+                  class="cell"
+                  class:cursor={craftTabFocus === "inventory" && invCursor === i}
+                  class:moving={moving?.container === "inventory" && moving.slot === i}
+                  onclick={() => {
+                    craftTabFocus = "inventory";
+                    invCursor = i;
+                    activateInv("inventory", i);
+                  }}
+                >
+                  {#if item}
+                    <IconGlyph value={itemIcon(item.itemId)} />
+                    {#if item.qty > 1}<span class="qty">{item.qty}</span>{/if}
+                  {/if}
+                </button>
+              {/each}
+            </div>
+          </div>
+
+          <!-- Middle: Crafting Area -->
+          <div class="col crafting-area-col">
+            <h3>Crafting Grid</h3>
+            <div class="crafting-area-main">
+              <!-- 3x3 Grid -->
+              <div class="crafting-grid">
+                {#each Array.from({ length: 9 }) as _, i}
+                  {@const item = craftingSlots[i]}
+                  <button
+                    class="cell big"
+                    class:cursor={craftTabFocus === "grid" && craftGridCursor === i}
+                    class:moving={moving?.container === "crafting" && moving.slot === i}
+                    onclick={() => {
+                      craftTabFocus = "grid";
+                      craftGridCursor = i;
+                      activateInv("crafting", i);
+                    }}
+                  >
+                    {#if item}
+                      <IconGlyph value={itemIcon(item.itemId)} size={28} />
+                      {#if item.qty > 1}<span class="qty">{item.qty}</span>{/if}
+                    {/if}
+                  </button>
+                {/each}
+              </div>
+
+              <!-- Arrow -->
+              <div class="crafting-arrow">➜</div>
+
+              <!-- Output Slot -->
+              <div class="crafting-output-container">
+                <button
+                  class="cell big output-cell"
+                  class:cursor={craftTabFocus === "output"}
+                  class:has-item={matchedRecipe !== null}
+                  onclick={() => {
+                    craftTabFocus = "output";
+                    if (matchedRecipe) {
+                      getGame()?.sendCraft(matchedRecipe.id);
+                    }
+                  }}
+                >
+                  {#if matchedRecipe}
+                    <IconGlyph value={itemIcon(matchedRecipe.output)} size={28} />
+                    {#if matchedRecipe.outputQty > 1}
+                      <span class="qty">{matchedRecipe.outputQty}</span>
+                    {/if}
+                  {/if}
+                </button>
+                <div class="output-label">
+                  {matchedRecipe ? itemDef(matchedRecipe.output).name : "Empty"}
+                </div>
+              </div>
+            </div>
+
+            <!-- Actions -->
+            <div class="crafting-actions">
               <button
-                class="recipe"
-                class:cursor={craftCursor === i}
-                class:unavailable={!canCraft(recipe.id)}
+                class="rc-btn primary craft-btn"
+                class:selected={craftTabFocus === "clear" && clearBtnFocus === 0}
+                disabled={matchedRecipe === null}
                 onclick={() => {
-                  craftCursor = i;
-                  activateCraft(i);
+                  craftTabFocus = "clear";
+                  clearBtnFocus = 0;
+                  if (matchedRecipe) getGame()?.sendCraft(matchedRecipe.id);
                 }}
               >
-                <IconGlyph value={itemIcon(recipe.output)} />
-                <span class="name">
-                  {itemDef(recipe.output).name}
-                  {#if recipe.station}<span class="station">at {recipe.station}</span>{/if}
-                </span>
-                <span class="ingredients">
-                  {#each recipe.ingredients as ing (ing.itemId)}
-                    <span class="ingredient" class:missing={count(ing.itemId) < ing.qty}>
-                      <IconGlyph value={itemIcon(ing.itemId)} size={14} />{count(ing.itemId)}/{ing.qty}
-                    </span>
-                  {/each}
-                </span>
+                Craft
               </button>
-            {/each}
+              <button
+                class="rc-btn ghost clear-btn"
+                class:selected={craftTabFocus === "clear" && clearBtnFocus === 1}
+                disabled={craftingSlots.filter(it => it !== undefined).length === 0}
+                onclick={() => {
+                  craftTabFocus = "clear";
+                  clearBtnFocus = 1;
+                  clearCraftingGrid();
+                }}
+              >
+                Clear Grid
+              </button>
+            </div>
+          </div>
+
+          <!-- Right: Recipe Book -->
+          <div class="col recipe-book-col">
+            <h3>Recipe Book</h3>
+            <div class="recipes-list">
+              {#each recipes as recipe}
+                {@const outputDef = itemDef(recipe.output)}
+                <div class="recipe-entry">
+                  <div class="recipe-header">
+                    <span class="recipe-icon"><IconGlyph value={itemIcon(recipe.output)} size={16} /></span>
+                    <span class="recipe-name">{outputDef.name}</span>
+                    {#if recipe.station}
+                      <span class="recipe-station">🏕️</span>
+                    {/if}
+                  </div>
+                  <div class="recipe-ingredients">
+                    {#each recipe.ingredients as ing}
+                      <span class="recipe-ing">
+                        {itemDef(ing.itemId).name} x{ing.qty}
+                      </span>
+                    {/each}
+                  </div>
+                </div>
+              {/each}
+            </div>
           </div>
         </div>
       {:else if game.activeTab === "party"}
         <div class="col party-tab-col">
           <h3>Your Party</h3>
-          {#if game.party && game.party.length > 0}
+          {#if game.pendingInvite}
+            <div class="pending-invite-box rc-frame">
+              <div class="pending-invite-text">
+                <strong>{game.pendingInvite}</strong> invites you to a party
+              </div>
+              <div class="pending-invite-actions">
+                <button class="rc-btn primary" onclick={() => getGame()?.sendParty("accept")}>Accept</button>
+                <button class="rc-btn ghost" onclick={() => getGame()?.sendParty("decline")}>Decline</button>
+              </div>
+            </div>
+          {:else if game.party && game.party.length > 0}
             <div class="party-list">
               {#each game.party as member (member.id)}
                 <div class="party-member" class:offline={!member.online}>
@@ -543,14 +894,76 @@
           </div>
         </div>
       {:else}
-        <div class="col system-col">
-          <h3>System</h3>
-          <button class="rc-btn" class:selected={systemCursor === 0} onclick={toggleFullscreen}>
-            {isFullscreen ? "Exit Fullscreen" : "Enter Fullscreen"}
-          </button>
-          <button class="rc-btn ghost" class:selected={systemCursor === 1} onclick={exitToCharacterSelect}>
-            Exit to Character Select
-          </button>
+        <div class="system-menu-container">
+          <!-- Sidebar sub-navigation -->
+          <div class="system-sidebar">
+            <button
+              class="sub-tab-btn"
+              class:active={systemTabSub === "game"}
+              class:cursor={systemSubFocus === "sidebar" && systemSubTabIdx === 0}
+              onclick={() => {
+                systemSubTabIdx = 0;
+                systemSubFocus = "sidebar";
+              }}
+            >
+              Game Options
+            </button>
+            <button
+              class="sub-tab-btn"
+              class:active={systemTabSub === "wiki"}
+              class:cursor={systemSubFocus === "sidebar" && systemSubTabIdx === 1}
+              onclick={() => {
+                systemSubTabIdx = 1;
+                systemSubFocus = "sidebar";
+              }}
+            >
+              Wiki Guide
+            </button>
+          </div>
+
+          <!-- Content display area -->
+          <div class="system-content-panel">
+            {#if systemTabSub === "game"}
+              <div class="col system-col">
+                <h3>Game Options</h3>
+                <button
+                  class="rc-btn"
+                  class:selected={systemSubFocus === "content" && systemCursor === 0}
+                  onclick={toggleFullscreen}
+                >
+                  {isFullscreen ? "Exit Fullscreen" : "Enter Fullscreen"}
+                </button>
+                <button
+                  class="rc-btn ghost"
+                  class:selected={systemSubFocus === "content" && systemCursor === 1}
+                  onclick={exitToCharacterSelect}
+                >
+                  Exit to Character Select
+                </button>
+              </div>
+            {:else if systemTabSub === "wiki"}
+              <div class="wiki-panel">
+                <h3>Game Wiki Guide</h3>
+                <div class="wiki-scrollable" bind:this={wikiScrollContainer}>
+                  {#each wikiParsed as item}
+                    {#if item.type === "h1"}
+                      <h1 class="wiki-h1">{item.text}</h1>
+                    {:else if item.type === "h2"}
+                      <h2 class="wiki-h2">{item.text}</h2>
+                    {:else if item.type === "h3"}
+                      <h3 class="wiki-h3">{item.text}</h3>
+                    {:else if item.type === "li"}
+                      <li class="wiki-li">{@html formatBoldText(item.text)}</li>
+                    {:else if item.type === "p"}
+                      <p class="wiki-p">{@html formatBoldText(item.text)}</p>
+                    {:else if item.type === "hr"}
+                      <hr class="wiki-hr" />
+                    {/if}
+                  {/each}
+                </div>
+              </div>
+            {/if}
+          </div>
         </div>
       {/if}
     </div>
@@ -869,61 +1282,36 @@
   .cell.big.first {
     margin-left: 16px;
   }
-  /* ---- Crafting tab ---- */
-  .craft-col {
-    flex: 1;
-  }
-  .recipes {
-    display: flex;
-    flex-direction: column;
-    gap: 5px;
-    overflow-y: auto;
-  }
-  .recipe {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    background: rgba(255, 255, 255, 0.04);
-    border: 2px solid rgba(255, 255, 255, 0.1);
-    border-radius: 6px;
-    padding: 8px 12px;
-    cursor: pointer;
-    color: #dce6f2;
-    text-align: left;
-  }
-  .recipe.cursor {
-    border-color: #ffd66e;
-    box-shadow: 0 0 10px rgba(255, 214, 110, 0.4);
-  }
-  .recipe.unavailable {
-    opacity: 0.45;
-  }
-  .recipe .name {
-    flex: 1;
-    font-size: 13px;
-    display: flex;
-    flex-direction: column;
-  }
-  .station {
-    font-size: 10px;
-    color: #c9a24b;
-  }
-  .ingredients {
-    display: flex;
-    gap: 6px;
-    font-size: 11px;
-  }
-  .ingredient {
-    display: inline-flex;
-    align-items: center;
-    gap: 2px;
-  }
-  .ingredients .missing {
-    color: #ff8a80;
-  }
   /* ---- Party tab ---- */
   .party-tab-col {
     width: 260px;
+  }
+  .pending-invite-box {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    background: rgba(255, 255, 255, 0.03);
+    border: 2px dashed rgba(201, 162, 75, 0.3);
+    border-radius: 6px;
+    padding: 14px;
+    margin-bottom: 12px;
+  }
+  .pending-invite-text {
+    font-size: 13px;
+    color: var(--rc-parchment);
+    line-height: 1.5;
+  }
+  .pending-invite-text strong {
+    color: var(--rc-gold-bright);
+  }
+  .pending-invite-actions {
+    display: flex;
+    gap: 8px;
+  }
+  .pending-invite-actions .rc-btn {
+    padding: 6px 12px;
+    font-size: 12.5px;
+    flex: 1;
   }
   .party-list {
     display: flex;
@@ -1025,20 +1413,45 @@
     background: rgba(255, 255, 255, 0.04);
     border: 2px solid rgba(255, 255, 255, 0.1);
     border-radius: 6px;
-    padding: 10px 14px;
-    cursor: pointer;
+    padding: 6px 12px;
     color: #dce6f2;
-    text-align: left;
     transition: background-color 0.2s, border-color 0.2s;
   }
-  .quest-row.cursor {
-    border-color: #ffd66e;
-    box-shadow: 0 0 10px rgba(255, 214, 110, 0.4);
+  .quest-row.row-active {
+    background: rgba(255, 255, 255, 0.07);
   }
   .quest-row-main {
+    background: none;
+    border: none;
+    padding: 6px 8px;
+    margin: 0;
+    text-align: left;
     display: flex;
     flex-direction: column;
     gap: 4px;
+    cursor: pointer;
+    flex: 1;
+    border-radius: 4px;
+    transition: background-color 0.2s;
+  }
+  .quest-row-main:hover, .quest-row-main.sub-cursor {
+    background: rgba(255, 255, 255, 0.06);
+  }
+  .quest-row-main:hover .quest-row-check,
+  .quest-row-main.sub-cursor .quest-row-check {
+    color: var(--rc-gold-bright);
+    text-shadow: 0 0 8px rgba(255, 214, 110, 0.6);
+  }
+  .quest-row-actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .share-btn {
+    padding: 5px 10px;
+    font-size: 11px;
+    font-family: var(--rc-display);
+    font-weight: 700;
   }
   .quest-row-title {
     display: flex;
@@ -1093,10 +1506,243 @@
     font-style: italic;
   }
 
+  /* ---- Crafting Board ---- */
+  .craft-container {
+    display: flex;
+    gap: 20px;
+    flex: 1;
+    min-height: 0;
+  }
+  .craft-container .grid {
+    grid-template-columns: repeat(4, 46px);
+  }
+  .crafting-area-col {
+    flex: 1.2;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+  .crafting-area-main {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 15px;
+    margin-top: 15px;
+    margin-bottom: 20px;
+  }
+  .crafting-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 52px);
+    gap: 6px;
+  }
+  .crafting-arrow {
+    font-size: 24px;
+    color: var(--rc-gold-dim);
+    text-shadow: 0 1px 3px #000;
+  }
+  .crafting-output-container {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    width: 90px;
+  }
+  .output-cell {
+    border-color: var(--rc-gold-dim) !important;
+    background: rgba(201, 162, 75, 0.05) !important;
+    box-shadow: inset 0 0 10px rgba(0, 0, 0, 0.5) !important;
+  }
+  .output-cell.has-item {
+    border-color: var(--rc-gold-bright) !important;
+    box-shadow: 0 0 14px rgba(255, 214, 110, 0.25) !important;
+  }
+  .output-label {
+    font-size: 11px;
+    color: var(--rc-ink-dim);
+    text-align: center;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    width: 100%;
+  }
+  .crafting-actions {
+    display: flex;
+    gap: 10px;
+    width: 100%;
+    justify-content: center;
+    margin-top: auto;
+    padding-bottom: 10px;
+  }
+  .crafting-actions .rc-btn {
+    flex: 1;
+    max-width: 130px;
+  }
+  .recipe-book-col {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+  .recipes-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    overflow-y: auto;
+    flex: 1;
+    padding-right: 4px;
+  }
+  .recipe-entry {
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 6px;
+    padding: 8px 10px;
+  }
+  .recipe-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 4px;
+  }
+  .recipe-icon {
+    display: inline-flex;
+    vertical-align: middle;
+  }
+  .recipe-name {
+    font-family: var(--rc-display);
+    font-weight: 700;
+    font-size: 12.5px;
+    color: var(--rc-parchment);
+  }
+  .recipe-station {
+    font-size: 10px;
+    margin-left: auto;
+    opacity: 0.8;
+  }
+  .recipe-ingredients {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 8px;
+    font-size: 10.5px;
+    color: var(--rc-ink-dim);
+  }
+  .recipe-ing {
+    background: rgba(0, 0, 0, 0.2);
+    padding: 1px 5px;
+    border-radius: 4px;
+  }
+
   /* ---- System tab ---- */
+  .system-menu-container {
+    display: flex;
+    gap: 20px;
+    flex: 1;
+    min-height: 0;
+    width: 100%;
+  }
+  .system-sidebar {
+    width: 180px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    border-right: 1px solid rgba(255, 255, 255, 0.08);
+    padding-right: 20px;
+  }
+  .sub-tab-btn {
+    background: rgba(255, 255, 255, 0.03);
+    border: 2px solid rgba(255, 255, 255, 0.08);
+    color: var(--rc-ink-dim);
+    padding: 10px 14px;
+    border-radius: 6px;
+    font-family: var(--rc-display);
+    font-weight: 700;
+    font-size: 13px;
+    text-align: left;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .sub-tab-btn:hover {
+    background: rgba(255, 255, 255, 0.07);
+    color: var(--rc-parchment);
+  }
+  .sub-tab-btn.active {
+    background: rgba(201, 162, 75, 0.08);
+    border-color: var(--rc-gold-dim);
+    color: var(--rc-gold-bright);
+  }
+  .sub-tab-btn.cursor {
+    border-color: var(--rc-gold-bright);
+    box-shadow: 0 0 10px rgba(255, 214, 110, 0.25);
+  }
+  .system-content-panel {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
   .system-col {
     width: 280px;
     gap: 10px;
+  }
+  .wiki-panel {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    padding-right: 10px;
+  }
+  .wiki-panel h3 {
+    margin-bottom: 12px;
+  }
+  .wiki-scrollable {
+    flex: 1;
+    overflow-y: auto;
+    background: rgba(0, 0, 0, 0.15);
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    border-radius: 6px;
+    padding: 15px;
+    font-size: 12.5px;
+    line-height: 1.6;
+    color: #cbd5e1;
+  }
+  .wiki-h1 {
+    font-family: var(--rc-display);
+    font-size: 18px;
+    color: var(--rc-gold-bright);
+    margin-top: 0;
+    margin-bottom: 12px;
+    border-bottom: 1px dashed rgba(201, 162, 75, 0.2);
+    padding-bottom: 6px;
+  }
+  .wiki-h2 {
+    font-family: var(--rc-display);
+    font-size: 15px;
+    color: var(--rc-parchment);
+    margin-top: 18px;
+    margin-bottom: 8px;
+  }
+  .wiki-h3 {
+    font-family: var(--rc-display);
+    font-size: 13.5px;
+    color: var(--rc-gold-dim);
+    margin-top: 12px;
+    margin-bottom: 6px;
+  }
+  .wiki-p {
+    margin-top: 0;
+    margin-bottom: 10px;
+  }
+  .wiki-p :global(strong), .wiki-li :global(strong) {
+    color: var(--rc-parchment);
+  }
+  .wiki-li {
+    margin-left: 15px;
+    margin-bottom: 6px;
+    list-style-type: square;
+  }
+  .wiki-hr {
+    border: 0;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    margin: 15px 0;
   }
   .rc-btn {
     padding: 11px 14px;

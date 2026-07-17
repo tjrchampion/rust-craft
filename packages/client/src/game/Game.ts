@@ -76,7 +76,7 @@ export class Game {
   private connection = new Connection();
   private input: InputManager;
   private nodes!: NodeManager;
-  private entities!: EntityManager;
+  readonly entities!: EntityManager;
   private settlements!: SettlementHandles;
   private npcManager!: NpcManager;
   private grass: GrassField;
@@ -1085,6 +1085,11 @@ export class Game {
     sound.play("ui");
   }
 
+  sendShareQuest(questId: string): void {
+    this.connection.send({ t: "shareQuest", questId });
+    sound.play("ui");
+  }
+
   closeQuestDialog(): void {
     ui.questOffer = null;
     this.setUiMode(false);
@@ -1105,9 +1110,9 @@ export class Game {
   }
 
   sendMoveItem(
-    fc: "inventory" | "hotbar" | "equip",
+    fc: "inventory" | "hotbar" | "equip" | "crafting",
     fs: number,
-    tc: "inventory" | "hotbar" | "equip",
+    tc: "inventory" | "hotbar" | "equip" | "crafting",
     ts: number,
   ): void {
     this.connection.send({ t: "moveItem", fromContainer: fc, fromSlot: fs, toContainer: tc, toSlot: ts });
@@ -1126,15 +1131,24 @@ export class Game {
 
   setUiMode(open: boolean): void {
     this.input.uiMode = open;
-    if (open) this.input.releasePointer();
+    if (open) {
+      this.input.releasePointer();
+    } else {
+      this.input.requestPointer();
+    }
   }
 
   /** Open the character screen directly on `tab`, or close it if it's
    *  already open showing that same tab -- shared by every key/button that
    *  jumps to a specific tab (Tab/I, K, J, O, gamepad Start). */
   private toggleTab(tab: CharacterTab): void {
-    if (ui.inventoryOpen && ui.activeTab === tab) ui.inventoryOpen = false;
-    else {
+    if (ui.inventoryOpen) {
+      if (ui.activeTab === tab || tab === "inventory") {
+        ui.inventoryOpen = false;
+      } else {
+        ui.activeTab = tab;
+      }
+    } else {
       ui.inventoryOpen = true;
       ui.activeTab = tab;
     }

@@ -590,6 +590,9 @@ export class GameServer {
       case "quest":
         this.handleQuestAction(player, parsed.action, parsed.questId);
         break;
+      case "shareQuest":
+        this.handleShareQuest(player, parsed.questId);
+        break;
       case "dodge":
         this.handleDodge(player, parsed.dirX, parsed.dirZ);
         break;
@@ -761,9 +764,31 @@ export class GameServer {
     if (action === "decline" || !QUEST_IDS.includes(questId)) return;
     const quest = questDef(questId);
 
-    // Accept/turn-in both require standing near that quest's village giver.
+    // Accept/turn-in: accept can be done near NPC OR near a party member who has the quest active!
+    // turnin MUST still be done near the NPC village giver.
     const npc = this.npcs.find((n) => n.villageIndex === quest.villageIndex);
-    if (!npc || dist2D(player.move.x, player.move.z, npc.x, npc.z) > 6) {
+    const nearNpc = npc && dist2D(player.move.x, player.move.z, npc.x, npc.z) <= 6;
+    
+    let canAcceptShared = false;
+    if (action === "accept" && player.partyId) {
+      const party = this.parties.get(player.partyId);
+      if (party) {
+        for (const memberId of party.members) {
+          if (memberId === player.id) continue;
+          const member = this.players.get(memberId);
+          if (member && !member.dead) {
+            const hasQuest = member.questProgress.get(questId)?.status === "active";
+            const close = dist2D(player.move.x, player.move.z, member.move.x, member.move.z) <= 40;
+            if (hasQuest && close) {
+              canAcceptShared = true;
+              break;
+            }
+          }
+        }
+      }
+    }
+
+    if (!nearNpc && !(action === "accept" && canAcceptShared)) {
       this.sendEvent(player, { t: "event", kind: "error", message: "Move closer to the quest giver" });
       return;
     }
@@ -798,7 +823,68 @@ export class GameServer {
     this.broadcastChat("system", `${player.name} completed "${quest.name}".`);
   }
 
-  private addQuestKillProgress(player: PlayerState, mobType: string): void {
+  private handleShareQuest(player: PlayerState, questId: string): void {
+    if (player.dead) return;
+    if (!QUEST_IDS.includes(questId)) return;
+    const quest = questDef(questId);
+    if (!player.partyId) {
+      this.sendEvent(player, { t: "event", kind: "error", message: "You are not in a party" });
+      return;
+    }
+    
+    const party = this.parties.get(player.partyId);
+    if (!party) return;
+    
+    const entry = player.questProgress.get(questId);
+    if (!entry || entry.status !== "active") {
+      this.sendEvent(player, { t: "event", kind: "error", message: "You do not have this quest active" });
+      return;
+    }
+
+    let sharedCount = 0;
+    for (const memberId of party.members) {
+      if (memberId === player.id) continue;
+      const member = this.players.get(memberId);
+      if (!member || member.dead) continue;
+      
+      if (dist2D(player.move.x, player.move.z, member.move.x, member.move.z) > 40) continue;
+      
+      const status = this.questStatusFor(member, quest);
+      if (status !== "available") continue;
+      
+      const offer = {
+        id: quest.id,
+        name: quest.name,
+        description: quest.description,
+        tier: quest.tier,
+        minLevel: quest.minLevel,
+        objectiveKind: quest.objectiveKind,
+        objectiveTarget: quest.objectiveTarget,
+        objectiveCount: quest.objectiveCount,
+        rewardXp: quest.rewardXp,
+        rewardItems: quest.rewardItems,
+        status: "available" as const,
+        progress: 0,
+      };
+      
+      this.sendTo(member.peer, {
+        t: "questOffer",
+        npcId: "share",
+        npcName: `Quest Share: ${player.name}`,
+        offers: [offer],
+      });
+      
+      sharedCount++;
+    }
+    
+    if (sharedCount > 0) {
+      this.sendTo(player.peer, { t: "chat", channel: "system", from: "system", text: `Shared quest "${quest.name}" with nearby party members.` });
+    } else {
+      this.sendEvent(player, { t: "event", kind: "error", message: "No eligible party members nearby to share with" });
+    }
+  }
+
+  private incrementPlayerKillProgress(player: PlayerState, mobType: string): void {
     let changed = false;
     for (const [questId, entry] of player.questProgress) {
       if (entry.status !== "active") continue;
@@ -814,8 +900,22 @@ export class GameServer {
     }
   }
 
-  private addQuestGatherProgress(player: PlayerState, itemId: string, qty: number): void {
-    if (qty <= 0) return;
+  private addQuestKillProgress(player: PlayerState, mobType: string): void {
+    const party = player.partyId ? this.parties.get(player.partyId) : null;
+    if (party) {
+      for (const memberId of party.members) {
+        const member = this.players.get(memberId);
+        if (!member || member.dead) continue;
+        if (dist2D(player.move.x, player.move.z, member.move.x, member.move.z) <= 40) {
+          this.incrementPlayerKillProgress(member, mobType);
+        }
+      }
+    } else {
+      this.incrementPlayerKillProgress(player, mobType);
+    }
+  }
+
+  private incrementPlayerGatherProgress(player: PlayerState, itemId: string, qty: number): void {
     let changed = false;
     for (const [questId, entry] of player.questProgress) {
       if (entry.status !== "active") continue;
@@ -828,6 +928,22 @@ export class GameServer {
     if (changed) {
       player.dirty = true;
       this.sendTo(player.peer, { t: "questLog", quests: this.questLogFor(player) });
+    }
+  }
+
+  private addQuestGatherProgress(player: PlayerState, itemId: string, qty: number): void {
+    if (qty <= 0) return;
+    const party = player.partyId ? this.parties.get(player.partyId) : null;
+    if (party) {
+      for (const memberId of party.members) {
+        const member = this.players.get(memberId);
+        if (!member || member.dead) continue;
+        if (dist2D(player.move.x, player.move.z, member.move.x, member.move.z) <= 40) {
+          this.incrementPlayerGatherProgress(member, itemId, qty);
+        }
+      }
+    } else {
+      this.incrementPlayerGatherProgress(player, itemId, qty);
     }
   }
 
@@ -1030,8 +1146,10 @@ export class GameServer {
             maxHp: this.maxHp(member),
             online: true,
             leader: id === party.leaderId,
+            x: member.move.x,
+            z: member.move.z,
           }
-        : { id, name: "…", level: 0, hp: 0, maxHp: 1, online: false, leader: id === party.leaderId };
+        : { id, name: "…", level: 0, hp: 0, maxHp: 1, online: false, leader: id === party.leaderId, x: 0, z: 0 };
     });
   }
 
@@ -1450,22 +1568,71 @@ export class GameServer {
       }
     }
 
+    // Get all items in the player's crafting grid slots (container: "crafting")
+    const gridItems = player.inventory.filter((it) => it.container === "crafting");
+    
+    // Group grid items by itemId
+    const gridTotals: Record<string, number> = {};
+    for (const it of gridItems) {
+      gridTotals[it.itemId] = (gridTotals[it.itemId] ?? 0) + it.qty;
+    }
+
+    // Verify ingredients are present in the grid in correct quantities
+    const ingredientTotals: Record<string, number> = {};
     for (const ing of recipe.ingredients) {
-      const have = player.inventory.reduce((n, i) => (i.itemId === ing.itemId ? n + i.qty : n), 0);
-      if (have < ing.qty) {
-        this.sendEvent(player, { t: "event", kind: "error", message: "Missing materials" });
+      ingredientTotals[ing.itemId] = (ingredientTotals[ing.itemId] ?? 0) + ing.qty;
+    }
+
+    // Grid totals must exactly match ingredient totals (no extra items, exact quantities)
+    const gridKeys = Object.keys(gridTotals);
+    const ingKeys = Object.keys(ingredientTotals);
+    if (gridKeys.length !== ingKeys.length) {
+      this.sendEvent(player, { t: "event", kind: "error", message: "Incorrect ingredients in grid" });
+      return;
+    }
+
+    for (const key of gridKeys) {
+      if (gridTotals[key] !== ingredientTotals[key]) {
+        this.sendEvent(player, { t: "event", kind: "error", message: "Incorrect ingredient quantity" });
         return;
       }
     }
-    for (const ing of recipe.ingredients) removeItem(player.inventory, ing.itemId, ing.qty);
-    const overflow = addItem(player.inventory, recipe.output, recipe.outputQty);
-    if (overflow > 0) {
-      // No room: refund what we can and bail out honestly.
-      this.sendEvent(player, { t: "event", kind: "error", message: "Inventory full" });
+
+    // Check inventory capacity first by copying inventory
+    const tempInv = JSON.parse(JSON.stringify(player.inventory));
+    // Remove ingredients from tempInv's crafting slots
+    for (let i = tempInv.length - 1; i >= 0; i--) {
+      if (tempInv[i].container === "crafting") {
+        tempInv.splice(i, 1);
+      }
     }
+    const overflow = addItem(tempInv, recipe.output, recipe.outputQty);
+    if (overflow > 0) {
+      this.sendEvent(player, { t: "event", kind: "error", message: "Inventory full" });
+      return;
+    }
+
+    // Actual execution: consume grid items
+    for (const ing of recipe.ingredients) {
+      let remaining = ing.qty;
+      for (let i = player.inventory.length - 1; i >= 0 && remaining > 0; i--) {
+        const item = player.inventory[i]!;
+        if (item.container === "crafting" && item.itemId === ing.itemId) {
+          const take = Math.min(item.qty, remaining);
+          item.qty -= take;
+          remaining -= take;
+          if (item.qty <= 0) {
+            player.inventory.splice(i, 1);
+          }
+        }
+      }
+    }
+
+    // Add output item to inventory/hotbar
+    const actualOverflow = addItem(player.inventory, recipe.output, recipe.outputQty);
     player.dirty = true;
     this.sendInventory(player);
-    this.sendEvent(player, { t: "event", kind: "gather", itemId: recipe.output, amount: recipe.outputQty - overflow });
+    this.sendEvent(player, { t: "event", kind: "gather", itemId: recipe.output, amount: recipe.outputQty - actualOverflow });
   }
 
   private handleConsume(player: PlayerState, container: InvItem["container"], slot: number): void {
@@ -1485,15 +1652,37 @@ export class GameServer {
       return;
     }
 
-    if (def.type !== "consumable" || !def.restore) return;
-    player.hp = clamp(player.hp + (def.restore.hp ?? 0), 0, this.maxHp(player));
-    player.hunger = clamp(player.hunger + (def.restore.hunger ?? 0), 0, 100);
-    player.thirst = clamp(player.thirst + (def.restore.thirst ?? 0), 0, 100);
-    decrementSlot(player.inventory, container, slot);
-    player.dirty = true;
-    this.setActionAnim(player, "gather");
-    this.sendInventory(player);
-    this.sendSelf(player);
+    if (def.type !== "consumable") return;
+
+    let consumed = false;
+
+    if (def.restore) {
+      player.hp = clamp(player.hp + (def.restore.hp ?? 0), 0, this.maxHp(player));
+      player.mana = clamp(player.mana + (def.restore.mana ?? 0), 0, this.maxMana(player));
+      player.hunger = clamp(player.hunger + (def.restore.hunger ?? 0), 0, 100);
+      player.thirst = clamp(player.thirst + (def.restore.thirst ?? 0), 0, 100);
+      consumed = true;
+    }
+
+    if (def.applyAuraOnConsume) {
+      player.activeAuras = applyAura(player.activeAuras, def.applyAuraOnConsume, player.id, Date.now());
+      if (def.applyAuraOnConsume === "invisible") {
+        for (const mob of this.mobs.values()) {
+          if (mob.targetId === player.id) {
+            mob.targetId = null;
+          }
+        }
+      }
+      consumed = true;
+    }
+
+    if (consumed) {
+      decrementSlot(player.inventory, container, slot);
+      player.dirty = true;
+      this.setActionAnim(player, "gather");
+      this.sendInventory(player);
+      this.sendSelf(player);
+    }
   }
 
   private async handlePlace(player: PlayerState, container: InvItem["container"], slot: number): Promise<void> {
@@ -1931,6 +2120,7 @@ export class GameServer {
       if (!mob.targetId) {
         for (const player of this.players.values()) {
           if (player.dead) continue;
+          if (player.activeAuras.some((a) => a.auraId === "invisible")) continue;
           if (dist2D(mob.x, mob.z, player.move.x, player.move.z) < def.aggroRange) {
             mob.targetId = player.id;
             break;

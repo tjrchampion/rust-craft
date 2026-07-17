@@ -26,6 +26,16 @@ const ICONS: Record<string, string> = {
   sunforged_blade: "⚔️",
   leather_armor: "🥋",
   cloth_robe: "👘",
+  minor_healing_potion: "🧪",
+  runic_healing_potion: "🍷",
+  minor_mana_potion: "🧪",
+  runic_mana_potion: "🥣",
+  frontline_potion: "🧉",
+  potion_focus: "🍹",
+  invisibility_potion: "🌫️",
+  free_action_potion: "👟",
+  flask_titan: "🏺",
+  phial_quickness: "🫙",
 };
 
 const SPELL_ICONS: Record<string, string> = {

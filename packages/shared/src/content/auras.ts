@@ -155,6 +155,53 @@ export const AURAS: Record<string, AuraDef> = {
     icon: "🐺",
     positive: true,
   },
+  potion_frontline: {
+    id: "potion_frontline",
+    name: "Frontline Potion",
+    durationS: 20,
+    statModifiers: { armor: 6, vitality: 4 },
+    icon: "🛡️",
+    positive: true,
+  },
+  potion_focus: {
+    id: "potion_focus",
+    name: "Potion of Focus",
+    durationS: 20,
+    statModifiers: { power: 6, critChance: 0.15 },
+    icon: "👁️",
+    positive: true,
+  },
+  invisible: {
+    id: "invisible",
+    name: "Invisibility Potion",
+    durationS: 15,
+    icon: "👻",
+    positive: true,
+  },
+  free_action: {
+    id: "free_action",
+    name: "Free Action Potion",
+    durationS: 15,
+    statModifiers: { moveSpeedMult: 0.15 },
+    icon: "🏃",
+    positive: true,
+  },
+  flask_titan: {
+    id: "flask_titan",
+    name: "Flask of the Titan",
+    durationS: 1800,
+    statModifiers: { maxHp: 60 },
+    icon: "🏺",
+    positive: true,
+  },
+  phial_quickness: {
+    id: "phial_quickness",
+    name: "Phial of Quickness",
+    durationS: 1800,
+    statModifiers: { moveSpeedMult: 0.15 },
+    icon: "💨",
+    positive: true,
+  },
 };
 
 export function auraDef(id: string): AuraDef {

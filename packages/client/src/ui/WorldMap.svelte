@@ -27,6 +27,33 @@
   const questPoints = $derived(game.questMarkers.map((m) => ({ ...m, p: project(m.x, m.z) })));
   const playerPoint = $derived(project(game.playerX, game.playerZ));
 
+  const partyPoints = $derived.by(() => {
+    const list: { id: string; name: string; p: { x: number; y: number } }[] = [];
+    const party = game.party ?? [];
+    const selfId = game.selfId;
+    const gameInstance = getGame();
+    
+    for (const member of party) {
+      if (member.id === selfId || !member.online) continue;
+      
+      let x = member.x ?? 0;
+      let z = member.z ?? 0;
+      
+      const realPos = gameInstance?.entities.entityWorldPos(member.id);
+      if (realPos) {
+        x = realPos.x;
+        z = realPos.z;
+      }
+      
+      list.push({
+        id: member.id,
+        name: member.name,
+        p: project(x, z),
+      });
+    }
+    return list;
+  });
+
   const GLYPH: Record<string, string> = { available: "!", complete: "?", active: "?" };
   const POI_COLOR: Record<PoiType, string> = {
     shrine: "#c39bf2",
@@ -74,6 +101,10 @@
         {#each questPoints as q (q.id)}
           <circle cx={q.p.x} cy={q.p.y} r="8" class="wm-quest-dot wm-{q.marker}" />
           <text x={q.p.x} y={q.p.y + 3.5} class="wm-quest-glyph">{GLYPH[q.marker]}</text>
+        {/each}
+        {#each partyPoints as pm (pm.id)}
+          <circle cx={pm.p.x} cy={pm.p.y} r="8" class="wm-party-dot" />
+          <text x={pm.p.x} y={pm.p.y - 13} class="wm-party-label">{pm.name}</text>
         {/each}
         <g transform="translate({playerPoint.x} {playerPoint.y}) rotate({heading})">
           <path d="M 0 -12 L 8 9 L 0 5 L -8 9 Z" class="wm-player" />
@@ -228,5 +259,18 @@
     text-align: center;
     font-size: 11px;
     color: var(--rc-ink-dim);
+  }
+  .wm-party-dot {
+    fill: #3b82f6;
+    stroke: rgba(0, 0, 0, 0.7);
+    stroke-width: 1.2;
+  }
+  .wm-party-label {
+    font-family: var(--rc-display);
+    font-weight: 700;
+    font-size: 11px;
+    fill: #93c5fd;
+    text-anchor: middle;
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
   }
 </style>

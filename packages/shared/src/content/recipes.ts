@@ -91,4 +91,95 @@ export const RECIPES: Record<string, RecipeDef> = {
       { itemId: "hide", qty: 2 },
     ],
   },
+  minor_healing_potion: {
+    id: "minor_healing_potion",
+    output: "minor_healing_potion",
+    outputQty: 1,
+    ingredients: [
+      { itemId: "berries", qty: 3 },
+      { itemId: "wood", qty: 5 },
+    ],
+  },
+  runic_healing_potion: {
+    id: "runic_healing_potion",
+    output: "runic_healing_potion",
+    outputQty: 1,
+    ingredients: [
+      { itemId: "berries", qty: 10 },
+      { itemId: "ancient_dust", qty: 5 },
+    ],
+  },
+  minor_mana_potion: {
+    id: "minor_mana_potion",
+    output: "minor_mana_potion",
+    outputQty: 1,
+    ingredients: [
+      { itemId: "ancient_dust", qty: 5 },
+    ],
+  },
+  runic_mana_potion: {
+    id: "runic_mana_potion",
+    output: "runic_mana_potion",
+    outputQty: 1,
+    ingredients: [
+      { itemId: "ancient_dust", qty: 10 },
+      { itemId: "bone", qty: 5 },
+    ],
+  },
+  frontline_potion: {
+    id: "frontline_potion",
+    output: "frontline_potion",
+    outputQty: 1,
+    ingredients: [
+      { itemId: "stone", qty: 10 },
+      { itemId: "hide", qty: 2 },
+    ],
+  },
+  potion_focus: {
+    id: "potion_focus",
+    output: "potion_focus",
+    outputQty: 1,
+    ingredients: [
+      { itemId: "bone", qty: 5 },
+      { itemId: "ancient_dust", qty: 5 },
+    ],
+  },
+  invisibility_potion: {
+    id: "invisibility_potion",
+    output: "invisibility_potion",
+    outputQty: 1,
+    ingredients: [
+      { itemId: "ancient_dust", qty: 5 },
+      { itemId: "hide", qty: 3 },
+    ],
+  },
+  free_action_potion: {
+    id: "free_action_potion",
+    output: "free_action_potion",
+    outputQty: 1,
+    ingredients: [
+      { itemId: "berries", qty: 8 },
+      { itemId: "hide", qty: 5 },
+    ],
+  },
+  flask_titan: {
+    id: "flask_titan",
+    output: "flask_titan",
+    outputQty: 1,
+    ingredients: [
+      { itemId: "stone", qty: 20 },
+      { itemId: "bone", qty: 10 },
+      { itemId: "ancient_dust", qty: 5 },
+    ],
+  },
+  phial_quickness: {
+    id: "phial_quickness",
+    output: "phial_quickness",
+    outputQty: 1,
+    ingredients: [
+      { itemId: "berries", qty: 15 },
+      { itemId: "hide", qty: 15 },
+      { itemId: "ancient_dust", qty: 5 },
+    ],
+  },
 };

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { game } from "./gameState.svelte";
   import { generateVillages } from "@rustcraft/shared";
+  import { getGame } from "../game/instance";
 
   /** World-space radius (meters) shown edge-to-edge on the map. */
   const MAP_RADIUS_WORLD = 160;
@@ -45,6 +46,39 @@
   const villagePoints = $derived(villages.map((v) => ({ id: v.id, p: project(v.x, v.z) })));
   const questPoints = $derived(game.questMarkers.map((m) => ({ ...m, p: project(m.x, m.z) })));
 
+  interface PartyPoint {
+    id: string;
+    name: string;
+    p: Projected;
+  }
+
+  const partyPoints = $derived.by(() => {
+    const list: PartyPoint[] = [];
+    const party = game.party ?? [];
+    const selfId = game.selfId;
+    const gameInstance = getGame();
+    
+    for (const member of party) {
+      if (member.id === selfId || !member.online) continue;
+      
+      let x = member.x ?? 0;
+      let z = member.z ?? 0;
+      
+      const realPos = gameInstance?.entities.entityWorldPos(member.id);
+      if (realPos) {
+        x = realPos.x;
+        z = realPos.z;
+      }
+      
+      list.push({
+        id: member.id,
+        name: member.name,
+        p: project(x, z),
+      });
+    }
+    return list;
+  });
+
   const GLYPH: Record<string, string> = { available: "!", complete: "?", active: "?" };
 </script>
 
@@ -68,6 +102,11 @@
           <text x={q.p.x} y={q.p.y + 3.2} class="mm-quest-glyph">{GLYPH[q.marker]}</text>
         {/if}
       {/each}
+      {#each partyPoints as pm (pm.id)}
+        {#if pm.p.onMap}
+          <circle cx={pm.p.x} cy={pm.p.y} r="4" class="mm-party-dot" />
+        {/if}
+      {/each}
     </g>
     <circle cx={CENTER} cy={CENTER} r={RADIUS} class="mm-rim" />
     <text x={CENTER} y="15" class="mm-cardinal">N</text>
@@ -81,6 +120,16 @@
         </g>
         <text x={q.p.x} y={q.p.y > CENTER ? q.p.y + 12 : q.p.y - 8} class="mm-dist">
           {Math.round(q.p.worldDist)}m
+        </text>
+      {/if}
+    {/each}
+    {#each partyPoints as pm (pm.id)}
+      {#if !pm.p.onMap}
+        <g transform="translate({pm.p.x} {pm.p.y}) rotate({pm.p.angleDeg})">
+          <path d="M 0 -6 L 4.5 5 L 0 2.5 L -4.5 5 Z" class="mm-party-arrow" />
+        </g>
+        <text x={pm.p.x} y={pm.p.y > CENTER ? pm.p.y + 11 : pm.p.y - 7} class="mm-party-dist">
+          {pm.name.slice(0, 3)}
         </text>
       {/if}
     {/each}
@@ -175,6 +224,22 @@
   .mm-dist {
     font-size: 7px;
     fill: var(--rc-ink-dim);
+    text-anchor: middle;
+  }
+  .mm-party-dot {
+    fill: #3b82f6;
+    stroke: rgba(0, 0, 0, 0.7);
+    stroke-width: 0.8;
+  }
+  .mm-party-arrow {
+    fill: #3b82f6;
+    stroke: rgba(0, 0, 0, 0.7);
+    stroke-width: 0.8;
+  }
+  .mm-party-dist {
+    font-size: 7px;
+    fill: #93c5fd;
+    font-weight: bold;
     text-anchor: middle;
   }
 </style>

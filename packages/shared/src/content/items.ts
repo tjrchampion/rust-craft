@@ -21,7 +21,8 @@ export interface ItemDef {
   gatherPower?: { wood?: number; stone?: number };
   maxDurability?: number;
   /** Consumable effects. */
-  restore?: { hp?: number; hunger?: number; thirst?: number };
+  restore?: { hp?: number; mana?: number; hunger?: number; thirst?: number };
+  applyAuraOnConsume?: string;
   /** Tome: spell taught on use. */
   teachesSpell?: string;
   /** Placeable: structure type created. */
@@ -233,6 +234,76 @@ export const ITEMS: Record<string, ItemDef> = {
     stack: 1,
     slot: "chest",
     statModifiers: { armor: 2, power: 2 },
+  },
+  minor_healing_potion: {
+    id: "minor_healing_potion",
+    name: "Minor Healing Potion",
+    type: "consumable",
+    stack: 10,
+    restore: { hp: 40 },
+  },
+  runic_healing_potion: {
+    id: "runic_healing_potion",
+    name: "Runic Healing Potion",
+    type: "consumable",
+    stack: 10,
+    restore: { hp: 100 },
+  },
+  minor_mana_potion: {
+    id: "minor_mana_potion",
+    name: "Minor Mana Potion",
+    type: "consumable",
+    stack: 10,
+    restore: { mana: 40 },
+  },
+  runic_mana_potion: {
+    id: "runic_mana_potion",
+    name: "Runic Mana Potion",
+    type: "consumable",
+    stack: 10,
+    restore: { mana: 100 },
+  },
+  frontline_potion: {
+    id: "frontline_potion",
+    name: "Frontline Potion",
+    type: "consumable",
+    stack: 10,
+    applyAuraOnConsume: "potion_frontline",
+  },
+  potion_focus: {
+    id: "potion_focus",
+    name: "Potion of Focus",
+    type: "consumable",
+    stack: 10,
+    applyAuraOnConsume: "potion_focus",
+  },
+  invisibility_potion: {
+    id: "invisibility_potion",
+    name: "Invisibility Potion",
+    type: "consumable",
+    stack: 10,
+    applyAuraOnConsume: "invisible",
+  },
+  free_action_potion: {
+    id: "free_action_potion",
+    name: "Free Action Potion",
+    type: "consumable",
+    stack: 10,
+    applyAuraOnConsume: "free_action",
+  },
+  flask_titan: {
+    id: "flask_titan",
+    name: "Flask of the Titan",
+    type: "consumable",
+    stack: 5,
+    applyAuraOnConsume: "flask_titan",
+  },
+  phial_quickness: {
+    id: "phial_quickness",
+    name: "Phial of Quickness",
+    type: "consumable",
+    stack: 5,
+    applyAuraOnConsume: "phial_quickness",
   },
 };
 

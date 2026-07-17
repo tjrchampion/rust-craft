@@ -1,9 +1,47 @@
 <script lang="ts">
   import { game } from "./gameState.svelte";
   import { getGame } from "../game/instance";
+  import { onDestroy } from "svelte";
 
   const otherMembers = $derived((game.party ?? []).filter((m) => m.id !== game.selfId));
   const amLeader = $derived((game.party ?? []).find((m) => m.id === game.selfId)?.leader ?? false);
+
+  let showOverlay = $state(false);
+  let countdown = $state(15);
+  let timer: any = null;
+
+  $effect(() => {
+    const invite = game.pendingInvite;
+    if (invite) {
+      showOverlay = true;
+      countdown = 15;
+      if (timer) clearInterval(timer);
+      timer = setInterval(() => {
+        countdown--;
+        if (countdown <= 0) {
+          showOverlay = false;
+          clearInterval(timer);
+        }
+      }, 1000);
+    } else {
+      showOverlay = false;
+      if (timer) clearInterval(timer);
+    }
+  });
+
+  onDestroy(() => {
+    if (timer) clearInterval(timer);
+  });
+
+  function acceptInvite() {
+    getGame()?.sendParty("accept");
+    showOverlay = false;
+  }
+
+  function declineInvite() {
+    getGame()?.sendParty("decline");
+    showOverlay = false;
+  }
 </script>
 
 <!-- PvP indicator -->
@@ -14,12 +52,10 @@
 {/if}
 
 <!-- Party invite prompt -->
-{#if game.pendingInvite}
-  <div class="invite rc-frame">
-    <div class="invite-text"><strong>{game.pendingInvite}</strong> invites you to a party</div>
-    <div class="invite-buttons">
-      <button class="rc-btn primary" onclick={() => getGame()?.sendParty("accept")}>Accept</button>
-      <button class="rc-btn" onclick={() => getGame()?.sendParty("decline")}>Decline</button>
+{#if showOverlay && game.pendingInvite}
+  <div class="invite">
+    <div class="invite-text">
+      <strong>{game.pendingInvite}</strong> invites you. Press <strong>Tab</strong> to accept! ({countdown}s)
     </div>
   </div>
 {/if}
@@ -67,31 +103,29 @@
   }
   .invite {
     position: absolute;
-    top: 90px;
+    top: 16px;
     left: 50%;
     transform: translateX(-50%);
-    padding: 14px 18px;
+    padding: 8px 14px;
     display: flex;
-    flex-direction: column;
-    gap: 10px;
     align-items: center;
+    gap: 12px;
     pointer-events: auto;
+    z-index: 100;
+    border-radius: 8px;
+    background: rgba(14, 18, 24, 0.95);
+    border: 2px solid var(--rc-gold-dim);
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.6), 0 0 15px rgba(255, 214, 110, 0.15);
   }
   .invite-text {
-    color: var(--rc-ink);
-    font-size: 14px;
+    color: var(--rc-parchment);
+    font-size: 12.5px;
+    white-space: nowrap;
   }
   .invite-text strong {
     color: var(--rc-gold-bright);
   }
-  .invite-buttons {
-    display: flex;
-    gap: 8px;
-  }
-  .invite-buttons .rc-btn {
-    padding: 6px 16px;
-    font-size: 13px;
-  }
+
   .party {
     position: absolute;
     top: 120px;
