@@ -228,11 +228,14 @@ export class Game {
 
   private async connect(characterId: string): Promise<void> {
     try {
+      ui.loading = true;
+      ui.loadingMessage = "Connecting to server...";
+      ui.loadingProgress = 10;
       await this.connection.connect(characterId, this.wsAddress);
-      ui.connected = true;
       this.running = true;
       requestAnimationFrame(this.frame);
     } catch {
+      ui.loading = false;
       ui.disconnected = true;
     }
   }
@@ -247,7 +250,6 @@ export class Game {
         this.selfClassId = msg.classId;
         ui.classId = msg.classId;
         ui.serverTimeOffset = msg.serverTime - Date.now();
-        void this.avatar.loadFrom(playerModelUrl(msg.classId), 1.8);
         ui.self = msg.self;
         ui.inventory = msg.inventory;
         ui.learnedSpells = msg.learnedSpells;
@@ -261,6 +263,7 @@ export class Game {
         for (const npc of msg.npcs) this.npcManager.applySnap(npc);
         ui.questMarkers = this.npcManager.questMarkers();
         ui.questLog = msg.questLog;
+        void this.preloadAndEnter(msg);
         break;
       }
       case "snapshot": {
@@ -373,6 +376,41 @@ export class Game {
           ui.toast(msg.message);
         }
         break;
+    }
+  }
+
+  private async preloadAndEnter(msg: Extract<ServerMsg, { t: "welcome" }>): Promise<void> {
+    try {
+      ui.loadingMessage = "Loading character models...";
+      ui.loadingProgress = 35;
+      const { preloadCharacterAssets } = await import("../render/gltf");
+      await preloadCharacterAssets();
+
+      ui.loadingMessage = "Loading terrain assets...";
+      ui.loadingProgress = 65;
+      const { natureAssetsLoaded } = await import("../render/natureAssets");
+      await natureAssetsLoaded;
+
+      ui.loadingMessage = "Loading town assets...";
+      ui.loadingProgress = 85;
+      const { preloadSettlements } = await import("../render/settlements");
+      await preloadSettlements();
+
+      ui.loadingMessage = "Entering world...";
+      ui.loadingProgress = 95;
+      await this.avatar.loadFrom(playerModelUrl(msg.classId), 1.8);
+
+      ui.loadingProgress = 100;
+      // Slight delay for smooth visual transition
+      await new Promise((resolve) => setTimeout(resolve, 300));
+
+      ui.loading = false;
+      ui.connected = true;
+    } catch (e) {
+      console.error("[Game] Preload failed", e);
+      // Fallback: connect anyway so they aren't stuck on a black screen
+      ui.loading = false;
+      ui.connected = true;
     }
   }
 

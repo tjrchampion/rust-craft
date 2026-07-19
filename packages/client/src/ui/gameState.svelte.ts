@@ -29,6 +29,9 @@ let toastId = 0;
 
 class GameState {
   connected = $state(false);
+  loading = $state(false);
+  loadingProgress = $state(0);
+  loadingMessage = $state("");
   self = $state<SelfState | null>(null);
   selfName = $state("");
   selfId = $state("");
@@ -151,6 +154,9 @@ class GameState {
     this.zoneBanner = null;
     this.questMarkers = [];
     this.dungeonState = null;
+    this.loading = false;
+    this.loadingProgress = 0;
+    this.loadingMessage = "";
   }
 }
 

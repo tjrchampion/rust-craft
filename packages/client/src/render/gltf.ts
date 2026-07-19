@@ -504,3 +504,13 @@ export function logicalFromState(
       return "idle";
   }
 }
+
+export function preloadCharacterAssets(): Promise<void> {
+  const urls = [
+    ...PLAYER_MODELS,
+    WOLF_MODEL,
+    ...Object.values(SKELETON_MODELS),
+    ...Object.values(CREATURE_MODELS).map((c) => c.url),
+  ];
+  return Promise.all(urls.map((url) => load(url).catch(() => null))).then(() => {});
+}

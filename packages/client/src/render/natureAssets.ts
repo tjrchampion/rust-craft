@@ -139,6 +139,8 @@ function normalize(gltf: GLTF, targetHeight: number): THREE.Group {
   return wrapper;
 }
 
+const treePromises: Promise<void>[] = [];
+
 /**
  * Kick off loading every known tree template immediately at module load, so
  * by the time a game session actually starts (after a real network
@@ -147,12 +149,26 @@ function normalize(gltf: GLTF, targetHeight: number): THREE.Group {
  */
 function preload(): void {
   for (const key of Object.keys(TREE_URLS) as TreeKey[]) {
-    loader.load(TREE_URLS[key], (gltf) => {
-      templates.set(key, normalize(gltf, TREE_HEIGHTS[key]));
+    const p = new Promise<void>((resolve) => {
+      loader.load(
+        TREE_URLS[key],
+        (gltf) => {
+          templates.set(key, normalize(gltf, TREE_HEIGHTS[key]));
+          resolve();
+        },
+        undefined,
+        (err) => {
+          console.warn(`[natureAssets] failed to load ${key}`, err);
+          resolve();
+        }
+      );
     });
+    treePromises.push(p);
   }
 }
 preload();
+
+export const natureAssetsLoaded = Promise.all(treePromises);
 
 /**
  * A ready-to-place clone of a real imported tree model, with deterministic

@@ -291,3 +291,14 @@ export function animateSettlements(handles: SettlementHandles, timeMs: number): 
     crystal.position.y = 1.1 + Math.sin(timeMs / 600) * 0.15;
   }
 }
+
+export function preloadSettlements(): Promise<void> {
+  const promises: Promise<any>[] = [];
+  for (const type of Object.keys(BUILDING_HEIGHTS)) {
+    promises.push(loadBuilding(type).catch(() => null));
+  }
+  for (const type of Object.keys(PROP_HEIGHTS)) {
+    promises.push(loadProp(type).catch(() => null));
+  }
+  return Promise.all(promises).then(() => {});
+}

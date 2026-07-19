@@ -54,7 +54,21 @@
 </script>
 
 <div class="hud">
-  {#if !game.connected && !game.disconnected}
+  {#if game.loading && !game.disconnected}
+    <div class="loading-overlay">
+      <div class="loading-content">
+        <h1 class="loading-title">RUSTCRAFT</h1>
+        <div class="progress-container">
+          <div class="progress-bar">
+            <div class="progress-fill" style="width: {game.loadingProgress}%"></div>
+          </div>
+          <div class="progress-glow" style="width: {game.loadingProgress}%"></div>
+        </div>
+        <div class="loading-status">{game.loadingMessage}</div>
+        <div class="loading-percentage">{game.loadingProgress}%</div>
+      </div>
+    </div>
+  {:else if !game.connected && !game.disconnected}
     <div class="center-note">Connecting…</div>
   {/if}
 
@@ -339,5 +353,92 @@
     pointer-events: none;
     text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
     letter-spacing: 0.5px;
+  }
+  .loading-overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: radial-gradient(circle at center, rgba(14, 18, 28, 0.98) 0%, rgba(6, 8, 12, 1) 100%);
+    backdrop-filter: blur(10px);
+    pointer-events: auto;
+    z-index: 9999;
+  }
+  .loading-content {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 20px;
+    width: 320px;
+  }
+  .loading-title {
+    font-family: var(--rc-display, 'Cinzel', serif);
+    font-size: 38px;
+    font-weight: 700;
+    color: transparent;
+    background: linear-gradient(135deg, var(--rc-gold-bright, #ffe9a8) 0%, var(--rc-gold, #cda15f) 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    letter-spacing: 6px;
+    text-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+    margin: 0;
+    animation: pulseTitle 2s ease-in-out infinite alternate;
+  }
+  .progress-container {
+    position: relative;
+    width: 100%;
+    height: 6px;
+    margin-top: 10px;
+  }
+  .progress-bar {
+    width: 100%;
+    height: 100%;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+  .progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #7a3fbf, #ffe9a8);
+    border-radius: 4px;
+    transition: width 0.3s ease-out;
+  }
+  .progress-glow {
+    position: absolute;
+    top: 0;
+    left: 0;
+    height: 100%;
+    background: linear-gradient(90deg, #7a3fbf, #ffe9a8);
+    filter: blur(8px);
+    opacity: 0.6;
+    pointer-events: none;
+    transition: width 0.3s ease-out;
+  }
+  .loading-status {
+    font-size: 13px;
+    color: var(--rc-parchment, #e3d2b7);
+    opacity: 0.85;
+    font-family: var(--rc-display, serif);
+    letter-spacing: 1px;
+    text-align: center;
+    min-height: 18px;
+  }
+  .loading-percentage {
+    font-family: monospace;
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.4);
+    letter-spacing: 1px;
+  }
+  @keyframes pulseTitle {
+    from {
+      transform: scale(0.98);
+      filter: drop-shadow(0 0 2px rgba(255, 233, 168, 0.2));
+    }
+    to {
+      transform: scale(1.02);
+      filter: drop-shadow(0 0 10px rgba(205, 161, 95, 0.4));
+    }
   }
 </style>
