@@ -9,6 +9,9 @@ export const CLASS_MODEL_URLS: Record<ClassId, string> = {
   ranger: "/assets/models/Ranger.glb",
   druid: "/assets/models/Druid.glb",
   paladin: "/assets/models/Paladin.glb",
+  berserker: "/assets/models/Barbarian_Large.glb",
+  assassin: "/assets/models/Rogue_Hooded.glb",
+  engineer: "/assets/models/Engineer.glb",
 };
 
 export const CLASS_ICONS: Record<ClassId, string> = {
@@ -19,6 +22,9 @@ export const CLASS_ICONS: Record<ClassId, string> = {
   ranger: "🏹",
   druid: "🌿",
   paladin: "🛡️",
+  berserker: "🪓",
+  assassin: "🥷",
+  engineer: "🔧",
 };
 
 /** Every weapon/shield/accessory node name present in each class's rig — the
@@ -42,4 +48,7 @@ export const CLASS_WEAPON_NODES: Record<ClassId, string[]> = {
   ranger: [],
   druid: [],
   paladin: [],
+  berserker: ["1H_Axe", "2H_Axe", "1H_Axe_Offhand", "Barbarian_Round_Shield", "Mug"],
+  assassin: ["Knife", "Knife_Offhand", "Throwable", "1H_Crossbow", "2H_Crossbow"],
+  engineer: [],
 };

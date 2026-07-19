@@ -346,3 +346,41 @@ describe("dungeon interiors", () => {
     }
   });
 });
+
+describe("mineral ore nodes", () => {
+  const ORE_TYPES = ["copper_vein", "tin_vein", "iron_deposit", "mithril_deposit", "thorium_vein"];
+
+  it("region 1 ore nodes only spawn in mountain/hills/dunes biomes, never forest/meadow/swamp", () => {
+    const nodes = generateNodes();
+    const oreNodes = nodes.filter((n) => ORE_TYPES.includes(n.type));
+    expect(oreNodes.length).toBeGreaterThan(0);
+    for (const n of oreNodes) {
+      expect(["mountain", "hills", "dunes"]).toContain(n.biome);
+    }
+  });
+
+  it("thorium_vein is exclusive to Ashenpeak (region 2) -- never in region 1", () => {
+    const region1 = generateNodes();
+    const region2 = generateRegionTwoNodes();
+    expect(region1.some((n) => n.type === "thorium_vein")).toBe(false);
+    expect(region2.some((n) => n.type === "thorium_vein")).toBe(true);
+  });
+
+  it("mithril_deposit appears in both region 1's mountain biome and region 2", () => {
+    // Region 1's default bounds only contain a couple dozen mountain-biome
+    // node cells -- too small a sample for an ~8% cumulative band to be
+    // guaranteed present for any single deterministic seed. Sample a much
+    // larger window of the same terrain/table to check the composition
+    // reliably, without changing production placement odds.
+    const bigSample = generateNodes({ minX: -900, maxX: 900, minZ: -900, maxZ: 900 }, "big_", 555);
+    const region2 = generateRegionTwoNodes();
+    expect(bigSample.some((n) => n.type === "mithril_deposit" && n.biome === "mountain")).toBe(true);
+    expect(region2.some((n) => n.type === "mithril_deposit")).toBe(true);
+  });
+
+  it("dunes only ever gets the thin copper_vein band, never tin/iron/mithril/thorium", () => {
+    const nodes = generateNodes();
+    const dunesOre = nodes.filter((n) => n.biome === "dunes" && ORE_TYPES.includes(n.type));
+    for (const n of dunesOre) expect(n.type).toBe("copper_vein");
+  });
+});

@@ -97,7 +97,7 @@
           <div class="rewards">
             <span class="reward-xp">+{o.rewardXp} XP</span>
             {#each o.rewardItems as r (r.itemId)}
-              <span class="reward-item"><IconGlyph value={itemIcon(r.itemId)} size={14} />{r.qty}</span>
+              <span class="reward-item"><IconGlyph value={itemIcon(r.itemId)} size={14} itemId={r.itemId} />{r.qty}</span>
             {/each}
           </div>
 

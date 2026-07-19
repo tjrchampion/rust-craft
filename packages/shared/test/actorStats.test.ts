@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { computeActorStats, armorMitigation, type BaseStats } from "../src/sim/actorStats";
 import { CLASSES, CLASS_IDS } from "../src/content/classes";
+import { EQUIP_SLOTS, ITEMS } from "../src/content/items";
 
 const base: BaseStats = { power: 10, armor: 5, agility: 5, vitality: 5 };
 
@@ -35,7 +36,7 @@ describe("computeActorStats", () => {
   });
 
   it("every class template has distinct, sane base stats", () => {
-    expect(CLASS_IDS.length).toBe(7);
+    expect(CLASS_IDS.length).toBe(10);
     for (const id of CLASS_IDS) {
       const stats = CLASSES[id].baseStats;
       expect(stats.power).toBeGreaterThan(0);
@@ -57,5 +58,32 @@ describe("armorMitigation", () => {
 
   it("never amplifies damage for negative armor", () => {
     expect(armorMitigation(-50)).toBeLessThanOrEqual(1);
+  });
+});
+
+describe("modular equipment slots", () => {
+  it("defines six equipment slots including arms, legs, and feet", () => {
+    expect(EQUIP_SLOTS).toContain("weapon");
+    expect(EQUIP_SLOTS).toContain("head");
+    expect(EQUIP_SLOTS).toContain("chest");
+    expect(EQUIP_SLOTS).toContain("arms");
+    expect(EQUIP_SLOTS).toContain("legs");
+    expect(EQUIP_SLOTS).toContain("feet");
+    expect(EQUIP_SLOTS.length).toBe(6);
+  });
+
+  it("assigns correct slots and stats to new modular items", () => {
+    const peasantChest = ITEMS.peasant_chest;
+    const rangerFeet = ITEMS.ranger_feet;
+    expect(peasantChest).toBeDefined();
+    expect(rangerFeet).toBeDefined();
+    if (peasantChest && rangerFeet) {
+      expect(peasantChest.slot).toBe("chest");
+      expect(peasantChest.statModifiers?.vitality).toBe(1);
+      expect(peasantChest.statModifiers?.armor).toBe(3);
+
+      expect(rangerFeet.slot).toBe("feet");
+      expect(rangerFeet.statModifiers?.moveSpeedMult).toBe(0.12);
+    }
   });
 });

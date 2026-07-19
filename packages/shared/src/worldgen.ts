@@ -448,23 +448,68 @@ export function inDungeonReserve(x: number, z: number): boolean {
 
 // ============================ resource nodes ============================
 
-interface BiomeMix {
-  presence: number; // scatter density 0..1 (higher = more nodes)
-  tree: number; // cumulative rolls
-  rock: number;
-}
-
-// meadow/mountain/hills were the sparsest for trees (see BiomeMix docs above);
-// boosted `tree` (and `presence` where the whole biome felt empty) so those
-// stretches of the map read as denser forest instead of bare filler terrain.
-const BIOME_MIX: Record<Biome, BiomeMix> = {
-  forest: { presence: 0.62, tree: 0.6, rock: 0.85 },
-  meadow: { presence: 0.48, tree: 0.45, rock: 0.6 },
-  mountain: { presence: 0.58, tree: 0.35, rock: 0.85 },
-  hills: { presence: 0.52, tree: 0.48, rock: 0.75 },
-  swamp: { presence: 0.55, tree: 0.5, rock: 0.55 },
-  dunes: { presence: 0.16, tree: 0.7, rock: 0.9 },
+// meadow/mountain/hills were the sparsest for trees; boosted `presence`
+// where the whole biome felt empty so those stretches read as denser
+// forest instead of bare filler terrain.
+const BIOME_PRESENCE: Record<Biome, number> = {
+  forest: 0.62,
+  meadow: 0.48,
+  mountain: 0.58,
+  hills: 0.52,
+  swamp: 0.55,
+  dunes: 0.16,
 };
+
+// Weighted node-type tables per biome, [type, cumulative weight] -- same
+// pattern as BIOME_MOB_TABLE/pickFromWeights below. forest/meadow/swamp keep
+// the original tree/rock/berry_bush-only split unchanged; mountain/hills/
+// dunes additionally carve out ore bands (mountain gets the deepest
+// progression up through Mithril -- Thorium is Ashenpeak-exclusive, see
+// REGION_TWO_NODE_TABLE).
+const BIOME_NODE_TABLE: Record<Biome, [string, number][]> = {
+  forest: [
+    ["tree", 0.6],
+    ["rock", 0.85],
+    ["berry_bush", 1.0],
+  ],
+  meadow: [
+    ["tree", 0.45],
+    ["rock", 0.6],
+    ["berry_bush", 1.0],
+  ],
+  mountain: [
+    ["tree", 0.35],
+    ["rock", 0.65],
+    ["copper_vein", 0.72],
+    ["tin_vein", 0.78],
+    ["iron_deposit", 0.84],
+    ["mithril_deposit", 0.9],
+    ["berry_bush", 1.0],
+  ],
+  hills: [
+    ["tree", 0.48],
+    ["rock", 0.63],
+    ["copper_vein", 0.69],
+    ["tin_vein", 0.74],
+    ["iron_deposit", 0.78],
+    ["berry_bush", 1.0],
+  ],
+  swamp: [
+    ["tree", 0.5],
+    ["rock", 0.55],
+    ["berry_bush", 1.0],
+  ],
+  dunes: [
+    ["tree", 0.7],
+    ["rock", 0.87],
+    ["copper_vein", 0.9],
+    ["berry_bush", 1.0],
+  ],
+};
+
+function pickBiomeNode(biome: Biome, roll: number): string {
+  return pickFromWeights(BIOME_NODE_TABLE[biome], roll);
+}
 
 export interface ScatterBounds {
   minX: number;
@@ -485,9 +530,16 @@ const REGION_ONE_BOUNDS: ScatterBounds = {
  * get the identical node list; only depletion state is dynamic. Defaults
  * reproduce the original Greenlands-only behavior exactly; `bounds`/
  * `idPrefix`/`seedSalt` let a second region reuse this same scatter logic
- * over its own coordinate window without colliding ids or cloning the noise.
+ * over its own coordinate window without colliding ids or cloning the noise;
+ * `pickNode` lets it swap in a different node-type table entirely (see
+ * REGION_TWO_NODE_TABLE), mirroring generateMobSpawns's `pickMob` param.
  */
-export function generateNodes(bounds: ScatterBounds = REGION_ONE_BOUNDS, idPrefix = "n_", seedSalt = 0): WorldNode[] {
+export function generateNodes(
+  bounds: ScatterBounds = REGION_ONE_BOUNDS,
+  idPrefix = "n_",
+  seedSalt = 0,
+  pickNode: (biome: Biome, roll: number) => string = pickBiomeNode,
+): WorldNode[] {
   const villages = generateVillages();
   const paths = generatePaths();
   const pois = generatePois();
@@ -503,10 +555,10 @@ export function generateNodes(bounds: ScatterBounds = REGION_ONE_BOUNDS, idPrefi
       const z = bounds.minZ + (cz + 0.15 + jz * 0.7) * NODE_CELL;
 
       const biome = biomeAt(x, z);
-      const mix = BIOME_MIX[biome];
+      const presenceThreshold = BIOME_PRESENCE[biome];
       const presence = hash2(ZONE_SEED + 11 + seedSalt, cx, cz);
       const density = fbm(ZONE_SEED + 23 + seedSalt, x, z, 160, 2);
-      if (presence > mix.presence * (0.45 + density * 0.9)) continue;
+      if (presence > presenceThreshold * (0.45 + density * 0.9)) continue;
 
       const y = terrainHeight(x, z);
       if (y < WATER_LEVEL + 0.4) continue;
@@ -519,7 +571,7 @@ export function generateNodes(bounds: ScatterBounds = REGION_ONE_BOUNDS, idPrefi
       if (inDungeonReserve(x, z)) continue;
 
       const roll = hash2(ZONE_SEED + 41 + seedSalt, cx, cz);
-      const type = roll < mix.tree ? "tree" : roll < mix.rock ? "rock" : "berry_bush";
+      const type = pickNode(biome, roll);
       nodes.push({
         id: `${idPrefix}${cx}_${cz}`,
         type,
@@ -616,6 +668,21 @@ const REGION_TWO_MOB_TABLE: [string, number][] = [
   ["dragon", 1.0],
 ];
 
+// Ashenpeak's node table (region 2, always mountain/hills biome per
+// northBiomeAt) -- reuses the same tree/rock/berry/ore mix as region 1's
+// mountain, but Thorium Veins are exclusive to this table so the elite ore
+// tier lives only in the harder region, same theme as the tier-3 dungeon.
+const REGION_TWO_NODE_TABLE: [string, number][] = [
+  ["tree", 0.3],
+  ["rock", 0.5],
+  ["copper_vein", 0.56],
+  ["tin_vein", 0.61],
+  ["iron_deposit", 0.66],
+  ["mithril_deposit", 0.74],
+  ["thorium_vein", 0.82],
+  ["berry_bush", 1.0],
+];
+
 /**
  * Deterministic mob spawn points. Every biome has a mix of beasts and stray
  * undead; ruins add dense skeleton clusters on top. Defaults reproduce the
@@ -701,7 +768,9 @@ let regionTwoMobSpawnsCache: MobSpawn[] | null = null;
  *  coordinate window (never sampled by region 1). */
 export function generateRegionTwoNodes(): WorldNode[] {
   if (regionTwoNodesCache) return regionTwoNodesCache;
-  regionTwoNodesCache = generateNodes(REGION_TWO_BOUNDS, "n2_", 9001);
+  regionTwoNodesCache = generateNodes(REGION_TWO_BOUNDS, "n2_", 9001, (_biome, roll) =>
+    pickFromWeights(REGION_TWO_NODE_TABLE, roll),
+  );
   return regionTwoNodesCache;
 }
 

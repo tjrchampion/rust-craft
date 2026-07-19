@@ -1577,6 +1577,11 @@ export class GameServer {
       power = def.gatherPower?.[type.nodeClass] ?? UNARMED_GATHER_POWER;
     }
 
+    if (type.minPower !== undefined && power < type.minPower) {
+      this.sendEvent(player, { t: "event", kind: "error", message: "Requires a better pickaxe" });
+      return;
+    }
+
     player.gatherReadyAt = now + GATHER_COOLDOWN_S * 1000;
     this.setActionAnim(player, "gather");
     this.cancelCast(player);
@@ -1584,6 +1589,9 @@ export class GameServer {
     const remaining = (this.nodeHits.get(nodeId) ?? type.hits) - power;
     const gained = type.yieldPerHit * power;
     const overflow = addItem(player.inventory, type.yieldItem, gained);
+    if (type.bonusYield && Math.random() < type.bonusYield.chance) {
+      addItem(player.inventory, type.bonusYield.itemId, 1);
+    }
     player.dirty = true;
     this.sendInventory(player);
     this.sendEvent(player, {

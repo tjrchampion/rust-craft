@@ -15,6 +15,9 @@ export const PLAYER_MODELS = [
   "/assets/models/Ranger.glb",
   "/assets/models/Druid.glb",
   "/assets/models/Paladin.glb",
+  "/assets/models/Barbarian_Large.glb",
+  "/assets/models/Rogue_Hooded.glb",
+  "/assets/models/Engineer.glb",
 ];
 export const WOLF_MODEL = "/assets/models/Wolf.glb";
 
@@ -133,11 +136,42 @@ export function mobModelSpec(model: string): { url: string; anims: AnimSpec } {
   return { url, anims: PLAYER_ANIMS };
 }
 
-function load(url: string): Promise<GLTF> {
+export function load(url: string): Promise<GLTF> {
   let p = cache.get(url);
   if (!p) {
     p = loader.loadAsync(url);
     cache.set(url, p);
+  }
+  return p;
+}
+
+type RigSize = "medium" | "large";
+
+/** KayKit's newer character exports (Barbarian/Knight/Mage/Ranger/Rogue/
+ *  Druid/Engineer/Rogue_Hooded/Barbarian_Large) ship with zero baked-in
+ *  animation clips -- clips instead live in a handful of shared, per-rig-size
+ *  library files meant to be applied directly onto any character built from
+ *  the same base skeleton (no bone-remapping/retargeting needed, since every
+ *  character sharing a rig size shares that rig's exact bone names). */
+const ANIMATION_LIBRARY_DIR = "/assets/models/animations";
+const ANIMATION_LIBRARY_FILES: Record<RigSize, string[]> = {
+  medium: ["General", "MovementBasic", "MovementAdvanced", "CombatMelee", "CombatRanged", "Simulation"].map(
+    (n) => `${ANIMATION_LIBRARY_DIR}/Rig_Medium/Rig_Medium_${n}.glb`,
+  ),
+  large: ["General", "MovementBasic", "MovementAdvanced", "CombatMelee", "Simulation"].map(
+    (n) => `${ANIMATION_LIBRARY_DIR}/Rig_Large/Rig_Large_${n}.glb`,
+  ),
+};
+
+const animLibraryCache = new Map<RigSize, Promise<THREE.AnimationClip[]>>();
+
+function loadAnimationLibrary(rig: RigSize): Promise<THREE.AnimationClip[]> {
+  let p = animLibraryCache.get(rig);
+  if (!p) {
+    p = Promise.all(ANIMATION_LIBRARY_FILES[rig].map((url) => load(url))).then((gltfs) =>
+      gltfs.flatMap((g) => g.animations),
+    );
+    animLibraryCache.set(rig, p);
   }
   return p;
 }
@@ -166,29 +200,43 @@ export interface AnimSpec {
   dodgeRight?: string[];
 }
 
+// Clip names come in two eras: the older baked-in rigs (still true for
+// Paladin.glb, which never got re-exported) use one naming scheme; the newer
+// shared-library rigs (every other player class -- see loadAnimationLibrary
+// above) use a slightly renamed scheme. Every logical below lists the new
+// name(s) first, old name(s) as trailing fallbacks, so a single AnimSpec
+// serves both eras -- whichever clip set a given AnimatedModel actually
+// loaded, findAction() just walks the list and uses the first match.
 export const PLAYER_ANIMS: AnimSpec = {
-  idle: ["Idle"],
+  idle: ["Idle_A", "Idle"],
   walk: ["Walking_A"],
   run: ["Running_A"],
-  attack: ["1H_Melee_Attack_Slice_Diagonal", "1H_Melee_Attack_Chop"],
-  gather: ["1H_Melee_Attack_Chop", "Interact"],
-  cast: ["Spellcasting", "Spellcast_Long"],
+  attack: [
+    "Melee_1H_Attack_Slice_Diagonal",
+    "1H_Melee_Attack_Slice_Diagonal",
+    "Melee_1H_Attack_Chop",
+    "1H_Melee_Attack_Chop",
+    "Melee_2H_Attack",
+    "Melee_1H_Slash",
+  ],
+  gather: ["Melee_1H_Attack_Chop", "1H_Melee_Attack_Chop", "Interact"],
+  cast: ["Ranged_Magic_Spellcasting", "Spellcasting", "Ranged_Magic_Spellcasting_Long", "Spellcast_Long"],
   dead: ["Death_A"],
   strafeLeft: ["Running_Strafe_Left"],
   strafeRight: ["Running_Strafe_Right"],
   walkBack: ["Walking_Backwards"],
   hit: ["Hit_A"],
   jump: ["Jump_Idle"],
-  block: ["Block"],
+  block: ["Melee_Block", "Block", "Melee_Blocking"],
   sit: ["Sit_Floor_Idle"],
-  cheer: ["Cheer"],
+  cheer: ["Cheering", "Cheer"],
   // Warrior/mage/rogue/cleric rigs have dedicated dodge clips; ranger/druid/
   // paladin don't, so they fall back to the chop swing as a stand-in burst
   // animation (still reads fine at dodge's brief on-screen duration).
-  dodgeForward: ["Dodge_Forward", "2H_Melee_Attack_Chop"],
-  dodgeBackward: ["Dodge_Backward", "2H_Melee_Attack_Chop"],
-  dodgeLeft: ["Dodge_Left", "2H_Melee_Attack_Chop"],
-  dodgeRight: ["Dodge_Right", "2H_Melee_Attack_Chop"],
+  dodgeForward: ["Dodge_Forward", "Melee_2H_Attack_Chop", "2H_Melee_Attack_Chop"],
+  dodgeBackward: ["Dodge_Backward", "Dodge_Backwards", "Melee_2H_Attack_Chop", "2H_Melee_Attack_Chop"],
+  dodgeLeft: ["Dodge_Left", "Melee_2H_Attack_Chop", "2H_Melee_Attack_Chop"],
+  dodgeRight: ["Dodge_Right", "Melee_2H_Attack_Chop", "2H_Melee_Attack_Chop"],
 };
 
 export const WOLF_ANIMS: AnimSpec = {
@@ -351,7 +399,13 @@ export class AnimatedModel {
 
     this.group.add(scene);
     this.mixer = new THREE.AnimationMixer(scene);
-    for (const clip of gltf.animations) {
+    // Newer KayKit character exports carry no baked-in clips at all -- borrow
+    // from the shared per-rig-size animation library instead (see
+    // loadAnimationLibrary above). Rig size is inferred from the filename
+    // ("_Large" suffix) since that's the only signal the URL gives us.
+    const clips =
+      gltf.animations.length > 0 ? gltf.animations : await loadAnimationLibrary(url.includes("_Large") ? "large" : "medium");
+    for (const clip of clips) {
       // Strip armature prefixes ("AnimalArmature|Walk" -> also register "Walk")
       this.actions.set(clip.name, this.mixer.clipAction(clip));
       const bare = clip.name.split("|").pop()!;
@@ -512,5 +566,9 @@ export function preloadCharacterAssets(): Promise<void> {
     ...Object.values(SKELETON_MODELS),
     ...Object.values(CREATURE_MODELS).map((c) => c.url),
   ];
-  return Promise.all(urls.map((url) => load(url).catch(() => null))).then(() => {});
+  return Promise.all([
+    ...urls.map((url) => load(url).catch(() => null)),
+    loadAnimationLibrary("medium").catch(() => []),
+    loadAnimationLibrary("large").catch(() => []),
+  ]).then(() => {});
 }

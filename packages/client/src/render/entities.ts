@@ -493,9 +493,6 @@ export class EntityManager {
     }
   }
 
-  /** Repaints the floating debuff-icon row only when the active set actually
-   *  changed (auras persist across most snapshot ticks unchanged, so this
-   *  avoids redrawing the canvas texture 20x/sec for nothing). */
   private updateDebuffs(entity: RemoteEntity, debuffs: string[]): void {
     const key = debuffs.join(",");
     if (key === entity.lastDebuffKey) return;

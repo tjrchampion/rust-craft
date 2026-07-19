@@ -73,6 +73,7 @@ export const MOBS: Record<string, MobDef> = {
     loot: [
       { itemId: "raw_meat", min: 2, max: 3 },
       { itemId: "hide", min: 1, max: 2 },
+      { itemId: "wolf_fang", min: 1, max: 1, chance: 0.2 },
     ],
     render: { model: "wolf", height: 1.15, color: "#d7b48a" },
   },
@@ -95,6 +96,7 @@ export const MOBS: Record<string, MobDef> = {
     loot: [
       { itemId: "raw_meat", min: 3, max: 5 },
       { itemId: "hide", min: 2, max: 4 },
+      { itemId: "wolf_fang", min: 1, max: 1, chance: 0.3 },
     ],
     render: { model: "wolf", height: 2.0, tint: 0x26262f, color: "#ff6f5e" },
   },
@@ -451,6 +453,7 @@ export const MOBS: Record<string, MobDef> = {
       { itemId: "hide", min: 2, max: 4 },
       { itemId: "raw_meat", min: 2, max: 3 },
       { itemId: "ancient_dust", min: 0, max: 1, chance: 0.5 },
+      { itemId: "yeti_claw", min: 1, max: 1, chance: 0.25 },
     ],
     render: { model: "yeti", height: 2.4, color: "#e6eef2" },
   },
@@ -473,6 +476,7 @@ export const MOBS: Record<string, MobDef> = {
     loot: [
       { itemId: "hide", min: 2, max: 4 },
       { itemId: "ancient_dust", min: 1, max: 2 },
+      { itemId: "yeti_claw", min: 1, max: 1, chance: 0.25 },
     ],
     render: { model: "yetialt", height: 2.4, color: "#c9dcf0" },
   },
@@ -495,6 +499,7 @@ export const MOBS: Record<string, MobDef> = {
     loot: [
       { itemId: "stone", min: 3, max: 5 },
       { itemId: "ancient_dust", min: 1, max: 2 },
+      { itemId: "golem_core", min: 1, max: 1, chance: 0.2 },
     ],
     render: { model: "golem", height: 2.0, color: "#8a8a8a" },
   },
@@ -563,6 +568,7 @@ export const MOBS: Record<string, MobDef> = {
     loot: [
       { itemId: "ancient_dust", min: 2, max: 4 },
       { itemId: "stone", min: 2, max: 3 },
+      { itemId: "demon_horn", min: 1, max: 1, chance: 0.15 },
     ],
     render: { model: "demon", height: 2.2, color: "#b83a3a" },
   },
@@ -585,6 +591,7 @@ export const MOBS: Record<string, MobDef> = {
     loot: [
       { itemId: "ancient_dust", min: 3, max: 4 },
       { itemId: "bone", min: 1, max: 3 },
+      { itemId: "demon_horn", min: 1, max: 1, chance: 0.15 },
     ],
     render: { model: "demonalt", height: 2.0, color: "#7a2020" },
   },
@@ -608,6 +615,7 @@ export const MOBS: Record<string, MobDef> = {
       { itemId: "ancient_dust", min: 3, max: 5 },
       { itemId: "stone", min: 3, max: 5 },
       { itemId: "hide", min: 2, max: 3 },
+      { itemId: "dragon_scale", min: 1, max: 2, chance: 0.25 },
     ],
     render: { model: "dragon", height: 2.6, color: "#4a7a4a" },
   },

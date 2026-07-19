@@ -24,8 +24,11 @@
     INVENTORY_SLOTS,
     HOTBAR_SLOTS,
     EQUIP_SLOTS,
+    computeActorStats,
     type ItemSnap,
     type SpellDef,
+    type StatModifiers,
+    type RecipeDef,
   } from "@rustcraft/shared";
 
   const SPELL_PREFIX = "spell:";
@@ -41,7 +44,14 @@
     { id: "party", label: "Party" },
     { id: "system", label: "System" },
   ];
-  const EQUIP_LABELS: Record<string, string> = { weapon: "Weapon", head: "Head", chest: "Chest" };
+  const EQUIP_LABELS: Record<string, string> = {
+    weapon: "Weapon",
+    head: "Head/Helmet",
+    chest: "Chest/Body",
+    arms: "Hands/Gloves",
+    legs: "Legs/Pants",
+    feet: "Feet/Boots"
+  };
   const recipes = Object.values(RECIPES);
 
   let invCursor = $state(0);
@@ -52,7 +62,7 @@
   let spellHotbarCursor = $state(0);
   let questsCursor = $state(0);
   let questSubFocus = $state<"track" | "share">("track");
-  let craftTabFocus = $state<"inventory" | "grid" | "output" | "clear">("inventory");
+  let craftTabFocus = $state<"inventory" | "grid" | "output" | "clear" | "recipes">("inventory");
   let craftGridCursor = $state(0);
   let clearBtnFocus = $state(0);
   let systemCursor = $state(0);
@@ -146,6 +156,14 @@
   });
 
   const classInfo = $derived(game.classId ? classDef(game.classId) : null);
+  const computedStats = $derived.by(() => {
+    if (!classInfo || !game.self) return null;
+    const gearMods = game.inventory
+      .filter((i) => i.container === "equip")
+      .map((i) => itemDef(i.itemId).statModifiers)
+      .filter((m): m is StatModifiers => !!m);
+    return computeActorStats(classInfo.baseStats, game.self.level, gearMods, []);
+  });
   const classSpells = $derived(classInfo ? classInfo.startingSpells : []);
   const spellsToShow = $derived.by(() => {
     const list = [...classSpells];
@@ -199,6 +217,11 @@
     Array.from({ length: 9 }, (_, i) => game.inventory.find((it) => it.container === "crafting" && it.slot === i))
   );
 
+  // Exact match: the grid's distinct item ids must equal a recipe's
+  // ingredient id set precisely (not just "at least enough of everything
+  // it needs"), otherwise a low-threshold recipe (e.g. torch, wood-only)
+  // hijacks the match the moment its own bar is cleared, regardless of
+  // other unrelated items also sitting in the grid for a different recipe.
   const matchedRecipe = $derived.by(() => {
     const active = craftingSlots.filter(it => it !== undefined && it.qty > 0);
     if (active.length === 0) return null;
@@ -206,16 +229,11 @@
     for (const it of active) {
       if (it) totals[it.itemId] = (totals[it.itemId] ?? 0) + it.qty;
     }
+    const gridItemIds = Object.keys(totals);
     for (const recipe of Object.values(RECIPES)) {
-      let match = true;
-      for (const ing of recipe.ingredients) {
-        const total = totals[ing.itemId] ?? 0;
-        if (total < ing.qty) {
-          match = false;
-          break;
-        }
-      }
-      if (match) return recipe;
+      if (recipe.ingredients.length !== gridItemIds.length) continue;
+      if (!gridItemIds.every((id) => recipe.ingredients.some((ing) => ing.itemId === id))) continue;
+      if (recipe.ingredients.every((ing) => (totals[ing.itemId] ?? 0) >= ing.qty)) return recipe;
     }
     return null;
   });
@@ -376,9 +394,51 @@
   }
 
   // ------------------------------------------------------------------- craft
+  /** Move matching stacks from the inventory (never hotbar/equip, so we
+   *  never yank something the player is actively relying on) into empty
+   *  crafting-grid slots until the recipe's ingredients are covered. Plans
+   *  the moves against local bookkeeping rather than re-reading
+   *  craftingSlots/game.inventory mid-loop, since sendMoveItem is a fire-
+   *  and-forget WS message -- the reactive state won't reflect a move
+   *  until the server's snapshot round-trips back. */
+  function quickFillRecipe(recipe: RecipeDef): void {
+    const g = getGame();
+    if (!g) return;
+    const gridFilled = new Set<number>();
+    const gridTotals: Record<string, number> = {};
+    for (let i = 0; i < 9; i++) {
+      const it = craftingSlots[i];
+      if (it) {
+        gridFilled.add(i);
+        gridTotals[it.itemId] = (gridTotals[it.itemId] ?? 0) + it.qty;
+      }
+    }
+    const usedInventorySlots = new Set<number>();
+    for (const ing of recipe.ingredients) {
+      let have = gridTotals[ing.itemId] ?? 0;
+      if (have >= ing.qty) continue;
+      for (const it of game.inventory) {
+        if (have >= ing.qty) break;
+        if (it.container !== "inventory" || it.itemId !== ing.itemId || usedInventorySlots.has(it.slot)) continue;
+        let targetSlot = -1;
+        for (let s = 0; s < 9; s++) {
+          if (!gridFilled.has(s)) {
+            targetSlot = s;
+            break;
+          }
+        }
+        if (targetSlot === -1) break; // grid full
+        g.sendMoveItem("inventory", it.slot, "crafting", targetSlot);
+        gridFilled.add(targetSlot);
+        usedInventorySlots.add(it.slot);
+        have += it.qty;
+      }
+    }
+  }
+
   function activateCraft(idx: number): void {
     const recipe = recipes[idx];
-    if (recipe && canCraft(recipe.id)) getGame()?.sendCraft(recipe.id);
+    if (recipe) quickFillRecipe(recipe);
   }
 
   // ------------------------------------------------------------------ system
@@ -610,7 +670,7 @@
                 <span class="equip-label">{EQUIP_LABELS[EQUIP_SLOTS[i]!]}</span>
                 <span class="equip-value">
                   {#if item}
-                    <IconGlyph value={itemIcon(item.itemId)} size={20} />
+                    <IconGlyph value={itemIcon(item.itemId)} size={20} itemId={item.itemId} />
                     {itemDef(item.itemId).name}
                   {:else}
                     Empty
@@ -620,9 +680,21 @@
             {/each}
           </div>
           <div class="char-info">
-            <div>Level {game.self?.level ?? 1} · {classInfo?.name ?? "Adventurer"}</div>
-            <div>HP: {Math.round(game.self?.hp ?? 0)}/{Math.round(game.self?.maxHp ?? 0)}</div>
-            <div>{classInfo?.resourceLabel ?? "Mana"}: {Math.round(game.self?.mana ?? 0)}/{Math.round(game.self?.maxMana ?? 0)}</div>
+            <div class="char-level-class">Level {game.self?.level ?? 1} · {classInfo?.name ?? "Adventurer"}</div>
+            <div class="char-vitals">
+              <div>HP: {Math.round(game.self?.hp ?? 0)}/{Math.round(game.self?.maxHp ?? 0)}</div>
+              <div>{classInfo?.resourceLabel ?? "Mana"}: {Math.round(game.self?.mana ?? 0)}/{Math.round(game.self?.maxMana ?? 0)}</div>
+            </div>
+            {#if computedStats}
+              <div class="stats-grid">
+                <div class="stat-item"><span class="stat-name">Power:</span> <span class="stat-val">{Math.round(computedStats.power)}</span></div>
+                <div class="stat-item"><span class="stat-name">Agility:</span> <span class="stat-val">{Math.round(computedStats.agility)}</span></div>
+                <div class="stat-item"><span class="stat-name">Vitality:</span> <span class="stat-val">{Math.round(computedStats.vitality)}</span></div>
+                <div class="stat-item"><span class="stat-name">Armor:</span> <span class="stat-val">{Math.round(computedStats.armor)}</span></div>
+                <div class="stat-item"><span class="stat-name">Crit:</span> <span class="stat-val">{Math.round(computedStats.critChance * 100)}%</span></div>
+                <div class="stat-item"><span class="stat-name">Speed:</span> <span class="stat-val">x{computedStats.moveSpeedMult.toFixed(2)}</span></div>
+              </div>
+            {/if}
           </div>
         </div>
         <div class="col backpack-col">
@@ -639,7 +711,7 @@
                 }}
               >
                 {#if item}
-                  <IconGlyph value={itemIcon(item.itemId)} />
+                  <IconGlyph value={itemIcon(item.itemId)} itemId={item.itemId} />
                   {#if item.qty > 1}<span class="qty">{item.qty}</span>{/if}
                 {/if}
               </button>
@@ -658,7 +730,7 @@
                 {#if spellId}
                   <IconGlyph value={spellIcon(spellId)} size={20} />
                 {:else if item}
-                  <IconGlyph value={itemIcon(item.itemId)} size={20} />
+                  <IconGlyph value={itemIcon(item.itemId)} size={20} itemId={item.itemId} />
                   {#if item.qty > 1}<span class="qty">{item.qty}</span>{/if}
                 {/if}
                 <span class="num">{keyLabel(i)}</span>
@@ -772,7 +844,7 @@
                   <IconGlyph value={spellIcon(spellId)} size={28} />
                   <span class="clear" onclick={(e) => clearHotbarSpell(i, e)}>✕</span>
                 {:else if item}
-                  <IconGlyph value={itemIcon(item.itemId)} size={28} />
+                  <IconGlyph value={itemIcon(item.itemId)} size={28} itemId={item.itemId} />
                 {/if}
                 <span class="num">{keyLabel(i)}</span>
               </button>
@@ -797,7 +869,7 @@
                   }}
                 >
                   {#if item}
-                    <IconGlyph value={itemIcon(item.itemId)} />
+                    <IconGlyph value={itemIcon(item.itemId)} itemId={item.itemId} />
                     {#if item.qty > 1}<span class="qty">{item.qty}</span>{/if}
                   {/if}
                 </button>
@@ -824,7 +896,7 @@
                     }}
                   >
                     {#if item}
-                      <IconGlyph value={itemIcon(item.itemId)} size={28} />
+                      <IconGlyph value={itemIcon(item.itemId)} size={28} itemId={item.itemId} />
                       {#if item.qty > 1}<span class="qty">{item.qty}</span>{/if}
                     {/if}
                   </button>
@@ -848,7 +920,7 @@
                   }}
                 >
                   {#if matchedRecipe}
-                    <IconGlyph value={itemIcon(matchedRecipe.output)} size={28} />
+                    <IconGlyph value={itemIcon(matchedRecipe.output)} size={28} itemId={matchedRecipe.output} />
                     {#if matchedRecipe.outputQty > 1}
                       <span class="qty">{matchedRecipe.outputQty}</span>
                     {/if}
@@ -893,11 +965,22 @@
           <div class="col recipe-book-col">
             <h3>Recipe Book</h3>
             <div class="recipes-list">
-              {#each recipes as recipe}
+              {#each recipes as recipe, idx}
                 {@const outputDef = itemDef(recipe.output)}
-                <div class="recipe-entry">
+                <button
+                  type="button"
+                  class="recipe-entry"
+                  class:selected={craftTabFocus === "recipes" && craftCursor === idx}
+                  class:matched={matchedRecipe?.id === recipe.id}
+                  class:unaffordable={!canCraft(recipe.id)}
+                  onclick={() => {
+                    craftTabFocus = "recipes";
+                    craftCursor = idx;
+                    quickFillRecipe(recipe);
+                  }}
+                >
                   <div class="recipe-header">
-                    <span class="recipe-icon"><IconGlyph value={itemIcon(recipe.output)} size={16} /></span>
+                    <span class="recipe-icon"><IconGlyph value={itemIcon(recipe.output)} size={16} itemId={recipe.output} /></span>
                     <span class="recipe-name">{outputDef.name}</span>
                     {#if recipe.station}
                       <span class="recipe-station">🏕️</span>
@@ -910,7 +993,7 @@
                       </span>
                     {/each}
                   </div>
-                </div>
+                </button>
               {/each}
             </div>
           </div>
@@ -1180,6 +1263,43 @@
     display: flex;
     flex-direction: column;
     gap: 4px;
+  }
+  .char-level-class {
+    font-weight: bold;
+    color: var(--rc-gold-bright, #ffe9a8);
+    font-family: var(--rc-display, serif);
+    letter-spacing: 0.5px;
+    margin-bottom: 2px;
+  }
+  .char-vitals {
+    display: flex;
+    justify-content: space-between;
+    font-size: 12px;
+    opacity: 0.95;
+    margin-bottom: 6px;
+    border-bottom: 1px dashed rgba(255, 255, 255, 0.05);
+    padding-bottom: 6px;
+  }
+  .stats-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 4px 10px;
+    background: rgba(0, 0, 0, 0.15);
+    padding: 6px 8px;
+    border-radius: 4px;
+    border: 1px solid rgba(255, 255, 255, 0.05);
+  }
+  .stat-item {
+    display: flex;
+    justify-content: space-between;
+    font-size: 11px;
+  }
+  .stat-name {
+    color: rgba(255, 255, 255, 0.5);
+  }
+  .stat-val {
+    font-weight: 500;
+    color: var(--rc-parchment, #e3d2b7);
   }
   .backpack-col {
     flex: 1;
@@ -1675,10 +1795,30 @@
     padding-right: 4px;
   }
   .recipe-entry {
+    display: block;
+    width: 100%;
+    text-align: left;
+    font: inherit;
+    color: inherit;
+    cursor: pointer;
     background: rgba(255, 255, 255, 0.03);
     border: 1px solid rgba(255, 255, 255, 0.08);
     border-radius: 6px;
     padding: 8px 10px;
+    transition: background 0.12s, border-color 0.12s;
+  }
+  .recipe-entry:hover {
+    background: rgba(255, 255, 255, 0.06);
+  }
+  .recipe-entry.selected {
+    border-color: var(--rc-gold);
+  }
+  .recipe-entry.matched {
+    background: rgba(120, 200, 140, 0.1);
+    border-color: rgba(120, 200, 140, 0.5);
+  }
+  .recipe-entry.unaffordable {
+    opacity: 0.55;
   }
   .recipe-header {
     display: flex;

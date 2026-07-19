@@ -72,7 +72,7 @@
           {#if cooldownLabel}<span class="cooldown-label">{cooldownLabel}</span>{/if}
         {/if}
       {:else if item}
-        <IconGlyph value={itemIcon(item.itemId)} size={26} />
+        <IconGlyph value={itemIcon(item.itemId)} size={26} itemId={item.itemId} />
         {#if item.qty > 1}<span class="qty">{item.qty}</span>{/if}
         {#if item.durability !== null && itemDef(item.itemId).maxDurability}
           <div class="dura" style="width: {(item.durability / itemDef(item.itemId).maxDurability!) * 100}%"></div>

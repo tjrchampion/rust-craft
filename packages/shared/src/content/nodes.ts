@@ -1,4 +1,4 @@
-export type NodeClass = "wood" | "stone" | "pick";
+export type NodeClass = "wood" | "stone" | "pick" | "ore";
 
 export interface NodeTypeDef {
   id: string;
@@ -9,6 +9,13 @@ export interface NodeTypeDef {
   yieldItem: string;
   yieldPerHit: number; // at gather power 1, scales with tool power
   respawnS: number;
+  /** Ore tiers only: minimum gatherPower.ore required to gather at all --
+   *  unlike wood/stone, an under-tier pickaxe can't touch this node (not
+   *  just gather it slowly). See handleGather in GameServer.ts. */
+  minPower?: number;
+  /** A small chance of an extra, rarer item alongside the normal yield
+   *  (e.g. Silver Ore sometimes found in a Copper Vein). */
+  bonusYield?: { itemId: string; chance: number };
 }
 
 export const NODE_TYPES: Record<string, NodeTypeDef> = {
@@ -38,6 +45,61 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
     yieldItem: "berries",
     yieldPerHit: 3,
     respawnS: 120,
+  },
+  // Ore tiers -- mirrors the game's Trivial..Elite (0-4) tier scale. minPower
+  // hard-gates the two higher tiers so a starter Pickaxe can mine everything
+  // up through Iron but genuinely cannot touch Mithril/Thorium at all.
+  copper_vein: {
+    id: "copper_vein",
+    name: "Copper Vein",
+    nodeClass: "ore",
+    hits: 10,
+    yieldItem: "copper_ore",
+    yieldPerHit: 2,
+    respawnS: 200,
+    minPower: 1,
+    bonusYield: { itemId: "silver_ore", chance: 0.1 },
+  },
+  tin_vein: {
+    id: "tin_vein",
+    name: "Tin Vein",
+    nodeClass: "ore",
+    hits: 10,
+    yieldItem: "tin_ore",
+    yieldPerHit: 2,
+    respawnS: 220,
+    minPower: 1,
+  },
+  iron_deposit: {
+    id: "iron_deposit",
+    name: "Iron Deposit",
+    nodeClass: "ore",
+    hits: 14,
+    yieldItem: "iron_ore",
+    yieldPerHit: 2,
+    respawnS: 260,
+    minPower: 1,
+    bonusYield: { itemId: "gold_ore", chance: 0.08 },
+  },
+  mithril_deposit: {
+    id: "mithril_deposit",
+    name: "Mithril Deposit",
+    nodeClass: "ore",
+    hits: 16,
+    yieldItem: "mithril_ore",
+    yieldPerHit: 2,
+    respawnS: 320,
+    minPower: 2,
+  },
+  thorium_vein: {
+    id: "thorium_vein",
+    name: "Thorium Vein",
+    nodeClass: "ore",
+    hits: 18,
+    yieldItem: "thorium_ore",
+    yieldPerHit: 2,
+    respawnS: 400,
+    minPower: 3,
   },
 };
 

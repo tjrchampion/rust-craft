@@ -254,7 +254,7 @@ export class Game {
         ui.inventory = msg.inventory;
         ui.learnedSpells = msg.learnedSpells;
         ui.selectedSlot = msg.selectedSlot;
-        this.applyEquippedWeapon(msg.inventory);
+        this.applyEquippedGear(msg.inventory);
         ui.timeOfDay = msg.timeOfDay;
         this.move = { x: msg.self.x, y: msg.self.y, z: msg.self.z, vy: msg.self.vy, grounded: msg.self.grounded };
         this.depletedNodeIds = msg.depletedNodes;
@@ -291,7 +291,7 @@ export class Game {
         ui.inventory = msg.items;
         ui.learnedSpells = msg.learnedSpells;
         ui.selectedSlot = msg.selectedSlot;
-        this.applyEquippedWeapon(msg.items);
+        this.applyEquippedGear(msg.items);
         break;
       case "nodeUpdate":
         this.nodes?.setDepleted(msg.nodeId, msg.depleted);
@@ -398,7 +398,7 @@ export class Game {
 
       ui.loadingMessage = "Entering world...";
       ui.loadingProgress = 95;
-      await this.avatar.loadFrom(playerModelUrl(msg.classId), 1.8);
+      await this.avatar.loadFrom(playerModelUrl(this.selfClassId), 1.8);
 
       ui.loadingProgress = 100;
       // Slight delay for smooth visual transition
@@ -513,12 +513,22 @@ export class Game {
 
   /** Show whichever weapon-mesh variant matches the equip slot's current
    *  item, hiding every other variant baked into the local avatar's rig. */
-  private applyEquippedWeapon(items: ItemSnap[]): void {
+  private applyEquippedGear(items: ItemSnap[]): void {
     const weapon = items.find((i) => i.container === "equip" && i.slot === 0);
     const def = weapon ? itemDef(weapon.itemId) : null;
     const allKnown = CLASS_WEAPON_NODES[this.selfClassId as keyof typeof CLASS_WEAPON_NODES] ?? [];
-    this.avatar.setWeapon(def?.weaponModel ?? [], allKnown);
-    void this.avatar.setWeaponProp(def?.weaponProp ?? null);
+
+    const hasBakedIn = def && def.weaponModel && def.weaponModel.some(nodeName => allKnown.includes(nodeName));
+    if (hasBakedIn) {
+      this.avatar.setWeapon(def!.weaponModel!, allKnown);
+      void this.avatar.setWeaponProp(null);
+    } else if (def && def.weaponProp) {
+      this.avatar.setWeapon([], allKnown);
+      void this.avatar.setWeaponProp(def.weaponProp);
+    } else {
+      this.avatar.setWeapon([], allKnown);
+      void this.avatar.setWeaponProp(null);
+    }
     this.equippedWeaponDef = def;
   }
 

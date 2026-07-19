@@ -1,8 +1,24 @@
 import * as THREE from "three";
 import { generateNodes, dist2D, type WorldNode } from "@rustcraft/shared";
-import { buildRock, buildBerryBush, buildBiomeTree } from "./models";
+import { buildRock, buildOreRock, buildBerryBush, buildBiomeTree } from "./models";
 
 const VISIBLE_RADIUS = 220; // only keep nearby node meshes in the scene
+
+/** Tint (+ optional glow accent for the precious tiers) per ore node type. */
+const ORE_TINTS: Record<string, { tint: number; glow?: number }> = {
+  copper_vein: { tint: 0xb87333 },
+  tin_vein: { tint: 0xa8a8a0 },
+  iron_deposit: { tint: 0x6b6660 },
+  mithril_deposit: { tint: 0x7a9cb8, glow: 0x9fc9e0 },
+  thorium_vein: { tint: 0x5a8f5a, glow: 0x7fffa0 },
+};
+
+/** Gather-particle spark color per node type, falling back to berry-red. */
+const GATHER_PARTICLE_COLOR: Record<string, number> = {
+  tree: 0x8a5a2f,
+  rock: 0x9a9690,
+  ...Object.fromEntries(Object.entries(ORE_TINTS).map(([id, { tint }]) => [id, tint])),
+};
 
 interface NodeEntry {
   node: WorldNode;
@@ -50,8 +66,7 @@ export class NodeManager {
     if (!entry) return;
     entry.shakeUntil = performance.now() + 220;
 
-    const color =
-      entry.node.type === "tree" ? 0x8a5a2f : entry.node.type === "rock" ? 0x9a9690 : 0xc23b4e;
+    const color = GATHER_PARTICLE_COLOR[entry.node.type] ?? 0xc23b4e;
     const count = 7;
     for (let i = 0; i < count; i++) {
       const chip = new THREE.Mesh(
@@ -135,8 +150,11 @@ export class NodeManager {
 
   private buildMesh(node: WorldNode): THREE.Group {
     let mesh: THREE.Group;
+    const ore = ORE_TINTS[node.type];
     if (node.type === "tree") {
       mesh = buildBiomeTree(node.biome, node.variant);
+    } else if (ore) {
+      mesh = buildOreRock(node.variant, ore.tint, ore.glow);
     } else if (node.type === "rock") {
       mesh = buildRock(node.variant);
     } else {

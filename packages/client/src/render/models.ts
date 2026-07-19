@@ -353,19 +353,37 @@ export function buildStump(variant: number): THREE.Group {
   return group;
 }
 
-export function buildRock(variant: number): THREE.Group {
+export function buildRock(variant: number, tint = 0x8a867e): THREE.Group {
   const group = new THREE.Group();
   const geo = new THREE.DodecahedronGeometry(0.9 + variant * 0.5, 0);
-  const rock = new THREE.Mesh(geo, lambert(0x8a867e));
+  const rock = new THREE.Mesh(geo, lambert(tint));
   rock.position.y = 0.55;
   rock.scale.y = 0.72;
   rock.castShadow = true;
   group.add(rock);
-  const small = new THREE.Mesh(new THREE.DodecahedronGeometry(0.4, 0), lambert(0x7b776f));
+  const small = new THREE.Mesh(
+    new THREE.DodecahedronGeometry(0.4, 0),
+    lambert(new THREE.Color(tint).multiplyScalar(0.82).getHex()),
+  );
   small.position.set(0.8, 0.22, 0.3 - variant * 0.6);
   small.castShadow = true;
   group.add(small);
   group.rotation.y = variant * Math.PI * 2;
+  return group;
+}
+
+/** An ore vein: buildRock tinted per ore type, with a small glowing crystal
+ *  accent for the precious tiers (mithril/thorium). */
+export function buildOreRock(variant: number, tint: number, glow?: number): THREE.Group {
+  const group = buildRock(variant, tint);
+  if (glow !== undefined) {
+    const crystal = buildCrystal(glow, 0.22);
+    crystal.position.set(-0.3, 0.95, 0.2);
+    group.add(crystal);
+    const light = new THREE.PointLight(glow, 3, 6, 2);
+    light.position.set(-0.3, 1.1, 0.2);
+    group.add(light);
+  }
   return group;
 }
 

@@ -1,7 +1,7 @@
 import type { BaseStats } from "../sim/actorStats";
 import type { GearSlot } from "./items";
 
-export type ClassId = "warrior" | "mage" | "rogue" | "cleric" | "ranger" | "druid" | "paladin";
+export type ClassId = "warrior" | "mage" | "rogue" | "cleric" | "ranger" | "druid" | "paladin" | "berserker" | "assassin" | "engineer";
 
 /**
  * Classes are pure data blueprints applied ONLY at character creation --
@@ -102,6 +102,42 @@ export const CLASSES: Record<ClassId, ClassTemplate> = {
     startingSpells: ["crusader_strike", "divine_favor", "heal", "consecration", "hammer_of_wrath", "holy_shield"],
     startingGear: [
       { slot: "weapon", itemId: "sunforged_blade" },
+      { slot: "chest", itemId: "leather_armor" },
+    ],
+  },
+  berserker: {
+    id: "berserker",
+    name: "Berserker",
+    description: "A gigantic barbarian variant that channels fury into crushing strikes.",
+    resourceLabel: "Rage",
+    baseStats: { power: 10, armor: 6, agility: 3, vitality: 10 },
+    startingSpells: ["rend", "charge", "heal", "whirlwind", "execute"],
+    startingGear: [
+      { slot: "weapon", itemId: "axe_2handed_large" },
+      { slot: "chest", itemId: "leather_armor" },
+    ],
+  },
+  assassin: {
+    id: "assassin",
+    name: "Assassin",
+    description: "A hooded rogue variant specializing in poison and silent critical strikes.",
+    resourceLabel: "Energy",
+    baseStats: { power: 8, armor: 4, agility: 11, vitality: 5 },
+    startingSpells: ["backstab", "poison_strike", "heal", "fan_of_knives", "eviscerate", "garrote"],
+    startingGear: [
+      { slot: "weapon", itemId: "dagger" },
+      { slot: "chest", itemId: "leather_armor" },
+    ],
+  },
+  engineer: {
+    id: "engineer",
+    name: "Engineer",
+    description: "A master mechanic that repairs allies and builds tech in combat.",
+    resourceLabel: "Steam",
+    baseStats: { power: 8, armor: 8, agility: 5, vitality: 7 },
+    startingSpells: ["charge", "frostbolt", "heal", "shield_wall", "whirlwind"],
+    startingGear: [
+      { slot: "weapon", itemId: "wrench" },
       { slot: "chest", itemId: "leather_armor" },
     ],
   },
