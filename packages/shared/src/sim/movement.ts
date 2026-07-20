@@ -65,11 +65,23 @@ export function stepMovement(state: MoveState, input: MoveInput, dt: number): Mo
   } else {
     speed = (input.sprint ? SPRINT_SPEED : WALK_SPEED) * (swimming ? SWIM_SPEED_MULT : 1);
   }
-  x += mx * speed * dt;
-  z += mz * speed * dt;
+  let nextX = x + mx * speed * dt;
+  let nextZ = z + mz * speed * dt;
 
-  x = clamp(x, WORLD_MIN_X, WORLD_MAX_X);
-  z = clamp(z, WORLD_MIN_Z, WORLD_MAX_Z);
+  nextX = clamp(nextX, WORLD_MIN_X, WORLD_MAX_X);
+  nextZ = clamp(nextZ, WORLD_MIN_Z, WORLD_MAX_Z);
+
+  if (input.inDungeon) {
+    const oldHeight = dungeonFloorHeightAt(state.x, state.z);
+    const newHeight = dungeonFloorHeightAt(nextX, nextZ);
+    if (newHeight === null || (oldHeight !== null && Math.abs(newHeight - oldHeight) > 2.5)) {
+      nextX = state.x;
+      nextZ = state.z;
+    }
+  }
+
+  x = nextX;
+  z = nextZ;
 
   // A bridge deck overrides the carved river trench so players walk the
   // span instead of wading through the water beneath it; a dungeon's flat

@@ -101,6 +101,26 @@ export const NODE_TYPES: Record<string, NodeTypeDef> = {
     respawnS: 400,
     minPower: 3,
   },
+  dungeon_chest_common: {
+    id: "dungeon_chest_common",
+    name: "Treasure Chest",
+    nodeClass: "pick",
+    hits: 1,
+    yieldItem: "ancient_dust",
+    yieldPerHit: 3,
+    respawnS: 9999999, // practically never respawn during instance
+    bonusYield: { itemId: "bandage", chance: 0.5 },
+  },
+  dungeon_chest_rare: {
+    id: "dungeon_chest_rare",
+    name: "Ornate Chest",
+    nodeClass: "pick",
+    hits: 1,
+    yieldItem: "ancient_dust",
+    yieldPerHit: 8,
+    respawnS: 9999999,
+    bonusYield: { itemId: "runic_healing_potion", chance: 0.8 },
+  },
 };
 
 export function nodeTypeDef(id: string): NodeTypeDef {

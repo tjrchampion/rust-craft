@@ -1,6 +1,8 @@
 import * as THREE from "three";
 import { generateNodes, dist2D, type WorldNode } from "@rustcraft/shared";
 import { buildRock, buildOreRock, buildBerryBush, buildBiomeTree } from "./models";
+import { load } from "./gltf";
+import * as SkeletonUtils from "three/examples/jsm/utils/SkeletonUtils.js";
 
 const VISIBLE_RADIUS = 220; // only keep nearby node meshes in the scene
 
@@ -17,6 +19,8 @@ const ORE_TINTS: Record<string, { tint: number; glow?: number }> = {
 const GATHER_PARTICLE_COLOR: Record<string, number> = {
   tree: 0x8a5a2f,
   rock: 0x9a9690,
+  dungeon_chest_common: 0xd4af37,
+  dungeon_chest_rare: 0xffd700,
   ...Object.fromEntries(Object.entries(ORE_TINTS).map(([id, { tint }]) => [id, tint])),
 };
 
@@ -60,7 +64,22 @@ export class NodeManager {
     }
   }
 
-  /** Gather feedback: shake the node and spew a burst of chip particles. */
+  addDynamicNodes(nodesList: WorldNode[]): void {
+    for (const node of nodesList) {
+      if (!this.nodes.has(node.id)) {
+        this.nodes.set(node.id, {
+          node,
+          mesh: null,
+          inScene: false,
+          depleted: false,
+          shakeUntil: 0,
+          baseX: node.x,
+          baseZ: node.z,
+        });
+      }
+    }
+  }
+
   hitNode(nodeId: string): void {
     const entry = this.nodes.get(nodeId);
     if (!entry) return;
@@ -151,7 +170,21 @@ export class NodeManager {
   private buildMesh(node: WorldNode): THREE.Group {
     let mesh: THREE.Group;
     const ore = ORE_TINTS[node.type];
-    if (node.type === "tree") {
+    if (node.type === "dungeon_chest_common" || node.type === "dungeon_chest_rare") {
+      mesh = new THREE.Group();
+      const model = node.type === "dungeon_chest_rare" ? "chest_gold.gltf" : "chest.gltf";
+      load(`/assets/models/props/${model}`).then((gltf) => {
+        const clone = SkeletonUtils.clone(gltf.scene);
+        clone.scale.set(1.2, 1.2, 1.2);
+        clone.traverse((o) => {
+          if ((o as THREE.Mesh).isMesh) {
+            o.castShadow = true;
+            o.receiveShadow = true;
+          }
+        });
+        mesh.add(clone);
+      });
+    } else if (node.type === "tree") {
       mesh = buildBiomeTree(node.biome, node.variant);
     } else if (ore) {
       mesh = buildOreRock(node.variant, ore.tint, ore.glow);

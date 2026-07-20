@@ -85,7 +85,7 @@ export const DUNGEON_WIPE_EJECT_MS = 15 * 1000; // eject a fully-dead party if n
 // Every portal's arena is a real enclosed room built on top of the same
 // reserved rectangle above -- these size the walls/floor/ceiling, inside
 // the larger DUNGEON_ARENA_RADIUS exclusion buffer.
-export const DUNGEON_WALL_RADIUS = 38; // interior room radius
+export const DUNGEON_WALL_RADIUS = 130; // interior room radius
 export const DUNGEON_WALL_HEIGHT = 16; // tall enough to fully occlude sky/horizon
 export const DUNGEON_DOORWAY_HALF_ANGLE = 0.28; // radians, gap in the wall ring for the entrance
 

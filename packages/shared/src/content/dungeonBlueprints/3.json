@@ -1,0 +1,73 @@
+{
+  "assets": [
+    {
+      "id": "asset_1",
+      "model": "wall.gltf",
+      "localX": -14,
+      "localY": 0,
+      "localZ": 10,
+      "yaw": 0,
+      "scale": 1
+    },
+    {
+      "id": "asset_2",
+      "model": "wall.gltf",
+      "localX": -10,
+      "localY": 0,
+      "localZ": 10,
+      "yaw": 0,
+      "scale": 1
+    },
+    {
+      "id": "asset_3",
+      "model": "wall.gltf",
+      "localX": -6,
+      "localY": 0,
+      "localZ": 10,
+      "yaw": 0,
+      "scale": 1
+    },
+    {
+      "id": "asset_4",
+      "model": "wall.gltf",
+      "localX": -2,
+      "localY": 0,
+      "localZ": 10,
+      "yaw": 0,
+      "scale": 1
+    },
+    {
+      "id": "asset_5",
+      "model": "wall.gltf",
+      "localX": 2,
+      "localY": 0,
+      "localZ": 10,
+      "yaw": 0,
+      "scale": 1
+    },
+    {
+      "id": "asset_6",
+      "model": "wall.gltf",
+      "localX": 6,
+      "localY": 0,
+      "localZ": 10,
+      "yaw": 0,
+      "scale": 1
+    },
+    {
+      "id": "asset_7",
+      "model": "wall.gltf",
+      "localX": 10,
+      "localY": 0,
+      "localZ": 10,
+      "yaw": 0,
+      "scale": 1
+    }
+  ],
+  "mobSpawns": [],
+  "chests": [],
+  "entryLocal": {
+    "x": 0,
+    "z": 0
+  }
+}

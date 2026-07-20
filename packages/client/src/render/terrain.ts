@@ -109,6 +109,9 @@ function buildTerrainMesh(centerX: number, centerZ: number, sizeX: number, sizeZ
     const y = terrainHeight(x, z);
     pos.setY(i, y);
 
+    terrainUv[i * 2] = (x + ZONE_SIZE / 2) / ZONE_SIZE;
+    terrainUv[i * 2 + 1] = (z + ZONE_SIZE / 2) / ZONE_SIZE;
+
     const slope = terrainSlope(x, z);
     const biome = biomeAt(x, z);
     let wGrass = 0;

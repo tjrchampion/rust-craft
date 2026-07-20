@@ -1,4 +1,4 @@
-export type Screen = "loading" | "login" | "charselect" | "ingame";
+export type Screen = "loading" | "login" | "charselect" | "ingame" | "dungeoneditor";
 
 export interface CharacterSummary {
   id: string;
@@ -47,6 +47,15 @@ class AppState {
     }
     const proto = location.protocol === "https:" ? "wss" : "ws";
     return `${proto}://${location.host}/ws`;
+  }
+
+  /** Dev-only entry point for the dungeon editor (packages/client/src/ui/
+   *  DungeonEditor.svelte) -- pure level-authoring tooling, bypasses login/
+   *  character selection entirely since it needs no session. Gated by
+   *  import.meta.env.DEV at the call site (App.svelte) so it's stripped out
+   *  of production builds. */
+  enterDungeonEditor() {
+    this.setScreen("dungeoneditor");
   }
 
   async refresh() {

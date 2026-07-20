@@ -1,4 +1,5 @@
 import { hash2, mulberry32, hashString } from "./rng";
+import { DUNGEON_BLUEPRINTS, hasDungeonBlueprint } from "./content/dungeonBlueprints";
 import {
   terrainHeight,
   terrainHeightBeforeRivers,
@@ -408,7 +409,7 @@ export function generatePois(): PoiSpec[] {
       const rng = mulberry32(ZONE_SEED * 13 + 7001 + i);
       for (let attempt = 0; attempt < 60; attempt++) {
         const angle = rng() * Math.PI * 2;
-        const dist = DUNGEON_ARENA_RADIUS + 15 + rng() * 25;
+        const dist = 145 + rng() * 40;
         const x = arena.x + Math.sin(angle) * dist;
         const z = arena.z + Math.cos(angle) * dist;
         if (!isBuildableSite(x, z)) continue;
@@ -442,7 +443,7 @@ export function generatePois(): PoiSpec[] {
  *  only thing there, for every concurrent run alike. */
 export function inDungeonReserve(x: number, z: number): boolean {
   return generatePois().some(
-    (p) => p.type === "dungeon_portal" && p.arenaX !== undefined && dist2D(x, z, p.arenaX, p.arenaZ!) < DUNGEON_ARENA_RADIUS,
+    (p) => p.type === "dungeon_portal" && p.arenaX !== undefined && dist2D(x, z, p.arenaX, p.arenaZ!) < DUNGEON_WALL_RADIUS,
   );
 }
 
@@ -791,10 +792,115 @@ export function generateRegionTwoMobSpawns(): MobSpawn[] {
 
 // ============================ dungeons ============================
 
+// Tile pitch matches the KayKit Dungeon Pack's modular wall/floor pieces
+// (wall.gltf/wall_doorway.gltf/floor_tile_large.gltf are all 4x4 world
+// units) -- shared between generateDungeonLayout and dungeonFloorHeightAt
+// so the two stay in lockstep. DUNGEON_GRID_SIZE tiles at DUNGEON_PITCH each
+// still spans -60..+60 (120 units) local to a portal's center.
+export const DUNGEON_PITCH = 4;
+export const DUNGEON_HALF = DUNGEON_PITCH / 2;
+export const DUNGEON_GRID_SIZE = 30;
+export const dungeonCellCenter = (t: number) => -60 + t * DUNGEON_PITCH + DUNGEON_HALF;
+/** Inverse of dungeonCellCenter -- snaps a local world coordinate to its
+ *  nearest tile index. Shared by deriveDungeonGridFromAssets, the
+ *  blueprint-driven branch of generateDungeonLayout, and the client dungeon
+ *  editor's snap-to-grid placement. */
+export const dungeonSnapToTile = (v: number) => Math.round((v + 60 - DUNGEON_HALF) / DUNGEON_PITCH);
+
+export interface DungeonTile {
+  tx: number;
+  tz: number;
+  type: "floor" | "stairs" | "wall" | "empty";
+  height: number;
+  /** rise: vertical gain across this tile for stairs interpolation in
+   *  dungeonFloorHeightAt -- defaults to 1.0 when absent (matches the
+   *  procedural generator's historical assumption). Blueprint-driven tiles
+   *  copy this from the placing DungeonAsset's own `rise` field, since it
+   *  can't be inferred from the tile alone (different stair models have
+   *  different real vertical spans). */
+  stairsDir?: { x: number; z: number; rise?: number };
+  isRoom?: boolean;
+}
+
+export interface DungeonAsset {
+  /** Stable per-instance key for editor selection/undo bookkeeping.
+   *  Ignored by every runtime consumer (client renderer, server). */
+  id?: string;
+  model: string;
+  localX: number;
+  localY: number;
+  localZ: number;
+  yaw: number;
+  scale?: number;
+  /** Vertical rise this asset represents, in world units -- only
+   *  meaningful when `model` starts with "stairs_". Used by
+   *  deriveDungeonGridFromAssets to populate DungeonTile.stairsDir.rise.
+   *  Ignored by the client renderer. */
+  rise?: number;
+}
+
+/** Hand-authored dungeon interior, produced by the in-browser dungeon
+ *  editor (see packages/client/src/render/DungeonEditorScene.ts) and saved
+ *  to packages/shared/src/content/dungeonBlueprints/<tier>.json. The author
+ *  only places visual assets -- the walkable DungeonTile grid is derived
+ *  automatically from them (see deriveDungeonGridFromAssets) so mesh
+ *  position and collision height can never drift apart, which is what
+ *  procedural generation kept getting wrong. */
+export interface DungeonBlueprint {
+  assets: DungeonAsset[];
+  mobSpawns: { localX: number; localZ: number }[];
+  chests: { localX: number; localY: number; localZ: number; rarity: "common" | "rare" }[];
+  entryLocal: { x: number; z: number };
+}
+
+/** Derives the walkable DungeonTile grid from whichever placed assets have
+ *  a "floor_" or "stairs_" model prefix -- tx/tz from the asset's snapped
+ *  localX/localZ, height copied directly from the asset's own localY (i.e.
+ *  wherever the author visually placed it), and stairsDir from the asset's
+ *  yaw rounded to the nearest cardinal direction (mirrors the yaw<->dir
+ *  mapping the procedural generator's asset-emission pass already uses,
+ *  just inverted). Tiles not covered by such an asset are simply absent --
+ *  dungeonFloorHeightAt already treats a missing tile as empty. */
+export function deriveDungeonGridFromAssets(assets: DungeonAsset[]): DungeonTile[] {
+  const grid: DungeonTile[] = [];
+  for (const asset of assets) {
+    const isFloor = asset.model.startsWith("floor_");
+    const isStairs = asset.model.startsWith("stairs_");
+    if (!isFloor && !isStairs) continue;
+    const tx = dungeonSnapToTile(asset.localX);
+    const tz = dungeonSnapToTile(asset.localZ);
+    let stairsDir: { x: number; z: number; rise?: number } | undefined;
+    if (isStairs) {
+      // Inverse of the yaw<->stairsDir mapping used when emitting stairs
+      // assets: yaw 0 -> {z:-1}, PI/2 -> {x:-1}, PI/-PI -> {z:1}, -PI/2 -> {x:1}.
+      const twoPi = Math.PI * 2;
+      const norm = ((asset.yaw % twoPi) + twoPi) % twoPi;
+      const quarter = Math.round(norm / (Math.PI / 2)) % 4;
+      const dir =
+        quarter === 0 ? { x: 0, z: -1 } :
+        quarter === 1 ? { x: -1, z: 0 } :
+        quarter === 2 ? { x: 0, z: 1 } :
+        { x: 1, z: 0 };
+      stairsDir = { ...dir, rise: asset.rise ?? 1.0 };
+    }
+    grid.push({
+      tx,
+      tz,
+      type: isStairs ? "stairs" : "floor",
+      height: asset.localY,
+      stairsDir,
+    });
+  }
+  return grid;
+}
+
 export interface DungeonLayoutSpec {
   id: string;
   center: { x: number; y: number; z: number };
   entryPoint: { x: number; z: number };
+  spawnTx: number;
+  spawnTz: number;
+  spawnHeight: number;
   /** Offsets from `center` -- tier-agnostic; which mob type actually
    *  populates each point is decided at instance-creation time from the
    *  chosen DungeonTierDef's mobTable (see packages/shared/src/content/
@@ -811,14 +917,613 @@ export interface DungeonLayoutSpec {
    *  carbon copies of each other. */
   pillars: { localX: number; localZ: number }[];
   rubble: { localX: number; localZ: number; rot: number }[];
+  grid: DungeonTile[];
+  assets: DungeonAsset[];
+  chests: { localX: number; localY: number; localZ: number; rarity: "common" | "rare" }[];
+  torches: { localX: number; localY: number; localZ: number; yaw: number }[];
 }
 
 const dungeonLayoutCache = new Map<string, DungeonLayoutSpec>();
 
-/** One small hand-placed room layout per portal, reused identically by
- *  every concurrent run of that portal -- instancing comes from
- *  server-side visibility filtering (see GameServer's instanceId), not
- *  from unique geometry per run, so a single fixed layout is enough. */
+interface ProceduralDungeonDraft {
+  assets: DungeonAsset[];
+  grid: DungeonTile[];
+  mobSpawns: { localX: number; localZ: number }[];
+  chests: { localX: number; localY: number; localZ: number; rarity: "common" | "rare" }[];
+  pillars: { localX: number; localZ: number }[];
+  rubble: { localX: number; localZ: number; rot: number }[];
+  torches: { localX: number; localY: number; localZ: number; yaw: number }[];
+  spawnTx: number;
+  spawnTz: number;
+  spawnHeight: number;
+  entryLocal: { x: number; z: number };
+}
+
+/** Seeded procedural room/corridor/wall/stairs generator -- entirely in
+ *  local (portal-independent) coordinates, so it doubles as both (a) the
+ *  fallback layout source for any dungeon tier without an authored
+ *  blueprint (see generateDungeonLayout below) and (b) the dungeon editor's
+ *  "Generate" button (see generateProceduralDungeonBlueprint), which uses
+ *  it to scaffold a rough starting layout for the author to then fix up by
+ *  hand -- the same asset-placement logic either way, just consumed
+ *  differently. Extracted from generateDungeonLayout as a pure function;
+ *  no behavior change for existing (portalId-seeded) callers. */
+function generateProceduralDungeonDraft(seed: string): ProceduralDungeonDraft {
+  let rng = mulberry32(hashString(seed) ^ 0x2f6e2b1);
+
+  const pillars: { localX: number; localZ: number }[] = [];
+  const rubble: { localX: number; localZ: number; rot: number }[] = [];
+  const grid: DungeonTile[] = [];
+  const assets: DungeonAsset[] = [];
+  const chests: { localX: number; localY: number; localZ: number; rarity: "common" | "rare" }[] = [];
+  const torches: { localX: number; localY: number; localZ: number; yaw: number }[] = [];
+  const mobSpawns: { localX: number; localZ: number }[] = [];
+
+  const setCell = (tx: number, tz: number, type: "floor" | "stairs" | "wall" | "empty", height: number, stairsDir?: { x: number; z: number }, isRoom?: boolean) => {
+    const idx = grid.findIndex(t => t.tx === tx && t.tz === tz);
+    if (idx !== -1) {
+      grid[idx] = { tx, tz, type, height, stairsDir, isRoom: isRoom ?? grid[idx]!.isRoom };
+    } else {
+      grid.push({ tx, tz, type, height, stairsDir, isRoom });
+    }
+  };
+
+  const getTile = (tx: number, tz: number) => {
+    return grid.find(t => t.tx === tx && t.tz === tz);
+  };
+
+  let layoutRng = mulberry32(hashString(seed) ^ 0xabcdef);
+
+  const PITCH = DUNGEON_PITCH;
+  const HALF = DUNGEON_HALF;
+  const GRID_SIZE = DUNGEON_GRID_SIZE;
+  const cellCenter = dungeonCellCenter;
+
+  // stairs_narrow.gltf measures exactly 4x5.1x4 (width x height x depth) --
+  // the only stairs piece in the KayKit set whose footprint matches a
+  // single DUNGEON_PITCH tile with no overhang (stairs_wide.gltf, used
+  // here previously, is 7 units wide and spills into neighboring tiles).
+  // Room height tiers step by exactly this rise so every transition is a
+  // whole number of stair tiles with no leftover gap at the top -- the
+  // same class of bug the hand-authored editor exists to let a human catch
+  // and fix, but the auto-generated *draft* should still get this right by
+  // construction rather than resurrecting the old mismatch.
+  const STAIR_RISE = 5.1;
+
+  const rooms: { cx: number; cz: number; w: number; h: number; height: number }[] = [];
+  const sectors = [
+    { xMin: 2, xMax: 8, zMin: 2, zMax: 8 },
+    { xMin: 12, xMax: 18, zMin: 2, zMax: 8 },
+    { xMin: 22, xMax: 28, zMin: 2, zMax: 8 },
+    { xMin: 22, xMax: 28, zMin: 12, zMax: 18 },
+    { xMin: 12, xMax: 18, zMin: 12, zMax: 18 },
+    { xMin: 2, xMax: 8, zMin: 12, zMax: 18 },
+    { xMin: 2, xMax: 8, zMin: 22, zMax: 28 },
+    { xMin: 12, xMax: 18, zMin: 22, zMax: 28 },
+    { xMin: 22, xMax: 28, zMin: 22, zMax: 28 },
+  ];
+
+  for (let i = 0; i < sectors.length; i++) {
+    const s = sectors[i]!;
+    const w = 3 + Math.floor(layoutRng() * 3);
+    const h = 3 + Math.floor(layoutRng() * 3);
+    const cx = s.xMin + Math.floor(layoutRng() * (s.xMax - s.xMin));
+    const cz = s.zMin + Math.floor(layoutRng() * (s.zMax - s.zMin));
+    const height = (i % 3) * STAIR_RISE;
+    rooms.push({ cx, cz, w, h, height });
+  }
+
+  for (const r of rooms) {
+    const xStart = r.cx - Math.floor(r.w / 2);
+    const xEnd = r.cx + Math.floor(r.w / 2);
+    const zStart = r.cz - Math.floor(r.h / 2);
+    const zEnd = r.cz + Math.floor(r.h / 2);
+    for (let x = xStart; x <= xEnd; x++) {
+      for (let z = zStart; z <= zEnd; z++) {
+        if (x >= 1 && x <= GRID_SIZE - 2 && z >= 1 && z <= GRID_SIZE - 2) {
+          setCell(x, z, "floor", r.height, undefined, true);
+        }
+      }
+    }
+  }
+
+  for (let i = 0; i < rooms.length - 1; i++) {
+    const r1 = rooms[i]!;
+    const r2 = rooms[i+1]!;
+
+    const startX = Math.min(r1.cx, r2.cx);
+    const endX = Math.max(r1.cx, r2.cx);
+    const diffY = r2.height - r1.height;
+    const stepsNeeded = Math.round(Math.abs(diffY) / STAIR_RISE);
+    const hasStairs = stepsNeeded > 0;
+
+    const stairStartX = Math.floor((startX + endX) / 2) - Math.floor(stepsNeeded / 2);
+
+    // Single-tile-wide corridor -- each tile is a full PITCH-wide/deep
+    // KayKit module now, so a 1-tile corridor is already a proper 4-unit
+    // passage; the old code doubled every row/column to get a 4-unit-wide
+    // corridor out of 2-unit tiles, which is no longer needed.
+    for (let x = startX; x <= endX; x++) {
+      if (hasStairs && x >= stairStartX && x < stairStartX + stepsNeeded) {
+        const dirX = r2.height > r1.height ? (r2.cx > r1.cx ? 1 : -1) : (r1.cx > r2.cx ? 1 : -1);
+        const lowHeight = Math.min(r1.height, r2.height);
+        const baseHeight = dirX === 1 ?
+          lowHeight + (x - stairStartX) * STAIR_RISE :
+          lowHeight + (stairStartX + stepsNeeded - 1 - x) * STAIR_RISE;
+        setCell(x, r1.cz, "stairs", baseHeight, { x: dirX, z: 0 }, false);
+      } else {
+        const h = (hasStairs && ((r2.cx > r1.cx && x >= stairStartX + stepsNeeded) || (r2.cx < r1.cx && x < stairStartX))) ? r2.height : r1.height;
+        setCell(x, r1.cz, "floor", h, undefined, false);
+      }
+    }
+
+    const startZ = Math.min(r1.cz, r2.cz);
+    const endZ = Math.max(r1.cz, r2.cz);
+    for (let z = startZ; z <= endZ; z++) {
+      setCell(r2.cx, z, "floor", r2.height, undefined, false);
+    }
+  }
+
+  const spawnTx = rooms[0]!.cx;
+  const spawnTz = rooms[0]!.cz;
+  const spawnHeight = rooms[0]!.height;
+  const entryLocal = { x: cellCenter(spawnTx), z: cellCenter(spawnTz) };
+
+  for (let tx = 0; tx < GRID_SIZE; tx++) {
+    for (let tz = 0; tz < GRID_SIZE; tz++) {
+      if (!grid.some(t => t.tx === tx && t.tz === tz)) {
+        grid.push({ tx, tz, type: "empty", height: 0 });
+      }
+    }
+  }
+
+  for (const tile of grid) {
+    if (tile.type === "empty") continue;
+
+    const cellCenterX = cellCenter(tile.tx);
+    const cellCenterZ = cellCenter(tile.tz);
+
+    if (tile.type === "floor") {
+      assets.push({
+        model: "floor_tile_large.gltf",
+        localX: cellCenterX,
+        localY: tile.height,
+        localZ: cellCenterZ,
+        yaw: 0,
+        scale: 1.0
+      });
+    } else if (tile.type === "stairs") {
+      let yaw = 0;
+      if (tile.stairsDir) {
+        if (tile.stairsDir.x === 1) yaw = -Math.PI / 2;
+        else if (tile.stairsDir.x === -1) yaw = Math.PI / 2;
+        else if (tile.stairsDir.z === 1) yaw = Math.PI;
+        else if (tile.stairsDir.z === -1) yaw = 0;
+      }
+      assets.push({
+        model: "stairs_narrow.gltf",
+        localX: cellCenterX,
+        localY: tile.height,
+        localZ: cellCenterZ,
+        yaw: yaw,
+        scale: 1.0,
+        rise: STAIR_RISE
+      });
+    }
+
+    const neighbors = [
+      { dir: { x: 0, y: -1 }, yaw: 0, localX: cellCenterX, localZ: cellCenterZ - HALF, tag: "North" },
+      { dir: { x: 0, y: 1 }, yaw: Math.PI, localX: cellCenterX, localZ: cellCenterZ + HALF, tag: "South" },
+      { dir: { x: 1, y: 0 }, yaw: -Math.PI / 2, localX: cellCenterX + HALF, localZ: cellCenterZ, tag: "East" },
+      { dir: { x: -1, y: 0 }, yaw: Math.PI / 2, localX: cellCenterX - HALF, localZ: cellCenterZ, tag: "West" },
+    ];
+
+    // Which of this tile's 4 cardinal directions actually got a wall/doorway
+    // plane -- feeds the corner pass below, which caps the vertex between
+    // any two ADJACENT (perpendicular) wall directions with wall_corner.gltf
+    // so straight wall segments don't just butt into each other with a bare
+    // seam (KayKit's straight wall pieces aren't mitred).
+    const wallDirs = new Set<string>();
+
+    for (const n of neighbors) {
+      const neighborTile = getTile(tile.tx + n.dir.x, tile.tz + n.dir.y);
+      if (!neighborTile || neighborTile.type === "empty") {
+        if (tile.tx === spawnTx && tile.tz === spawnTz && n.tag === "West") {
+          assets.push({
+            model: "wall_doorway.gltf",
+            localX: n.localX,
+            localY: tile.height,
+            localZ: n.localZ,
+            yaw: n.yaw,
+            scale: 1.0
+          });
+          wallDirs.add(n.tag);
+        } else {
+          assets.push({
+            model: "wall.gltf",
+            localX: n.localX,
+            localY: tile.height,
+            localZ: n.localZ,
+            yaw: n.yaw,
+            scale: 1.0
+          });
+          wallDirs.add(n.tag);
+
+          const shouldTorch =
+            (tile.tx === spawnTx && tile.tz === spawnTz && n.tag === "North") ||
+            (tile.tx === rooms[8]!.cx && tile.tz === rooms[8]!.cz && n.tag === "North") ||
+            (tile.tx === rooms[4]!.cx && tile.tz === rooms[4]!.cz && n.tag === "South") ||
+            (tile.tx === rooms[2]!.cx && tile.tz === rooms[2]!.cz && n.tag === "East") ||
+            (tile.tx === rooms[6]!.cx && tile.tz === rooms[6]!.cz && n.tag === "West") ||
+            (tile.tx === rooms[1]!.cx && tile.tz === rooms[1]!.cz && n.tag === "North");
+
+          if (shouldTorch) {
+            const torchX = n.localX - n.dir.x * 0.15;
+            const torchZ = n.localZ - n.dir.y * 0.15;
+            assets.push({
+              model: "torch_mounted.gltf",
+              localX: torchX,
+              localY: tile.height + 1.8,
+              localZ: torchZ,
+              yaw: n.yaw
+            });
+            torches.push({
+              localX: torchX,
+              localY: tile.height + 1.8,
+              localZ: torchZ,
+              yaw: n.yaw
+            });
+          }
+        }
+      } else if (tile.isRoom && !neighborTile.isRoom && (neighborTile.type === "floor" || neighborTile.type === "stairs")) {
+        assets.push({
+          model: "wall_doorway.gltf",
+          localX: n.localX,
+          localY: tile.height,
+          localZ: n.localZ,
+          yaw: n.yaw,
+          scale: 1.0
+        });
+        wallDirs.add(n.tag);
+      }
+    }
+
+    const corners: { pair: [string, string]; vx: number; vz: number; yaw: number }[] = [
+      { pair: ["North", "East"], vx: HALF, vz: -HALF, yaw: 0 },
+      { pair: ["East", "South"], vx: HALF, vz: HALF, yaw: -Math.PI / 2 },
+      { pair: ["South", "West"], vx: -HALF, vz: HALF, yaw: Math.PI },
+      { pair: ["West", "North"], vx: -HALF, vz: -HALF, yaw: Math.PI / 2 },
+    ];
+    for (const c of corners) {
+      if (wallDirs.has(c.pair[0]) && wallDirs.has(c.pair[1])) {
+        assets.push({
+          model: "wall_corner.gltf",
+          localX: cellCenterX + c.vx,
+          localY: tile.height,
+          localZ: cellCenterZ + c.vz,
+          yaw: c.yaw,
+          scale: 1.0
+        });
+      }
+    }
+  }
+
+  const chestRooms: { idx: number; model: string; rarity: "common" | "rare" }[] = [
+    { idx: 2, model: "chest.gltf", rarity: "common" },
+    { idx: 4, model: "chest_gold.gltf", rarity: "rare" },
+    { idx: 6, model: "chest.gltf", rarity: "common" },
+    { idx: 8, model: "chest_gold.gltf", rarity: "rare" },
+  ];
+  for (const c of chestRooms) {
+    const r = rooms[c.idx]!;
+    const x = cellCenter(r.cx);
+    const z = cellCenter(r.cz);
+    chests.push({ localX: x, localY: r.height, localZ: z, rarity: c.rarity });
+    assets.push({ model: c.model, localX: x, localY: r.height, localZ: z, yaw: 0, scale: 1.0 });
+  }
+
+  for (let i = 1; i < rooms.length; i++) {
+    const r = rooms[i]!;
+    const mobCount = i === 8 ? 4 : 2;
+    for (let m = 0; m < mobCount; m++) {
+      const offsetX = (m % 2 === 0 ? 1 : -1) * 0.8;
+      const offsetZ = (m >= 2 ? 1 : -1) * 0.8;
+      mobSpawns.push({
+        localX: cellCenter(r.cx) + offsetX,
+        localZ: cellCenter(r.cz) + offsetZ
+      });
+    }
+  }
+
+  // Set-dressing: a pillar near one corner of a handful of rooms, and a
+  // rubble pile in a couple of others -- scattered within the *actual* room
+  // footprints (unlike the old radius-around-center placement, which used a
+  // leftover DUNGEON_WALL_RADIUS-based polar formula from an abandoned
+  // circular-wall design and landed these props far outside the real
+  // 120x120 tile grid, in the void past the walls where nothing ever
+  // rendered them).
+  const pillarRoomIdxs = [1, 3, 5, 7];
+  for (const idx of pillarRoomIdxs) {
+    const r = rooms[idx]!;
+    const cornerX = r.cx + Math.floor(r.w / 2) - 1;
+    const cornerZ = r.cz + Math.floor(r.h / 2) - 1;
+    const x = cellCenter(cornerX);
+    const z = cellCenter(cornerZ);
+    pillars.push({ localX: x, localZ: z });
+    assets.push({ model: "pillar.gltf", localX: x, localY: r.height, localZ: z, yaw: 0, scale: 1.0 });
+  }
+  const rubbleRoomIdxs = [2, 5];
+  for (const idx of rubbleRoomIdxs) {
+    const r = rooms[idx]!;
+    const rot = rng() * Math.PI * 2;
+    const cornerX = r.cx - Math.floor(r.w / 2) + 1;
+    const cornerZ = r.cz - Math.floor(r.h / 2) + 1;
+    const x = cellCenter(cornerX);
+    const z = cellCenter(cornerZ);
+    rubble.push({ localX: x, localZ: z, rot });
+    assets.push({ model: "rubble_half.gltf", localX: x, localY: r.height, localZ: z, yaw: rot, scale: 1.0 });
+  }
+
+  return { assets, grid, mobSpawns, chests, pillars, rubble, torches, spawnTx, spawnTz, spawnHeight, entryLocal };
+}
+
+/** Random single-level dungeon layout for the editor's "Generate" button.
+ *  Unlike generateProceduralDungeonDraft (the *runtime* fallback used for
+ *  any dungeon tier that hasn't been hand-authored yet, which lays out a
+ *  fixed 9-sector grid with multi-level stairs), this fills the whole
+ *  DUNGEON_GRID_SIZE grid with a variable number of randomly-placed,
+ *  corridor-connected rooms at a single flat height and furnishes them with
+ *  every decorative prop category the editor palette offers -- torches,
+ *  pillars, rubble, banners, tables/barrels, barriers -- so a generated
+ *  draft looks like an actual furnished dungeon instead of bare floor and
+ *  walls, cutting down how much the author has to hand-place afterward.
+ *  Pass a fresh seed (e.g. a random string) each click for a new layout. */
+export function generateRandomDungeonBlueprint(seed: string): DungeonBlueprint {
+  const rng = mulberry32(hashString(seed) ^ 0x51a4d9);
+  const GRID = DUNGEON_GRID_SIZE;
+  const HALF = DUNGEON_HALF;
+  const MARGIN = 1;
+  const cellCenter = dungeonCellCenter;
+  const key = (x: number, z: number) => `${x}_${z}`;
+
+  interface Room { x0: number; z0: number; x1: number; z1: number; cx: number; cz: number; w: number; h: number }
+  const rooms: Room[] = [];
+  const roomCount = 4 + Math.floor(rng() * 4); // 4-7 rooms
+  for (let guard = 0; rooms.length < roomCount && guard < 400; guard++) {
+    const w = 6 + Math.floor(rng() * 6); // 6-11 tiles
+    const h = 6 + Math.floor(rng() * 6);
+    const span = GRID - 2 * MARGIN - w + 1;
+    const spanH = GRID - 2 * MARGIN - h + 1;
+    if (span <= 0 || spanH <= 0) continue;
+    const x0 = MARGIN + Math.floor(rng() * span);
+    const z0 = MARGIN + Math.floor(rng() * spanH);
+    const x1 = x0 + w - 1;
+    const z1 = z0 + h - 1;
+    // Reject if it overlaps (or sits flush against) any existing room, so
+    // rooms always stay visually distinct with a walkable gap or wall
+    // between them.
+    const overlaps = rooms.some(
+      (r) => x0 - 1 <= r.x1 + 1 && x1 + 1 >= r.x0 - 1 && z0 - 1 <= r.z1 + 1 && z1 + 1 >= r.z0 - 1
+    );
+    if (overlaps) continue;
+    rooms.push({ x0, z0, x1, z1, cx: Math.round((x0 + x1) / 2), cz: Math.round((z0 + z1) / 2), w, h });
+  }
+  if (rooms.length === 0) {
+    // Every random placement attempt collided -- guarantee at least one
+    // room so the draft is never completely empty.
+    const w = 10, h = 10;
+    const x0 = Math.floor(GRID / 2) - Math.floor(w / 2);
+    const z0 = Math.floor(GRID / 2) - Math.floor(h / 2);
+    rooms.push({ x0, z0, x1: x0 + w - 1, z1: z0 + h - 1, cx: x0 + Math.floor(w / 2), cz: z0 + Math.floor(h / 2), w, h });
+  }
+
+  const floor = new Set<string>();
+  const roomFloor = new Set<string>();
+  for (const r of rooms) {
+    for (let x = r.x0; x <= r.x1; x++) {
+      for (let z = r.z0; z <= r.z1; z++) {
+        floor.add(key(x, z));
+        roomFloor.add(key(x, z));
+      }
+    }
+  }
+
+  // Connect each room to its nearest already-placed room (not just the
+  // previous one in generation order) via a 1-tile-wide L-shaped corridor --
+  // keeps corridors short instead of one snaking mega-corridor whenever two
+  // consecutively-generated rooms happen to land far apart.
+  for (let i = 1; i < rooms.length; i++) {
+    const b = rooms[i]!;
+    let nearest = rooms[0]!;
+    let bestDist = Infinity;
+    for (let j = 0; j < i; j++) {
+      const a = rooms[j]!;
+      const d = Math.abs(a.cx - b.cx) + Math.abs(a.cz - b.cz);
+      if (d < bestDist) { bestDist = d; nearest = a; }
+    }
+    const a = nearest;
+    if (rng() < 0.5) {
+      for (let x = Math.min(a.cx, b.cx); x <= Math.max(a.cx, b.cx); x++) floor.add(key(x, a.cz));
+      for (let z = Math.min(a.cz, b.cz); z <= Math.max(a.cz, b.cz); z++) floor.add(key(b.cx, z));
+    } else {
+      for (let z = Math.min(a.cz, b.cz); z <= Math.max(a.cz, b.cz); z++) floor.add(key(a.cx, z));
+      for (let x = Math.min(a.cx, b.cx); x <= Math.max(a.cx, b.cx); x++) floor.add(key(x, b.cz));
+    }
+  }
+
+  const assets: DungeonAsset[] = [];
+  const chests: { localX: number; localY: number; localZ: number; rarity: "common" | "rare" }[] = [];
+  const mobSpawns: { localX: number; localZ: number }[] = [];
+
+  const FLOOR_VARIANTS = [
+    "floor_tile_large.gltf", "floor_tile_large.gltf", "floor_tile_large.gltf", "floor_tile_large.gltf",
+    "floor_tile_large_rocks.gltf", "floor_dirt_large.gltf",
+  ];
+  for (const k of floor) {
+    const [txs, tzs] = k.split("_");
+    const tx = Number(txs), tz = Number(tzs);
+    const model = FLOOR_VARIANTS[Math.floor(rng() * FLOOR_VARIANTS.length)]!;
+    assets.push({ model, localX: cellCenter(tx), localY: 0, localZ: cellCenter(tz), yaw: 0, scale: 1 });
+  }
+
+  const entryRoom = rooms[0]!;
+  const entryLocal = { x: cellCenter(entryRoom.cx), z: cellCenter(entryRoom.cz) };
+
+  // Walls ring the outside of the combined floor+corridor footprint --
+  // corridor cells are just regular floor cells here, so a room opens
+  // straight into its connecting corridor with no doorway needed; walls
+  // only appear where a floor cell borders genuinely empty space.
+  const neighborsOf = (cx: number, cz: number) => [
+    { dx: 0, dz: -1, yaw: 0, x: cx, z: cz - HALF, tag: "N" },
+    { dx: 0, dz: 1, yaw: Math.PI, x: cx, z: cz + HALF, tag: "S" },
+    { dx: 1, dz: 0, yaw: -Math.PI / 2, x: cx + HALF, z: cz, tag: "E" },
+    { dx: -1, dz: 0, yaw: Math.PI / 2, x: cx - HALF, z: cz, tag: "W" },
+  ] as const;
+  const cornerDefs = [
+    { pair: ["N", "E"], vx: HALF, vz: -HALF, yaw: 0 },
+    { pair: ["E", "S"], vx: HALF, vz: HALF, yaw: -Math.PI / 2 },
+    { pair: ["S", "W"], vx: -HALF, vz: HALF, yaw: Math.PI },
+    { pair: ["W", "N"], vx: -HALF, vz: -HALF, yaw: Math.PI / 2 },
+  ] as const;
+
+  const wallSpotsByRoom = new Map<number, { x: number; z: number; yaw: number }[]>();
+  for (const k of floor) {
+    const [txs, tzs] = k.split("_");
+    const tx = Number(txs), tz = Number(tzs);
+    const cx = cellCenter(tx), cz = cellCenter(tz);
+    const wallDirs = new Set<string>();
+    const roomIdx = rooms.findIndex((r) => tx >= r.x0 && tx <= r.x1 && tz >= r.z0 && tz <= r.z1);
+    for (const n of neighborsOf(cx, cz)) {
+      if (floor.has(key(tx + n.dx, tz + n.dz))) continue;
+      const isEntryDoor = tx === entryRoom.cx && tz === entryRoom.cz && n.tag === "W";
+      assets.push({
+        model: isEntryDoor ? "wall_doorway.gltf" : "wall.gltf",
+        localX: n.x, localY: 0, localZ: n.z, yaw: n.yaw, scale: 1,
+      });
+      wallDirs.add(n.tag);
+      if (roomIdx >= 0) {
+        const list = wallSpotsByRoom.get(roomIdx) ?? [];
+        list.push({ x: n.x, z: n.z, yaw: n.yaw });
+        wallSpotsByRoom.set(roomIdx, list);
+      }
+    }
+    for (const c of cornerDefs) {
+      if (wallDirs.has(c.pair[0]) && wallDirs.has(c.pair[1])) {
+        assets.push({ model: "wall_corner.gltf", localX: cx + c.vx, localY: 0, localZ: cz + c.vz, yaw: c.yaw, scale: 1 });
+      }
+    }
+  }
+
+  const TORCH_MODELS = ["torch_lit.gltf", "torch.gltf"];
+  const PILLAR_MODELS = ["pillar.gltf", "pillar_decorated.gltf", "column.gltf"];
+  const RUBBLE_MODELS = ["rubble_half.gltf", "rubble_large.gltf"];
+  const BANNER_MODELS = [
+    "banner_red.gltf", "banner_blue.gltf", "banner_green.gltf", "banner_brown.gltf",
+    "banner_white.gltf", "banner_yellow.gltf", "banner_shield_red.gltf", "banner_shield_blue.gltf",
+  ];
+  const TABLE_MODELS = ["table_long.gltf", "table_medium.gltf", "table_small.gltf", "table_round_medium.gltf"];
+  const BARREL_MODELS = ["barrel_large.gltf", "barrel_small.gltf", "barrel_small_stack.gltf"];
+  const COMMON_CHEST_MODELS = ["chest.gltf", "chest_large.gltf"];
+  const RARE_CHEST_MODELS = ["chest_gold.gltf", "chest_large_gold.gltf"];
+
+  const pick = <T,>(arr: readonly T[]) => arr[Math.floor(rng() * arr.length)]!;
+
+  for (let i = 0; i < rooms.length; i++) {
+    const r = rooms[i]!;
+    const isEntry = i === 0;
+
+    // Interior cells only (excludes the outer ring, which is where walls
+    // sit) -- every room has at least one since w/h are both >= 3.
+    const interior: { tx: number; tz: number }[] = [];
+    for (let x = r.x0 + 1; x <= r.x1 - 1; x++) {
+      for (let z = r.z0 + 1; z <= r.z1 - 1; z++) interior.push({ tx: x, tz: z });
+    }
+    for (let s = interior.length - 1; s > 0; s--) {
+      const j = Math.floor(rng() * (s + 1));
+      [interior[s], interior[j]] = [interior[j]!, interior[s]!];
+    }
+    let cursor = 0;
+    const nextSpot = () => (cursor < interior.length ? interior[cursor++] : undefined);
+
+    if (!isEntry && rng() < 0.5) {
+      const spot = nextSpot();
+      if (spot) {
+        const x = cellCenter(spot.tx), z = cellCenter(spot.tz);
+        const rarity: "common" | "rare" = rng() < 0.3 ? "rare" : "common";
+        const isMimic = rng() < 0.08;
+        const model = isMimic ? "chest_mimic.gltf" : pick(rarity === "rare" ? RARE_CHEST_MODELS : COMMON_CHEST_MODELS);
+        chests.push({ localX: x, localY: 0, localZ: z, rarity });
+        assets.push({ model, localX: x, localY: 0, localZ: z, yaw: rng() * Math.PI * 2, scale: 1 });
+      }
+    }
+
+    if (r.w * r.h >= 12 && rng() < 0.5) {
+      const corners: [number, number][] = [[r.x0 + 1, r.z0 + 1], [r.x1 - 1, r.z0 + 1], [r.x0 + 1, r.z1 - 1], [r.x1 - 1, r.z1 - 1]];
+      for (const [tx, tz] of corners) {
+        if (rng() < 0.6) {
+          assets.push({ model: pick(PILLAR_MODELS), localX: cellCenter(tx), localY: 0, localZ: cellCenter(tz), yaw: 0, scale: 1 });
+        }
+      }
+    }
+
+    if (rng() < 0.35) {
+      const spot = nextSpot();
+      if (spot) {
+        assets.push({
+          model: pick(RUBBLE_MODELS), localX: cellCenter(spot.tx), localY: 0, localZ: cellCenter(spot.tz),
+          yaw: rng() * Math.PI * 2, scale: 1,
+        });
+      }
+    }
+
+    if (rng() < 0.3) {
+      const spot = nextSpot();
+      if (spot) {
+        assets.push({ model: pick(TABLE_MODELS), localX: cellCenter(spot.tx), localY: 0, localZ: cellCenter(spot.tz), yaw: rng() * Math.PI * 2, scale: 1 });
+      }
+      if (rng() < 0.7) {
+        const spot2 = nextSpot();
+        if (spot2) {
+          assets.push({ model: pick(BARREL_MODELS), localX: cellCenter(spot2.tx), localY: 0, localZ: cellCenter(spot2.tz), yaw: rng() * Math.PI * 2, scale: 1 });
+        }
+      }
+    }
+
+    const wallSpots = wallSpotsByRoom.get(i);
+    if (wallSpots && wallSpots.length > 0 && rng() < 0.5) {
+      const spot = pick(wallSpots);
+      assets.push({ model: pick(BANNER_MODELS), localX: spot.x, localY: 1.6, localZ: spot.z, yaw: spot.yaw, scale: 1 });
+    }
+    if (rng() < 0.4) {
+      const spot = pick(interior.length > 0 ? interior : [{ tx: r.cx, tz: r.cz }]);
+      assets.push({ model: pick(TORCH_MODELS), localX: cellCenter(spot.tx), localY: 0, localZ: cellCenter(spot.tz), yaw: 0, scale: 1 });
+    }
+
+    if (!isEntry) {
+      const mobCount = 1 + Math.floor(rng() * (r.w * r.h >= 16 ? 3 : 2));
+      for (let m = 0; m < mobCount; m++) {
+        const spot = interior[Math.floor(rng() * interior.length)]!;
+        mobSpawns.push({ localX: cellCenter(spot.tx) + (rng() - 0.5) * HALF, localZ: cellCenter(spot.tz) + (rng() - 0.5) * HALF });
+      }
+    }
+  }
+
+  // A handful of barrier/lock props at corridor cells (floor tiles that
+  // don't belong to any room) purely for flavor -- decorative only, since
+  // deriveDungeonGridFromAssets only reads floor_/stairs_ prefixed assets,
+  // so these never actually block movement.
+  const BARRIER_MODELS = ["barrier.gltf", "barrier_column.gltf", "barrier_corner.gltf", "key_gold.gltf", "lock_A.gltf"];
+  for (const k of floor) {
+    if (roomFloor.has(k)) continue;
+    if (rng() > 0.12) continue;
+    const [txs, tzs] = k.split("_");
+    const tx = Number(txs), tz = Number(tzs);
+    assets.push({ model: pick(BARRIER_MODELS), localX: cellCenter(tx), localY: 0, localZ: cellCenter(tz), yaw: rng() * Math.PI * 2, scale: 1 });
+  }
+
+  return { assets, mobSpawns, chests, entryLocal };
+}
+
 export function generateDungeonLayout(portalId: string): DungeonLayoutSpec {
   const cached = dungeonLayoutCache.get(portalId);
   if (cached) return cached;
@@ -828,65 +1533,106 @@ export function generateDungeonLayout(portalId: string): DungeonLayoutSpec {
   }
   const floorY = terrainHeight(portal.arenaX, portal.arenaZ);
   const center = { x: portal.arenaX, y: floorY, z: portal.arenaZ };
+
   const dx = center.x - portal.x;
   const dz = center.z - portal.z;
-  const mag = Math.hypot(dx, dz) || 1;
   const doorwayAngle = Math.atan2(dx, dz);
-  const entryPoint = {
-    x: center.x - (dx / mag) * (DUNGEON_ARENA_RADIUS - 8),
-    z: center.z - (dz / mag) * (DUNGEON_ARENA_RADIUS - 8),
-  };
-  const rng = mulberry32(hashString(portalId) ^ 0x2f6e2b1);
-  const mobSpawns: { localX: number; localZ: number }[] = [];
-  const count = 10;
-  for (let i = 0; i < count; i++) {
-    const angle = (i / count) * Math.PI * 2 + rng() * 0.3;
-    const dist = 10 + rng() * (DUNGEON_ARENA_RADIUS - 20);
-    mobSpawns.push({ localX: Math.sin(angle) * dist, localZ: Math.cos(angle) * dist });
+
+  const tier = portal.dungeonTier ?? 0;
+  if (hasDungeonBlueprint(tier)) {
+    const bp = DUNGEON_BLUEPRINTS[tier]!;
+    const grid = deriveDungeonGridFromAssets(bp.assets);
+    const spawnTx = dungeonSnapToTile(bp.entryLocal.x);
+    const spawnTz = dungeonSnapToTile(bp.entryLocal.z);
+    const entryTile = grid.find((t) => t.tx === spawnTx && t.tz === spawnTz);
+    const layout: DungeonLayoutSpec = {
+      id: portalId,
+      center,
+      entryPoint: { x: center.x + bp.entryLocal.x, z: center.z + bp.entryLocal.z },
+      spawnTx,
+      spawnTz,
+      spawnHeight: entryTile?.height ?? 0,
+      mobSpawns: bp.mobSpawns,
+      floorY,
+      doorwayAngle,
+      pillars: [],
+      rubble: [],
+      grid,
+      assets: bp.assets,
+      chests: bp.chests,
+      torches: [],
+    };
+    dungeonLayoutCache.set(portalId, layout);
+    return layout;
   }
-  const pillars: { localX: number; localZ: number }[] = [];
-  const pillarCount = 4;
-  for (let i = 0; i < pillarCount; i++) {
-    const angle = (i / pillarCount) * Math.PI * 2 + rng() * 0.5;
-    const dist = 14 + rng() * (DUNGEON_WALL_RADIUS - 20);
-    pillars.push({ localX: Math.sin(angle) * dist, localZ: Math.cos(angle) * dist });
-  }
-  const rubble: { localX: number; localZ: number; rot: number }[] = [];
-  const rubbleCount = 8;
-  for (let i = 0; i < rubbleCount; i++) {
-    const angle = rng() * Math.PI * 2;
-    const dist = 12 + rng() * (DUNGEON_WALL_RADIUS - 18);
-    rubble.push({ localX: Math.sin(angle) * dist, localZ: Math.cos(angle) * dist, rot: rng() * Math.PI * 2 });
-  }
+
+  const draft = generateProceduralDungeonDraft(portalId);
   const layout: DungeonLayoutSpec = {
     id: portalId,
     center,
-    entryPoint,
-    mobSpawns,
+    entryPoint: { x: center.x + draft.entryLocal.x, z: center.z + draft.entryLocal.z },
+    spawnTx: draft.spawnTx,
+    spawnTz: draft.spawnTz,
+    spawnHeight: draft.spawnHeight,
+    mobSpawns: draft.mobSpawns,
     floorY,
     doorwayAngle,
-    pillars,
-    rubble,
+    pillars: draft.pillars,
+    rubble: draft.rubble,
+    grid: draft.grid,
+    assets: draft.assets,
+    chests: draft.chests,
+    torches: draft.torches,
   };
+
   dungeonLayoutCache.set(portalId, layout);
   return layout;
 }
 
-/** Flat interior floor height if (x,z) is inside any dungeon's wall ring,
- *  else null (falls through to terrainHeight) -- mirrors bridgeHeightAt's
- *  override pattern in sim/movement.ts. */
+/** Resolves a single tile's floor height at a local (lx,lz) position --
+ *  flat for "floor" tiles, ramped across the stairsDir axis (scaled by
+ *  stairsDir.rise, defaulting to 1.0) for "stairs" tiles. Extracted as its
+ *  own pure function so the interpolation math is unit-testable without
+ *  needing a real dungeon portal (see worldgen.test.ts). */
+export function dungeonTileFloorHeight(tile: DungeonTile, lx: number, lz: number, floorY: number): number {
+  if (tile.type === "stairs" && tile.stairsDir) {
+    const cellCenterX = dungeonCellCenter(tile.tx);
+    const cellCenterZ = dungeonCellCenter(tile.tz);
+    let t = 0.5;
+    if (tile.stairsDir.x !== 0) {
+      const dx = lx - cellCenterX;
+      t = (dx * tile.stairsDir.x + DUNGEON_HALF) / DUNGEON_PITCH;
+    } else if (tile.stairsDir.z !== 0) {
+      const dz = lz - cellCenterZ;
+      t = (dz * tile.stairsDir.z + DUNGEON_HALF) / DUNGEON_PITCH;
+    }
+    t = Math.max(0, Math.min(1, t));
+    return floorY + tile.height + t * (tile.stairsDir.rise ?? 1.0);
+  }
+  return floorY + tile.height;
+}
+
 export function dungeonFloorHeightAt(x: number, z: number): number | null {
   for (const p of generatePois()) {
     if (p.type !== "dungeon_portal" || p.arenaX === undefined || p.arenaZ === undefined) continue;
     if (dist2D(x, z, p.arenaX, p.arenaZ) < DUNGEON_WALL_RADIUS) {
-      return generateDungeonLayout(p.id).floorY;
+      const layout = generateDungeonLayout(p.id);
+      const lx = x - layout.center.x;
+      const lz = z - layout.center.z;
+      if (lx < -60 || lx > 60 || lz < -60 || lz > 60) return null;
+
+      const gx = Math.floor((lx + 60) / DUNGEON_PITCH);
+      const gz = Math.floor((lz + 60) / DUNGEON_PITCH);
+      if (gx < 0 || gx > DUNGEON_GRID_SIZE - 1 || gz < 0 || gz > DUNGEON_GRID_SIZE - 1) return null;
+
+      const tile = layout.grid.find((t: DungeonTile) => t.tx === gx && t.tz === gz);
+      if (!tile || tile.type === "empty") return null;
+      return dungeonTileFloorHeight(tile, lx, lz, layout.floorY);
     }
   }
   return null;
 }
 
-/** Which dungeon portal's interior room (x,z) is inside, if any -- same
- *  scan as dungeonFloorHeightAt, for client-side "am I indoors" checks. */
 export function dungeonPortalAt(x: number, z: number): PoiSpec | null {
   for (const p of generatePois()) {
     if (p.type !== "dungeon_portal" || p.arenaX === undefined || p.arenaZ === undefined) continue;

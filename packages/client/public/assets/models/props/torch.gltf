@@ -20,13 +20,13 @@
     ],
     "materials" : [
         {
-            "name" : "tools",
+            "name" : "texture",
             "pbrMetallicRoughness" : {
                 "baseColorTexture" : {
                     "index" : 0
                 },
                 "metallicFactor" : 0,
-                "roughnessFactor" : 0.5
+                "roughnessFactor" : 0.44999998807907104
             }
         }
     ],
@@ -55,69 +55,69 @@
     "images" : [
         {
             "mimeType" : "image/png",
-            "name" : "tools_bits_texture",
-            "uri" : "tools_bits_texture.png"
+            "name" : "dungeon_texture",
+            "uri" : "dungeon_texture.png"
         }
     ],
     "accessors" : [
         {
             "bufferView" : 0,
             "componentType" : 5126,
-            "count" : 462,
+            "count" : 288,
             "max" : [
-                0.10557234287261963,
-                0.9421609044075012,
-                0.11108512431383133
+                0.2751416862010956,
+                0.6465588808059692,
+                0.2751415967941284
             ],
             "min" : [
-                -0.10534228384494781,
-                -0.22490280866622925,
-                -0.11435001343488693
+                -0.2751416563987732,
+                -0.395045667886734,
+                -0.2751416862010956
             ],
             "type" : "VEC3"
         },
         {
             "bufferView" : 1,
             "componentType" : 5126,
-            "count" : 462,
+            "count" : 288,
             "type" : "VEC2"
         },
         {
             "bufferView" : 2,
             "componentType" : 5126,
-            "count" : 462,
+            "count" : 288,
             "type" : "VEC3"
         },
         {
             "bufferView" : 3,
             "componentType" : 5123,
-            "count" : 1422,
+            "count" : 648,
             "type" : "SCALAR"
         }
     ],
     "bufferViews" : [
         {
             "buffer" : 0,
-            "byteLength" : 5544,
+            "byteLength" : 3456,
             "byteOffset" : 0,
             "target" : 34962
         },
         {
             "buffer" : 0,
-            "byteLength" : 3696,
-            "byteOffset" : 5544,
+            "byteLength" : 2304,
+            "byteOffset" : 3456,
             "target" : 34962
         },
         {
             "buffer" : 0,
-            "byteLength" : 5544,
-            "byteOffset" : 9240,
+            "byteLength" : 3456,
+            "byteOffset" : 5760,
             "target" : 34962
         },
         {
             "buffer" : 0,
-            "byteLength" : 2844,
-            "byteOffset" : 14784,
+            "byteLength" : 1296,
+            "byteOffset" : 9216,
             "target" : 34963
         }
     ],
@@ -129,7 +129,7 @@
     ],
     "buffers" : [
         {
-            "byteLength" : 17628,
+            "byteLength" : 10512,
             "uri" : "torch.bin"
         }
     ]

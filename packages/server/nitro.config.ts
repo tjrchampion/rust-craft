@@ -6,5 +6,8 @@ export default defineNitroConfig({
   experimental: {
     websocket: true,
   },
+  devServer: {
+    watch: ["../shared/src"],
+  },
   imports: false,
 });

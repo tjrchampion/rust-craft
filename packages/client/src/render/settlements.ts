@@ -11,7 +11,6 @@ import {
   dungeonTierDef,
 } from "@rustcraft/shared";
 import { buildShrine, buildStump, buildCampfire, buildNameplate, buildRock } from "./models";
-import { buildDungeonInterior } from "./dungeonInterior";
 
 const loader = new GLTFLoader();
 const cache = new Map<string, Promise<GLTF>>();
@@ -65,7 +64,7 @@ function loadProp(type: string): Promise<GLTF> {
 }
 
 async function placeBuilding(
-  scene: THREE.Scene,
+  scene: THREE.Object3D,
   type: string,
   x: number,
   y: number,
@@ -95,7 +94,7 @@ async function placeBuilding(
 }
 
 async function placeProp(
-  scene: THREE.Scene,
+  scene: THREE.Object3D,
   type: string,
   x: number,
   z: number,
@@ -125,7 +124,7 @@ async function placeProp(
 
 /** Deterministic clutter + a fence perimeter that makes a village feel lived-in. */
 function scatterVillageClutter(
-  scene: THREE.Scene,
+  scene: THREE.Object3D,
   village: { id: string; x: number; z: number; radius: number; buildings: { x: number; z: number }[] },
 ): void {
   const rng = mulberry32(hashString(village.id) ^ 0x9e3779b9);
@@ -181,7 +180,7 @@ export interface SettlementHandles {
 /** Construct a single village's buildings, clutter and nameplate. Cheap to
  *  call lazily per-zone since building GLTFs are cached process-wide. */
 export function buildVillage(
-  scene: THREE.Scene,
+  scene: THREE.Object3D,
   village: ReturnType<typeof generateVillages>[number],
   withSigns = true,
 ): THREE.Object3D[] {
@@ -202,7 +201,7 @@ export function buildVillage(
 
 /** Ruins, shrines, camps, and the watchtower — modest in count,
  *  so these stay eager rather than being streamed per-zone like villages. */
-export function buildWorldStatic(scene: THREE.Scene, withSigns = true): SettlementHandles {
+export function buildWorldStatic(scene: THREE.Object3D, withSigns = true): SettlementHandles {
   const shrines: { id: string; x: number; y: number; z: number }[] = [];
   const dungeonPortals: { id: string; x: number; y: number; z: number; tier: number }[] = [];
   const crystals: THREE.Object3D[] = [];

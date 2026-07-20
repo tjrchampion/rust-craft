@@ -76,7 +76,7 @@ const BLADE_MATERIAL = new THREE.MeshLambertMaterial({ vertexColors: true, side:
  * around the player the same way NodeManager windows resource nodes.
  */
 export class GrassField {
-  private scene: THREE.Scene;
+  private scene: THREE.Object3D;
   private built = new Map<string, THREE.InstancedMesh | null>();
   private inScene = new Set<string>();
   private lastWindowUpdate = 0;
@@ -93,7 +93,7 @@ export class GrassField {
   private queued = new Set<string>();
   private static readonly BUILDS_PER_CALL = 2;
 
-  constructor(scene: THREE.Scene) {
+  constructor(scene: THREE.Object3D) {
     this.scene = scene;
   }
 

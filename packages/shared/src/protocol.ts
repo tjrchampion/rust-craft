@@ -448,6 +448,8 @@ export type ServerMsg =
       tier: number | null;
       partySize: number;
       mobsRemaining: number | null;
+      instanceId: string | null;
+      portalId: string | null;
     }
   | { t: "dungeonComplete"; tier: number; xp: number; items: { itemId: string; qty: number }[] }
   | { t: "error"; message: string };

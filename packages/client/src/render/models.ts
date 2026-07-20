@@ -380,9 +380,6 @@ export function buildOreRock(variant: number, tint: number, glow?: number): THRE
     const crystal = buildCrystal(glow, 0.22);
     crystal.position.set(-0.3, 0.95, 0.2);
     group.add(crystal);
-    const light = new THREE.PointLight(glow, 3, 6, 2);
-    light.position.set(-0.3, 1.1, 0.2);
-    group.add(light);
   }
   return group;
 }

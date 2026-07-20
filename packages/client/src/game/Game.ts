@@ -28,6 +28,7 @@ import {
   dungeonTierDef,
   dungeonPortalAt,
   generateDungeonLayout,
+  dungeonFloorHeightAt,
   TIER_NAMES,
   WORLD_MIN_X,
   WORLD_MAX_X,
@@ -59,7 +60,7 @@ import {
 } from "../render/classModels";
 import { AnimatedModel, PLAYER_ANIMS, logicalFromState, dodgeLogicalFor } from "../render/gltf";
 import { buildWorldStatic, buildVillage, animateSettlements, type SettlementHandles } from "../render/settlements";
-import { DUNGEON_THEME_COLORS, buildDungeonInterior } from "../render/dungeonInterior";
+import { DUNGEON_THEME_COLORS, DungeonInteriorRenderer } from "../render/dungeonInterior";
 import { NpcManager } from "../render/npcs";
 import { sound } from "./sound";
 import { game as ui, type CharacterTab } from "../ui/gameState.svelte";
@@ -85,6 +86,7 @@ interface PendingInput {
 export class Game {
   private renderer: THREE.WebGLRenderer;
   private scene = new THREE.Scene();
+  private overworldGroup = new THREE.Group();
   private camera: THREE.PerspectiveCamera;
   private sun: THREE.DirectionalLight;
   private ambient: THREE.AmbientLight;
@@ -94,6 +96,7 @@ export class Game {
   private insideDungeonPortal: PoiSpec | null = null;
   private activeDungeonGroup: THREE.Group | null = null;
   private activeDungeonPortalId: string | null = null;
+  private dungeonRenderer: DungeonInteriorRenderer | null = null;
 
   private connection = new Connection();
   private input: InputManager;
@@ -191,16 +194,17 @@ export class Game {
     this.ambient = new THREE.AmbientLight(0x8899bb, 0.75);
     this.scene.add(this.sun, this.ambient);
 
-    this.scene.add(buildTerrain());
+    this.scene.add(this.overworldGroup);
+    this.overworldGroup.add(buildTerrain());
     this.water = buildWater();
-    this.scene.add(this.water.mesh);
-    this.scene.add(buildHorizonMountains());
+    this.overworldGroup.add(this.water.mesh);
+    this.overworldGroup.add(buildHorizonMountains());
     this.clouds = buildClouds();
-    this.scene.add(this.clouds.group);
-    this.settlements = buildWorldStatic(this.scene);
+    this.overworldGroup.add(this.clouds.group);
+    this.settlements = buildWorldStatic(this.overworldGroup);
     this.overworldSigns.push(...this.settlements.signs);
     this.npcManager = new NpcManager(this.scene);
-    this.grass = new GrassField(this.scene);
+    this.grass = new GrassField(this.overworldGroup);
 
     this.avatar = new AnimatedModel(PLAYER_ANIMS);
     const plate = buildNameplate(characterName, "#ffe9a8");
@@ -363,6 +367,21 @@ export class Game {
             ui.inventoryOpen = false;
             ui.worldMapOpen = false;
             if (ui.questOffer) this.closeQuestDialog();
+          }
+
+          // Register dynamic chest nodes from the dungeon layout
+          if (msg.portalId && msg.instanceId) {
+            const layout = generateDungeonLayout(msg.portalId);
+            const chestNodes = layout.chests.map((c, idx) => ({
+              id: `${msg.instanceId}_chest_${idx}`,
+              type: c.rarity === "rare" ? "dungeon_chest_rare" : "dungeon_chest_common",
+              x: layout.center.x + c.localX,
+              y: layout.center.y + c.localY,
+              z: layout.center.z + c.localZ,
+              variant: 0,
+              biome: "forest" as const,
+            }));
+            this.nodes?.addDynamicNodes(chestNodes);
           }
         } else {
           ui.dungeonState = null;
@@ -847,13 +866,15 @@ export class Game {
     this.updateCamera(rx, ry, rz);
     this.nodes?.update(rx, rz, now, dt);
     this.regionTwoNodes?.update(rx, rz, now, dt);
-    this.grass.update(rx, rz, now);
+    if (!this.insideDungeonPortal) {
+      this.grass.update(rx, rz, now);
+      this.clouds.update(dt);
+      this.water.update(dt);
+      animateSettlements(this.settlements, now);
+    }
     this.entities.update(now, dt);
-    animateSettlements(this.settlements, now);
     this.updateInteractPrompt();
     this.updateDayNight(rx, rz);
-    this.clouds.update(dt);
-    this.water.update(dt);
     this.updateZoneAndStreaming(rx, rz);
 
     this.renderer.render(this.scene, this.camera);
@@ -889,7 +910,15 @@ export class Game {
     }
 
     if (this.insideDungeonPortal) {
+      this.overworldGroup.visible = false;
+      if (this.overworldGroup.parent) {
+        this.scene.remove(this.overworldGroup);
+      }
       if (this.activeDungeonPortalId !== this.insideDungeonPortal.id) {
+        if (this.dungeonRenderer) {
+          this.dungeonRenderer.destroy();
+          this.dungeonRenderer = null;
+        }
         if (this.activeDungeonGroup) {
           this.scene.remove(this.activeDungeonGroup);
           this.disposeHierarchy(this.activeDungeonGroup);
@@ -898,12 +927,21 @@ export class Game {
         this.activeDungeonPortalId = this.insideDungeonPortal.id;
         this.activeDungeonGroup = new THREE.Group();
         const layout = generateDungeonLayout(this.insideDungeonPortal.id);
-        const tier = this.insideDungeonPortal.dungeonTier ?? 0;
-        const theme = dungeonTierDef(tier).theme;
-        buildDungeonInterior(this.activeDungeonGroup, layout, theme);
+        this.dungeonRenderer = new DungeonInteriorRenderer(this.activeDungeonGroup, layout);
         this.scene.add(this.activeDungeonGroup);
       }
+      if (this.dungeonRenderer) {
+        this.dungeonRenderer.update(x, z);
+      }
     } else {
+      this.overworldGroup.visible = true;
+      if (!this.overworldGroup.parent) {
+        this.scene.add(this.overworldGroup);
+      }
+      if (this.dungeonRenderer) {
+        this.dungeonRenderer.destroy();
+        this.dungeonRenderer = null;
+      }
       if (this.activeDungeonGroup) {
         this.scene.remove(this.activeDungeonGroup);
         this.disposeHierarchy(this.activeDungeonGroup);
@@ -911,28 +949,31 @@ export class Game {
         this.activeDungeonPortalId = null;
       }
     }
-    for (const village of generateVillages()) {
-      if (this.streamedVillages.has(village.id)) continue;
-      if (dist2D(x, z, village.x, village.z) < this.STREAM_RADIUS) {
-        this.streamedVillages.add(village.id);
-        const vSigns = buildVillage(this.scene, village, true);
-        for (const sign of vSigns) {
-          sign.visible = !this.insideDungeonPortal;
-        }
-        this.overworldSigns.push(...vSigns);
-      }
-    }
 
-    // Ashenpeak (region 2): nothing about it exists in the scene until the
-    // player is already well inside the valley approach — built once, then
-    // stays resident (its own NodeManager reuses the same VISIBLE_RADIUS
-    // windowing as the main map's, unaffected by this outer gate).
-    if (!this.regionTwoBuilt && dist2D(x, z, REGION_TWO_GATE_X, REGION_TWO_GATE_Z) < REGION_TWO_TRIGGER_RADIUS) {
-      this.regionTwoBuilt = true;
-      const centerZ = (VALLEY_START_Z + REGION_TWO_MAX_Z) / 2;
-      const sizeZ = REGION_TWO_MAX_Z - VALLEY_START_Z;
-      this.scene.add(buildRegionTerrain(0, centerZ, ZONE_SIZE, sizeZ));
-      this.regionTwoNodes = new NodeManager(this.scene, this.depletedNodeIds, generateRegionTwoNodes());
+    if (!this.insideDungeonPortal) {
+      for (const village of generateVillages()) {
+        if (this.streamedVillages.has(village.id)) continue;
+        if (dist2D(x, z, village.x, village.z) < this.STREAM_RADIUS) {
+          this.streamedVillages.add(village.id);
+          const vSigns = buildVillage(this.scene, village, true);
+          for (const sign of vSigns) {
+            sign.visible = !this.insideDungeonPortal;
+          }
+          this.overworldSigns.push(...vSigns);
+        }
+      }
+
+      // Ashenpeak (region 2): nothing about it exists in the scene until the
+      // player is already well inside the valley approach — built once, then
+      // stays resident (its own NodeManager reuses the same VISIBLE_RADIUS
+      // windowing as the main map's, unaffected by this outer gate).
+      if (!this.regionTwoBuilt && dist2D(x, z, REGION_TWO_GATE_X, REGION_TWO_GATE_Z) < REGION_TWO_TRIGGER_RADIUS) {
+        this.regionTwoBuilt = true;
+        const centerZ = (VALLEY_START_Z + REGION_TWO_MAX_Z) / 2;
+        const sizeZ = REGION_TWO_MAX_Z - VALLEY_START_Z;
+        this.overworldGroup.add(buildRegionTerrain(0, centerZ, ZONE_SIZE, sizeZ));
+        this.regionTwoNodes = new NodeManager(this.scene, this.depletedNodeIds, generateRegionTwoNodes());
+      }
     }
   }
 
@@ -1140,14 +1181,26 @@ export class Game {
   private updateCamera(px: number, py: number, pz: number): void {
     const cy = this.cameraYaw;
     const cp = this.cameraPitch;
-    const horizontal = CAMERA_DISTANCE * Math.cos(cp);
-    const targetX = px - Math.sin(cy) * horizontal;
-    const targetZ = pz - Math.cos(cy) * horizontal;
-    let targetY = py + CAMERA_HEIGHT - CAMERA_DISTANCE * Math.sin(cp);
 
-    // Keep the camera above the terrain.
-    const ground = terrainHeight(targetX, targetZ);
-    targetY = Math.max(targetY, ground + 0.6, WATER_LEVEL + 0.4);
+    let distance = CAMERA_DISTANCE;
+    let targetX = px - Math.sin(cy) * (distance * Math.cos(cp));
+    let targetZ = pz - Math.cos(cy) * (distance * Math.cos(cp));
+
+    // Removed the floor-bound distance snapping loop as it causes the camera to lock 
+    // inside the player's head when rotating near walls or narrow corridors.
+
+    let targetY = py + CAMERA_HEIGHT - distance * Math.sin(cp);
+
+    if (this.insideDungeonPortal) {
+      const h = dungeonFloorHeightAt(px, pz);
+      if (h !== null) {
+        targetY = Math.min(targetY, py + 2.7);
+        targetY = Math.max(targetY, h + 0.6);
+      }
+    } else {
+      const ground = terrainHeight(targetX, targetZ);
+      targetY = Math.max(targetY, ground + 0.6, WATER_LEVEL + 0.4);
+    }
 
     this.camera.position.set(targetX, targetY, targetZ);
     this.camera.lookAt(px, py + 1.5, pz);
@@ -1191,6 +1244,15 @@ export class Game {
       return;
     }
     this.interactNodeId = null;
+    // Exit dungeon portal nearby?
+    if (this.insideDungeonPortal) {
+      const layout = generateDungeonLayout(this.insideDungeonPortal.id);
+      if (dist2D(this.move.x, this.move.z, layout.entryPoint.x, layout.entryPoint.z) < 4.5) {
+        ui.interactLabel = "Leave Dungeon";
+        this.interactNodeId = "poi_dungeon_exit";
+        return;
+      }
+    }
     // Shrine nearby?
     for (const shrine of this.settlements.shrines) {
       if (dist2D(this.move.x, this.move.z, shrine.x, shrine.z) < 4.5) {

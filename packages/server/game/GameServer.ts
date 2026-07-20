@@ -46,6 +46,7 @@ import {
   generateVillages,
   generateNpcQuestGivers,
   generateDungeonLayout,
+  dungeonFloorHeightAt,
   dungeonTierDef,
   pickDungeonMob,
   DUNGEON_PORTAL_ACTIVATION_RADIUS,
@@ -592,7 +593,8 @@ export class GameServer {
         if (player.inputQueue.length < MAX_INPUT_QUEUE) player.inputQueue.push(parsed);
         break;
       case "interact":
-        if (parsed.nodeId.startsWith("poi_shrine")) this.handleShrine(player, parsed.nodeId);
+        if (parsed.nodeId === "poi_dungeon_exit") this.handleDungeonLeave(player);
+        else if (parsed.nodeId.startsWith("poi_shrine")) this.handleShrine(player, parsed.nodeId);
         else if (parsed.nodeId.startsWith("poi_dungeon")) this.handleDungeonPortal(player, parsed.nodeId);
         else if (parsed.nodeId.startsWith("npc_")) this.handleQuestGiverInteract(player, parsed.nodeId);
         else this.handleGather(player, parsed.nodeId);
@@ -1339,7 +1341,7 @@ export class GameServer {
       const def = mobDef(type);
       const x = layout.center.x + spawn.localX;
       const z = layout.center.z + spawn.localZ;
-      const y = layout.floorY;
+      const y = dungeonFloorHeightAt(x, z) ?? layout.floorY;
       const mobId = `${instanceId}_${i}`;
       mobIds.add(mobId);
       this.mobs.set(mobId, {
@@ -1366,6 +1368,21 @@ export class GameServer {
       });
     }
 
+    // Spawn Chest Nodes for this dungeon instance
+    for (let i = 0; i < layout.chests.length; i++) {
+      const c = layout.chests[i]!;
+      const nodeId = `${instanceId}_chest_${i}`;
+      this.nodes.set(nodeId, {
+        id: nodeId,
+        type: c.rarity === "rare" ? "dungeon_chest_rare" : "dungeon_chest_common",
+        x: layout.center.x + c.localX,
+        y: layout.center.y + c.localY,
+        z: layout.center.z + c.localZ,
+        variant: 0,
+        biome: "forest" as const,
+      });
+    }
+
     const instance: DungeonInstance = {
       id: instanceId,
       portalId: portal.id,
@@ -1387,7 +1404,7 @@ export class GameServer {
       const spread = Math.min(3, members.length);
       const ex = layout.entryPoint.x + Math.sin(angle) * spread;
       const ez = layout.entryPoint.z + Math.cos(angle) * spread;
-      member.move = { x: ex, y: layout.floorY, z: ez, vy: 0, grounded: true };
+      member.move = { x: ex, y: layout.floorY + layout.spawnHeight, z: ez, vy: 0, grounded: true };
       member.dirty = true;
       // A live pet has to follow its owner into the instance, or it'd be
       // left behind fighting the (now filtered-out) overworld.
@@ -1410,6 +1427,12 @@ export class GameServer {
   private handleDungeonLeave(player: PlayerState): void {
     if (!player.instanceId) return;
     const instance = this.dungeonInstances.get(player.instanceId);
+    if (instance) {
+      const layout = generateDungeonLayout(instance.portalId);
+      if (dist2D(player.move.x, player.move.z, layout.entryPoint.x, layout.entryPoint.z) > 6.0) {
+        return; // Too far from the exit portal
+      }
+    }
     this.teleportOutOfDungeon(player, instance ?? null);
     if (instance) {
       instance.memberIds.delete(player.id);
@@ -1432,7 +1455,15 @@ export class GameServer {
 
   private sendDungeonState(player: PlayerState, instance: DungeonInstance | null): void {
     if (!instance) {
-      this.sendTo(player.peer, { t: "dungeonState", inDungeon: false, tier: null, partySize: 0, mobsRemaining: null });
+      this.sendTo(player.peer, {
+        t: "dungeonState",
+        inDungeon: false,
+        tier: null,
+        partySize: 0,
+        mobsRemaining: null,
+        instanceId: null,
+        portalId: null,
+      });
       return;
     }
     let remaining = 0;
@@ -1446,6 +1477,8 @@ export class GameServer {
       tier: instance.tier,
       partySize: instance.memberIds.size,
       mobsRemaining: remaining,
+      instanceId: instance.id,
+      portalId: instance.portalId,
     });
   }
 
@@ -1517,6 +1550,14 @@ export class GameServer {
     const instance = this.dungeonInstances.get(instanceId);
     if (!instance) return;
     for (const mobId of instance.mobIds) this.mobs.delete(mobId);
+    
+    // Clean up chest nodes
+    for (const nodeId of this.nodes.keys()) {
+      if (nodeId.startsWith(`${instanceId}_chest_`)) {
+        this.nodes.delete(nodeId);
+      }
+    }
+    
     this.dungeonInstances.delete(instanceId);
   }
 
@@ -2113,15 +2154,40 @@ export class GameServer {
     player.hunger = Math.max(player.hunger, 30);
     player.thirst = Math.max(player.thirst, 30);
 
-    // Respawn at the nearest village graveyard, falling back to world spawn.
-    const grave = this.nearestGraveyard(player.move.x, player.move.z);
-    player.move = {
-      x: grave.x + (Math.random() - 0.5) * 6,
-      y: terrainHeight(grave.x, grave.z) + 0.1,
-      z: grave.z + (Math.random() - 0.5) * 6,
-      vy: 0,
-      grounded: true,
-    };
+    if (player.instanceId) {
+      const instance = this.dungeonInstances.get(player.instanceId);
+      if (instance) {
+        instance.wipedAt = null; // Clear the wipe/eject timer
+        const layout = generateDungeonLayout(instance.portalId);
+        player.move = {
+          x: layout.entryPoint.x + (Math.random() - 0.5) * 3,
+          y: layout.floorY + layout.spawnHeight + 0.1,
+          z: layout.entryPoint.z + (Math.random() - 0.5) * 3,
+          vy: 0,
+          grounded: true,
+        };
+      } else {
+        player.instanceId = null;
+        const grave = this.nearestGraveyard(player.move.x, player.move.z);
+        player.move = {
+          x: grave.x + (Math.random() - 0.5) * 6,
+          y: terrainHeight(grave.x, grave.z) + 0.1,
+          z: grave.z + (Math.random() - 0.5) * 6,
+          vy: 0,
+          grounded: true,
+        };
+      }
+    } else {
+      // Respawn at the nearest village graveyard, falling back to world spawn.
+      const grave = this.nearestGraveyard(player.move.x, player.move.z);
+      player.move = {
+        x: grave.x + (Math.random() - 0.5) * 6,
+        y: terrainHeight(grave.x, grave.z) + 0.1,
+        z: grave.z + (Math.random() - 0.5) * 6,
+        vy: 0,
+        grounded: true,
+      };
+    }
     player.dirty = true;
     this.sendSelf(player);
   }
@@ -2742,7 +2808,7 @@ export class GameServer {
 
   /** Shared by mobs and pets -- both are just an x/y/z/yaw position that
    *  steps toward a target each tick, so the type only needs those fields. */
-  private moveMob(mob: { x: number; y: number; z: number; yaw: number }, tx: number, tz: number, speed: number): void {
+  private moveMob(mob: { x: number; y: number; z: number; yaw: number; instanceId: string | null }, tx: number, tz: number, speed: number): void {
     const dx = tx - mob.x;
     const dz = tz - mob.z;
     const d = Math.hypot(dx, dz);
@@ -2750,8 +2816,16 @@ export class GameServer {
     const step = Math.min(speed * TICK_DT, d);
     const nx = mob.x + (dx / d) * step;
     const nz = mob.z + (dz / d) * step;
-    const ny = terrainHeight(nx, nz);
-    if (ny < WATER_LEVEL - 0.2) return; // wolves won't swim
+
+    let ny = dungeonFloorHeightAt(nx, nz);
+    if (mob.instanceId !== null) {
+      if (ny === null) return; // Block mobs from clipping walls
+      if (Math.abs(ny - mob.y) > 1.5) return; // Block steep jumps
+    } else {
+      ny = ny ?? terrainHeight(nx, nz);
+      if (ny < WATER_LEVEL - 0.2) return; // wolves won't swim
+    }
+
     mob.x = nx;
     mob.z = nz;
     mob.y = ny;

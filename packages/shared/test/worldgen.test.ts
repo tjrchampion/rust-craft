@@ -10,9 +10,13 @@ import {
   generateRegionTwoMobSpawns,
   generateDungeonLayout,
   dungeonFloorHeightAt,
+  dungeonTileFloorHeight,
   dungeonPortalAt,
+  deriveDungeonGridFromAssets,
   distPointToSegment,
+  type DungeonAsset,
 } from "../src/worldgen";
+import { hasDungeonBlueprint, DUNGEON_BLUEPRINTS } from "../src/content/dungeonBlueprints";
 import {
   biomeAt,
   terrainHeight,
@@ -310,9 +314,9 @@ describe("dungeon interiors", () => {
   it("dungeonFloorHeightAt returns the layout's flat floorY within the wall radius, null far away", () => {
     for (const portal of portals) {
       const layout = generateDungeonLayout(portal.id);
-      expect(dungeonFloorHeightAt(portal.arenaX!, portal.arenaZ!)).toBe(layout.floorY);
-      const nearEdge = portal.arenaX! + (DUNGEON_WALL_RADIUS - 2);
-      expect(dungeonFloorHeightAt(nearEdge, portal.arenaZ!)).toBe(layout.floorY);
+      expect(dungeonFloorHeightAt(layout.entryPoint.x, layout.entryPoint.z)).toBe(layout.floorY);
+      const nearEdge = layout.entryPoint.x - 6;
+      expect(dungeonFloorHeightAt(nearEdge, layout.entryPoint.z)).toBe(layout.floorY);
       const farAway = portal.arenaX! + DUNGEON_WALL_RADIUS + 200;
       expect(dungeonFloorHeightAt(farAway, portal.arenaZ!)).toBeNull();
     }
@@ -344,6 +348,108 @@ describe("dungeon interiors", () => {
       const expected = Math.atan2(layout.center.x - portal.x, layout.center.z - portal.z);
       expect(layout.doorwayAngle).toBeCloseTo(expected, 5);
     }
+  });
+});
+
+describe("dungeon editor blueprints", () => {
+  // tier 0 and tier 3 are real, live-editable content authored via the
+  // in-browser dungeon editor (packages/client/src/ui/DungeonEditor.svelte)
+  // -- packages/shared/src/content/dungeonBlueprints/{0,3}.json can go from
+  // empty placeholder to fully authored (or back) as the user edits, so
+  // these tests deliberately don't assume which state either tier is in;
+  // they check the *wiring* is correct whichever state they're found in.
+  // The stairs-rise/height-continuity math itself is covered independent of
+  // any real file by the deriveDungeonGridFromAssets / dungeonTileFloorHeight
+  // unit tests below.
+  it("hasDungeonBlueprint reflects whether a tier's blueprint has any assets, and is false for an unknown tier", () => {
+    expect(hasDungeonBlueprint(99)).toBe(false);
+    for (const tier of [0, 3]) {
+      expect(hasDungeonBlueprint(tier)).toBe((DUNGEON_BLUEPRINTS[tier]?.assets.length ?? 0) > 0);
+    }
+  });
+
+  it("generateDungeonLayout wires an authored tier's blueprint straight through, deriving the grid from its assets", () => {
+    const portal = generatePois().find(
+      (p) => p.type === "dungeon_portal" && hasDungeonBlueprint(p.dungeonTier ?? 0)
+    );
+    if (!portal) return; // no tier currently authored -- covered by the fallback test below instead
+    const tier = portal.dungeonTier ?? 0;
+    const layout = generateDungeonLayout(portal.id);
+    const bp = DUNGEON_BLUEPRINTS[tier]!;
+    expect(layout.assets).toEqual(bp.assets);
+    expect(layout.chests).toEqual(bp.chests);
+    expect(layout.mobSpawns).toEqual(bp.mobSpawns);
+    expect(layout.entryPoint).toEqual({ x: layout.center.x + bp.entryLocal.x, z: layout.center.z + bp.entryLocal.z });
+    // pillars/rubble are vestigial for blueprint-driven tiers, unlike the procedural path.
+    expect(layout.pillars).toEqual([]);
+    expect(layout.rubble).toEqual([]);
+  });
+
+  it("generateDungeonLayout falls back to procedural generation for any portal whose tier has no authored blueprint", () => {
+    for (const portal of generatePois().filter((p) => p.type === "dungeon_portal")) {
+      if (hasDungeonBlueprint(portal.dungeonTier ?? 0)) continue;
+      const layout = generateDungeonLayout(portal.id);
+      expect(layout.assets.length).toBeGreaterThan(0);
+      // Non-empty pillars is a procedural-only signal (blueprint-driven
+      // layouts always report [] -- see the authored-tier test above).
+      expect(layout.pillars.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("deriveDungeonGridFromAssets ignores non-floor/stairs assets", () => {
+    const assets: DungeonAsset[] = [
+      { model: "torch_mounted.gltf", localX: 0, localY: 0, localZ: 0, yaw: 0 },
+      { model: "pillar.gltf", localX: 4, localY: 0, localZ: 0, yaw: 0 },
+    ];
+    expect(deriveDungeonGridFromAssets(assets)).toEqual([]);
+  });
+
+  it("deriveDungeonGridFromAssets maps a floor asset's localY straight through as walkable height", () => {
+    const assets: DungeonAsset[] = [
+      { model: "floor_tile_large.gltf", localX: -58, localY: 2.5, localZ: -58, yaw: 0 },
+    ];
+    const grid = deriveDungeonGridFromAssets(assets);
+    expect(grid).toHaveLength(1);
+    expect(grid[0]).toMatchObject({ tx: 0, tz: 0, type: "floor", height: 2.5 });
+  });
+
+  it("deriveDungeonGridFromAssets maps stairs yaw to the correct cardinal stairsDir and carries rise through", () => {
+    const cases: { yaw: number; dir: { x: number; z: number } }[] = [
+      { yaw: 0, dir: { x: 0, z: -1 } },
+      { yaw: Math.PI / 2, dir: { x: -1, z: 0 } },
+      { yaw: Math.PI, dir: { x: 0, z: 1 } },
+      { yaw: -Math.PI / 2, dir: { x: 1, z: 0 } },
+    ];
+    for (const c of cases) {
+      const grid = deriveDungeonGridFromAssets([
+        { model: "stairs_modular_center.gltf", localX: -58, localY: 0, localZ: -58, yaw: c.yaw, rise: 4.0 },
+      ]);
+      expect(grid[0]!.type).toBe("stairs");
+      expect(grid[0]!.stairsDir).toMatchObject({ x: c.dir.x, z: c.dir.z, rise: 4.0 });
+    }
+  });
+
+  it("deriveDungeonGridFromAssets defaults rise to 1.0 when the asset omits it", () => {
+    const grid = deriveDungeonGridFromAssets([
+      { model: "stairs_wide.gltf", localX: -58, localY: 0, localZ: -58, yaw: 0 },
+    ]);
+    expect(grid[0]!.stairsDir!.rise).toBe(1.0);
+  });
+
+  it("dungeonTileFloorHeight ramps across a stairs tile scaled by its own rise, not a hardcoded 1.0", () => {
+    const tile = { tx: 0, tz: 0, type: "stairs" as const, height: 10, stairsDir: { x: 1, z: 0, rise: 5.1 } };
+    const cellCenterX = -60 + 0 * 4 + 2; // dungeonCellCenter(0)
+    const cellCenterZ = -60 + 0 * 4 + 2;
+    const atStart = dungeonTileFloorHeight(tile, cellCenterX - 2, cellCenterZ, 100);
+    const atEnd = dungeonTileFloorHeight(tile, cellCenterX + 2, cellCenterZ, 100);
+    expect(atStart).toBeCloseTo(100 + 10, 5);
+    expect(atEnd).toBeCloseTo(100 + 10 + 5.1, 5);
+  });
+
+  it("dungeonTileFloorHeight is flat for floor tiles regardless of position", () => {
+    const tile = { tx: 0, tz: 0, type: "floor" as const, height: 3 };
+    expect(dungeonTileFloorHeight(tile, 0, 0, 50)).toBe(53);
+    expect(dungeonTileFloorHeight(tile, 1.9, -1.9, 50)).toBe(53);
   });
 });
 

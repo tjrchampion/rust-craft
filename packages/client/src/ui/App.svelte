@@ -4,8 +4,13 @@
   import TitleScreen from "./TitleScreen.svelte";
   import CharacterSelect from "./CharacterSelect.svelte";
   import Hud from "./Hud.svelte";
+  import DungeonEditor from "./DungeonEditor.svelte";
 
   onMount(() => {
+    if (import.meta.env.DEV && new URLSearchParams(location.search).get("editor") === "dungeon") {
+      app.enterDungeonEditor();
+      return;
+    }
     void app.refresh();
   });
 </script>
@@ -20,6 +25,8 @@
   <CharacterSelect />
 {:else if app.screen === "ingame"}
   <Hud />
+{:else if app.screen === "dungeoneditor"}
+  <DungeonEditor />
 {/if}
 
 <style>
