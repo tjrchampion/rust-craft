@@ -3,7 +3,15 @@ import type { PlayerSnap, MobSnap, PetSnap, ProjectileSnap, StructureSnap, AnimS
 import { wrapAngle, mobDef, itemDef, auraDef } from "@rustcraft/shared";
 import { buildNameplate, buildCampfire, buildHorse, buildRaft } from "./models";
 import { AnimatedModel, PLAYER_ANIMS, mobModelSpec, logicalFromState, dodgeLogicalFor } from "./gltf";
-import { CLASS_MODEL_URLS, CLASS_WEAPON_NODES } from "./classModels";
+import {
+  CLASS_MODEL_URLS,
+  CLASS_WEAPON_NODES,
+  CLASS_HEAD_NODES,
+  CLASS_CHEST_NODES,
+  CLASS_BODY_NODE,
+  CLASS_ARM_NODES,
+  CLASS_LEG_NODES,
+} from "./classModels";
 import { buildSchoolProjectile, recycleSchoolProjectile, buildSchoolParticle, SCHOOL_VFX, schoolProfile, spellSchool, type School, projectilePools } from "./vfx";
 
 // Snapshots broadcast at a full 20Hz (see GameServer.tick), so 2 snapshot
@@ -49,6 +57,12 @@ interface RemoteEntity {
   mount: "horse" | "raft" | null;
   mountMesh: THREE.Group | null;
   weaponId: string | null;
+  heldItemId: string | null;
+  headId: string | null;
+  chestId: string | null;
+  armsId: string | null;
+  legsId: string | null;
+  feetId: string | null;
 }
 
 export interface TargetInfo {
@@ -370,6 +384,12 @@ export class EntityManager {
       mount: null,
       mountMesh: null,
       weaponId: null,
+      heldItemId: null,
+      headId: null,
+      chestId: null,
+      armsId: null,
+      legsId: null,
+      feetId: null,
     };
     this.entities.set(id, entity);
     return entity;
@@ -412,14 +432,50 @@ export class EntityManager {
   }
 
   /** Show whichever weapon-mesh variant matches the player's currently
-   *  equipped weapon item, hiding every other variant baked into their rig. */
-  private setWeapon(entity: RemoteEntity, weaponId: string | null): void {
-    if (entity.weaponId === weaponId) return;
+   *  equipped weapon item, hiding every other variant baked into their rig
+   *  -- unless their active hotbar slot holds its own visual item (a tool
+   *  or potion), which takes over the held model instead, mirroring
+   *  Game.ts's applyEquippedGear for the local player. */
+  private setWeapon(entity: RemoteEntity, weaponId: string | null, heldItemId: string | null): void {
+    if (entity.weaponId === weaponId && entity.heldItemId === heldItemId) return;
     entity.weaponId = weaponId;
+    entity.heldItemId = heldItemId;
     const allKnown = CLASS_WEAPON_NODES[entity.classId as ClassId] ?? [];
-    const def = weaponId ? itemDef(weaponId) : null;
+    const equipDef = weaponId ? itemDef(weaponId) : null;
+    const heldDef0 = heldItemId ? itemDef(heldItemId) : null;
+    const def = heldDef0 && (heldDef0.weaponProp || heldDef0.weaponModel) ? heldDef0 : equipDef;
     entity.model.setWeapon(def?.weaponModel ?? [], allKnown);
     void entity.model.setWeaponProp(def?.weaponProp ?? null);
+  }
+
+  /** Reveal the rig's baked head/chest cosmetic once the player has
+   *  anything equipped in that slot (hidden by default -- bare head, no
+   *  cape) and tint the Body/Arm/Leg mesh for chest/arms/legs/feet --
+   *  mirrors Game.ts's applyEquippedGear for the local player, so other
+   *  players see the same gear appearance. */
+  private setGearAppearance(entity: RemoteEntity, snap: PlayerSnap): void {
+    const classId = entity.classId as ClassId;
+    if (entity.headId !== snap.headId) {
+      entity.headId = snap.headId;
+      entity.model.setHeadGear(snap.headId !== null, CLASS_HEAD_NODES[classId] ?? []);
+    }
+    if (entity.chestId !== snap.chestId) {
+      entity.chestId = snap.chestId;
+      entity.model.setChestGear(snap.chestId !== null, CLASS_CHEST_NODES[classId] ?? []);
+      const def = snap.chestId ? itemDef(snap.chestId) : null;
+      entity.model.setGearTint("chest", [CLASS_BODY_NODE[classId]].filter(Boolean), def?.gearTint ?? null);
+    }
+    if (entity.armsId !== snap.armsId) {
+      entity.armsId = snap.armsId;
+      const def = snap.armsId ? itemDef(snap.armsId) : null;
+      entity.model.setGearTint("arms", CLASS_ARM_NODES[classId] ?? [], def?.gearTint ?? null);
+    }
+    if (entity.legsId !== snap.legsId || entity.feetId !== snap.feetId) {
+      entity.legsId = snap.legsId;
+      entity.feetId = snap.feetId;
+      const def = snap.legsId ? itemDef(snap.legsId) : snap.feetId ? itemDef(snap.feetId) : null;
+      entity.model.setGearTint("legs", CLASS_LEG_NODES[classId] ?? [], def?.gearTint ?? null);
+    }
   }
 
   applyPlayers(players: PlayerSnap[], selfId: string, now: number): void {
@@ -437,7 +493,8 @@ export class EntityManager {
       entity.maxHp = snap.maxHp;
       this.setPvp(entity, snap.pvp);
       this.setMount(entity, snap.mount);
-      this.setWeapon(entity, snap.weaponId);
+      this.setWeapon(entity, snap.weaponId, snap.heldItemId);
+      this.setGearAppearance(entity, snap);
       entity.samples.push({ t: now, x: snap.x, y: snap.y, z: snap.z, yaw: snap.yaw });
       if (entity.samples.length > 12) entity.samples.shift();
       if (entity.hpBar) paintHpBar(entity.hpBar, snap.hp / snap.maxHp);

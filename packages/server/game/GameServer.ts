@@ -613,7 +613,7 @@ export class GameServer {
         this.handleConsume(player, parsed.container, parsed.slot);
         break;
       case "moveItem":
-        if (moveItem(player.inventory, parsed.fromContainer, parsed.fromSlot, parsed.toContainer, parsed.toSlot)) {
+        if (moveItem(player.inventory, parsed.fromContainer, parsed.fromSlot, parsed.toContainer, parsed.toSlot, parsed.qty)) {
           player.dirty = true;
           this.sendInventory(player);
         }
@@ -1705,6 +1705,15 @@ export class GameServer {
       return;
     }
     const spell = spellDef(spellId);
+    if (spell.allowedWeaponTypes) {
+      const weapon = findItem(player.inventory, "equip", 0);
+      const weaponType = weapon ? itemDef(weapon.itemId).weaponType : undefined;
+      if (!weaponType || !spell.allowedWeaponTypes.includes(weaponType)) {
+        const need = spell.allowedWeaponTypes.map((t) => t[0]!.toUpperCase() + t.slice(1)).join(", ");
+        this.sendEvent(player, { t: "event", kind: "error", message: `Requires: ${need}` });
+        return;
+      }
+    }
     if (player.level < (spell.requiredLevel ?? 1)) {
       this.sendEvent(player, { t: "event", kind: "error", message: `Requires level ${spell.requiredLevel ?? 1}` });
       return;
@@ -2991,6 +3000,7 @@ export class GameServer {
       for (const other of allPlayers) {
         if (!this.sameInstance(viewer, other)) continue;
         if (dist2D(px, pz, other.move.x, other.move.z) > INTEREST_RADIUS) continue;
+        const heldItem = findItem(other.inventory, "hotbar", other.selectedSlot);
         players.push({
           id: other.id,
           name: other.name,
@@ -3005,6 +3015,12 @@ export class GameServer {
           pvp: other.pvp,
           mount: other.mount,
           weaponId: findItem(other.inventory, "equip", 0)?.itemId ?? null,
+          heldItemId: heldItem && !heldItem.itemId.startsWith("spell:") ? heldItem.itemId : null,
+          headId: findItem(other.inventory, "equip", EQUIP_SLOTS.indexOf("head"))?.itemId ?? null,
+          chestId: findItem(other.inventory, "equip", EQUIP_SLOTS.indexOf("chest"))?.itemId ?? null,
+          armsId: findItem(other.inventory, "equip", EQUIP_SLOTS.indexOf("arms"))?.itemId ?? null,
+          legsId: findItem(other.inventory, "equip", EQUIP_SLOTS.indexOf("legs"))?.itemId ?? null,
+          feetId: findItem(other.inventory, "equip", EQUIP_SLOTS.indexOf("feet"))?.itemId ?? null,
           debuffs: this.dotDebuffs(other.activeAuras),
         });
       }

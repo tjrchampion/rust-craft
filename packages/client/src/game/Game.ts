@@ -14,6 +14,7 @@ import {
   spellDef,
   zoneAt,
   HOTBAR_SLOTS,
+  EQUIP_SLOTS,
   generateVillages,
   generateRegionTwoNodes,
   VALLEY_START_Z,
@@ -48,7 +49,14 @@ import { buildNameplate, buildHorse, buildRaft, type MountParts } from "../rende
 import { NodeManager } from "../render/nodes";
 import { GrassField } from "../render/grass";
 import { EntityManager, playerModelUrl } from "../render/entities";
-import { CLASS_WEAPON_NODES } from "../render/classModels";
+import {
+  CLASS_WEAPON_NODES,
+  CLASS_HEAD_NODES,
+  CLASS_CHEST_NODES,
+  CLASS_BODY_NODE,
+  CLASS_ARM_NODES,
+  CLASS_LEG_NODES,
+} from "../render/classModels";
 import { AnimatedModel, PLAYER_ANIMS, logicalFromState, dodgeLogicalFor } from "../render/gltf";
 import { buildWorldStatic, buildVillage, animateSettlements, type SettlementHandles } from "../render/settlements";
 import { DUNGEON_THEME_COLORS, buildDungeonInterior } from "../render/dungeonInterior";
@@ -512,24 +520,70 @@ export class Game {
   }
 
   /** Show whichever weapon-mesh variant matches the equip slot's current
-   *  item, hiding every other variant baked into the local avatar's rig. */
+   *  item, hiding every other variant baked into the local avatar's rig --
+   *  unless the active hotbar slot holds its own visual item (a tool like a
+   *  Pickaxe/Torch, or a potion), in which case that takes over the held
+   *  model instead, matching gather/attack logic (which already reads the
+   *  hotbar selection, not the equip slot, for what you're "using"). */
   private applyEquippedGear(items: ItemSnap[]): void {
     const weapon = items.find((i) => i.container === "equip" && i.slot === 0);
-    const def = weapon ? itemDef(weapon.itemId) : null;
+    const equipDef = weapon ? itemDef(weapon.itemId) : null;
     const allKnown = CLASS_WEAPON_NODES[this.selfClassId as keyof typeof CLASS_WEAPON_NODES] ?? [];
 
-    const hasBakedIn = def && def.weaponModel && def.weaponModel.some(nodeName => allKnown.includes(nodeName));
+    const hotbarItem = items.find((i) => i.container === "hotbar" && i.slot === ui.selectedSlot);
+    const hotbarDef = hotbarItem && !hotbarItem.itemId.startsWith("spell:") ? itemDef(hotbarItem.itemId) : null;
+    const heldDef = hotbarDef && (hotbarDef.weaponProp || hotbarDef.weaponModel) ? hotbarDef : equipDef;
+
+    const hasBakedIn = heldDef && heldDef.weaponModel && heldDef.weaponModel.some(nodeName => allKnown.includes(nodeName));
     if (hasBakedIn) {
-      this.avatar.setWeapon(def!.weaponModel!, allKnown);
+      this.avatar.setWeapon(heldDef!.weaponModel!, allKnown);
       void this.avatar.setWeaponProp(null);
-    } else if (def && def.weaponProp) {
+    } else if (heldDef && heldDef.weaponProp) {
       this.avatar.setWeapon([], allKnown);
-      void this.avatar.setWeaponProp(def.weaponProp);
+      void this.avatar.setWeaponProp(heldDef.weaponProp);
     } else {
       this.avatar.setWeapon([], allKnown);
       void this.avatar.setWeaponProp(null);
     }
-    this.equippedWeaponDef = def;
+    // Cast/attack animation overrides stay tied to the *equipped* weapon
+    // (e.g. Firebolt's staff-channel pose), independent of whatever tool is
+    // currently held for gathering.
+    this.equippedWeaponDef = equipDef;
+
+    // No separate model per craftable head/chest item yet -- characters
+    // start bare (no baked hat/helmet/mask, no cape/backpack/pelt), and
+    // equipping anything in that slot reveals the class rig's own baked
+    // cosmetic as the stand-in visual.
+    const chestItem = items.find((i) => i.container === "equip" && i.slot === EQUIP_SLOTS.indexOf("chest"));
+    const armsItem = items.find((i) => i.container === "equip" && i.slot === EQUIP_SLOTS.indexOf("arms"));
+    const legsItem = items.find((i) => i.container === "equip" && i.slot === EQUIP_SLOTS.indexOf("legs"));
+    const feetItem = items.find((i) => i.container === "equip" && i.slot === EQUIP_SLOTS.indexOf("feet"));
+    this.avatar.setHeadGear(
+      items.some((i) => i.container === "equip" && i.slot === EQUIP_SLOTS.indexOf("head")),
+      CLASS_HEAD_NODES[this.selfClassId as keyof typeof CLASS_HEAD_NODES] ?? [],
+    );
+    this.avatar.setChestGear(!!chestItem, CLASS_CHEST_NODES[this.selfClassId as keyof typeof CLASS_CHEST_NODES] ?? []);
+
+    // No separate armor mesh exists for chest/arms/legs either -- tint the
+    // rig's own Body/Arm/Leg mesh instead of hiding it. Legs/feet share the
+    // same leg mesh (no separate boot geometry), so legs wins if both slots
+    // are filled.
+    this.avatar.setGearTint(
+      "chest",
+      [CLASS_BODY_NODE[this.selfClassId as keyof typeof CLASS_BODY_NODE]].filter(Boolean),
+      chestItem ? (itemDef(chestItem.itemId).gearTint ?? null) : null,
+    );
+    this.avatar.setGearTint(
+      "arms",
+      CLASS_ARM_NODES[this.selfClassId as keyof typeof CLASS_ARM_NODES] ?? [],
+      armsItem ? (itemDef(armsItem.itemId).gearTint ?? null) : null,
+    );
+    const legsColor = legsItem
+      ? (itemDef(legsItem.itemId).gearTint ?? null)
+      : feetItem
+        ? (itemDef(feetItem.itemId).gearTint ?? null)
+        : null;
+    this.avatar.setGearTint("legs", CLASS_LEG_NODES[this.selfClassId as keyof typeof CLASS_LEG_NODES] ?? [], legsColor);
   }
 
   /** The unified action bar: a slot either holds a real item (select it, same
@@ -1291,8 +1345,9 @@ export class Game {
     fs: number,
     tc: "inventory" | "hotbar" | "equip" | "crafting",
     ts: number,
+    qty?: number,
   ): void {
-    this.connection.send({ t: "moveItem", fromContainer: fc, fromSlot: fs, toContainer: tc, toSlot: ts });
+    this.connection.send({ t: "moveItem", fromContainer: fc, fromSlot: fs, toContainer: tc, toSlot: ts, qty });
   }
 
   /** Pull a *newly chosen* spell from the spellbook into a hotbar slot (or

@@ -22,6 +22,10 @@
       ? ((activeCharacter?.classId as ClassId) ?? CLASS_IDS[0]!)
       : (hoveredClassId ?? selectedClassId ?? CLASS_IDS[0]!),
   );
+  // Only an actual roster character has real equipped gear to show -- the
+  // create-mode class picker has no character yet, so the preview falls
+  // back to that class's bare starting-weapon look.
+  const stageEquip = $derived(mode === "select" ? (activeCharacter?.equip ?? null) : null);
 
   // Default into whichever mode makes sense once the roster has loaded, without
   // fighting the player if they've already toggled it manually.
@@ -44,7 +48,7 @@
 
   onMount(() => {
     scene = new ClassPreviewScene(canvas);
-    void scene.preloadAll().then(() => scene?.setClass(stageClassId));
+    void scene.preloadAll().then(() => scene?.setClass(stageClassId, stageEquip));
     const onResize = () => scene?.resize();
     window.addEventListener("resize", onResize);
     return () => {
@@ -54,7 +58,7 @@
   });
 
   $effect(() => {
-    scene?.setClass(stageClassId);
+    scene?.setClass(stageClassId, stageEquip);
   });
 
   function selectCharacter(character: CharacterSummary): void {
@@ -368,6 +372,9 @@
     color: var(--rc-ink-dim);
   }
   .class-list {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
     display: flex;
     flex-direction: column;
     gap: 6px;

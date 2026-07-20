@@ -459,6 +459,196 @@ export const RECIPES: Record<string, RecipeDef> = {
       { itemId: "mithril_ore", qty: 10 },
     ],
   },
+  // New craftable weapon-slot gear from the KayKit FantasyWeaponsBits packs
+  // -- curated tiers, wood/stone/hide/bone plus a tier-appropriate ore.
+  short_sword: {
+    id: "short_sword",
+    output: "short_sword",
+    outputQty: 1,
+    ingredients: [
+      { itemId: "wood", qty: 15 },
+      { itemId: "stone", qty: 10 },
+      { itemId: "copper_ore", qty: 5 },
+    ],
+  },
+  broadsword: {
+    id: "broadsword",
+    output: "broadsword",
+    outputQty: 1,
+    ingredients: [
+      { itemId: "wood", qty: 20 },
+      { itemId: "stone", qty: 15 },
+      { itemId: "tin_ore", qty: 8 },
+    ],
+  },
+  runeblade: {
+    id: "runeblade",
+    output: "runeblade",
+    outputQty: 1,
+    ingredients: [
+      { itemId: "wood", qty: 20 },
+      { itemId: "iron_ore", qty: 10 },
+      { itemId: "ancient_dust", qty: 5 },
+    ],
+  },
+  battle_axe: {
+    id: "battle_axe",
+    output: "battle_axe",
+    outputQty: 1,
+    ingredients: [
+      { itemId: "wood", qty: 20 },
+      { itemId: "stone", qty: 10 },
+      { itemId: "copper_ore", qty: 5 },
+    ],
+  },
+  war_axe: {
+    id: "war_axe",
+    output: "war_axe",
+    outputQty: 1,
+    ingredients: [
+      { itemId: "wood", qty: 25 },
+      { itemId: "iron_ore", qty: 10 },
+      { itemId: "tin_ore", qty: 5 },
+    ],
+  },
+  short_bow: {
+    id: "short_bow",
+    output: "short_bow",
+    outputQty: 1,
+    ingredients: [
+      { itemId: "wood", qty: 15 },
+      { itemId: "hide", qty: 5 },
+      { itemId: "copper_ore", qty: 3 },
+    ],
+  },
+  longbow: {
+    id: "longbow",
+    output: "longbow",
+    outputQty: 1,
+    ingredients: [
+      { itemId: "wood", qty: 25 },
+      { itemId: "hide", qty: 10 },
+      { itemId: "iron_ore", qty: 8 },
+    ],
+  },
+  oak_staff: {
+    id: "oak_staff",
+    output: "oak_staff",
+    outputQty: 1,
+    ingredients: [
+      { itemId: "wood", qty: 20 },
+      { itemId: "copper_ore", qty: 5 },
+    ],
+  },
+  arcane_rod: {
+    id: "arcane_rod",
+    output: "arcane_rod",
+    outputQty: 1,
+    ingredients: [
+      { itemId: "wood", qty: 20 },
+      { itemId: "ancient_dust", qty: 8 },
+      { itemId: "iron_ore", qty: 5 },
+    ],
+  },
+  crystal_wand: {
+    id: "crystal_wand",
+    output: "crystal_wand",
+    outputQty: 1,
+    ingredients: [
+      { itemId: "wood", qty: 15 },
+      { itemId: "ancient_dust", qty: 10 },
+      { itemId: "mithril_ore", qty: 5 },
+    ],
+  },
+  curved_dagger: {
+    id: "curved_dagger",
+    output: "curved_dagger",
+    outputQty: 1,
+    ingredients: [
+      { itemId: "stone", qty: 10 },
+      { itemId: "bone", qty: 5 },
+      { itemId: "copper_ore", qty: 3 },
+    ],
+  },
+  serrated_dagger: {
+    id: "serrated_dagger",
+    output: "serrated_dagger",
+    outputQty: 1,
+    ingredients: [
+      { itemId: "stone", qty: 15 },
+      { itemId: "bone", qty: 10 },
+      { itemId: "iron_ore", qty: 8 },
+    ],
+  },
+  kite_shield: {
+    id: "kite_shield",
+    output: "kite_shield",
+    outputQty: 1,
+    ingredients: [
+      { itemId: "wood", qty: 15 },
+      { itemId: "stone", qty: 15 },
+      { itemId: "tin_ore", qty: 5 },
+    ],
+  },
+  heater_shield: {
+    id: "heater_shield",
+    output: "heater_shield",
+    outputQty: 1,
+    ingredients: [
+      { itemId: "stone", qty: 30 },
+      { itemId: "hide", qty: 10 },
+      { itemId: "iron_ore", qty: 10 },
+    ],
+  },
+  halberd: {
+    id: "halberd",
+    output: "halberd",
+    outputQty: 1,
+    ingredients: [
+      { itemId: "wood", qty: 25 },
+      { itemId: "stone", qty: 15 },
+      { itemId: "tin_ore", qty: 8 },
+    ],
+  },
+  reaper_scythe: {
+    id: "reaper_scythe",
+    output: "reaper_scythe",
+    outputQty: 1,
+    ingredients: [
+      { itemId: "wood", qty: 25 },
+      { itemId: "stone", qty: 20 },
+      { itemId: "mithril_ore", qty: 10 },
+    ],
+  },
+  brass_knuckles: {
+    id: "brass_knuckles",
+    output: "brass_knuckles",
+    outputQty: 1,
+    ingredients: [
+      { itemId: "hide", qty: 10 },
+      { itemId: "bone", qty: 8 },
+      { itemId: "copper_ore", qty: 3 },
+    ],
+  },
+  war_gauntlets: {
+    id: "war_gauntlets",
+    output: "war_gauntlets",
+    outputQty: 1,
+    ingredients: [
+      { itemId: "hide", qty: 15 },
+      { itemId: "bone", qty: 15 },
+      { itemId: "mithril_ore", qty: 8 },
+    ],
+  },
+  iron_spear: {
+    id: "iron_spear",
+    output: "iron_spear",
+    outputQty: 1,
+    ingredients: [
+      { itemId: "wood", qty: 20 },
+      { itemId: "iron_ore", qty: 8 },
+    ],
+  },
   peasant_hood: {
     id: "peasant_hood",
     output: "peasant_hood",

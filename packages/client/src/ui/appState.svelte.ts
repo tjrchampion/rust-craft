@@ -5,6 +5,10 @@ export interface CharacterSummary {
   name: string;
   level: number;
   classId: string;
+  /** Currently equipped item id per gear slot (weapon/head/chest/arms/legs/
+   *  feet), keyed by GearSlot name -- so the character-select preview can
+   *  show what this specific character actually has on. */
+  equip?: Partial<Record<string, string>>;
 }
 
 export interface Realm {

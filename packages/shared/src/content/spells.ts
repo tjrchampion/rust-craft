@@ -1,3 +1,5 @@
+import type { WeaponType } from "./items";
+
 export type DamageType = "physical" | "fire" | "frost" | "holy" | "nature" | "arcane" | "shadow";
 export type SpellTargetKind = "projectile" | "melee" | "self" | "aoe";
 
@@ -45,6 +47,10 @@ export interface SpellDef {
    *  than in `effects`. `petType` keys into content/mobs.ts for model/stats. */
   summon?: { petType: string };
   requiredLevel?: number;
+  /** Melee/projectile/aoe damage spells only: which equipped weapon types
+   *  can cast this. Undefined means unrestricted (all self/heal spells, and
+   *  any spell not listed here, can be cast with anything equipped). */
+  allowedWeaponTypes?: WeaponType[];
 }
 
 export const SPELLS: Record<string, SpellDef> = {
@@ -60,6 +66,7 @@ export const SPELLS: Record<string, SpellDef> = {
       { type: "applyAura", auraId: "burning" },
     ],
     requiredLevel: 1,
+    allowedWeaponTypes: ["staff", "wand"],
   },
   frostbolt: {
     id: "frostbolt",
@@ -73,6 +80,9 @@ export const SPELLS: Record<string, SpellDef> = {
       { type: "applyAura", auraId: "chilled" },
     ],
     requiredLevel: 2,
+    // Also granted to Engineer (see classes.ts) -- include wrench so it
+    // doesn't lose access to its own starting kit.
+    allowedWeaponTypes: ["staff", "wand", "wrench"],
   },
   rend: {
     id: "rend",
@@ -86,6 +96,7 @@ export const SPELLS: Record<string, SpellDef> = {
       { type: "applyAura", auraId: "bleeding" },
     ],
     requiredLevel: 1,
+    allowedWeaponTypes: ["sword", "axe"],
   },
   charge: {
     id: "charge",
@@ -106,6 +117,7 @@ export const SPELLS: Record<string, SpellDef> = {
     targeting: { kind: "melee", range: 2.2 },
     effects: [{ type: "damage", base: 8, powerScale: 2.6, damageType: "physical" }],
     requiredLevel: 1,
+    allowedWeaponTypes: ["dagger", "fist"],
   },
   poison_strike: {
     id: "poison_strike",
@@ -119,6 +131,7 @@ export const SPELLS: Record<string, SpellDef> = {
       { type: "applyAura", auraId: "poisoned" },
     ],
     requiredLevel: 2,
+    allowedWeaponTypes: ["dagger", "fist"],
   },
   heal: {
     id: "heal",
@@ -139,6 +152,7 @@ export const SPELLS: Record<string, SpellDef> = {
     targeting: { kind: "projectile", range: 26, projectileSpeed: 30 },
     effects: [{ type: "damage", base: 9, powerScale: 1.9, damageType: "holy" }],
     requiredLevel: 1,
+    allowedWeaponTypes: ["mace", "sword", "polearm"],
   },
   quick_shot: {
     id: "quick_shot",
@@ -149,6 +163,7 @@ export const SPELLS: Record<string, SpellDef> = {
     targeting: { kind: "projectile", range: 32, projectileSpeed: 34 },
     effects: [{ type: "damage", base: 7, powerScale: 1.7, damageType: "physical" }],
     requiredLevel: 1,
+    allowedWeaponTypes: ["bow", "crossbow"],
   },
   piercing_shot: {
     id: "piercing_shot",
@@ -162,6 +177,7 @@ export const SPELLS: Record<string, SpellDef> = {
       { type: "applyAura", auraId: "bleeding" },
     ],
     requiredLevel: 6,
+    allowedWeaponTypes: ["bow", "crossbow"],
   },
   wrath: {
     id: "wrath",
@@ -172,6 +188,7 @@ export const SPELLS: Record<string, SpellDef> = {
     targeting: { kind: "projectile", range: 28, projectileSpeed: 24 },
     effects: [{ type: "damage", base: 9, powerScale: 2.0, damageType: "nature" }],
     requiredLevel: 1,
+    allowedWeaponTypes: ["staff", "wand"],
   },
   regrowth: {
     id: "regrowth",
@@ -192,6 +209,7 @@ export const SPELLS: Record<string, SpellDef> = {
     targeting: { kind: "melee", range: 2.4 },
     effects: [{ type: "damage", base: 8, powerScale: 2.0, damageType: "holy" }],
     requiredLevel: 1,
+    allowedWeaponTypes: ["mace", "sword", "polearm"],
   },
   divine_favor: {
     id: "divine_favor",
@@ -212,6 +230,7 @@ export const SPELLS: Record<string, SpellDef> = {
     targeting: { kind: "aoe", range: 0, radius: 4 },
     effects: [{ type: "damage", base: 5, powerScale: 1.1, damageType: "physical" }],
     requiredLevel: 4,
+    allowedWeaponTypes: ["sword", "axe", "wrench"],
   },
   flame_nova: {
     id: "flame_nova",
@@ -225,6 +244,7 @@ export const SPELLS: Record<string, SpellDef> = {
       { type: "applyAura", auraId: "burning" },
     ],
     requiredLevel: 4,
+    allowedWeaponTypes: ["staff", "wand"],
   },
   fan_of_knives: {
     id: "fan_of_knives",
@@ -235,6 +255,7 @@ export const SPELLS: Record<string, SpellDef> = {
     targeting: { kind: "aoe", range: 0, radius: 4 },
     effects: [{ type: "damage", base: 4, powerScale: 1.2, damageType: "physical" }],
     requiredLevel: 4,
+    allowedWeaponTypes: ["dagger", "fist"],
   },
   circle_of_healing: {
     id: "circle_of_healing",
@@ -255,6 +276,7 @@ export const SPELLS: Record<string, SpellDef> = {
     targeting: { kind: "aoe", range: 0, radius: 6 },
     effects: [{ type: "damage", base: 6, powerScale: 1.3, damageType: "physical" }],
     requiredLevel: 4,
+    allowedWeaponTypes: ["bow", "crossbow"],
   },
   thorn_burst: {
     id: "thorn_burst",
@@ -265,6 +287,7 @@ export const SPELLS: Record<string, SpellDef> = {
     targeting: { kind: "aoe", range: 0, radius: 5 },
     effects: [{ type: "damage", base: 6, powerScale: 1.4, damageType: "nature" }],
     requiredLevel: 4,
+    allowedWeaponTypes: ["staff", "wand"],
   },
   consecration: {
     id: "consecration",
@@ -275,6 +298,7 @@ export const SPELLS: Record<string, SpellDef> = {
     targeting: { kind: "aoe", range: 0, radius: 5 },
     effects: [{ type: "damage", base: 6, powerScale: 1.3, damageType: "holy" }],
     requiredLevel: 4,
+    allowedWeaponTypes: ["mace", "sword", "polearm"],
   },
   execute: {
     id: "execute",
@@ -285,6 +309,7 @@ export const SPELLS: Record<string, SpellDef> = {
     targeting: { kind: "melee", range: 2.6 },
     effects: [{ type: "damage", base: 8, powerScale: 1.4, damageType: "physical", executeScale: 3.0 }],
     requiredLevel: 6,
+    allowedWeaponTypes: ["sword", "axe"],
   },
   shield_wall: {
     id: "shield_wall",
@@ -308,6 +333,7 @@ export const SPELLS: Record<string, SpellDef> = {
       { type: "applyAura", auraId: "arcane_silence" },
     ],
     requiredLevel: 6,
+    allowedWeaponTypes: ["staff", "wand"],
   },
   blizzard: {
     id: "blizzard",
@@ -321,6 +347,7 @@ export const SPELLS: Record<string, SpellDef> = {
       { type: "applyAura", auraId: "chilled" },
     ],
     requiredLevel: 8,
+    allowedWeaponTypes: ["staff", "wand"],
   },
   eviscerate: {
     id: "eviscerate",
@@ -331,6 +358,7 @@ export const SPELLS: Record<string, SpellDef> = {
     targeting: { kind: "melee", range: 2.2 },
     effects: [{ type: "damage", base: 7, powerScale: 1.3, damageType: "shadow", executeScale: 2.6 }],
     requiredLevel: 6,
+    allowedWeaponTypes: ["dagger", "fist"],
   },
   garrote: {
     id: "garrote",
@@ -344,6 +372,7 @@ export const SPELLS: Record<string, SpellDef> = {
       { type: "applyAura", auraId: "bleeding" },
     ],
     requiredLevel: 8,
+    allowedWeaponTypes: ["dagger", "fist"],
   },
   holy_fire: {
     id: "holy_fire",
@@ -357,6 +386,7 @@ export const SPELLS: Record<string, SpellDef> = {
       { type: "applyAura", auraId: "holy_burn" },
     ],
     requiredLevel: 6,
+    allowedWeaponTypes: ["mace", "sword", "polearm"],
   },
   renew: {
     id: "renew",
@@ -377,6 +407,7 @@ export const SPELLS: Record<string, SpellDef> = {
     targeting: { kind: "projectile", range: 34, projectileSpeed: 36 },
     effects: [{ type: "damage", base: 8, powerScale: 1.5, damageType: "physical", executeScale: 2.4 }],
     requiredLevel: 8,
+    allowedWeaponTypes: ["bow", "crossbow"],
   },
   serpent_sting: {
     id: "serpent_sting",
@@ -390,6 +421,7 @@ export const SPELLS: Record<string, SpellDef> = {
       { type: "applyAura", auraId: "poisoned" },
     ],
     requiredLevel: 2,
+    allowedWeaponTypes: ["bow", "crossbow"],
   },
   moonfire: {
     id: "moonfire",
@@ -403,6 +435,7 @@ export const SPELLS: Record<string, SpellDef> = {
       { type: "applyAura", auraId: "moonfire_burn" },
     ],
     requiredLevel: 6,
+    allowedWeaponTypes: ["staff", "wand"],
   },
   entangling_roots: {
     id: "entangling_roots",
@@ -416,6 +449,7 @@ export const SPELLS: Record<string, SpellDef> = {
       { type: "applyAura", auraId: "entangled" },
     ],
     requiredLevel: 8,
+    allowedWeaponTypes: ["staff", "wand"],
   },
   hammer_of_wrath: {
     id: "hammer_of_wrath",
@@ -426,6 +460,7 @@ export const SPELLS: Record<string, SpellDef> = {
     targeting: { kind: "projectile", range: 26, projectileSpeed: 30 },
     effects: [{ type: "damage", base: 6, powerScale: 1.3, damageType: "holy", executeScale: 2.8 }],
     requiredLevel: 6,
+    allowedWeaponTypes: ["mace", "sword", "polearm"],
   },
   holy_shield: {
     id: "holy_shield",
@@ -446,7 +481,7 @@ export const SPELLS: Record<string, SpellDef> = {
     targeting: { kind: "self", range: 0 },
     effects: [{ type: "applyAura", auraId: "beast_mastery_buff", landsOn: "caster" }],
     summon: { petType: "wolf" },
-    requiredLevel: 10,
+    requiredLevel: 3,
   },
 };
 

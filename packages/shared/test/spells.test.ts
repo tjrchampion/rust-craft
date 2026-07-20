@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { SPELLS, spellDef } from "../src/content/spells";
 import { CLASS_IDS, classDef } from "../src/content/classes";
 import { auraDef } from "../src/content/auras";
+import { itemDef } from "../src/content/items";
 
 describe("spells", () => {
   it("every aoe spell defines a positive radius", () => {
@@ -58,6 +59,27 @@ describe("spells", () => {
       expect(spell.requiredLevel).toBeDefined();
       expect(spell.requiredLevel).toBeGreaterThanOrEqual(1);
       expect(spell.requiredLevel).toBeLessThanOrEqual(10);
+    }
+  });
+
+  // Critical non-regression check: weapon-gating a spell (Part B of the
+  // weapon/spell coupling work) must never lock a class out of a spell its
+  // own starting kit already grants it -- e.g. gating frostbolt to
+  // [staff, wand] would softlock the Engineer, who starts with both
+  // frostbolt and a wrench, unless wrench is also in the allowed list.
+  it("every class's starting weapon type satisfies every starting spell's weapon requirement", () => {
+    for (const id of CLASS_IDS) {
+      const cls = classDef(id);
+      const weaponItemId = cls.startingGear.find((g) => g.slot === "weapon")?.itemId;
+      const weaponType = weaponItemId ? itemDef(weaponItemId).weaponType : undefined;
+      for (const spellId of cls.startingSpells) {
+        const spell = spellDef(spellId);
+        if (!spell.allowedWeaponTypes) continue;
+        expect(
+          weaponType && spell.allowedWeaponTypes.includes(weaponType),
+          `${id}'s starting weapon (${weaponType}) can't cast its own starting spell ${spellId} (needs ${spell.allowedWeaponTypes.join(", ")})`,
+        ).toBe(true);
+      }
     }
   });
 });

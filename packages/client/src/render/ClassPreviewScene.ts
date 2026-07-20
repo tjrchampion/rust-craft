@@ -1,12 +1,21 @@
 import * as THREE from "three";
 import { CLASS_IDS, classDef, itemDef, type ClassId } from "@rustcraft/shared";
 import { AnimatedModel, PLAYER_ANIMS } from "./gltf";
-import { CLASS_MODEL_URLS, CLASS_WEAPON_NODES } from "./classModels";
+import {
+  CLASS_MODEL_URLS,
+  CLASS_WEAPON_NODES,
+  CLASS_HEAD_NODES,
+  CLASS_CHEST_NODES,
+  CLASS_BODY_NODE,
+  CLASS_ARM_NODES,
+  CLASS_LEG_NODES,
+} from "./classModels";
 
 /**
- * Small self-contained turntable viewer for the character-creation screen:
- * one AnimatedModel per class, preloaded and kept in the scene (hidden)
- * so switching the preview is instant instead of re-fetching/re-cloning.
+ * Small self-contained viewer for the character-select screen: one
+ * AnimatedModel per class, preloaded and kept in the scene (hidden) so
+ * switching the preview is instant instead of re-fetching/re-cloning.
+ * Static by default (drag to rotate manually) -- no idle auto-spin.
  */
 export class ClassPreviewScene {
   private renderer: THREE.WebGLRenderer;
@@ -14,10 +23,10 @@ export class ClassPreviewScene {
   private camera: THREE.PerspectiveCamera;
   private models = new Map<ClassId, AnimatedModel>();
   private activeId: ClassId | null = null;
+  private activeEquipKey: string | null = null;
   private running = true;
   private lastFrame = performance.now();
   private yaw = 0;
-  private autoRotate = true;
   private dragging = false;
   private moved = false;
   private lastPointerX = 0;
@@ -68,21 +77,52 @@ export class ClassPreviewScene {
       this.scene.add(model.group);
       this.models.set(id, model);
       await model.loadFrom(CLASS_MODEL_URLS[id], 1.75);
-      const weaponGear = classDef(id).startingGear.find((g) => g.slot === "weapon");
-      const def = weaponGear ? itemDef(weaponGear.itemId) : null;
-      model.setWeapon(def?.weaponModel ?? [], CLASS_WEAPON_NODES[id] ?? []);
-      void model.setWeaponProp(def?.weaponProp ?? null);
     }
     return model;
   }
 
-  /** Switch the visible turntable model. Loads on demand if not preloaded yet. */
-  setClass(id: ClassId): void {
-    if (this.activeId === id) return;
+  /** Show whichever gear the model should currently be wearing: a specific
+   *  character's actual equipped items (character-select mode, `equip`
+   *  passed in), or the class's default starting weapon with no armor/hat/
+   *  cape (character-creation preview / hovering an unselected class --
+   *  what a freshly rolled character looks like before any gear at all). */
+  private applyEquip(id: ClassId, model: AnimatedModel, equip: Partial<Record<string, string>> | null): void {
+    const allKnown = CLASS_WEAPON_NODES[id] ?? [];
+    const weaponId = equip ? equip.weapon : classDef(id).startingGear.find((g) => g.slot === "weapon")?.itemId;
+    const weaponDef = weaponId ? itemDef(weaponId) : null;
+    model.setWeapon(weaponDef?.weaponModel ?? [], allKnown);
+    void model.setWeaponProp(weaponDef?.weaponProp ?? null);
+
+    const headId = equip?.head ?? null;
+    const chestId = equip?.chest ?? null;
+    const armsId = equip?.arms ?? null;
+    const legsId = equip?.legs ?? null;
+    const feetId = equip?.feet ?? null;
+    model.setHeadGear(!!headId, CLASS_HEAD_NODES[id] ?? []);
+    model.setChestGear(!!chestId, CLASS_CHEST_NODES[id] ?? []);
+    model.setGearTint("chest", [CLASS_BODY_NODE[id]].filter(Boolean), chestId ? (itemDef(chestId).gearTint ?? null) : null);
+    model.setGearTint("arms", CLASS_ARM_NODES[id] ?? [], armsId ? (itemDef(armsId).gearTint ?? null) : null);
+    const legsColor = legsId
+      ? (itemDef(legsId).gearTint ?? null)
+      : feetId
+        ? (itemDef(feetId).gearTint ?? null)
+        : null;
+    model.setGearTint("legs", CLASS_LEG_NODES[id] ?? [], legsColor);
+  }
+
+  /** Switch the visible turntable model. Loads on demand if not preloaded
+   *  yet. Pass a character's `equip` map (character-select roster) to show
+   *  what they actually have on, or omit it (character creation / hovering
+   *  a class with no character yet) to show the class's bare default look. */
+  setClass(id: ClassId, equip?: Partial<Record<string, string>> | null): void {
+    const key = equip ? JSON.stringify(equip) : "";
+    if (this.activeId === id && this.activeEquipKey === key) return;
     this.activeId = id;
+    this.activeEquipKey = key;
     this.yaw = 0;
-    void this.ensureLoaded(id).then(() => {
-      if (this.activeId !== id) return; // superseded by a later hover/select
+    void this.ensureLoaded(id).then((model) => {
+      if (this.activeId !== id || this.activeEquipKey !== key) return; // superseded by a later hover/select
+      this.applyEquip(id, model, equip ?? null);
       for (const [otherId, m] of this.models) m.group.visible = otherId === id;
     });
   }
@@ -96,7 +136,6 @@ export class ClassPreviewScene {
 
   private onPointerDown = (e: PointerEvent): void => {
     this.dragging = true;
-    this.autoRotate = false;
     this.moved = false;
     this.lastPointerX = e.clientX;
     this.downX = e.clientX;
@@ -114,7 +153,6 @@ export class ClassPreviewScene {
   private onPointerUp = (): void => {
     if (this.dragging && !this.moved) this.flourish();
     this.dragging = false;
-    this.autoRotate = true;
   };
 
   private frame = (): void => {
@@ -123,7 +161,6 @@ export class ClassPreviewScene {
     const now = performance.now();
     const dt = Math.min(0.1, (now - this.lastFrame) / 1000);
     this.lastFrame = now;
-    if (this.autoRotate) this.yaw += dt * 0.5;
     const model = this.activeId ? this.models.get(this.activeId) : null;
     if (model) {
       model.group.rotation.y = this.yaw;

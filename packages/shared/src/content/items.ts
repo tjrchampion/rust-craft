@@ -1,3 +1,4 @@
+import type { ClassId } from "./classes";
 import type { StatModifiers } from "../sim/actorStats";
 
 export type ItemType = "resource" | "tool" | "weapon" | "consumable" | "placeable" | "tome" | "gear";
@@ -18,7 +19,7 @@ export interface ItemDef {
   /** Melee damage when held in the hotbar (tools double as weak weapons). */
   damage?: number;
   /** Gather effectiveness against node classes. */
-  gatherPower?: { wood?: number; stone?: number; ore?: number };
+  gatherPower?: { wood?: number; stone?: number; ore?: number; fish?: number; sand?: number };
   maxDurability?: number;
   /** Consumable effects. */
   restore?: { hp?: number; mana?: number; hunger?: number; thirst?: number };
@@ -45,7 +46,21 @@ export interface ItemDef {
   /** Gear (weapon slot only): override clip(s) for spellcasting while this
    *  weapon is equipped, e.g. a bow draw-and-loose instead of hand-waving. */
   castAnim?: string[];
+  /** Categorized weapon type for spell-locked casting requirements. */
+  weaponType?: "sword" | "staff" | "mace" | "bow" | "crossbow" | "dagger" | "shield" | "axe" | "wand" | "wrench" | "polearm" | "spear" | "fist" | "tool";
+  /** Optional class-lock list. If undefined, all classes can equip it. */
+  requiredClasses?: ClassId[];
+  /** Gear (chest/arms/legs/feet only): hex color multiplied onto the rig's
+   *  Body/Arm/Leg mesh while equipped -- there's no separate bare-skin or
+   *  modular armor mesh in these rigs, so tinting the existing mesh is the
+   *  visual stand-in for actually wearing this piece. legs/feet share the
+   *  same leg mesh, so if both slots are filled, legs wins. */
+  gearTint?: number;
 }
+
+/** Standalone alias for the weapon-type union, for spells.ts to import
+ *  without duplicating the literal list. */
+export type WeaponType = NonNullable<ItemDef["weaponType"]>;
 
 // Shared attackAnim/castAnim fallback chains, reused across every weapon of a
 // given type -- new (KayKit Character Animations 1.1 library) clip names
@@ -129,6 +144,7 @@ export const ITEMS: Record<string, ItemDef> = {
     damage: 12,
     gatherPower: { wood: 4 },
     maxDurability: 120,
+    weaponProp: { url: "/assets/models/props/axe.gltf", bone: "handslotr" },
   },
   pickaxe: {
     id: "pickaxe",
@@ -138,6 +154,7 @@ export const ITEMS: Record<string, ItemDef> = {
     damage: 10,
     gatherPower: { stone: 4, ore: 1 },
     maxDurability: 120,
+    weaponProp: { url: "/assets/models/props/pickaxe.gltf", bone: "handslotr" },
   },
   mithril_pickaxe: {
     id: "mithril_pickaxe",
@@ -147,6 +164,7 @@ export const ITEMS: Record<string, ItemDef> = {
     damage: 14,
     gatherPower: { stone: 4, ore: 2 },
     maxDurability: 150,
+    weaponProp: { url: "/assets/models/props/pickaxe.gltf", bone: "handslotr" },
   },
   thorium_pickaxe: {
     id: "thorium_pickaxe",
@@ -156,6 +174,7 @@ export const ITEMS: Record<string, ItemDef> = {
     damage: 18,
     gatherPower: { stone: 4, ore: 3 },
     maxDurability: 180,
+    weaponProp: { url: "/assets/models/props/pickaxe.gltf", bone: "handslotr" },
   },
   spear: {
     id: "spear",
@@ -164,6 +183,8 @@ export const ITEMS: Record<string, ItemDef> = {
     stack: 1,
     damage: 24,
     maxDurability: 80,
+    weaponProp: { url: "/assets/models/props/spear_A.gltf", bone: "handslotr" },
+    weaponType: "spear",
   },
   torch: {
     id: "torch",
@@ -172,6 +193,7 @@ export const ITEMS: Record<string, ItemDef> = {
     stack: 1,
     damage: 5,
     maxDurability: 100,
+    weaponProp: { url: "/assets/models/props/torch.gltf", bone: "handslotr" },
   },
   campfire: {
     id: "campfire",
@@ -211,6 +233,8 @@ export const ITEMS: Record<string, ItemDef> = {
     // Warrior's rig (Barbarian.glb) has no sword mesh, only axes.
     weaponModel: ["2H_Axe"],
     weaponProp: { url: "/assets/models/props/sword_1handed.glb", bone: "handslotr" },
+    weaponType: "sword",
+    requiredClasses: ["warrior", "paladin"],
   },
   apprentice_staff: {
     id: "apprentice_staff",
@@ -222,6 +246,8 @@ export const ITEMS: Record<string, ItemDef> = {
     weaponModel: ["2H_Staff"],
     weaponProp: { url: "/assets/models/props/staff.glb", bone: "handslotr" },
     attackAnim: STAFF_ATTACK,
+    weaponType: "staff",
+    requiredClasses: ["mage", "druid"],
   },
   twin_daggers: {
     id: "twin_daggers",
@@ -233,6 +259,8 @@ export const ITEMS: Record<string, ItemDef> = {
     weaponModel: ["Knife", "Knife_Offhand"],
     weaponProp: { url: "/assets/models/props/dagger.gltf", bone: "handslotr" },
     attackAnim: DUALWIELD_ATTACK,
+    weaponType: "dagger",
+    requiredClasses: ["rogue", "assassin"],
   },
   blessed_mace: {
     id: "blessed_mace",
@@ -244,6 +272,8 @@ export const ITEMS: Record<string, ItemDef> = {
     // Cleric's rig (Knight.glb) has no mace mesh, only swords/shields.
     weaponModel: ["1H_Sword", "Round_Shield"],
     weaponProp: { url: "/assets/models/props/sword_1handed.glb", bone: "handslotr" },
+    weaponType: "mace",
+    requiredClasses: ["cleric"],
   },
   hunting_bow: {
     id: "hunting_bow",
@@ -259,6 +289,8 @@ export const ITEMS: Record<string, ItemDef> = {
     // "handslotl" at runtime even though the source glTF calls it "handslot.l".
     weaponProp: { url: "/assets/models/props/bow_withString.glb", bone: "handslotl" },
     castAnim: BOW_CAST,
+    weaponType: "bow",
+    requiredClasses: ["ranger"],
   },
   grove_staff: {
     id: "grove_staff",
@@ -271,6 +303,8 @@ export const ITEMS: Record<string, ItemDef> = {
     // attach the pack's standalone staff prop onto the right hand.
     weaponProp: { url: "/assets/models/props/staff.glb", bone: "handslotr" },
     attackAnim: STAFF_ATTACK,
+    weaponType: "staff",
+    requiredClasses: ["mage", "druid"],
   },
   sunforged_blade: {
     id: "sunforged_blade",
@@ -282,6 +316,8 @@ export const ITEMS: Record<string, ItemDef> = {
     // Paladin.glb bundles no baked-in weapon variants either -- attach the
     // pack's standalone one-handed sword prop onto the right hand.
     weaponProp: { url: "/assets/models/props/sword_1handed.glb", bone: "handslotr" },
+    weaponType: "sword",
+    requiredClasses: ["warrior", "paladin"],
   },
   axe_1handed: {
     id: "axe_1handed",
@@ -293,6 +329,8 @@ export const ITEMS: Record<string, ItemDef> = {
     weaponModel: ["1H_Axe"],
     weaponProp: { url: "/assets/models/props/axe_1handed.gltf", bone: "handslotr" },
     attackAnim: AXE_1H_ATTACK,
+    weaponType: "axe",
+    requiredClasses: ["warrior", "berserker"],
   },
   axe_1handed_large: {
     id: "axe_1handed_large",
@@ -304,6 +342,8 @@ export const ITEMS: Record<string, ItemDef> = {
     weaponModel: ["1H_Axe_Offhand"],
     weaponProp: { url: "/assets/models/props/axe_1handed_Large.gltf", bone: "handslotr" },
     attackAnim: AXE_1H_ATTACK,
+    weaponType: "axe",
+    requiredClasses: ["warrior", "berserker"],
   },
   axe_2handed: {
     id: "axe_2handed",
@@ -315,6 +355,8 @@ export const ITEMS: Record<string, ItemDef> = {
     weaponModel: ["2H_Axe"],
     weaponProp: { url: "/assets/models/props/axe_2handed.gltf", bone: "handslotr" },
     attackAnim: AXE_2H_ATTACK,
+    weaponType: "axe",
+    requiredClasses: ["warrior", "berserker"],
   },
   axe_2handed_large: {
     id: "axe_2handed_large",
@@ -328,6 +370,8 @@ export const ITEMS: Record<string, ItemDef> = {
     weaponModel: ["2H_Axe"],
     weaponProp: { url: "/assets/models/props/axe_2handed_Large.gltf", bone: "handslotr" },
     attackAnim: GREATAXE_ATTACK,
+    weaponType: "axe",
+    requiredClasses: ["warrior", "berserker"],
   },
   bow: {
     id: "bow",
@@ -338,6 +382,8 @@ export const ITEMS: Record<string, ItemDef> = {
     statModifiers: { agility: 5, critChance: 0.04 },
     weaponProp: { url: "/assets/models/props/bow.gltf", bone: "handslotl" },
     castAnim: BOW_CAST,
+    weaponType: "bow",
+    requiredClasses: ["ranger"],
   },
   crossbow_1handed: {
     id: "crossbow_1handed",
@@ -349,6 +395,8 @@ export const ITEMS: Record<string, ItemDef> = {
     weaponModel: ["1H_Crossbow"],
     weaponProp: { url: "/assets/models/props/crossbow_1handed.gltf", bone: "handslotr" },
     castAnim: ["Ranged_1H_Shoot", "Ranged_1H_Shooting"],
+    weaponType: "crossbow",
+    requiredClasses: ["ranger"],
   },
   crossbow_2handed: {
     id: "crossbow_2handed",
@@ -360,6 +408,8 @@ export const ITEMS: Record<string, ItemDef> = {
     weaponModel: ["2H_Crossbow"],
     weaponProp: { url: "/assets/models/props/crossbow_2handed.gltf", bone: "handslotr" },
     castAnim: ["Ranged_2H_Shoot", "Ranged_2H_Shooting"],
+    weaponType: "crossbow",
+    requiredClasses: ["ranger"],
   },
   dagger: {
     id: "dagger",
@@ -371,6 +421,8 @@ export const ITEMS: Record<string, ItemDef> = {
     weaponModel: ["Knife", "Knife_Offhand"],
     weaponProp: { url: "/assets/models/props/dagger.gltf", bone: "handslotr" },
     attackAnim: DUALWIELD_ATTACK,
+    weaponType: "dagger",
+    requiredClasses: ["rogue", "assassin"],
   },
   druid_staff: {
     id: "druid_staff",
@@ -382,6 +434,8 @@ export const ITEMS: Record<string, ItemDef> = {
     weaponModel: ["2H_Staff"],
     weaponProp: { url: "/assets/models/props/druid_staff.gltf", bone: "handslotr" },
     attackAnim: STAFF_ATTACK,
+    weaponType: "staff",
+    requiredClasses: ["mage", "druid"],
   },
   wand: {
     id: "wand",
@@ -394,6 +448,8 @@ export const ITEMS: Record<string, ItemDef> = {
     weaponProp: { url: "/assets/models/props/wand.gltf", bone: "handslotr" },
     // A quick punchy raise-and-shoot, distinct from a staff's channeled cast.
     castAnim: ["Ranged_Magic_Shoot", "Ranged_Magic_Raise"],
+    weaponType: "wand",
+    requiredClasses: ["mage", "druid"],
   },
   shield_badge: {
     id: "shield_badge",
@@ -404,6 +460,8 @@ export const ITEMS: Record<string, ItemDef> = {
     statModifiers: { armor: 6, vitality: 3 },
     weaponModel: ["1H_Sword", "Badge_Shield"],
     weaponProp: { url: "/assets/models/props/shield_badge.gltf", bone: "handslotl" },
+    weaponType: "shield",
+    requiredClasses: ["warrior", "cleric", "paladin"],
   },
   shield_round: {
     id: "shield_round",
@@ -414,6 +472,8 @@ export const ITEMS: Record<string, ItemDef> = {
     statModifiers: { armor: 8, vitality: 4 },
     weaponModel: ["1H_Sword", "Round_Shield"],
     weaponProp: { url: "/assets/models/props/shield_round.gltf", bone: "handslotl" },
+    weaponType: "shield",
+    requiredClasses: ["warrior", "cleric", "paladin"],
   },
   shield_square: {
     id: "shield_square",
@@ -424,6 +484,8 @@ export const ITEMS: Record<string, ItemDef> = {
     statModifiers: { armor: 14, vitality: 6 },
     weaponModel: ["1H_Sword", "Rectangle_Shield"],
     weaponProp: { url: "/assets/models/props/shield_square.gltf", bone: "handslotl" },
+    weaponType: "shield",
+    requiredClasses: ["warrior", "cleric", "paladin"],
   },
   shield_spikes: {
     id: "shield_spikes",
@@ -434,6 +496,8 @@ export const ITEMS: Record<string, ItemDef> = {
     statModifiers: { armor: 9, power: 3, vitality: 3 },
     weaponModel: ["1H_Sword", "Spike_Shield"],
     weaponProp: { url: "/assets/models/props/shield_spikes.gltf", bone: "handslotl" },
+    weaponType: "shield",
+    requiredClasses: ["warrior", "cleric", "paladin"],
   },
   wrench: {
     id: "wrench",
@@ -444,6 +508,8 @@ export const ITEMS: Record<string, ItemDef> = {
     statModifiers: { power: 4, agility: 2, vitality: 2 },
     weaponProp: { url: "/assets/models/props/engineer_Wrench.gltf", bone: "handslotr" },
     attackAnim: ["Melee_1H_Attack_Chop", "1H_Melee_Attack_Chop"],
+    weaponType: "wrench",
+    requiredClasses: ["engineer"],
   },
   // Mob-drop-gated weapon upgrades -- each requires a trophy from a
   // specific creature plus a mineral, crafted rather than found/starting
@@ -458,6 +524,7 @@ export const ITEMS: Record<string, ItemDef> = {
     weaponModel: ["Knife", "Knife_Offhand"],
     weaponProp: { url: "/assets/models/props/dagger.gltf", bone: "handslotr" },
     attackAnim: DUALWIELD_ATTACK,
+    weaponType: "dagger",
   },
   frostclaw_axe: {
     id: "frostclaw_axe",
@@ -469,6 +536,7 @@ export const ITEMS: Record<string, ItemDef> = {
     weaponModel: ["2H_Axe"],
     weaponProp: { url: "/assets/models/props/axe_2handed.gltf", bone: "handslotr" },
     attackAnim: GREATAXE_ATTACK,
+    weaponType: "axe",
   },
   runic_staff: {
     id: "runic_staff",
@@ -480,6 +548,7 @@ export const ITEMS: Record<string, ItemDef> = {
     weaponModel: ["2H_Staff"],
     weaponProp: { url: "/assets/models/props/staff.glb", bone: "handslotr" },
     attackAnim: STAFF_ATTACK,
+    weaponType: "staff",
   },
   demonbone_bow: {
     id: "demonbone_bow",
@@ -490,6 +559,7 @@ export const ITEMS: Record<string, ItemDef> = {
     statModifiers: { agility: 9, critChance: 0.06 },
     weaponProp: { url: "/assets/models/props/bow.gltf", bone: "handslotl" },
     castAnim: BOW_CAST,
+    weaponType: "bow",
   },
   dragonscale_ward: {
     id: "dragonscale_ward",
@@ -500,6 +570,221 @@ export const ITEMS: Record<string, ItemDef> = {
     statModifiers: { armor: 20, vitality: 8 },
     weaponModel: ["1H_Sword", "Spike_Shield"],
     weaponProp: { url: "/assets/models/props/shield_spikes.gltf", bone: "handslotl" },
+    weaponType: "shield",
+  },
+  // New craftable weapon-slot gear from the KayKit FantasyWeaponsBits packs
+  // -- curated 2-3 tiers per existing family, plus two brand-new families
+  // (polearm, fist) the model packs support but no prior item used.
+  short_sword: {
+    id: "short_sword",
+    name: "Short Sword",
+    type: "gear",
+    stack: 1,
+    slot: "weapon",
+    statModifiers: { power: 2, agility: 1 },
+    weaponProp: { url: "/assets/models/props/sword_A.gltf", bone: "handslotr" },
+    weaponType: "sword",
+  },
+  broadsword: {
+    id: "broadsword",
+    name: "Broadsword",
+    type: "gear",
+    stack: 1,
+    slot: "weapon",
+    statModifiers: { power: 5, vitality: 1 },
+    weaponProp: { url: "/assets/models/props/sword_D.gltf", bone: "handslotr" },
+    weaponType: "sword",
+  },
+  runeblade: {
+    id: "runeblade",
+    name: "Runeblade",
+    type: "gear",
+    stack: 1,
+    slot: "weapon",
+    statModifiers: { power: 8, vitality: 2, critChance: 0.02 },
+    weaponProp: { url: "/assets/models/props/sword_G.gltf", bone: "handslotr" },
+    weaponType: "sword",
+    requiredClasses: ["warrior", "paladin"],
+  },
+  battle_axe: {
+    id: "battle_axe",
+    name: "Battle Axe",
+    type: "gear",
+    stack: 1,
+    slot: "weapon",
+    statModifiers: { power: 4, agility: 1 },
+    weaponProp: { url: "/assets/models/props/axe_B.gltf", bone: "handslotr" },
+    attackAnim: AXE_1H_ATTACK,
+    weaponType: "axe",
+  },
+  war_axe: {
+    id: "war_axe",
+    name: "War Axe",
+    type: "gear",
+    stack: 1,
+    slot: "weapon",
+    statModifiers: { power: 7, agility: 2, vitality: 1 },
+    weaponProp: { url: "/assets/models/props/axe_D.gltf", bone: "handslotr" },
+    attackAnim: AXE_2H_ATTACK,
+    weaponType: "axe",
+    requiredClasses: ["warrior", "berserker"],
+  },
+  short_bow: {
+    id: "short_bow",
+    name: "Short Bow",
+    type: "gear",
+    stack: 1,
+    slot: "weapon",
+    statModifiers: { agility: 3, critChance: 0.02 },
+    weaponProp: { url: "/assets/models/props/bow_A.gltf", bone: "handslotl" },
+    castAnim: BOW_CAST,
+    weaponType: "bow",
+  },
+  longbow: {
+    id: "longbow",
+    name: "Longbow",
+    type: "gear",
+    stack: 1,
+    slot: "weapon",
+    statModifiers: { agility: 7, critChance: 0.05 },
+    weaponProp: { url: "/assets/models/props/bow_C.gltf", bone: "handslotl" },
+    castAnim: BOW_CAST,
+    weaponType: "bow",
+    requiredClasses: ["ranger"],
+  },
+  oak_staff: {
+    id: "oak_staff",
+    name: "Oak Staff",
+    type: "gear",
+    stack: 1,
+    slot: "weapon",
+    statModifiers: { power: 3 },
+    weaponProp: { url: "/assets/models/props/staff_A.gltf", bone: "handslotr" },
+    attackAnim: STAFF_ATTACK,
+    weaponType: "staff",
+  },
+  arcane_rod: {
+    id: "arcane_rod",
+    name: "Arcane Rod",
+    type: "gear",
+    stack: 1,
+    slot: "weapon",
+    statModifiers: { power: 7, vitality: 1 },
+    weaponProp: { url: "/assets/models/props/staff_D.gltf", bone: "handslotr" },
+    attackAnim: STAFF_ATTACK,
+    weaponType: "staff",
+    requiredClasses: ["mage", "druid"],
+  },
+  crystal_wand: {
+    id: "crystal_wand",
+    name: "Crystal Wand",
+    type: "gear",
+    stack: 1,
+    slot: "weapon",
+    statModifiers: { power: 6, agility: 2 },
+    weaponProp: { url: "/assets/models/props/wand_B.gltf", bone: "handslotr" },
+    castAnim: ["Ranged_Magic_Shoot", "Ranged_Magic_Raise"],
+    weaponType: "wand",
+    requiredClasses: ["mage", "druid"],
+  },
+  curved_dagger: {
+    id: "curved_dagger",
+    name: "Curved Dagger",
+    type: "gear",
+    stack: 1,
+    slot: "weapon",
+    statModifiers: { agility: 3, critChance: 0.02 },
+    weaponProp: { url: "/assets/models/props/dagger_A.gltf", bone: "handslotr" },
+    attackAnim: DUALWIELD_ATTACK,
+    weaponType: "dagger",
+  },
+  serrated_dagger: {
+    id: "serrated_dagger",
+    name: "Serrated Dagger",
+    type: "gear",
+    stack: 1,
+    slot: "weapon",
+    statModifiers: { agility: 6, critChance: 0.06 },
+    weaponProp: { url: "/assets/models/props/dagger_C.gltf", bone: "handslotr" },
+    attackAnim: DUALWIELD_ATTACK,
+    weaponType: "dagger",
+    requiredClasses: ["rogue", "assassin"],
+  },
+  kite_shield: {
+    id: "kite_shield",
+    name: "Kite Shield",
+    type: "gear",
+    stack: 1,
+    slot: "weapon",
+    statModifiers: { armor: 7, vitality: 3 },
+    weaponProp: { url: "/assets/models/props/shield_B.gltf", bone: "handslotl" },
+    weaponType: "shield",
+  },
+  heater_shield: {
+    id: "heater_shield",
+    name: "Heater Shield",
+    type: "gear",
+    stack: 1,
+    slot: "weapon",
+    statModifiers: { armor: 12, vitality: 5 },
+    weaponProp: { url: "/assets/models/props/shield_D.gltf", bone: "handslotl" },
+    weaponType: "shield",
+    requiredClasses: ["warrior", "cleric", "paladin"],
+  },
+  halberd: {
+    id: "halberd",
+    name: "Halberd",
+    type: "gear",
+    stack: 1,
+    slot: "weapon",
+    statModifiers: { power: 6, agility: 1 },
+    weaponProp: { url: "/assets/models/props/halberd.gltf", bone: "handslotr" },
+    attackAnim: AXE_2H_ATTACK,
+    weaponType: "polearm",
+  },
+  reaper_scythe: {
+    id: "reaper_scythe",
+    name: "Reaper Scythe",
+    type: "gear",
+    stack: 1,
+    slot: "weapon",
+    statModifiers: { power: 10, agility: 2 },
+    weaponProp: { url: "/assets/models/props/scythe.gltf", bone: "handslotr" },
+    attackAnim: GREATAXE_ATTACK,
+    weaponType: "polearm",
+  },
+  brass_knuckles: {
+    id: "brass_knuckles",
+    name: "Brass Knuckles",
+    type: "gear",
+    stack: 1,
+    slot: "weapon",
+    statModifiers: { agility: 4, critChance: 0.03 },
+    weaponProp: { url: "/assets/models/props/fistweapon_A.gltf", bone: "handslotr" },
+    attackAnim: DUALWIELD_ATTACK,
+    weaponType: "fist",
+  },
+  war_gauntlets: {
+    id: "war_gauntlets",
+    name: "War Gauntlets",
+    type: "gear",
+    stack: 1,
+    slot: "weapon",
+    statModifiers: { power: 2, agility: 8, critChance: 0.08 },
+    weaponProp: { url: "/assets/models/props/fistweapon_C_stacked.gltf", bone: "handslotr" },
+    attackAnim: DUALWIELD_ATTACK,
+    weaponType: "fist",
+    requiredClasses: ["rogue", "assassin"],
+  },
+  iron_spear: {
+    id: "iron_spear",
+    name: "Iron Spear",
+    type: "gear",
+    stack: 1,
+    slot: "weapon",
+    statModifiers: { power: 6, agility: 1 },
+    weaponProp: { url: "/assets/models/props/spear_B.gltf", bone: "handslotr" },
+    weaponType: "spear",
   },
   leather_armor: {
     id: "leather_armor",
@@ -508,6 +793,7 @@ export const ITEMS: Record<string, ItemDef> = {
     stack: 1,
     slot: "chest",
     statModifiers: { armor: 6, vitality: 1 },
+    gearTint: 0x8a5a2f,
   },
   cloth_robe: {
     id: "cloth_robe",
@@ -516,6 +802,7 @@ export const ITEMS: Record<string, ItemDef> = {
     stack: 1,
     slot: "chest",
     statModifiers: { armor: 2, power: 2 },
+    gearTint: 0xb0c8ff,
   },
   peasant_hood: {
     id: "peasant_hood",
@@ -532,6 +819,7 @@ export const ITEMS: Record<string, ItemDef> = {
     stack: 1,
     slot: "chest",
     statModifiers: { armor: 3, vitality: 1 },
+    gearTint: 0xcbb994,
   },
   peasant_arms: {
     id: "peasant_arms",
@@ -540,6 +828,7 @@ export const ITEMS: Record<string, ItemDef> = {
     stack: 1,
     slot: "arms",
     statModifiers: { armor: 1 },
+    gearTint: 0xcbb994,
   },
   peasant_legs: {
     id: "peasant_legs",
@@ -548,6 +837,7 @@ export const ITEMS: Record<string, ItemDef> = {
     stack: 1,
     slot: "legs",
     statModifiers: { armor: 2 },
+    gearTint: 0xcbb994,
   },
   peasant_feet: {
     id: "peasant_feet",
@@ -556,6 +846,7 @@ export const ITEMS: Record<string, ItemDef> = {
     stack: 1,
     slot: "feet",
     statModifiers: { armor: 1, moveSpeedMult: 0.05 },
+    gearTint: 0xcbb994,
   },
   ranger_hood: {
     id: "ranger_hood",
@@ -572,6 +863,7 @@ export const ITEMS: Record<string, ItemDef> = {
     stack: 1,
     slot: "chest",
     statModifiers: { armor: 7, vitality: 2, agility: 1 },
+    gearTint: 0x4a7c4a,
   },
   ranger_arms: {
     id: "ranger_arms",
@@ -580,6 +872,7 @@ export const ITEMS: Record<string, ItemDef> = {
     stack: 1,
     slot: "arms",
     statModifiers: { armor: 2, agility: 1 },
+    gearTint: 0x4a7c4a,
   },
   ranger_legs: {
     id: "ranger_legs",
@@ -588,6 +881,7 @@ export const ITEMS: Record<string, ItemDef> = {
     stack: 1,
     slot: "legs",
     statModifiers: { armor: 5, agility: 1 },
+    gearTint: 0x4a7c4a,
   },
   ranger_feet: {
     id: "ranger_feet",
@@ -596,6 +890,7 @@ export const ITEMS: Record<string, ItemDef> = {
     stack: 1,
     slot: "feet",
     statModifiers: { armor: 2, moveSpeedMult: 0.12 },
+    gearTint: 0x4a7c4a,
   },
   minor_healing_potion: {
     id: "minor_healing_potion",

@@ -108,6 +108,7 @@ export function moveItem(
   fromSlot: number,
   toContainer: Container,
   toSlot: number,
+  qty?: number,
 ): boolean {
   if (toSlot >= slotCount(toContainer) || fromSlot >= slotCount(fromContainer)) return false;
   const from = findItem(items, fromContainer, fromSlot);
@@ -123,14 +124,27 @@ export function moveItem(
     if (toContainer === "equip" && itemDef(from.itemId).slot !== EQUIP_SLOTS[toSlot]) return false;
   }
   const to = findItem(items, toContainer, toSlot);
+  // A partial qty (less than the whole stack) splits off a new stack at the
+  // destination instead of moving/swapping the whole slot -- e.g. the Craft
+  // UI's "fill from Recipe Book" pulling exactly 25 Wood out of a 100 stack,
+  // so the grid ends up holding precisely one recipe's ingredients rather
+  // than an oversized pile that also happens to satisfy a cheaper recipe.
+  const splitting = qty !== undefined && qty > 0 && qty < from.qty;
 
   if (!fromIsSpell && to && to.itemId === from.itemId) {
     // Merge stacks.
     const def = itemDef(from.itemId);
-    const take = Math.min(def.stack - to.qty, from.qty);
+    const take = Math.min(def.stack - to.qty, splitting ? qty : from.qty);
     to.qty += take;
     from.qty -= take;
     if (from.qty <= 0) items.splice(items.indexOf(from), 1);
+    return true;
+  }
+
+  if (splitting) {
+    if (to) return false; // destination occupied by a different item -- can't split into it
+    from.qty -= qty;
+    items.push({ container: toContainer, slot: toSlot, itemId: from.itemId, qty, durability: from.durability });
     return true;
   }
 

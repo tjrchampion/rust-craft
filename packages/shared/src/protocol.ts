@@ -57,6 +57,9 @@ export const MoveItemMsg = z.object({
   fromSlot: z.number().int().min(0).max(31),
   toContainer: z.enum(["inventory", "hotbar", "equip", "crafting"]),
   toSlot: z.number().int().min(0).max(31),
+  /** Move only this many off the source stack (splitting it), leaving the
+   *  remainder behind -- omit to move/swap the whole stack as before. */
+  qty: z.number().int().min(1).optional(),
 });
 
 export const SelectSlotMsg = z.object({
@@ -197,6 +200,16 @@ export interface PlayerSnap {
   pvp: boolean;
   mount: "horse" | "raft" | null;
   weaponId: string | null;
+  /** Whatever's in the player's currently-selected hotbar slot, if it's a
+   *  real item (not a slotted spell marker) -- takes over the held-in-hand
+   *  model on the client when it has its own weaponProp/weaponModel (tools,
+   *  potions), same as the local player's own hotbar selection does. */
+  heldItemId: string | null;
+  headId: string | null;
+  chestId: string | null;
+  armsId: string | null;
+  legsId: string | null;
+  feetId: string | null;
   /** Aura ids for currently-ticking damage-over-time effects only (not
    *  buffs/HoTs/silence) -- drives the floating debuff icon over their head. */
   debuffs: string[];

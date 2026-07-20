@@ -275,7 +275,13 @@ export class AnimatedModel {
   private innerScene: THREE.Object3D | null = null;
   private footY = 0;
   private liftY = 0;
-  private pendingWeapon: { visible: string[]; all: string[] } | null = null;
+  /** Node-visibility calls queued until loadFrom finishes, keyed by channel
+   *  ("weapon"/"head"/"chest") so independent callers each get their own
+   *  slot to wait in instead of clobbering one another. */
+  private pendingNodeVisibility = new Map<string, { visible: string[]; all: string[] }>();
+  /** Per-channel ("chest"/"arms"/"legs") gear-tint calls queued until
+   *  loadFrom finishes, mirroring pendingNodeVisibility. */
+  private pendingGearTint = new Map<string, { nodes: string[]; color: number | null }>();
   private attachedProp: THREE.Object3D | null = null;
   private attachedPropUrl: string | null = null;
   private pendingProp: { url: string; bone: string } | null = null;
@@ -316,18 +322,77 @@ export class AnimatedModel {
     }
   }
 
-  /** Show only `visible` among `allKnown` weapon/shield/accessory nodes —
-   *  every KayKit rig bakes in multiple weapon-mesh variants parented to the
-   *  same hand socket, all visible by default, so equipping a specific item
-   *  means hiding every other known variant and showing just this one. */
-  setWeapon(visible: string[], allKnown: string[]): void {
+  /** Show only `visible` among `allKnown` nodes, hiding every other known
+   *  node -- shared plumbing for weapon variants and baked cosmetic gear
+   *  (hat/helmet/cape/etc), all parented at the rig's top level and visible
+   *  by default. */
+  private setNodeVisibility(channel: string, visible: string[], allKnown: string[]): void {
     if (!this.innerScene) {
-      this.pendingWeapon = { visible, all: allKnown };
+      this.pendingNodeVisibility.set(channel, { visible, all: allKnown });
       return;
     }
     const scene = this.innerScene;
     scene.traverse((o) => {
       if (allKnown.includes(o.name)) o.visible = visible.includes(o.name);
+    });
+  }
+
+  /** Show only `visible` among `allKnown` weapon/shield/accessory nodes —
+   *  every KayKit rig bakes in multiple weapon-mesh variants parented to the
+   *  same hand socket, all visible by default, so equipping a specific item
+   *  means hiding every other known variant and showing just this one. */
+  setWeapon(visible: string[], allKnown: string[]): void {
+    this.setNodeVisibility("weapon", visible, allKnown);
+  }
+
+  /** Characters start bare -- no baked hat/helmet/mask -- and only show it
+   *  once any head-slot item is equipped, using the rig's own baked mesh as
+   *  the stand-in visual (there's no separate model per craftable hood/cap
+   *  yet). Hidden again the moment the slot is emptied. */
+  setHeadGear(equipped: boolean, allKnown: string[]): void {
+    this.setNodeVisibility("head", equipped ? allKnown : [], allKnown);
+  }
+
+  /** Same as setHeadGear but for the baked chest/back cosmetic (cape/
+   *  backpack/pelt) and the chest slot. */
+  setChestGear(equipped: boolean, allKnown: string[]): void {
+    this.setNodeVisibility("chest", equipped ? allKnown : [], allKnown);
+  }
+
+  /** Recolor the given rig nodes (Body/Arm/Leg) to reflect an equipped
+   *  chest/arms/legs item -- there's no separate bare-skin/undergear mesh in
+   *  these rigs, so instead of swapping geometry we tint the existing mesh.
+   *  Pass `color` as null to restore the original, untinted appearance. */
+  setGearTint(channel: string, nodes: string[], color: number | null): void {
+    if (!this.innerScene) {
+      this.pendingGearTint.set(channel, { nodes, color });
+      return;
+    }
+    this.applyGearTint(nodes, color);
+  }
+
+  private applyGearTint(nodes: string[], color: number | null): void {
+    const scene = this.innerScene!;
+    scene.traverse((o) => {
+      const mesh = o as THREE.Mesh;
+      if (!mesh.isMesh || !nodes.includes(o.name)) return;
+      const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+      const next = materials.map((m) => {
+        const std = m as THREE.MeshStandardMaterial & { gearTintBase?: THREE.Color };
+        // Clone once per instance the first time this mesh is tinted (its
+        // material otherwise stays a shared reference from the GLTF cache,
+        // so recoloring it in place would leak to every other instance of
+        // the same rig -- other players, the character-creation preview,
+        // etc). Stash the pre-tint color on the clone so switching to a
+        // different item (or unequipping) always recomputes from the true
+        // original instead of compounding tints on top of each other.
+        const working = std.gearTintBase ? std : (std.clone() as typeof std);
+        if (!working.gearTintBase) working.gearTintBase = std.color.clone();
+        working.color.copy(working.gearTintBase);
+        if (color !== null) working.color.multiply(new THREE.Color(color));
+        return working;
+      });
+      mesh.material = Array.isArray(mesh.material) ? next : next[0]!;
     });
   }
 
@@ -412,10 +477,14 @@ export class AnimatedModel {
       if (!this.actions.has(bare)) this.actions.set(bare, this.mixer.clipAction(clip));
     }
     this.play("idle");
-    if (this.pendingWeapon) {
-      this.setWeapon(this.pendingWeapon.visible, this.pendingWeapon.all);
-      this.pendingWeapon = null;
+    for (const [channel, { visible, all }] of this.pendingNodeVisibility) {
+      this.setNodeVisibility(channel, visible, all);
     }
+    this.pendingNodeVisibility.clear();
+    for (const { nodes, color } of this.pendingGearTint.values()) {
+      this.applyGearTint(nodes, color);
+    }
+    this.pendingGearTint.clear();
     if (this.pendingProp) {
       void this.tryApplyProp(this.pendingProp, this.pendingProp.url);
     }

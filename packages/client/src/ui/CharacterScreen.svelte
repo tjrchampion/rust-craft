@@ -26,6 +26,8 @@
     EQUIP_SLOTS,
     computeActorStats,
     type ItemSnap,
+    type ItemDef,
+    type GearSlot,
     type SpellDef,
     type StatModifiers,
     type RecipeDef,
@@ -117,6 +119,11 @@
    *  container able to clip it. */
   let hoveredSpell = $state<string | null>(null);
   let tooltipPos = $state({ x: 0, y: 0 });
+  /** Floating item tooltip -- structurally parallel to hoveredSpell/tooltipPos
+   *  above, reusing the same fixed-position/rect-based approach and the
+   *  .floating-tooltip CSS shell. */
+  let hoveredItem = $state<{ itemId: string; durability: number | null } | null>(null);
+  let itemTooltipPos = $state({ x: 0, y: 0 });
   let isFullscreen = $state(!!document.fullscreenElement);
 
   $effect(() => {
@@ -175,12 +182,33 @@
     return list;
   });
 
+  const equippedWeapon = $derived(game.inventory.find((i) => i.container === "equip" && i.slot === 0));
+  const equippedWeaponType = $derived(equippedWeapon ? itemDef(equippedWeapon.itemId).weaponType : undefined);
+
+  function weaponTypeLabel(t: string): string {
+    return t[0]!.toUpperCase() + t.slice(1);
+  }
+
   const isSpellLocked = (spellId: string) => {
     const def = spellDef(spellId);
     const req = def.requiredLevel ?? 1;
     const playerLvl = game.self?.level ?? 1;
-    return playerLvl < req;
+    if (playerLvl < req) return true;
+    if (def.allowedWeaponTypes && (!equippedWeaponType || !def.allowedWeaponTypes.includes(equippedWeaponType))) return true;
+    return false;
   };
+
+  /** Human-readable reason the spell row is locked/greyed out, for the badge. */
+  function spellLockReason(spellId: string): string {
+    const def = spellDef(spellId);
+    const req = def.requiredLevel ?? 1;
+    const playerLvl = game.self?.level ?? 1;
+    if (playerLvl < req) return `Req. Lvl ${req}`;
+    if (def.allowedWeaponTypes && (!equippedWeaponType || !def.allowedWeaponTypes.includes(equippedWeaponType))) {
+      return `Requires: ${def.allowedWeaponTypes.map(weaponTypeLabel).join(", ")}`;
+    }
+    return "";
+  }
 
   // Controller-driven spell tooltip synchronization
   $effect(() => {
@@ -250,23 +278,48 @@
     return r.ingredients.every((ing) => count(ing.itemId) >= ing.qty);
   }
 
+  /** Return every grid slot to the inventory -- topping off an existing
+   *  stack of the same item (up to its stack cap) before falling back to a
+   *  fresh empty slot, so clearing doesn't fragment stackable resources
+   *  across the backpack. No partial reuse *within* the grid, no "history"
+   *  left behind -- every slot empties out completely. Tracks stacks/claimed
+   *  slots locally (not by re-reading game.inventory mid-loop) since
+   *  sendMoveItem is fire-and-forget -- otherwise multiple grid items would
+   *  all target the same "first empty slot" the reactive state hasn't
+   *  caught up to yet, colliding with each other. */
   function clearCraftingGrid(): void {
     const g = getGame();
     if (!g) return;
+    const stacks = game.inventory
+      .filter((it) => it.container === "inventory")
+      .map((it) => ({ itemId: it.itemId, qty: it.qty, slot: it.slot }));
+    const usedInventorySlots = new Set(stacks.map((s) => s.slot));
+
     for (let i = 0; i < 9; i++) {
       const item = craftingSlots[i];
-      if (item) {
-        let targetSlot = -1;
-        for (let s = 0; s < INVENTORY_SLOTS; s++) {
-          if (!game.inventory.some(it => it.container === "inventory" && it.slot === s)) {
-            targetSlot = s;
-            break;
-          }
-        }
-        if (targetSlot !== -1) {
-          g.sendMoveItem("crafting", i, "inventory", targetSlot);
+      if (!item) continue;
+      let remaining = item.qty;
+      const cap = itemDef(item.itemId).stack;
+      for (const stack of stacks) {
+        if (remaining <= 0) break;
+        if (stack.itemId !== item.itemId || stack.qty >= cap) continue;
+        const take = Math.min(cap - stack.qty, remaining);
+        g.sendMoveItem("crafting", i, "inventory", stack.slot, take);
+        stack.qty += take;
+        remaining -= take;
+      }
+      if (remaining <= 0) continue;
+      let targetSlot = -1;
+      for (let s = 0; s < INVENTORY_SLOTS; s++) {
+        if (!usedInventorySlots.has(s)) {
+          targetSlot = s;
+          break;
         }
       }
+      if (targetSlot === -1) continue; // inventory full
+      g.sendMoveItem("crafting", i, "inventory", targetSlot, remaining);
+      usedInventorySlots.add(targetSlot);
+      stacks.push({ itemId: item.itemId, qty: remaining, slot: targetSlot });
     }
   }
 
@@ -367,6 +420,97 @@
     hoveredSpell = null;
   }
 
+  function showItemTooltip(itemId: string, durability: number | null, e: MouseEvent): void {
+    hoveredItem = { itemId, durability };
+    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    itemTooltipPos = { x: Math.min(r.right + 10, window.innerWidth - 280), y: r.top };
+  }
+  function hideItemTooltip(): void {
+    hoveredItem = null;
+  }
+
+  const STAT_LABELS: Record<string, string> = {
+    power: "Power",
+    armor: "Armor",
+    agility: "Agility",
+    vitality: "Vitality",
+    maxHp: "Max HP",
+    maxMana: "Max Resource",
+    critChance: "Crit",
+    moveSpeedMult: "Move Speed",
+  };
+  // critChance/moveSpeedMult are stored as fractions (0.05, 1.1) -- display
+  // them as +/- percentage points instead of raw decimals.
+  const PERCENT_STAT_KEYS = new Set(["critChance", "moveSpeedMult"]);
+
+  function equippedItemForSlot(slot: GearSlot): ItemSnap | undefined {
+    const idx = EQUIP_SLOTS.indexOf(slot);
+    return game.inventory.find((i) => i.container === "equip" && i.slot === idx);
+  }
+
+  interface ItemTooltipInfo {
+    def: ItemDef;
+    statDiff: { label: string; current: number; next: number; delta: number; isPercent: boolean }[];
+    classWarning: string | null;
+    weaponTypeLine: string | null;
+    consumableLines: string[];
+    toolLines: string[];
+  }
+
+  /** Everything the item tooltip needs: for gear, a per-stat diff against
+   *  whatever's currently equipped in the same slot (reusing the gearMods
+   *  assembly pattern from computedStats above); for consumables/tools,
+   *  their flat restore/gather/durability values instead of a diff. */
+  function itemTooltipInfo(itemId: string, durability: number | null): ItemTooltipInfo {
+    const def = itemDef(itemId);
+    const statDiff: ItemTooltipInfo["statDiff"] = [];
+    if (def.slot) {
+      const current = equippedItemForSlot(def.slot);
+      const currentDef = current ? itemDef(current.itemId) : undefined;
+      const next = def.statModifiers ?? {};
+      const curr = currentDef?.statModifiers ?? {};
+      const keys = new Set([...Object.keys(next), ...Object.keys(curr)]);
+      for (const key of keys) {
+        const n = (next as Record<string, number>)[key] ?? 0;
+        const c = (curr as Record<string, number>)[key] ?? 0;
+        if (n === 0 && c === 0) continue;
+        const isPercent = PERCENT_STAT_KEYS.has(key);
+        const scale = isPercent ? 100 : 1;
+        statDiff.push({
+          label: STAT_LABELS[key] ?? key,
+          current: c * scale,
+          next: n * scale,
+          delta: (n - c) * scale,
+          isPercent,
+        });
+      }
+    }
+    const classWarning =
+      def.requiredClasses && classInfo && !def.requiredClasses.includes(classInfo.id)
+        ? `Not ideal for ${classInfo.name} (best for ${def.requiredClasses.map((c) => classDef(c).name).join(", ")})`
+        : null;
+    const weaponTypeLine = def.weaponType ? `Type: ${weaponTypeLabel(def.weaponType)}` : null;
+    const consumableLines: string[] = [];
+    if (def.restore) {
+      if (def.restore.hp) consumableLines.push(`Restores ${def.restore.hp} HP`);
+      if (def.restore.mana) consumableLines.push(`Restores ${def.restore.mana} Resource`);
+      if (def.restore.hunger) consumableLines.push(`Restores ${def.restore.hunger} Hunger`);
+      if (def.restore.thirst) consumableLines.push(`Restores ${def.restore.thirst} Thirst`);
+    }
+    if (def.applyAuraOnConsume) consumableLines.push(`Applies ${auraDef(def.applyAuraOnConsume).name}`);
+    const toolLines: string[] = [];
+    if (def.damage) toolLines.push(`Damage: ${def.damage}`);
+    if (def.gatherPower) {
+      const gp = Object.entries(def.gatherPower)
+        .filter(([, v]) => v)
+        .map(([k, v]) => `${k} ${v}`)
+        .join(", ");
+      if (gp) toolLines.push(`Gather: ${gp}`);
+    }
+    if (def.maxDurability) toolLines.push(`Durability: ${durability ?? def.maxDurability}/${def.maxDurability}`);
+    return { def, statDiff, classWarning, weaponTypeLine, consumableLines, toolLines };
+  }
+
   function targetLabel(spell: SpellDef): string {
     const t = spell.targeting;
     if (t.kind === "self") return "Self";
@@ -394,44 +538,79 @@
   }
 
   // ------------------------------------------------------------------- craft
-  /** Move matching stacks from the inventory (never hotbar/equip, so we
-   *  never yank something the player is actively relying on) into empty
-   *  crafting-grid slots until the recipe's ingredients are covered. Plans
-   *  the moves against local bookkeeping rather than re-reading
-   *  craftingSlots/game.inventory mid-loop, since sendMoveItem is a fire-
-   *  and-forget WS message -- the reactive state won't reflect a move
-   *  until the server's snapshot round-trips back. */
+  /** Clears whatever's currently in the grid back to the inventory, then
+   *  fills it with exactly this recipe's ingredients -- always a full
+   *  clear-and-refill, never a top-up on top of a previously-selected
+   *  recipe's leftovers ("no history"), so the grid only ever holds one
+   *  recipe's exact ingredients and always matches the one just clicked.
+   *
+   *  Builds a simulated post-clear inventory (real inventory slots plus
+   *  wherever the just-cleared grid items are being sent) instead of
+   *  re-reading game.inventory/craftingSlots between the two steps, since
+   *  sendMoveItem is a fire-and-forget WS message and the reactive state
+   *  won't reflect either move until the server's snapshot round-trips
+   *  back -- without this, refilling right after clearing would fail to
+   *  see (and reuse) whatever was just freed from the grid. */
   function quickFillRecipe(recipe: RecipeDef): void {
     const g = getGame();
     if (!g) return;
-    const gridFilled = new Set<number>();
-    const gridTotals: Record<string, number> = {};
+
+    interface Stack { itemId: string; qty: number; slot: number }
+    const simulated: Stack[] = game.inventory
+      .filter((it) => it.container === "inventory")
+      .map((it) => ({ itemId: it.itemId, qty: it.qty, slot: it.slot }));
+    const usedInventorySlots = new Set(simulated.map((s) => s.slot));
+
+    // 1) Clear: send every occupied grid slot back to the inventory --
+    // topping off an existing stack of the same item first (so clearing
+    // doesn't fragment stackable resources), falling back to a fresh empty
+    // slot for whatever's left -- and fold the result into the simulated
+    // pool so step 2 can immediately treat it as available.
     for (let i = 0; i < 9; i++) {
-      const it = craftingSlots[i];
-      if (it) {
-        gridFilled.add(i);
-        gridTotals[it.itemId] = (gridTotals[it.itemId] ?? 0) + it.qty;
+      const item = craftingSlots[i];
+      if (!item) continue;
+      let remaining = item.qty;
+      const cap = itemDef(item.itemId).stack;
+      for (const stack of simulated) {
+        if (remaining <= 0) break;
+        if (stack.itemId !== item.itemId || stack.qty >= cap) continue;
+        const take = Math.min(cap - stack.qty, remaining);
+        g.sendMoveItem("crafting", i, "inventory", stack.slot, take);
+        stack.qty += take;
+        remaining -= take;
       }
-    }
-    const usedInventorySlots = new Set<number>();
-    for (const ing of recipe.ingredients) {
-      let have = gridTotals[ing.itemId] ?? 0;
-      if (have >= ing.qty) continue;
-      for (const it of game.inventory) {
-        if (have >= ing.qty) break;
-        if (it.container !== "inventory" || it.itemId !== ing.itemId || usedInventorySlots.has(it.slot)) continue;
-        let targetSlot = -1;
-        for (let s = 0; s < 9; s++) {
-          if (!gridFilled.has(s)) {
-            targetSlot = s;
-            break;
-          }
+      if (remaining <= 0) continue;
+      let targetSlot = -1;
+      for (let s = 0; s < INVENTORY_SLOTS; s++) {
+        if (!usedInventorySlots.has(s)) {
+          targetSlot = s;
+          break;
         }
-        if (targetSlot === -1) break; // grid full
-        g.sendMoveItem("inventory", it.slot, "crafting", targetSlot);
-        gridFilled.add(targetSlot);
-        usedInventorySlots.add(it.slot);
-        have += it.qty;
+      }
+      if (targetSlot === -1) continue; // inventory full; leave it in the grid
+      g.sendMoveItem("crafting", i, "inventory", targetSlot, remaining);
+      usedInventorySlots.add(targetSlot);
+      simulated.push({ itemId: item.itemId, qty: remaining, slot: targetSlot });
+    }
+
+    // 2) Refill: pull exactly this recipe's ingredients from the simulated
+    // inventory into the now-empty grid, splitting stacks so the grid ends
+    // up with precisely the required amount of each -- never more, which
+    // would let it also match a different, cheaper recipe by mistake.
+    const claimedSlots = new Set<number>();
+    let gridSlot = 0;
+    for (const ing of recipe.ingredients) {
+      let have = 0;
+      for (const stack of simulated) {
+        if (have >= ing.qty) break;
+        if (stack.itemId !== ing.itemId || claimedSlots.has(stack.slot)) continue;
+        if (gridSlot >= 9) break;
+        claimedSlots.add(stack.slot);
+        const needed = ing.qty - have;
+        const take = Math.min(needed, stack.qty);
+        g.sendMoveItem("inventory", stack.slot, "crafting", gridSlot, take < stack.qty ? take : undefined);
+        gridSlot++;
+        have += take;
       }
     }
   }
@@ -666,6 +845,8 @@
                   equipCursor = i;
                   activateInv("equip", i);
                 }}
+                onmouseenter={(e) => item && showItemTooltip(item.itemId, item.durability, e)}
+                onmouseleave={hideItemTooltip}
               >
                 <span class="equip-label">{EQUIP_LABELS[EQUIP_SLOTS[i]!]}</span>
                 <span class="equip-value">
@@ -709,6 +890,8 @@
                   invCursor = i;
                   activateInv("inventory", i);
                 }}
+                onmouseenter={(e) => item && showItemTooltip(item.itemId, item.durability, e)}
+                onmouseleave={hideItemTooltip}
               >
                 {#if item}
                   <IconGlyph value={itemIcon(item.itemId)} itemId={item.itemId} />
@@ -726,6 +909,8 @@
                 class:first={i === 6}
                 class:moving={moving?.container === "hotbar" && moving.slot === i}
                 onclick={() => activateInv("hotbar", i)}
+                onmouseenter={(e) => !spellId && item && showItemTooltip(item.itemId, item.durability, e)}
+                onmouseleave={hideItemTooltip}
               >
                 {#if spellId}
                   <IconGlyph value={spellIcon(spellId)} size={20} />
@@ -818,7 +1003,7 @@
                 <IconGlyph value={spellIcon(spellId)} size={26} />
                 <span class="name">{spell.name}</span>
                 {#if locked}
-                  <span class="lock-req">Req. Lvl {spell.requiredLevel ?? 1} 🔒</span>
+                  <span class="lock-req">{spellLockReason(spellId)} 🔒</span>
                 {/if}
               </button>
             {/each}
@@ -867,6 +1052,8 @@
                     invCursor = i;
                     activateInv("inventory", i);
                   }}
+                  onmouseenter={(e) => item && showItemTooltip(item.itemId, item.durability, e)}
+                  onmouseleave={hideItemTooltip}
                 >
                   {#if item}
                     <IconGlyph value={itemIcon(item.itemId)} itemId={item.itemId} />
@@ -894,6 +1081,8 @@
                       craftGridCursor = i;
                       activateInv("crafting", i);
                     }}
+                    onmouseenter={(e) => item && showItemTooltip(item.itemId, item.durability, e)}
+                    onmouseleave={hideItemTooltip}
                   >
                     {#if item}
                       <IconGlyph value={itemIcon(item.itemId)} size={28} itemId={item.itemId} />
@@ -918,6 +1107,8 @@
                       getGame()?.sendCraft(matchedRecipe.id);
                     }
                   }}
+                  onmouseenter={(e) => matchedRecipe && showItemTooltip(matchedRecipe.output, null, e)}
+                  onmouseleave={hideItemTooltip}
                 >
                   {#if matchedRecipe}
                     <IconGlyph value={itemIcon(matchedRecipe.output)} size={28} itemId={matchedRecipe.output} />
@@ -978,6 +1169,8 @@
                     craftCursor = idx;
                     quickFillRecipe(recipe);
                   }}
+                  onmouseenter={(e) => showItemTooltip(recipe.output, null, e)}
+                  onmouseleave={hideItemTooltip}
                 >
                   <div class="recipe-header">
                     <span class="recipe-icon"><IconGlyph value={itemIcon(recipe.output)} size={16} itemId={recipe.output} /></span>
@@ -1134,11 +1327,54 @@
         <span>Cooldown: {spell.cooldownS}s</span>
         <span>{targetLabel(spell)}</span>
       </div>
+      {#if spell.allowedWeaponTypes}
+        <div class="tt-weapon-req" class:tt-weapon-unmet={!equippedWeaponType || !spell.allowedWeaponTypes.includes(equippedWeaponType)}>
+          Requires: {spell.allowedWeaponTypes.map(weaponTypeLabel).join(", ")}
+        </div>
+      {/if}
       <div class="tt-effects">
         {#each effectLines(spell) as line (line)}
           <div class="tt-effect">{line}</div>
         {/each}
       </div>
+    </div>
+  {/if}
+  {#if hoveredItem}
+    {@const info = itemTooltipInfo(hoveredItem.itemId, hoveredItem.durability)}
+    <div class="floating-tooltip" style="left: {itemTooltipPos.x}px; top: {itemTooltipPos.y}px;">
+      <div class="tt-title">{info.def.name}</div>
+      {#if info.weaponTypeLine}
+        <div class="tt-weapon-req">{info.weaponTypeLine}</div>
+      {/if}
+      {#if info.classWarning}
+        <div class="tt-weapon-req tt-weapon-unmet">{info.classWarning}</div>
+      {/if}
+      {#if info.statDiff.length > 0}
+        <div class="tt-effects">
+          {#each info.statDiff as line (line.label)}
+            <div class="tt-effect">
+              {line.label}: {line.current}{line.isPercent ? "%" : ""} → {line.next}{line.isPercent ? "%" : ""}
+              <span class:tt-delta-pos={line.delta > 0} class:tt-delta-neg={line.delta < 0}>
+                ({line.delta > 0 ? "+" : ""}{line.delta}{line.isPercent ? "%" : ""})
+              </span>
+            </div>
+          {/each}
+        </div>
+      {/if}
+      {#if info.consumableLines.length > 0}
+        <div class="tt-effects">
+          {#each info.consumableLines as line (line)}
+            <div class="tt-effect">{line}</div>
+          {/each}
+        </div>
+      {/if}
+      {#if info.toolLines.length > 0}
+        <div class="tt-effects">
+          {#each info.toolLines as line (line)}
+            <div class="tt-effect">{line}</div>
+          {/each}
+        </div>
+      {/if}
     </div>
   {/if}
 </div>
@@ -1445,6 +1681,16 @@
     padding-bottom: 6px;
     border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   }
+  .tt-weapon-req {
+    font-size: 11px;
+    color: #9fd0a8;
+    margin-bottom: 6px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  }
+  .tt-weapon-req.tt-weapon-unmet {
+    color: #e08a8a;
+  }
   .tt-effects {
     display: flex;
     flex-direction: column;
@@ -1454,6 +1700,12 @@
     font-size: 11.5px;
     color: #dce6f2;
     line-height: 1.35;
+  }
+  .tt-delta-pos {
+    color: #7bd88f;
+  }
+  .tt-delta-neg {
+    color: #e08a8a;
   }
   .clear {
     position: absolute;
