@@ -2,6 +2,7 @@ import * as THREE from "three";
 import { GLTFLoader, type GLTF } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { SkeletonUtils } from "three/examples/jsm/Addons.js";
 import { MeshoptDecoder } from "three/examples/jsm/libs/meshopt_decoder.module.js";
+import { ITEMS } from "@rustcraft/shared";
 
 const loader = new GLTFLoader();
 loader.setMeshoptDecoder(MeshoptDecoder);
@@ -472,10 +473,18 @@ export class AnimatedModel {
       gltf.animations.length > 0 ? gltf.animations : await loadAnimationLibrary(url.includes("_Large") ? "large" : "medium");
     for (const clip of clips) {
       // Strip armature prefixes ("AnimalArmature|Walk" -> also register "Walk")
-      this.actions.set(clip.name, this.mixer.clipAction(clip));
+      const action = this.mixer.clipAction(clip);
+      this.actions.set(clip.name, action);
       const bare = clip.name.split("|").pop()!;
-      if (!this.actions.has(bare)) this.actions.set(bare, this.mixer.clipAction(clip));
+      if (!this.actions.has(bare)) this.actions.set(bare, action);
     }
+    // Pre-bind track property bindings for all loaded clips so switching to
+    // cast/attack/dodge animations during gameplay never stalls the main thread.
+    for (const action of this.actions.values()) {
+      action.play();
+      action.stop();
+    }
+    this.mixer.update(0);
     this.play("idle");
     for (const [channel, { visible, all }] of this.pendingNodeVisibility) {
       this.setNodeVisibility(channel, visible, all);
@@ -611,9 +620,6 @@ export function logicalFromState(
     case "jump":
       return "jump";
     case "cast":
-      // Casting no longer roots the player in place server-side, so prefer
-      // the movement clip while actually walking/running -- otherwise the
-      // avatar would glide through the world stuck in the cast pose.
       if (speed > runThreshold) return directionalMove(localMoveX, localMoveY, true);
       if (speed > 0.35) return directionalMove(localMoveX, localMoveY, false);
       return "cast";
@@ -629,11 +635,15 @@ export function logicalFromState(
 }
 
 export function preloadCharacterAssets(): Promise<void> {
+  const propUrls = Object.values(ITEMS)
+    .map((i) => i.weaponProp?.url)
+    .filter((url): url is string => !!url);
   const urls = [
     ...PLAYER_MODELS,
     WOLF_MODEL,
     ...Object.values(SKELETON_MODELS),
     ...Object.values(CREATURE_MODELS).map((c) => c.url),
+    ...propUrls,
   ];
   return Promise.all([
     ...urls.map((url) => load(url).catch(() => null)),

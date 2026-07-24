@@ -63,6 +63,9 @@ interface RemoteEntity {
   armsId: string | null;
   legsId: string | null;
   feetId: string | null;
+  lootRing?: THREE.Mesh;
+  freezeMesh?: THREE.Group;
+  lootable?: boolean;
 }
 
 export interface TargetInfo {
@@ -502,6 +505,31 @@ export class EntityManager {
     }
   }
 
+  private createLootRing(): THREE.Mesh {
+    const geom = new THREE.RingGeometry(0.7, 0.95, 32);
+    geom.rotateX(-Math.PI / 2);
+    const mat = new THREE.MeshBasicMaterial({
+      color: 0xffd700,
+      side: THREE.DoubleSide,
+      transparent: true,
+      opacity: 0.85,
+      depthWrite: false,
+    });
+    const mesh = new THREE.Mesh(geom, mat);
+    mesh.position.y = 0.05;
+    mesh.visible = false;
+
+    // Add a golden point light so the ring actually illuminates the world
+    const light = new THREE.PointLight(0xffd700, 2.5, 5);
+    light.position.set(0, 0.3, 0);
+    mesh.add(light);
+    // Store base intensity for pulsing in update()
+    mesh.userData.lootLight = light;
+    mesh.userData.lootLightBase = 2.5;
+
+    return mesh;
+  }
+
   applyMobs(mobs: MobSnap[], now: number): void {
     for (const snap of mobs) {
       let entity = this.entities.get(snap.id);
@@ -514,10 +542,29 @@ export class EntityManager {
       entity.anim = snap.anim;
       entity.hp = snap.hp;
       entity.maxHp = snap.maxHp;
+      entity.lootable = !!snap.lootable;
+      if (snap.lootable) {
+        if (!entity.lootRing) {
+          entity.lootRing = this.createLootRing();
+          entity.group.add(entity.lootRing);
+        }
+        entity.lootRing.visible = true;
+      } else if (entity.lootRing) {
+        entity.lootRing.visible = false;
+      }
+      if (entity.hpBar) {
+        entity.hpBar.visible = snap.hp > 0;
+        if (snap.hp > 0) paintHpBar(entity.hpBar, snap.hp / snap.maxHp);
+      }
+      if (entity.nameplate) {
+        entity.nameplate.visible = snap.hp > 0;
+      }
+      if (entity.debuffIcons) {
+        entity.debuffIcons.visible = snap.hp > 0;
+      }
       entity.samples.push({ t: now, x: snap.x, y: snap.y, z: snap.z, yaw: snap.yaw });
       if (entity.samples.length > 12) entity.samples.shift();
-      if (entity.hpBar) paintHpBar(entity.hpBar, snap.hp / snap.maxHp);
-      this.updateDebuffs(entity, snap.debuffs);
+      this.updateDebuffs(entity, snap.hp > 0 ? snap.debuffs : []);
     }
   }
 
@@ -550,11 +597,97 @@ export class EntityManager {
     }
   }
 
+  private createIceMesh(): THREE.Group {
+    const group = new THREE.Group();
+
+    // 1. Central Translucent Frost Prism Core
+    const prismGeom = new THREE.CylinderGeometry(0.85, 1.1, 2.1, 8);
+    const prismMat = new THREE.MeshStandardMaterial({
+      color: 0x40c4ff,
+      emissive: 0x0077ff,
+      emissiveIntensity: 0.75,
+      transparent: true,
+      opacity: 0.55,
+      roughness: 0.05,
+      metalness: 0.25,
+      depthWrite: false,
+    });
+    const prism = new THREE.Mesh(prismGeom, prismMat);
+    prism.position.y = 1.05;
+    group.add(prism);
+
+    // 2. Animated Blue Frost Flame Cones
+    const flames: THREE.Mesh[] = [];
+    const flameColors = [0x00ffff, 0x00a2ff, 0x33e5ff, 0x0055ff, 0x77e5ff];
+    const flameCount = 8;
+
+    for (let i = 0; i < flameCount; i++) {
+      const angle = (i / flameCount) * Math.PI * 2;
+      const radius = 0.6 + (i % 2) * 0.28;
+      const height = 1.3 + (i % 3) * 0.4;
+
+      const flameGeom = new THREE.ConeGeometry(0.3, height, 5);
+      const color = flameColors[i % flameColors.length];
+      const flameMat = new THREE.MeshBasicMaterial({
+        color,
+        transparent: true,
+        opacity: 0.85,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+      });
+
+      const flame = new THREE.Mesh(flameGeom, flameMat);
+      const baseY = height * 0.5;
+      flame.position.set(Math.sin(angle) * radius, baseY, Math.cos(angle) * radius);
+      flame.userData.baseY = baseY;
+
+      group.add(flame);
+      flames.push(flame);
+    }
+    group.userData.flames = flames;
+
+    // 3. Glowing Blue Flame Ground Ring
+    const ringGeom = new THREE.RingGeometry(0.65, 1.4, 24);
+    ringGeom.rotateX(-Math.PI / 2);
+    const ringMat = new THREE.MeshBasicMaterial({
+      color: 0x00e1ff,
+      side: THREE.DoubleSide,
+      transparent: true,
+      opacity: 0.85,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    });
+    const ring = new THREE.Mesh(ringGeom, ringMat);
+    ring.position.y = 0.05;
+    group.add(ring);
+
+    // 4. Intense Frost Light
+    const light = new THREE.PointLight(0x00e1ff, 4.5, 6.0);
+    light.position.y = 1.2;
+    group.add(light);
+    group.userData.light = light;
+
+    return group;
+  }
+
   private updateDebuffs(entity: RemoteEntity, debuffs: string[]): void {
     const key = debuffs.join(",");
-    if (key === entity.lastDebuffKey) return;
-    entity.lastDebuffKey = key;
-    paintDebuffIcons(entity.debuffIcons, debuffs);
+    if (key !== entity.lastDebuffKey) {
+      entity.lastDebuffKey = key;
+      paintDebuffIcons(entity.debuffIcons, debuffs);
+    }
+
+    const isFrozen = debuffs.includes("frozen") || debuffs.includes("chilled");
+    if (isFrozen) {
+      if (!entity.freezeMesh) {
+        entity.freezeMesh = this.createIceMesh();
+        entity.group.add(entity.freezeMesh);
+      }
+      entity.freezeMesh.visible = true;
+    } else if (entity.freezeMesh) {
+      entity.freezeMesh.visible = false;
+    }
   }
 
   applyProjectiles(snaps: ProjectileSnap[]): void {
@@ -876,6 +1009,35 @@ export class EntityManager {
         logical === "attack" ? weapon?.attackAnim : logical === "cast" ? weapon?.castAnim : undefined;
       entity.model.play(logical, overrides);
       entity.model.update(dt);
+
+      // Pulse the loot ring light if present and visible
+      if (entity.lootRing?.visible) {
+        const light = entity.lootRing.userData.lootLight as THREE.PointLight | undefined;
+        const base = entity.lootRing.userData.lootLightBase as number | undefined;
+        if (light && base !== undefined) {
+          light.intensity = base + Math.sin(now * 0.003) * 0.8;
+        }
+      }
+
+      // Animate blue flames and flicker light for frozen entities
+      if (entity.freezeMesh?.visible) {
+        entity.freezeMesh.rotation.y += dt * 1.8;
+        const flames = entity.freezeMesh.userData.flames as THREE.Mesh[] | undefined;
+        if (flames) {
+          for (let i = 0; i < flames.length; i++) {
+            const f = flames[i]!;
+            const phase = now * 0.009 + i * 1.3;
+            const sy = 0.8 + Math.sin(phase) * 0.45;
+            const sx = 0.85 + Math.cos(phase * 1.4) * 0.25;
+            f.scale.set(sx, sy, sx);
+            f.position.y = (f.userData.baseY as number) + Math.sin(phase * 1.7) * 0.15;
+          }
+        }
+        const light = entity.freezeMesh.userData.light as THREE.PointLight | undefined;
+        if (light) {
+          light.intensity = 4.0 + Math.sin(now * 0.015) * 1.8;
+        }
+      }
     }
 
     this.updateTargetRing();
@@ -957,9 +1119,34 @@ export class EntityManager {
     return false;
   }
 
+  nearestLootableCorpse(x: number, y: number, z: number, maxDist = 7.0): { id: string; name: string } | null {
+    let nearest: { id: string; name: string; dist: number } | null = null;
+    for (const e of this.entities.values()) {
+      if (e.kind === "mob" && e.hp <= 0 && e.lootable !== false) {
+        const mobX = e.samples.length > 0 ? e.samples[e.samples.length - 1]!.x : e.lastX || e.group.position.x;
+        const mobY = e.samples.length > 0 ? e.samples[e.samples.length - 1]!.y : e.group.position.y;
+        const mobZ = e.samples.length > 0 ? e.samples[e.samples.length - 1]!.z : e.lastZ || e.group.position.z;
+        const dx = mobX - x;
+        const dy = (mobY - y) * 0.4;
+        const dz = mobZ - z;
+        const d = Math.hypot(dx, dy, dz);
+        if (d < maxDist && (!nearest || d < nearest.dist)) {
+          nearest = { id: e.id, name: e.name ?? "Corpse", dist: d };
+        }
+      }
+    }
+    return nearest ? { id: nearest.id, name: nearest.name } : null;
+  }
+
   // ============================ targeting ============================
 
   setTarget(id: string | null): void {
+    const e = id ? this.entities.get(id) : null;
+    if (e && e.hp <= 0) {
+      this.targetId = null;
+      this.targetRing.visible = false;
+      return;
+    }
     this.targetId = id && this.entities.has(id) ? id : null;
     this.targetRing.visible = this.targetId !== null;
   }
@@ -971,7 +1158,7 @@ export class EntityManager {
   entityInfo(id: string | null): TargetInfo | null {
     if (!id) return null;
     const e = this.entities.get(id);
-    if (!e) return null;
+    if (!e || e.hp <= 0) return null;
     return {
       id: e.id,
       name: e.name ?? "Unknown",
@@ -984,7 +1171,7 @@ export class EntityManager {
 
   entityWorldPos(id: string, out = new THREE.Vector3()): THREE.Vector3 | null {
     const e = this.entities.get(id);
-    if (!e) return null;
+    if (!e || e.hp <= 0) return null;
     return out.copy(e.group.position);
   }
 
@@ -1011,17 +1198,17 @@ export class EntityManager {
     this.entities.get(id)?.model.play("hit");
   }
 
-  /** Raycast normalized device coords into the scene; return the entity hit. */
+  /** Raycast normalized device coords into the scene; return the entity hit (living only). */
   raycastEntity(camera: THREE.Camera, ndcX: number, ndcY: number): string | null {
     this.raycaster.setFromCamera(new THREE.Vector2(ndcX, ndcY), camera);
-    const groups = [...this.entities.values()].map((e) => e.group);
+    const groups = [...this.entities.values()].filter((e) => e.hp > 0).map((e) => e.group);
     const hits = this.raycaster.intersectObjects(groups, true);
     if (hits.length === 0) return null;
     // Walk up from the hit object to find which entity group owns it.
     let obj: THREE.Object3D | null = hits[0]!.object;
     while (obj) {
       for (const e of this.entities.values()) {
-        if (e.group === obj) return e.id;
+        if (e.group === obj && e.hp > 0) return e.id;
       }
       obj = obj.parent;
     }
@@ -1059,7 +1246,7 @@ export class EntityManager {
   private updateTargetRing(): void {
     if (!this.targetId) return;
     const e = this.entities.get(this.targetId);
-    if (!e) {
+    if (!e || e.hp <= 0) {
       this.setTarget(null);
       return;
     }

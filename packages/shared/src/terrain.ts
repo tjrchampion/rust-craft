@@ -185,10 +185,14 @@ function northTerrainHeight(x: number, z: number): number {
  * Exported so bridge decks can sit at bank height instead of the trench.
  */
 export function terrainHeightBeforeRivers(x: number, z: number): number {
-  if (z > VALLEY_START_Z) return northTerrainHeight(x, z);
-  const base = fbm(ZONE_SEED, x, z, 90, 4); // rolling hills
-  const ridge = fbm(ZONE_SEED + 7777, x, z, 220, 2); // large-scale variation
-  let h = base * 14 + ridge * 12 - 6;
+  // Blend south and north terrain heights around VALLEY_START_Z to avoid a hard seam.
+  const blendWidth = 5; // meters
+  const blend = Math.min(Math.max((z - VALLEY_START_Z) / blendWidth, 0), 1);
+  const southBase = fbm(ZONE_SEED, x, z, 90, 4); // rolling hills
+  const southRidge = fbm(ZONE_SEED + 7777, x, z, 220, 2); // large-scale variation
+  const southH = southBase * 14 + southRidge * 12 - 6;
+  const northH = northTerrainHeight(x, z);
+  let h = lerp(southH, northH, blend);
 
   const e = biomeValue(x, z);
   const m = moistureValue(x, z);

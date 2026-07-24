@@ -94,6 +94,26 @@ class GameState {
   /** null while in the open world; set for the life of a dungeon run --
    *  drives the persistent HUD chip (see Hud.svelte). */
   dungeonState = $state<{ tier: number; partySize: number; mobsRemaining: number | null } | null>(null);
+  /** null while in the open world; set for the life of a region visit --
+   *  drives the persistent HUD chip the same way dungeonState does. */
+  regionState = $state<{ regionId: string; regionName: string } | null>(null);
+
+  /** Currently active corpse loot items (null when loot window is closed) */
+  activeCorpseLoot = $state<{ mobId: string; mobType: string; items: { itemId: string; qty: number }[] } | null>(null);
+
+  /** System setting: Auto Loot toggle preference (persisted in localStorage) */
+  autoLoot = $state<boolean>(
+    typeof localStorage !== "undefined" && localStorage.getItem("rc_autoloot") !== null
+      ? localStorage.getItem("rc_autoloot") === "true"
+      : false,
+  );
+
+  setAutoLoot(enabled: boolean): void {
+    this.autoLoot = enabled;
+    if (typeof localStorage !== "undefined") {
+      localStorage.setItem("rc_autoloot", String(enabled));
+    }
+  }
 
   addChat(channel: ChatChannel, from: string, text: string): void {
     this.chatLog.push({ channel, from, text, at: Date.now() });
@@ -154,6 +174,7 @@ class GameState {
     this.zoneBanner = null;
     this.questMarkers = [];
     this.dungeonState = null;
+    this.regionState = null;
     this.loading = false;
     this.loadingProgress = 0;
     this.loadingMessage = "";

@@ -29,8 +29,16 @@ export const AURAS: Record<string, AuraDef> = {
     id: "chilled",
     name: "Chilled",
     durationS: 4,
-    statModifiers: { moveSpeedMult: -0.3 },
+    statModifiers: { moveSpeedMult: -0.5 },
     icon: "❄️",
+    positive: false,
+  },
+  frozen: {
+    id: "frozen",
+    name: "Frozen",
+    durationS: 5.0,
+    statModifiers: { moveSpeedMult: -1.0 },
+    icon: "🧊",
     positive: false,
   },
   bleeding: {

@@ -16,22 +16,27 @@
   import ZoneBanner from "./ZoneBanner.svelte";
   import MiniMap from "./MiniMap.svelte";
   import WorldMap from "./WorldMap.svelte";
+  import LootModal from "./LootModal.svelte";
 
   const interactKey = $derived(promptLabel("Ⓧ", "E"));
 
   let castProgress = $state(0);
   $effect(() => {
-    if (!game.self?.castingSpell || !game.self.castEndsAt) {
+    const spellId = game.self?.castingSpell;
+    if (!spellId || !game.self?.castEndsAt) {
       castProgress = 0;
       return;
     }
+    let totalMs = 1000;
+    try {
+      totalMs = spellDef(spellId).castTimeS * 1000;
+    } catch {
+      totalMs = 1000;
+    }
     const endsAt = game.self.castEndsAt;
-    const totalMs = spellDef(game.self.castingSpell).castTimeS * 1000;
     const interval = setInterval(() => {
-      // castEndsAt is a server-clock timestamp; subtract serverTimeOffset
-      // (sampled once at connect) before comparing against our own
-      // Date.now(), or any client/server clock skew throws this off.
-      const remaining = endsAt - game.serverTimeOffset - Date.now();
+      const currentServerTime = Date.now() - game.serverTimeOffset;
+      const remaining = endsAt - currentServerTime;
       castProgress = totalMs > 0 ? Math.min(1, Math.max(0, 1 - remaining / totalMs)) : 1;
     }, 40);
     return () => clearInterval(interval);
@@ -151,6 +156,7 @@
   {/if}
   <QuestDialog />
   <WorldMap />
+  <LootModal />
 
   <div class="app-version">
     {__APP_VERSION__}

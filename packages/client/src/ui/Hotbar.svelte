@@ -38,12 +38,8 @@
         const total = spellDef(spellId).cooldownS;
         const entry = game.self?.spellCooldowns.find((c) => c.spellId === spellId);
         if (entry && total > 0) {
-          // readyAt is a server-clock timestamp; subtract serverTimeOffset
-          // before comparing against our own clock (same pattern as the
-          // cast bar and aura timers) -- without it, any client/server
-          // clock skew made the cooldown sweep finish early or late versus
-          // when the server would actually allow the recast.
-          const remaining = Math.max(0, (entry.readyAt - game.serverTimeOffset - nowTick) / 1000);
+          const currentServerTime = nowTick - game.serverTimeOffset;
+          const remaining = Math.max(0, (entry.readyAt - currentServerTime) / 1000);
           cooldownFrac = Math.min(1, remaining / total);
           if (remaining > 0.05) cooldownLabel = remaining >= 10 ? String(Math.ceil(remaining)) : remaining.toFixed(1);
         }

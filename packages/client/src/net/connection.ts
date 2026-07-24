@@ -28,6 +28,9 @@ export class Connection {
           return;
         }
         if (msg.t === "welcome") resolve();
+        if (msg.t === "corpseLoot") {
+          console.log("[Net Debug] Connection received corpseLoot WS message:", msg);
+        }
         for (const handler of this.handlers) handler(msg);
       };
       ws.onerror = () => reject(new Error("Connection failed"));

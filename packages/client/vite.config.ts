@@ -27,13 +27,17 @@ export default defineConfig({
     __APP_VERSION__: JSON.stringify(appVersion),
   },
   server: {
-    port: Number(process.env.PORT) || 5173,
+    host: "127.0.0.1",
+    port: 5175,
     proxy: {
-      "/api": "http://localhost:3000",
-      "/ws": { target: "ws://localhost:3000", ws: true },
+      "/api": "http://localhost:3001",
+      "/ws": { target: "ws://localhost:3001", ws: true },
     },
     watch: {
-      ignored: ["**/packages/shared/src/content/dungeonBlueprints/**"],
+      ignored: [
+        "**/packages/shared/src/content/dungeonBlueprints/**",
+        "**/packages/shared/src/content/regionBlueprints/**",
+      ],
     },
   },
 });

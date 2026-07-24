@@ -1,4 +1,4 @@
-export type Screen = "loading" | "login" | "charselect" | "ingame" | "dungeoneditor";
+export type Screen = "loading" | "login" | "charselect" | "ingame" | "dungeoneditor" | "regioneditor";
 
 export interface CharacterSummary {
   id: string;
@@ -56,6 +56,13 @@ class AppState {
    *  of production builds. */
   enterDungeonEditor() {
     this.setScreen("dungeoneditor");
+  }
+
+  /** Dev-only entry point for the region editor (packages/client/src/ui/
+   *  RegionEditor.svelte) -- similar to dungeon editor, allows direct access
+   *  for development without login/character selection. */
+  enterRegionEditor() {
+    this.setScreen("regioneditor");
   }
 
   async refresh() {

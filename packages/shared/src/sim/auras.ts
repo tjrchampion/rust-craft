@@ -39,6 +39,18 @@ export function aggregateAuraModifiers(actives: ActiveAura[]): StatModifiers[] {
   return actives.map((a) => auraDef(a.auraId).statModifiers ?? {});
 }
 
+/** Combined movement speed multiplier from all active auras (e.g. -1.0 for frozen = 0). */
+export function moveSpeedMultFromAuras(actives: ActiveAura[]): number {
+  let mult = 1.0;
+  for (const a of actives) {
+    const mods = auraDef(a.auraId).statModifiers;
+    if (mods?.moveSpeedMult !== undefined) {
+      mult *= Math.max(0, 1 + mods.moveSpeedMult);
+    }
+  }
+  return mult;
+}
+
 export interface DueTick {
   aura: ActiveAura;
   tick: AuraTick;

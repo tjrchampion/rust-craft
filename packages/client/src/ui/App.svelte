@@ -5,11 +5,19 @@
   import CharacterSelect from "./CharacterSelect.svelte";
   import Hud from "./Hud.svelte";
   import DungeonEditor from "./DungeonEditor.svelte";
+  import RegionEditor from "./RegionEditor.svelte";
 
   onMount(() => {
-    if (import.meta.env.DEV && new URLSearchParams(location.search).get("editor") === "dungeon") {
-      app.enterDungeonEditor();
-      return;
+    if (import.meta.env.DEV) {
+      const editor = new URLSearchParams(location.search).get("editor");
+      if (editor === "dungeon") {
+        app.enterDungeonEditor();
+        return;
+      }
+      if (editor === "region") {
+        app.enterRegionEditor();
+        return;
+      }
     }
     void app.refresh();
   });
@@ -27,6 +35,8 @@
   <Hud />
 {:else if app.screen === "dungeoneditor"}
   <DungeonEditor />
+{:else if app.screen === "regioneditor"}
+  <RegionEditor />
 {/if}
 
 <style>

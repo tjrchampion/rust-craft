@@ -1274,6 +1274,14 @@
             {#if systemTabSub === "game"}
               <div class="col system-col">
                 <h3>Game Options</h3>
+                <label class="setting-toggle">
+                  <input
+                    type="checkbox"
+                    checked={game.autoLoot}
+                    onchange={(e) => game.setAutoLoot(e.currentTarget.checked)}
+                  />
+                  <span class="setting-label">Auto Loot Corpses</span>
+                </label>
                 <button
                   class="rc-btn"
                   class:selected={systemSubFocus === "content" && systemCursor === 0}
@@ -2107,6 +2115,27 @@
   }
 
   /* ---- System tab ---- */
+  .setting-toggle {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 13px;
+    color: var(--rc-parchment);
+    user-select: none;
+    margin-bottom: 8px;
+  }
+  .setting-toggle input {
+    cursor: pointer;
+    accent-color: #d4af37;
+    width: 16px;
+    height: 16px;
+  }
+
   .system-menu-container {
     display: flex;
     gap: 20px;

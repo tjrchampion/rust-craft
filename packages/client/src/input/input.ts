@@ -82,6 +82,10 @@ export class InputManager {
   private capsQueued = false;
   private lastCapsAt = 0;
   private pointerLocked = false;
+  private isMouseDown = false;
+  private isRightMouseDown = false;
+  private lastMouseX = 0;
+  private lastMouseY = 0;
   private prevPadButtons: boolean[] = [];
   private canvas: HTMLCanvasElement;
   /** LB/RB tap-vs-hold-chord disambiguation: a bare tap keeps the button's
@@ -133,19 +137,39 @@ export class InputManager {
       this.pointerLocked = document.pointerLockElement === canvas;
     });
     window.addEventListener("mousemove", (e) => {
-      if (this.pointerLocked) {
-        this.mouseDx += e.movementX;
-        this.mouseDy += e.movementY;
+      if (this.pointerLocked || this.isMouseDown || this.isRightMouseDown) {
+        const dx = e.movementX !== undefined && (this.pointerLocked || e.movementX !== 0) ? e.movementX : e.clientX - this.lastMouseX;
+        const dy = e.movementY !== undefined && (this.pointerLocked || e.movementY !== 0) ? e.movementY : e.clientY - this.lastMouseY;
+        this.mouseDx += dx;
+        this.mouseDy += dy;
       }
+      this.lastMouseX = e.clientX;
+      this.lastMouseY = e.clientY;
     });
     window.addEventListener("mousedown", (e) => {
-      if (this.pointerLocked && e.button === 0) {
+      if (e.button === 0) this.isMouseDown = true;
+      if (e.button === 2) this.isRightMouseDown = true;
+      this.lastMouseX = e.clientX;
+      this.lastMouseY = e.clientY;
+      if (!this.uiMode && !this.pointerLocked && (e.target === canvas || canvas.contains(e.target as Node))) {
+        void canvas.requestPointerLock();
+      }
+      if (e.button === 0) {
         this.lastDevice = "kbm";
         this.mouseAttackQueued = true;
       }
     });
+    window.addEventListener("mouseup", (e) => {
+      if (e.button === 0) this.isMouseDown = false;
+      if (e.button === 2) this.isRightMouseDown = false;
+    });
+    window.addEventListener("contextmenu", (e) => {
+      if (e.target === canvas || canvas.contains(e.target as Node)) {
+        e.preventDefault();
+      }
+    });
     window.addEventListener("wheel", (e) => {
-      if (this.pointerLocked) this.wheelDelta += Math.sign(e.deltaY);
+      this.wheelDelta += Math.sign(e.deltaY);
     });
     window.addEventListener("gamepadconnected", () => {
       this.lastDevice = "gamepad";

@@ -145,6 +145,13 @@ export const DungeonMsg = z
   })
   .strict();
 
+export const LootCorpseMsg = z.object({
+  t: z.literal("lootCorpse"),
+  mobId: z.string().max(256),
+  slot: z.number().int().min(0).optional().nullable(),
+  lootAll: z.boolean().optional().nullable(),
+});
+
 export const ClientMsg = z.discriminatedUnion("t", [
   InputMsg,
   InteractMsg,
@@ -168,6 +175,7 @@ export const ClientMsg = z.discriminatedUnion("t", [
   DodgeMsg,
   SelectTargetMsg,
   DungeonMsg,
+  LootCorpseMsg,
 ]);
 export type ClientMsg = z.infer<typeof ClientMsg>;
 
@@ -249,6 +257,7 @@ export interface MobSnap {
   anim: AnimState;
   /** Aura ids for currently-ticking damage-over-time effects only. */
   debuffs: string[];
+  lootable?: boolean;
 }
 
 export interface PetSnap {
@@ -408,6 +417,7 @@ export type ServerMsg =
         | "damage" // amount dealt to target
         | "heal"
         | "gather" // itemId + qty gained
+        | "loot" // itemId + qty taken from a mob corpse
         | "xp"
         | "levelup"
         | "death"
@@ -451,5 +461,12 @@ export type ServerMsg =
       instanceId: string | null;
       portalId: string | null;
     }
+  | {
+      t: "corpseLoot";
+      mobId: string;
+      mobType: string;
+      items: { itemId: string; qty: number }[];
+    }
   | { t: "dungeonComplete"; tier: number; xp: number; items: { itemId: string; qty: number }[] }
+  | { t: "regionState"; inRegion: boolean; regionId: string | null; regionName: string | null }
   | { t: "error"; message: string };

@@ -76,12 +76,10 @@ export const SPELLS: Record<string, SpellDef> = {
     cooldownS: 4,
     targeting: { kind: "projectile", range: 28, projectileSpeed: 22 },
     effects: [
-      { type: "damage", base: 6, powerScale: 1.6, damageType: "frost" },
-      { type: "applyAura", auraId: "chilled" },
+      { type: "damage", base: 8, powerScale: 1.8, damageType: "frost" },
+      { type: "applyAura", auraId: "frozen" },
     ],
     requiredLevel: 2,
-    // Also granted to Engineer (see classes.ts) -- include wrench so it
-    // doesn't lose access to its own starting kit.
     allowedWeaponTypes: ["staff", "wand", "wrench"],
   },
   rend: {

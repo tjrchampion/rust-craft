@@ -18,3 +18,4 @@ export * from "./content/classes";
 export * from "./content/auras";
 export * from "./content/dungeons";
 export * from "./content/dungeonBlueprints";
+export * from "./content/regions";

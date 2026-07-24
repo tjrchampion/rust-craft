@@ -40,6 +40,10 @@ import {
   type ItemSnap,
   type ItemDef,
   type PoiSpec,
+  type RegionBlueprint,
+  type RegionAssetCollider,
+  regionAssetColliders,
+  regionMusicTrackUrl,
 } from "@rustcraft/shared";
 import { Connection } from "../net/connection";
 import { InputManager } from "../input/input";
@@ -61,9 +65,13 @@ import {
 import { AnimatedModel, PLAYER_ANIMS, logicalFromState, dodgeLogicalFor } from "../render/gltf";
 import { buildWorldStatic, buildVillage, animateSettlements, type SettlementHandles } from "../render/settlements";
 import { DUNGEON_THEME_COLORS, DungeonInteriorRenderer } from "../render/dungeonInterior";
+import { RegionInteriorRenderer } from "../render/regionInterior";
+import { buildShrine } from "../render/models";
 import { NpcManager } from "../render/npcs";
 import { sound } from "./sound";
+import { music } from "./music";
 import { game as ui, type CharacterTab } from "../ui/gameState.svelte";
+import { app } from "../ui/appState.svelte";
 
 const CAMERA_DISTANCE = 6.5;
 const CAMERA_HEIGHT = 2.2;
@@ -81,6 +89,8 @@ interface PendingInput {
   mount: "horse" | "raft" | null;
   revivingId: string | null;
   inDungeon?: boolean;
+  regionHeightmap?: Pick<RegionBlueprint, "gridSize" | "pitch" | "heights">;
+  regionAssets?: RegionAssetCollider[];
 }
 
 export class Game {
@@ -97,6 +107,15 @@ export class Game {
   private activeDungeonGroup: THREE.Group | null = null;
   private activeDungeonPortalId: string | null = null;
   private dungeonRenderer: DungeonInteriorRenderer | null = null;
+  /** Mirrors the dungeon fields above, but gated purely on ui.regionState
+   *  (server-authoritative) rather than a coordinate check -- a region's
+   *  local coordinates aren't tied to any real overworld position the way a
+   *  dungeon arena's reserved rectangle is. */
+  private activeRegionGroup: THREE.Group | null = null;
+  private activeRegionId: string | null = null;
+  private regionRenderer: RegionInteriorRenderer | null = null;
+  private regionBlueprintCache = new Map<string, RegionBlueprint>();
+  private regionPortals: { id: string; name: string; x: number; z: number }[] = [];
 
   private connection = new Connection();
   private input: InputManager;
@@ -203,6 +222,7 @@ export class Game {
     this.overworldGroup.add(this.clouds.group);
     this.settlements = buildWorldStatic(this.overworldGroup);
     this.overworldSigns.push(...this.settlements.signs);
+    void this.loadRegionPortals();
     this.npcManager = new NpcManager(this.scene);
     this.grass = new GrassField(this.overworldGroup);
 
@@ -236,6 +256,46 @@ export class Game {
       entities: this.entities,
       selfId: this.selfId,
     };
+  }
+
+  /** Fetches every saved region's portal placement and drops a visible
+   *  portal prop + nameplate at each one in the open world -- regions are
+   *  freely creatable from the editor, so unlike dungeon portals (baked
+   *  into generatePois()'s deterministic seed) this list can only come from
+   *  the server. A region left at (0,0) is an editor-only draft that hasn't
+   *  been placed in the world yet (see RegionBlueprint.portalWorldX/Z) and
+   *  is skipped. */
+  private async loadRegionPortals(): Promise<void> {
+    try {
+      const res = await fetch(app.apiUrl("/api/regions"), { credentials: "include" });
+      if (!res.ok) return;
+      const data = (await res.json()) as {
+        regions: { id: string; name: string; portalWorldX: number; portalWorldZ: number }[];
+      };
+      this.regionPortals = data.regions
+        .filter((r) => r.portalWorldX !== 0 || r.portalWorldZ !== 0)
+        .map((r) => ({ id: r.id, name: r.name, x: r.portalWorldX, z: r.portalWorldZ }));
+      for (const portal of this.regionPortals) {
+        const y = terrainHeight(portal.x, portal.z);
+        const prop = buildShrine();
+        const crystal = prop.getObjectByName("crystal") as THREE.Mesh | undefined;
+        if (crystal) {
+          crystal.material = new THREE.MeshBasicMaterial({
+            color: 0x5ce88c, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending,
+          });
+        }
+        prop.position.set(portal.x, y, portal.z);
+        this.overworldGroup.add(prop);
+        const sign = buildNameplate(portal.name, "#5ce88c");
+        sign.scale.set(3.2, 0.9, 1);
+        sign.position.set(portal.x, y + 3.5, portal.z);
+        this.overworldGroup.add(sign);
+        this.overworldSigns.push(sign);
+      }
+    } catch {
+      // Portal props are a convenience -- a failed fetch just means no
+      // visible region portals this session, not a hard error.
+    }
   }
 
   private async connect(characterId: string): Promise<void> {
@@ -395,6 +455,32 @@ export class Game {
         sound.play("levelup");
         break;
       }
+      case "regionState": {
+        const wasInRegion = ui.regionState !== null;
+        if (msg.inRegion && msg.regionId) {
+          ui.regionState = { regionId: msg.regionId, regionName: msg.regionName ?? "" };
+          if (!wasInRegion) {
+            this.interactNodeId = null;
+            this.reviveTargetId = null;
+            this.entities.setTarget(null);
+            ui.inventoryOpen = false;
+            ui.worldMapOpen = false;
+            if (ui.questOffer) this.closeQuestDialog();
+          }
+        } else {
+          ui.regionState = null;
+        }
+        break;
+      }
+      case "corpseLoot":
+        if (msg.items && msg.items.length > 0) {
+          ui.activeCorpseLoot = { mobId: msg.mobId, mobType: msg.mobType, items: msg.items };
+          this.setUiMode(true);
+        } else {
+          ui.activeCorpseLoot = null;
+          this.setUiMode(false);
+        }
+        break;
       case "error":
         if (msg.message === "__disconnected__") {
           ui.disconnected = true;
@@ -522,15 +608,6 @@ export class Game {
         break;
       case "castStart":
         if (msg.sourceId === this.selfId) sound.play("castStart");
-        break;
-      case "dodge":
-        // Our own dodge is already predicted (see tryDodge) -- this broadcast
-        // only needs to drive *other* players' animation + burst, same as
-        // hit reactions are triggered off other players' damage events.
-        if (msg.sourceId && msg.sourceId !== this.selfId && msg.x !== undefined && msg.dirX !== undefined && msg.dirZ !== undefined) {
-          this.entities.playDodge(msg.sourceId, msg.dirX, msg.dirZ);
-          this.entities.spawnDodgeBurst(msg.x, msg.y ?? 0, msg.z ?? 0, msg.dirX, msg.dirZ);
-        }
         break;
       case "error":
         if (msg.message) ui.toast(msg.message);
@@ -799,7 +876,7 @@ export class Game {
       if (actions.attackPressed) {
         this.faceTarget();
         this.connection.send({ t: "attack" });
-        this.avatar.play("attack");
+        this.avatar.play("attack", this.equippedWeaponDef?.attackAnim);
       }
       if (actions.dodgePressed) this.tryDodge(actions);
       if (actions.interactPressed) {
@@ -866,7 +943,7 @@ export class Game {
     this.updateCamera(rx, ry, rz);
     this.nodes?.update(rx, rz, now, dt);
     this.regionTwoNodes?.update(rx, rz, now, dt);
-    if (!this.insideDungeonPortal) {
+    if (!this.insideDungeonPortal && !ui.regionState) {
       this.grass.update(rx, rz, now);
       this.clouds.update(dt);
       this.water.update(dt);
@@ -897,16 +974,69 @@ export class Game {
   }
 
   private updateZoneAndStreaming(x: number, z: number): void {
-    this.insideDungeonPortal = ui.dungeonState ? dungeonPortalAt(x, z) : null;
+    const inRegion = ui.regionState !== null;
+    // A region's local coordinates aren't tied to any real overworld
+    // position (unlike a dungeon arena, which reserves a real rectangle),
+    // so this is gated purely on the server-authoritative regionState flag
+    // instead of a coordinate check -- and a region visit always takes
+    // precedence over the (impossible, but just in case) dungeon flag.
+    this.insideDungeonPortal = !inRegion && ui.dungeonState ? dungeonPortalAt(x, z) : null;
 
-    const zone = zoneAt(x, z, !!this.insideDungeonPortal);
+    const zone = inRegion
+      ? { id: `region_${ui.regionState!.regionId}`, name: ui.regionState!.regionName, subtitle: "" }
+      : zoneAt(x, z, !!this.insideDungeonPortal);
     ui.enterZone(zone.id, zone.name, zone.subtitle);
 
-    const showSigns = !this.insideDungeonPortal;
+    const showSigns = !this.insideDungeonPortal && !inRegion;
     for (const sign of this.overworldSigns) {
       if (sign.visible !== showSigns) {
         sign.visible = showSigns;
       }
+    }
+
+    if (inRegion) {
+      this.overworldGroup.visible = false;
+      if (this.overworldGroup.parent) this.scene.remove(this.overworldGroup);
+      if (this.dungeonRenderer) {
+        this.dungeonRenderer.destroy();
+        this.dungeonRenderer = null;
+      }
+      if (this.activeDungeonGroup) {
+        this.scene.remove(this.activeDungeonGroup);
+        this.disposeHierarchy(this.activeDungeonGroup);
+        this.activeDungeonGroup = null;
+        this.activeDungeonPortalId = null;
+      }
+      const regionId = ui.regionState!.regionId;
+      if (this.activeRegionId !== regionId) {
+        if (this.regionRenderer) {
+          this.regionRenderer.destroy();
+          this.regionRenderer = null;
+        }
+        if (this.activeRegionGroup) {
+          this.scene.remove(this.activeRegionGroup);
+          this.disposeHierarchy(this.activeRegionGroup);
+          this.activeRegionGroup = null;
+        }
+        this.activeRegionId = regionId;
+        void this.enterRegionInterior(regionId);
+      }
+      if (this.regionRenderer) {
+        this.regionRenderer.update(x, z);
+      }
+      return;
+    }
+
+    if (this.regionRenderer) {
+      this.regionRenderer.destroy();
+      this.regionRenderer = null;
+      music.stop();
+    }
+    if (this.activeRegionGroup) {
+      this.scene.remove(this.activeRegionGroup);
+      this.disposeHierarchy(this.activeRegionGroup);
+      this.activeRegionGroup = null;
+      this.activeRegionId = null;
     }
 
     if (this.insideDungeonPortal) {
@@ -975,6 +1105,32 @@ export class Game {
         this.regionTwoNodes = new NodeManager(this.scene, this.depletedNodeIds, generateRegionTwoNodes());
       }
     }
+  }
+
+  /** Fetches (and caches) a region's full blueprint and builds its interior
+   *  renderer -- unlike a dungeon layout (a pure client-side function call),
+   *  a region's content is author-created data that only the server knows
+   *  about, so this always needs an HTTP round-trip the first time. */
+  private async enterRegionInterior(regionId: string): Promise<void> {
+    let blueprint = this.regionBlueprintCache.get(regionId);
+    if (!blueprint) {
+      try {
+        const res = await fetch(app.apiUrl(`/api/regions/${regionId}`), { credentials: "include" });
+        if (!res.ok) return;
+        const data = (await res.json()) as { blueprint: RegionBlueprint };
+        blueprint = data.blueprint;
+        this.regionBlueprintCache.set(regionId, blueprint);
+      } catch {
+        return;
+      }
+    }
+    // The player may have already left (or switched to a different region)
+    // while this fetch was in flight -- don't build a stale interior.
+    if (this.activeRegionId !== regionId) return;
+    this.activeRegionGroup = new THREE.Group();
+    this.regionRenderer = new RegionInteriorRenderer(this.activeRegionGroup, blueprint);
+    this.scene.add(this.activeRegionGroup);
+    music.play(regionMusicTrackUrl(this.regionRenderer.musicTrack), 3000);
   }
 
   private readonly TARGET_RANGE = 60;
@@ -1056,13 +1212,15 @@ export class Game {
     const mount = ui.self?.mount ?? null;
 
     const inDungeon = ui.dungeonState !== null;
+    const regionHeightmap = this.regionRenderer?.heightmap;
+    const regionAssets = this.regionRenderer ? regionAssetColliders(this.regionRenderer.assets) : undefined;
     const seq = ++this.inputSeq;
-    this.pending.push({ seq, ...input, mount, inDungeon });
+    this.pending.push({ seq, ...input, mount, inDungeon, regionHeightmap, regionAssets });
     if (this.pending.length > 120) this.pending.shift();
 
     // Predict with the mount so speed matches the server; the wire message
     // omits mount (server is authoritative on mount state).
-    this.move = stepMovement(this.move, { ...input, mount, inDungeon }, TICK_DT);
+    this.move = stepMovement(this.move, { ...input, mount, inDungeon, regionHeightmap, regionAssets }, TICK_DT);
     this.connection.send({ t: "input", seq, ...input, yaw: this.cameraYaw });
   }
 
@@ -1191,7 +1349,11 @@ export class Game {
 
     let targetY = py + CAMERA_HEIGHT - distance * Math.sin(cp);
 
-    if (this.insideDungeonPortal) {
+    if (this.regionRenderer) {
+      const h = this.regionRenderer.heightAt(px, pz);
+      targetY = Math.min(targetY, py + 2.7);
+      targetY = Math.max(targetY, h + 0.6);
+    } else if (this.insideDungeonPortal) {
       const h = dungeonFloorHeightAt(px, pz);
       if (h !== null) {
         targetY = Math.min(targetY, py + 2.7);
@@ -1225,6 +1387,17 @@ export class Game {
       return;
     }
     this.reviveTargetId = null;
+
+    // Lootable corpse nearby? (High priority so mobs killed near nodes, NPCs, or water take precedence)
+    const corpse = this.entities.nearestLootableCorpse(this.move.x, this.move.y, this.move.z, 6.0);
+    if (corpse) {
+      ui.interactLabel = `Loot ${corpse.name}`;
+      this.lootCorpseId = corpse.id;
+      this.interactNodeId = null;
+      return;
+    }
+    this.lootCorpseId = null;
+
     const node =
       this.nodes.findTarget(this.move.x, this.move.y, this.move.z, this.cameraYaw, GATHER_RANGE) ??
       this.regionTwoNodes?.findTarget(this.move.x, this.move.y, this.move.z, this.cameraYaw, GATHER_RANGE) ??
@@ -1244,6 +1417,15 @@ export class Game {
       return;
     }
     this.interactNodeId = null;
+    // Exit region portal nearby?
+    if (this.regionRenderer) {
+      const entry = this.regionRenderer.entryLocal;
+      if (dist2D(this.move.x, this.move.z, entry.x, entry.z) < 4.5) {
+        ui.interactLabel = `Leave ${this.regionRenderer.regionName}`;
+        this.interactNodeId = "poi_region_exit";
+        return;
+      }
+    }
     // Exit dungeon portal nearby?
     if (this.insideDungeonPortal) {
       const layout = generateDungeonLayout(this.insideDungeonPortal.id);
@@ -1277,6 +1459,14 @@ export class Game {
         return;
       }
     }
+    // Region portal nearby?
+    for (const portal of this.regionPortals) {
+      if (dist2D(this.move.x, this.move.z, portal.x, portal.z) < DUNGEON_PORTAL_ACTIVATION_RADIUS) {
+        ui.interactLabel = `Enter ${portal.name}`;
+        this.interactNodeId = `poi_region_${portal.id}`;
+        return;
+      }
+    }
     // Water nearby?
     if (this.nearWater()) {
       ui.interactLabel = "Drink";
@@ -1289,6 +1479,7 @@ export class Game {
   }
 
   private interactNodeId: string | null = null;
+  private lootCorpseId: string | null = null;
   private reviveTargetId: string | null = null;
   private nearCampfire = false;
 
@@ -1307,6 +1498,24 @@ export class Game {
   }
 
   private doInteract(): void {
+    const targetId = this.entities.getTargetId();
+    const targetEntity = targetId ? this.entities.getEntity(targetId) : null;
+    const corpseId =
+      targetEntity && targetEntity.kind === "mob" && targetEntity.hp <= 0
+        ? targetEntity.id
+        : this.lootCorpseId;
+
+    console.log("[Loot Debug] doInteract executed. targetId:", targetId, "lootCorpseId:", this.lootCorpseId, "resolvedCorpseId:", corpseId, "interactLabel:", ui.interactLabel);
+
+    if (corpseId) {
+      console.log("[Loot Debug] Sending lootCorpse request to server for mobId:", corpseId, "autoLoot:", ui.autoLoot);
+      if (ui.autoLoot) {
+        this.connection.send({ t: "lootCorpse", mobId: corpseId, lootAll: true });
+      } else {
+        this.connection.send({ t: "lootCorpse", mobId: corpseId });
+      }
+      return;
+    }
     if (ui.self?.sitting || this.nearCampfire) {
       this.connection.send({ t: "sit" });
     } else if (this.interactNodeId) {
@@ -1317,6 +1526,33 @@ export class Game {
   }
 
   private updateDayNight(px: number, pz: number): void {
+    if (this.regionRenderer) {
+      // Fixed color grading from the region's own blueprint, same idea as
+      // the dungeon's fixed torchlight override below -- no outdoor
+      // day/night cycling while inside. Uses an exponential fog (matching
+      // the region editor's own preview) rather than the linear THREE.Fog
+      // the open world/dungeons use, so this swaps the fog instance out
+      // and back rather than mutating one in place.
+      const cg = this.regionRenderer.colorGrading;
+      this.sun.intensity = cg.sunIntensity;
+      this.sun.color.set(cg.sunColor);
+      this.ambient.intensity = cg.ambientIntensity;
+      this.ambient.color.set(cg.ambientColor);
+      (this.scene.background as THREE.Color).set(cg.skyColor);
+      if (this.scene.fog instanceof THREE.FogExp2) {
+        this.scene.fog.color.set(cg.fogColor);
+        this.scene.fog.density = cg.fogDensity;
+      } else {
+        this.scene.fog = new THREE.FogExp2(new THREE.Color(cg.fogColor).getHex(), cg.fogDensity);
+      }
+      return;
+    }
+    // A region visit may have swapped scene.fog to a FogExp2 above --
+    // restore the linear Fog the rest of this function assumes before
+    // falling through to the dungeon/outdoor branches.
+    if (!(this.scene.fog instanceof THREE.Fog)) {
+      this.scene.fog = new THREE.Fog(0x87b5d9, 120, 620);
+    }
     if (this.insideDungeonPortal) {
       // Sealed chamber -- fixed themed torchlight regardless of the
       // outdoor time of day, tight fog so the doorway gap doesn't reveal a
@@ -1425,6 +1661,10 @@ export class Game {
 
   leaveDungeon(): void {
     this.connection.send({ t: "dungeon", action: "leave" });
+  }
+
+  sendLootCorpse(mobId: string, slot?: number, lootAll?: boolean): void {
+    this.connection.send({ t: "lootCorpse", mobId, slot, lootAll });
   }
 
   setUiMode(open: boolean): void {
