@@ -542,6 +542,45 @@ export interface RegionPointLight {
   distance: number;
 }
 
+export interface RegionPortalLink {
+  id: string;
+  name: string;
+  localX: number;
+  localZ: number;
+  targetRegionId: string;
+  targetLocalX?: number;
+  targetLocalZ?: number;
+}
+
+export type RegionQuestObjectiveKind = "kill" | "gather" | "escort";
+
+export interface RegionQuest {
+  id: string;
+  name: string;
+  description: string;
+  tier: number; // 0..4
+  minLevel: number;
+  objectiveKind: RegionQuestObjectiveKind;
+  objectiveTarget: string;
+  objectiveCount: number;
+  rewardXp: number;
+  rewardItems: { itemId: string; qty: number }[];
+  waypoints?: { x: number; z: number }[];
+}
+
+export interface RegionNPC {
+  id: string;
+  name: string;
+  model: string;
+  localX: number;
+  localZ: number;
+  yaw: number;
+  title?: string;
+  dialogue?: string;
+  quests?: RegionQuest[];
+  generateProceduralQuests?: boolean;
+}
+
 export interface RegionBlueprint {
   id: string;
   name: string;
@@ -565,6 +604,12 @@ export interface RegionBlueprint {
    *  at 0 mean "not placed in the world yet" (editor-only draft). */
   portalWorldX: number;
   portalWorldZ: number;
+  /** Optional -- If true, this region is designated as the default Starting Town where new players spawn. */
+  isStartingRegion?: boolean;
+  /** Optional -- Authored inter-region portals placed inside this region. */
+  portals?: RegionPortalLink[];
+  /** Optional -- Authored quest giver NPCs placed in this region. */
+  npcs?: RegionNPC[];
   /** Optional -- flattened gridSize*gridSize water depth values (in world units).
    *  If absent or 0 at a cell, there is no water surface there. */
   waterHeights?: number[];
@@ -897,7 +942,7 @@ export const DEFAULT_REGION_GENERATE_OPTIONS: RegionGenerateOptions = { heightSc
 /** Heightmap sample spacing -- fixed regardless of worldSize so a bigger
  *  world just means more grid cells at the same resolution, not blockier
  *  terrain. gridSize is derived from worldSize/pitch below. */
-const REGION_PITCH = 6;
+const REGION_PITCH = 2.5;
 
 /** Fraction of the half-span, at the outer edge, given over to the
  *  boundary mountain ring (see below). */
@@ -1128,6 +1173,8 @@ export function generateRandomRegionBlueprint(
     mobSpawns: [],
     villages: [],
     roads: [],
+    portals: [],
+    npcs: [],
     colorGrading: { ...REGION_COLOR_PRESETS[biome] },
     entryLocal: { x: 0, z: 0 },
     portalWorldX: 0,

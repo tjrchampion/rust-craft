@@ -113,6 +113,16 @@ export class NodeManager {
     if (entry.mesh) entry.mesh.visible = !depleted;
   }
 
+  /** Remove all currently active node meshes from the scene (e.g. when entering a region or dungeon). */
+  clearScene(): void {
+    for (const entry of this.nodes.values()) {
+      if (entry.inScene && entry.mesh) {
+        this.scene.remove(entry.mesh);
+        entry.inScene = false;
+      }
+    }
+  }
+
   /** Spatial windowing (throttled) + per-frame shake/particle animation. */
   update(px: number, pz: number, timeMs: number, dt = 0.016): void {
     // Windowing: only re-evaluate which nodes are in-scene a few times a second.

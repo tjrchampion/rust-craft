@@ -19,13 +19,27 @@
   });
 
   function objectiveText(o: QuestOfferInfo): string {
-    const name = o.objectiveKind === "kill" ? mobDef(o.objectiveTarget).name : itemDef(o.objectiveTarget).name;
+    if (o.objectiveKind === "escort") {
+      return `Escort NPC safely to destination`;
+    }
+    let name = o.objectiveTarget;
+    try {
+      if (o.objectiveKind === "kill") name = mobDef(o.objectiveTarget).name;
+      else if (o.objectiveKind === "gather") name = itemDef(o.objectiveTarget).name;
+    } catch {
+      name = o.objectiveTarget;
+    }
     const verb = o.objectiveKind === "kill" ? "Slay" : "Gather";
     return `${verb} ${o.objectiveCount} ${name}`;
   }
 
   function objectiveIcon(o: QuestOfferInfo): string {
-    return o.objectiveKind === "kill" ? mobIcon(o.objectiveTarget) : itemIcon(o.objectiveTarget);
+    if (o.objectiveKind === "escort") return "🛡️";
+    try {
+      return o.objectiveKind === "kill" ? mobIcon(o.objectiveTarget) : itemIcon(o.objectiveTarget);
+    } catch {
+      return "📜";
+    }
   }
 
   function close(): void {

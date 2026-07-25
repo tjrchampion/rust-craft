@@ -345,8 +345,13 @@
   }
 
   // ------------------------------------------------------------------- quests
-  function objectiveText(kind: "kill" | "gather", target: string): string {
-    return kind === "kill" ? mobDef(target).name : itemDef(target).name;
+  function objectiveText(kind: string, target: string): string {
+    if (kind === "escort") return "Escort NPC";
+    try {
+      return kind === "kill" ? mobDef(target).name : itemDef(target).name;
+    } catch {
+      return target;
+    }
   }
 
   // ---------------------------------------------------------------- inventory

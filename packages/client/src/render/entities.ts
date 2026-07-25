@@ -923,10 +923,13 @@ export class EntityManager {
     entity.model.play(logical);
   }
 
+  heightSampler?: (x: number, z: number) => number;
+
   addStructure(snap: StructureSnap): void {
     if (this.structures.has(snap.id)) return;
     const group = buildCampfire();
-    group.position.set(snap.x, snap.y, snap.z);
+    const posY = this.heightSampler ? this.heightSampler(snap.x, snap.z) : snap.y;
+    group.position.set(snap.x, posY, snap.z);
     group.rotation.y = snap.yaw;
     this.scene.add(group);
     this.structures.set(snap.id, group);

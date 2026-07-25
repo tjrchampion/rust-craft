@@ -11,6 +11,9 @@
     type RegionBiome,
     type RegionBlueprint,
     type RegionColorGrading,
+    type RegionQuest,
+    type RegionQuestObjectiveKind,
+    type RegionNPC,
   } from "@rustcraft/shared";
   import {
     RegionEditorScene,
@@ -32,6 +35,7 @@
   let biome = $state<RegionBiome>("grassland");
   let portalWorldX = $state(0);
   let portalWorldZ = $state(0);
+  let isStartingRegion = $state(false);
   let musicTrack = $state<string | null>(null);
 
   let selection = $state<EditorSelection[]>([]);
@@ -298,6 +302,61 @@
     scene?.updateSelectedProps(patch);
   }
 
+  function addQuestToNPC(sel: EditorSelection): void {
+    const npc: RegionNPC = sel.npcData ?? {
+      id: sel.id,
+      name: sel.name ?? "Quest Giver",
+      model: "Knight",
+      localX: sel.x,
+      localZ: sel.z,
+      yaw: sel.yaw,
+      title: "<Questgiver>",
+      dialogue: "Greetings, traveler! I need your assistance.",
+      quests: [],
+      generateProceduralQuests: true,
+    };
+    const quests = [...(npc.quests ?? [])];
+    const newQuest: RegionQuest = {
+      id: `quest_${Date.now()}_${quests.length + 1}`,
+      name: "New Quest",
+      description: "Assist the townsfolk with a task.",
+      tier: 1,
+      minLevel: 1,
+      objectiveKind: "kill",
+      objectiveTarget: "wolf",
+      objectiveCount: 5,
+      rewardXp: 50,
+      rewardItems: [{ itemId: "wood", qty: 10 }],
+    };
+    quests.push(newQuest);
+    applyPatch({ npcData: { ...npc, quests } });
+  }
+
+  function deleteQuestFromNPC(sel: EditorSelection, questId: string): void {
+    if (!sel.npcData?.quests) return;
+    if (scene?.activeEscortQuest?.questId === questId) {
+      scene?.setEscortPathTracing(null, null);
+    }
+    const quests = sel.npcData.quests.filter((q) => q.id !== questId);
+    applyPatch({ npcData: { ...sel.npcData, quests } });
+  }
+
+  function updateQuestInNPC(sel: EditorSelection, questIdx: number, patch: Partial<RegionQuest>): void {
+    if (!sel.npcData?.quests) return;
+    const quests = [...sel.npcData.quests];
+    if (!quests[questIdx]) return;
+    quests[questIdx] = { ...quests[questIdx]!, ...patch };
+    applyPatch({ npcData: { ...sel.npcData, quests } });
+  }
+
+  function toggleEscortPathTracing(sel: EditorSelection, questId: string): void {
+    if (scene?.activeEscortQuest?.questId === questId) {
+      scene?.setEscortPathTracing(null, null);
+    } else {
+      scene?.setEscortPathTracing(sel.id, questId);
+    }
+  }
+
   function deleteSelected(): void {
     scene?.deleteSelected();
   }
@@ -339,6 +398,7 @@
       biome = data.blueprint.biome;
       portalWorldX = data.blueprint.portalWorldX;
       portalWorldZ = data.blueprint.portalWorldZ;
+      isStartingRegion = data.blueprint.isStartingRegion ?? false;
       musicTrack = data.blueprint.musicTrack ?? null;
       colorGrading = scene.getColorGrading();
       status = `Loaded "${data.blueprint.name}".`;
@@ -382,7 +442,7 @@
 
   async function saveToServer(): Promise<void> {
     if (!scene) return;
-    scene.setMeta({ id: regionId, name: regionName, biome, portalWorldX, portalWorldZ, musicTrack });
+    scene.setMeta({ id: regionId, name: regionName, biome, portalWorldX, portalWorldZ, isStartingRegion, musicTrack });
     status = "Saving...";
     const blueprint = scene.exportBlueprint();
     try {
@@ -411,7 +471,7 @@
 
   function exportJson(): void {
     if (!scene) return;
-    scene.setMeta({ id: regionId, name: regionName, biome, portalWorldX, portalWorldZ, musicTrack });
+    scene.setMeta({ id: regionId, name: regionName, biome, portalWorldX, portalWorldZ, isStartingRegion, musicTrack });
     const blueprint = scene.exportBlueprint();
     const blob = new Blob([JSON.stringify(blueprint, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
@@ -627,7 +687,13 @@
               🏰 + Village Marker
             </button>
             <button class:active={armedMarker === "entry"} onclick={() => { pickMarker("entry"); activeDropdown = null; }}>
-              🚪 + Entry Portal
+              🚪 + Entry Spawn Point
+            </button>
+            <button class:active={armedMarker === "portal"} onclick={() => { pickMarker("portal"); activeDropdown = null; }}>
+              🌀 + Region Portal Link
+            </button>
+            <button class:active={armedMarker === "npc"} onclick={() => { pickMarker("npc"); activeDropdown = null; }}>
+              📜 + Quest Giver NPC
             </button>
           </div>
         {/if}
@@ -654,6 +720,11 @@
               <span class="readout">{worldSize}m</span>
             </label>
             <button class="menu-action" onclick={() => { generateDraft(); activeDropdown = null; }}>🎲 Re-Generate World</button>
+            <div class="dropdown-divider"></div>
+            <label class="menu-field checkbox-field">
+              <input type="checkbox" bind:checked={isStartingRegion} onchange={(e) => scene?.setMeta({ isStartingRegion: (e.target as HTMLInputElement).checked })} />
+              <span>⭐ Set as Starting Town (New Player Spawn)</span>
+            </label>
             <div class="dropdown-divider"></div>
             <label class="menu-field">
               Portal X <input type="number" step="1" bind:value={portalWorldX} />
@@ -863,6 +934,97 @@
           <label>Name <input type="text" value={sel.name} onchange={(e) => applyPatch({ name: (e.target as HTMLInputElement).value })} /></label>
           <label>Radius <input type="number" step="1" value={sel.radius} onchange={(e) => applyPatch({ radius: Number((e.target as HTMLInputElement).value) })} /></label>
           <button class="build-village-btn" onclick={() => scene?.buildVillageAroundMarker(sel.id)}>🏰 Build Village Here</button>
+        {:else if sel.markerKind === "portal"}
+          <label>Portal Label <input type="text" value={sel.name ?? "Portal to Region"} onchange={(e) => applyPatch({ name: (e.target as HTMLInputElement).value })} /></label>
+          <label>Destination
+            <select value={sel.targetRegionId ?? "overworld"} onchange={(e) => applyPatch({ targetRegionId: (e.target as HTMLSelectElement).value })}>
+              <option value="overworld">Main Open World</option>
+              {#each regionList as r}
+                <option value={r.id}>{r.name}</option>
+              {/each}
+            </select>
+          </label>
+        {:else if sel.markerKind === "npc"}
+          <label>NPC Name <input type="text" value={sel.npcData?.name ?? sel.name} onchange={(e) => applyPatch({ name: (e.target as HTMLInputElement).value, npcData: { ...sel.npcData, name: (e.target as HTMLInputElement).value } })} /></label>
+          <label>Title <input type="text" value={sel.npcData?.title ?? "<Questgiver>"} onchange={(e) => applyPatch({ npcData: { ...sel.npcData, title: (e.target as HTMLInputElement).value } })} /></label>
+          <label>Model
+            <select value={sel.npcData?.model ?? "Knight"} onchange={(e) => applyPatch({ npcData: { ...sel.npcData, model: (e.target as HTMLSelectElement).value } })}>
+              <option value="Knight">Knight</option>
+              <option value="Mage">Mage</option>
+              <option value="Barbarian">Barbarian</option>
+              <option value="Ranger">Ranger</option>
+              <option value="Rogue">Rogue</option>
+              <option value="Druid">Druid</option>
+              <option value="Paladin">Paladin</option>
+              <option value="Engineer">Engineer</option>
+              <option value="Barbarian_Large">Barbarian (Large)</option>
+              <option value="Rogue_Hooded">Rogue (Hooded)</option>
+            </select>
+          </label>
+          <label>Dialogue
+            <textarea rows="2" value={sel.npcData?.dialogue ?? ""} onchange={(e) => applyPatch({ npcData: { ...sel.npcData, dialogue: (e.target as HTMLTextAreaElement).value } })}></textarea>
+          </label>
+
+          <div class="quest-section">
+            <div class="quest-header">
+              <h4>📜 Quests Offered</h4>
+              <button class="add-quest-btn" onclick={() => addQuestToNPC(sel)}>+ Add Quest</button>
+            </div>
+
+            <label class="procedural-toggle">
+              <input type="checkbox" checked={sel.npcData?.generateProceduralQuests ?? true} onchange={(e) => applyPatch({ npcData: { ...sel.npcData, generateProceduralQuests: (e.target as HTMLInputElement).checked } })} />
+              <span>Generate Procedural Quests</span>
+            </label>
+
+            {#each sel.npcData?.quests ?? [] as quest, qIdx (quest.id)}
+              <div class="quest-card">
+                <div class="quest-card-header">
+                  <strong>{quest.name}</strong>
+                  <button class="quest-del-btn" onclick={() => deleteQuestFromNPC(sel, quest.id)}>✕</button>
+                </div>
+                <label>Quest Name <input type="text" value={quest.name} onchange={(e) => updateQuestInNPC(sel, qIdx, { name: (e.target as HTMLInputElement).value })} /></label>
+                <label>Description <input type="text" value={quest.description} onchange={(e) => updateQuestInNPC(sel, qIdx, { description: (e.target as HTMLInputElement).value })} /></label>
+                <label>Type
+                  <select value={quest.objectiveKind} onchange={(e) => updateQuestInNPC(sel, qIdx, { objectiveKind: (e.target as HTMLSelectElement).value as RegionQuestObjectiveKind })}>
+                    <option value="kill">Kill Mobs</option>
+                    <option value="gather">Gather Items</option>
+                    <option value="escort">Escort / Follow Me</option>
+                  </select>
+                </label>
+                <label>Target {quest.objectiveKind === "kill" ? "Mob ID" : quest.objectiveKind === "gather" ? "Item ID" : "Destination Label"}
+                  <input type="text" value={quest.objectiveTarget} onchange={(e) => updateQuestInNPC(sel, qIdx, { objectiveTarget: (e.target as HTMLInputElement).value })} />
+                </label>
+                {#if quest.objectiveKind !== "escort"}
+                  <label>Count <input type="number" min="1" max="100" value={quest.objectiveCount} onchange={(e) => updateQuestInNPC(sel, qIdx, { objectiveCount: Number((e.target as HTMLInputElement).value) })} /></label>
+                {/if}
+                <label>XP Reward <input type="number" min="10" max="5000" value={quest.rewardXp} onchange={(e) => updateQuestInNPC(sel, qIdx, { rewardXp: Number((e.target as HTMLInputElement).value) })} /></label>
+
+                {#if quest.objectiveKind === "escort"}
+                  <div class="escort-path-box">
+                    <button
+                      class="trace-btn"
+                      class:active={scene?.activeEscortQuest?.questId === quest.id}
+                      onclick={() => toggleEscortPathTracing(sel, quest.id)}
+                    >
+                      {scene?.activeEscortQuest?.questId === quest.id ? "⏹ Stop Tracing" : "📍 Trace Escort Path"} ({quest.waypoints?.length ?? 0} waypoints)
+                    </button>
+                    {#if quest.waypoints && quest.waypoints.length > 0}
+                      <div class="waypoint-list">
+                        {#each quest.waypoints as wp, wpIdx}
+                          <div class="wp-tag" class:active={scene?.selectedWaypointIndex === wpIdx}>
+                            <button class="wp-select-btn" onclick={() => scene?.selectWaypoint(wpIdx)}>
+                              📍 WP #{wpIdx + 1}: ({wp.x}, {wp.z})
+                            </button>
+                            <button class="wp-del-btn" onclick={() => scene?.removeEscortWaypoint(wpIdx)} title="Delete Waypoint">✕</button>
+                          </div>
+                        {/each}
+                      </div>
+                    {/if}
+                  </div>
+                {/if}
+              </div>
+            {/each}
+          </div>
         {/if}
         {#if sel.markerKind !== "entry"}
           <button class="delete" onclick={deleteSelected}>Delete</button>
@@ -1294,6 +1456,131 @@
     border: none;
     border-radius: 4px;
     cursor: pointer;
+  }
+  .quest-section {
+    margin-top: 12px;
+    padding-top: 10px;
+    border-top: 1px solid #2e3545;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-height: 380px;
+    overflow-y: auto;
+  }
+  .quest-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .quest-header h4 {
+    margin: 0;
+    font-size: 13px;
+    color: #33b5e5;
+  }
+  .add-quest-btn {
+    background: #1d72aa;
+    color: #ffffff;
+    border: none;
+    padding: 3px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    cursor: pointer;
+  }
+  .add-quest-btn:hover {
+    background: #2389cd;
+  }
+  .procedural-toggle {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: #a0aec0;
+  }
+  .quest-card {
+    background: #1c212c;
+    border: 1px solid #2d3748;
+    border-radius: 6px;
+    padding: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .quest-card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 12px;
+    color: #f7fafc;
+    border-bottom: 1px solid #2d3748;
+    padding-bottom: 4px;
+  }
+  .quest-del-btn {
+    background: transparent;
+    border: none;
+    color: #e53e3e;
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .escort-path-box {
+    margin-top: 6px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .trace-btn {
+    background: #2b6cb0;
+    color: #fff;
+    border: none;
+    padding: 5px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    cursor: pointer;
+    text-align: center;
+  }
+  .trace-btn.active {
+    background: #dd6b20;
+  }
+  .waypoint-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-height: 120px;
+    overflow-y: auto;
+  }
+  .wp-tag {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: #1a202c;
+    padding: 3px 6px;
+    border-radius: 3px;
+    font-size: 10px;
+    color: #cbd5e0;
+    border: 1px solid transparent;
+  }
+  .wp-tag.active {
+    background: #4a1525;
+    border-color: #ff3366;
+  }
+  .wp-select-btn {
+    background: none;
+    border: none;
+    color: #cbd5e0;
+    font-size: 10px;
+    cursor: pointer;
+    text-align: left;
+    flex: 1;
+  }
+  .wp-tag.active .wp-select-btn {
+    color: #ff99bb;
+    font-weight: 600;
+  }
+  .wp-del-btn {
+    background: none;
+    border: none;
+    color: #fc8181;
+    cursor: pointer;
+    font-size: 10px;
   }
   .playtest-hint {
     position: absolute;

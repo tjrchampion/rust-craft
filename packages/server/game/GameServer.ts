@@ -221,6 +221,9 @@ interface PlayerState {
    *  distance-based visibility/targeting site (sendSnapshots, broadcastNear,
    *  tickMobs' aggro acquisition, findMeleeTarget, etc). */
   instanceId: string | null;
+  lastRegionId?: string;
+  lastRegionX?: number;
+  lastRegionZ?: number;
 }
 
 interface MobState {
@@ -317,6 +320,25 @@ export class GameServer {
   private shrines = new Map<string, { x: number; y: number; z: number }>();
   private villages: { x: number; z: number }[] = [];
   private npcs: NpcSpec[] = []; // static base data; marker recomputed per-viewer
+  private activeRegionNpcs = new Map<
+    string,
+    {
+      id: string;
+      name: string;
+      regionId: string;
+      instanceId: string;
+      x: number;
+      y: number;
+      z: number;
+      startX: number;
+      startZ: number;
+      hp: number;
+      maxHp: number;
+      waypoints?: { x: number; z: number }[];
+      currentWpIdx?: number;
+      activeQuestId?: string;
+    }
+  >();
   // Persists until the leader explicitly disbands it -- an ordinary member
   // leaving just removes them; if the leader leaves, leadership passes to
   // another member rather than ending the party (see leaveParty).
@@ -394,13 +416,7 @@ export class GameServer {
     // fixed hand-curated set), so this reads whatever's on disk right now
     // rather than a bundled import -- see utils/regions.ts's comment for why.
     for (const region of listRegionBlueprints()) {
-      this.regionBlueprints.set(region.id, region);
-      this.regionPortals.set(region.id, {
-        id: region.id,
-        name: region.name,
-        x: region.portalWorldX,
-        z: region.portalWorldZ,
-      });
+      this.registerRegionBlueprint(region);
     }
 
     this.depletedNodes = await loadDepletedNodes();
@@ -476,10 +492,29 @@ export class GameServer {
       await this.removePlayer(characterId, false);
     }
 
+    const startingRegion = this.getStartingRegion();
     const isNew = persisted.x === 0 && persisted.z === 0 && persisted.xp === 0;
-    const x = isNew ? SPAWN_POINT.x + (Math.random() - 0.5) * 6 : persisted.x;
-    const z = isNew ? SPAWN_POINT.z + (Math.random() - 0.5) * 6 : persisted.z;
-    const y = Math.max(persisted.y, terrainHeight(x, z));
+
+    let instanceId: string | null = null;
+    let x = persisted.x;
+    let z = persisted.z;
+    let y = persisted.y;
+
+    if (startingRegion) {
+      this.activateRegion(startingRegion);
+      instanceId = `region_${startingRegion.id}`;
+      if (isNew || (x === 0 && z === 0)) {
+        x = startingRegion.entryLocal.x + (Math.random() - 0.5) * 2;
+        z = startingRegion.entryLocal.z + (Math.random() - 0.5) * 2;
+      }
+      y = sampleRegionHeight(startingRegion, x, z) + 0.1;
+    } else if (isNew) {
+      x = SPAWN_POINT.x + (Math.random() - 0.5) * 6;
+      z = SPAWN_POINT.z + (Math.random() - 0.5) * 6;
+      y = terrainHeight(x, z);
+    } else {
+      y = Math.max(persisted.y, terrainHeight(x, z));
+    }
 
     const player: PlayerState = {
       id: persisted.id,
@@ -495,9 +530,6 @@ export class GameServer {
       thirst: persisted.thirst,
       xp: persisted.xp,
       level: persisted.level,
-      // Union with the class's current startingSpells so existing characters
-      // pick up newly-added class abilities (e.g. Beast Mastery) without a
-      // DB migration -- never removes anything a character already learned.
       learnedSpells: [
         ...new Set([...persisted.learnedSpells, ...classDef((persisted.classId as ClassId) ?? "warrior").startingSpells]),
       ],
@@ -527,7 +559,7 @@ export class GameServer {
       questProgress: new Map(persisted.questProgress.map((q) => [q.questId, { status: q.status, progress: q.progress }])),
       activeAuras: [],
       currentTargetId: null,
-      instanceId: null,
+      instanceId,
     };
 
     this.players.set(player.id, player);
@@ -666,9 +698,13 @@ export class GameServer {
         else if (parsed.nodeId === "poi_region_exit") this.handleRegionLeave(player);
         else if (parsed.nodeId.startsWith("poi_shrine")) this.handleShrine(player, parsed.nodeId);
         else if (parsed.nodeId.startsWith("poi_dungeon")) this.handleDungeonPortal(player, parsed.nodeId);
+        else if (parsed.nodeId.startsWith("poi_region_link_")) this.handleRegionPortal(player, "", parsed.nodeId.slice("poi_region_link_".length));
         else if (parsed.nodeId.startsWith("poi_region_")) this.handleRegionPortal(player, parsed.nodeId.slice("poi_region_".length));
-        else if (parsed.nodeId.startsWith("npc_")) this.handleQuestGiverInteract(player, parsed.nodeId);
+        else if (parsed.nodeId.startsWith("npc_") || parsed.nodeId.startsWith("rnpc_")) this.handleQuestGiverInteract(player, parsed.nodeId);
         else this.handleGather(player, parsed.nodeId);
+        break;
+      case "regionPortal":
+        this.handleRegionPortal(player, parsed.regionId ?? "", parsed.portalId ?? undefined);
         break;
       case "drink":
         this.handleDrink(player);
@@ -844,11 +880,42 @@ export class GameServer {
     return "available";
   }
 
+  private findQuest(player: PlayerState, questId: string): QuestDef | null {
+    if (QUEST_IDS.includes(questId)) return questDef(questId);
+    const regionId = this.regionIdFromInstance(player.instanceId) ?? player.lastRegionId;
+    if (regionId) {
+      const bp = this.regionBlueprints.get(regionId);
+      if (bp?.npcs) {
+        for (const npc of bp.npcs) {
+          for (const q of npc.quests ?? []) {
+            if (q.id === questId) {
+              return {
+                id: q.id,
+                villageIndex: 0,
+                name: q.name,
+                description: q.description,
+                tier: q.tier,
+                minLevel: q.minLevel,
+                objectiveKind: q.objectiveKind as any,
+                objectiveTarget: q.objectiveTarget,
+                objectiveCount: q.objectiveCount ?? 1,
+                rewardXp: q.rewardXp,
+                rewardItems: q.rewardItems ?? [],
+              };
+            }
+          }
+        }
+      }
+    }
+    return null;
+  }
+
   private questLogFor(player: PlayerState): QuestLogEntry[] {
     const entries: QuestLogEntry[] = [];
     for (const [questId, entry] of player.questProgress) {
       if (entry.status !== "active") continue;
-      const quest = questDef(questId);
+      const quest = this.findQuest(player, questId);
+      if (!quest) continue;
       entries.push({
         id: quest.id,
         name: quest.name,
@@ -858,6 +925,7 @@ export class GameServer {
         objectiveCount: quest.objectiveCount,
         progress: entry.progress,
         status: entry.progress >= quest.objectiveCount ? "complete" : "active",
+        waypoints: (quest as any).waypoints,
       });
     }
     return entries;
@@ -879,6 +947,73 @@ export class GameServer {
 
   private handleQuestGiverInteract(player: PlayerState, npcId: string): void {
     if (player.dead) return;
+
+    if (npcId.startsWith("rnpc_")) {
+      const realId = npcId.slice(5);
+      const regionId = this.regionIdFromInstance(player.instanceId) ?? player.lastRegionId;
+      if (!regionId) return;
+      const bp = this.regionBlueprints.get(regionId);
+      if (!bp || !bp.npcs) return;
+      const rNpc = bp.npcs.find((n) => n.id === realId);
+      if (!rNpc) return;
+      if (dist2D(player.move.x, player.move.z, rNpc.localX, rNpc.localZ) > 8) return;
+
+      const offers: QuestOfferInfo[] = [];
+
+      for (const q of rNpc.quests ?? []) {
+        const entry = player.questProgress.get(q.id);
+        offers.push({
+          id: q.id,
+          name: q.name,
+          description: q.description,
+          tier: q.tier,
+          minLevel: q.minLevel,
+          objectiveKind: q.objectiveKind,
+          objectiveTarget: q.objectiveTarget,
+          objectiveCount: q.objectiveCount ?? 1,
+          rewardXp: q.rewardXp,
+          rewardItems: q.rewardItems ?? [],
+          status: this.questStatusFor(player, {
+            id: q.id,
+            villageIndex: 0,
+            name: q.name,
+            description: q.description,
+            tier: q.tier,
+            minLevel: q.minLevel,
+            objectiveKind: q.objectiveKind as any,
+            objectiveTarget: q.objectiveTarget,
+            objectiveCount: q.objectiveCount ?? 1,
+            rewardXp: q.rewardXp,
+            rewardItems: q.rewardItems ?? [],
+          }),
+          progress: entry?.progress ?? 0,
+        });
+      }
+
+      if (rNpc.generateProceduralQuests !== false) {
+        for (const q of questsForVillage(0)) {
+          const entry = player.questProgress.get(q.id);
+          offers.push({
+            id: q.id,
+            name: q.name,
+            description: q.description,
+            tier: q.tier,
+            minLevel: q.minLevel,
+            objectiveKind: q.objectiveKind,
+            objectiveTarget: q.objectiveTarget,
+            objectiveCount: q.objectiveCount,
+            rewardXp: q.rewardXp,
+            rewardItems: q.rewardItems,
+            status: this.questStatusFor(player, q),
+            progress: entry?.progress ?? 0,
+          });
+        }
+      }
+
+      this.sendTo(player.peer, { t: "questOffer", npcId, npcName: rNpc.name, offers });
+      return;
+    }
+
     const npc = this.npcs.find((n) => n.id === npcId);
     if (!npc) return;
     if (dist2D(player.move.x, player.move.z, npc.x, npc.z) > 6) return;
@@ -904,14 +1039,30 @@ export class GameServer {
   }
 
   private handleQuestAction(player: PlayerState, action: "accept" | "decline" | "turnin", questId: string): void {
-    if (action === "decline" || !QUEST_IDS.includes(questId)) return;
-    const quest = questDef(questId);
+    if (action === "decline") return;
+    const quest = this.findQuest(player, questId);
+    if (!quest) return;
 
-    // Accept/turn-in: accept can be done near NPC OR near a party member who has the quest active!
-    // turnin MUST still be done near the NPC village giver.
-    const npc = this.npcs.find((n) => n.villageIndex === quest.villageIndex);
-    const nearNpc = npc && dist2D(player.move.x, player.move.z, npc.x, npc.z) <= 6;
-    
+    let nearNpc = false;
+    const regionId = this.regionIdFromInstance(player.instanceId) ?? player.lastRegionId;
+    if (regionId) {
+      const bp = this.regionBlueprints.get(regionId);
+      if (bp?.npcs) {
+        for (const rNpc of bp.npcs) {
+          if (dist2D(player.move.x, player.move.z, rNpc.localX, rNpc.localZ) <= 8) {
+            nearNpc = true;
+            break;
+          }
+        }
+      }
+    }
+    if (!nearNpc) {
+      const npc = this.npcs.find((n) => n.villageIndex === quest.villageIndex);
+      if (npc && dist2D(player.move.x, player.move.z, npc.x, npc.z) <= 6) {
+        nearNpc = true;
+      }
+    }
+
     let canAcceptShared = false;
     if (action === "accept" && player.partyId) {
       const party = this.parties.get(player.partyId);
@@ -940,30 +1091,65 @@ export class GameServer {
       if (this.questStatusFor(player, quest) !== "available") return;
       player.questProgress.set(quest.id, { status: "active", progress: 0 });
       player.dirty = true;
-      this.sendTo(player.peer, { t: "questLog", quests: this.questLogFor(player) });
-      return;
-    }
 
-    // turnin
-    const entry = player.questProgress.get(quest.id);
-    if (!entry || entry.status !== "active" || entry.progress < quest.objectiveCount) {
-      this.sendEvent(player, { t: "event", kind: "error", message: "Objective not complete yet" });
-      return;
+      // Register escort NPC state on server if objective is escort or has waypoints
+      const regionId = this.regionIdFromInstance(player.instanceId) ?? player.lastRegionId;
+      if (regionId) {
+        const bp = this.regionBlueprints.get(regionId);
+        if (bp?.npcs) {
+          for (const rNpc of bp.npcs) {
+            const hasQuest = rNpc.quests?.some((q) => q.id === quest.id);
+            if (hasQuest) {
+              const waypoints = (quest as any).waypoints;
+              this.activeRegionNpcs.set(rNpc.id, {
+                id: rNpc.id,
+                name: rNpc.name,
+                regionId,
+                instanceId: player.instanceId,
+                x: rNpc.localX,
+                y: 0,
+                z: rNpc.localZ,
+                startX: rNpc.localX,
+                startZ: rNpc.localZ,
+                hp: 100,
+                maxHp: 100,
+                waypoints,
+                currentWpIdx: 0,
+                activeQuestId: quest.id,
+              });
+            }
+          }
+        }
+      }
+
+      this.sendTo(player.peer, { t: "questLog", quests: this.questLogFor(player) });
+    } else if (action === "turnin") {
+      const entry = player.questProgress.get(quest.id);
+      if (!entry || entry.status !== "active") return;
+      if (quest.objectiveKind !== "escort" && entry.progress < quest.objectiveCount) return;
+
+      player.questProgress.set(quest.id, { status: "completed", progress: quest.objectiveCount });
+      this.grantXp(player, quest.rewardXp);
+      const rewards: InvItem[] = [];
+      for (const item of quest.rewardItems) {
+        this.grantItemToPlayer(player, item.itemId, item.qty);
+        rewards.push({ itemId: item.itemId, count: item.qty });
+      }
+      player.dirty = true;
+      this.sendTo(player.peer, { t: "questLog", quests: this.questLogFor(player) });
+      this.sendEvent(player, {
+        t: "event",
+        kind: "quest",
+        message: `Completed "${quest.name}"! +${quest.rewardXp} XP`,
+      });
+      // Trigger WoW-style loot window with rewards!
+      this.sendTo(player.peer, {
+        t: "corpseLoot",
+        mobId: `quest_${quest.id}`,
+        mobType: quest.name,
+        items: rewards,
+      });
     }
-    entry.status = "completed";
-    player.dirty = true;
-    for (const r of quest.rewardItems) addItem(player.inventory, r.itemId, r.qty);
-    this.sendInventory(player);
-    this.grantXp(player, quest.rewardXp);
-    this.sendTo(player.peer, { t: "questLog", quests: this.questLogFor(player) });
-    this.sendTo(player.peer, {
-      t: "questComplete",
-      questId: quest.id,
-      questName: quest.name,
-      xp: quest.rewardXp,
-      items: quest.rewardItems,
-    });
-    this.broadcastChat("system", `${player.name} completed "${quest.name}".`);
   }
 
   private handleShareQuest(player: PlayerState, questId: string): void {
@@ -1685,6 +1871,33 @@ export class GameServer {
     if (this.activeRegionIds.has(region.id)) return;
     this.activeRegionIds.add(region.id);
     const instanceId = `region_${region.id}`;
+
+    // Auto-generate mobSpawns along escort waypoints & area if empty in blueprint
+    if (!region.mobSpawns || region.mobSpawns.length === 0) {
+      const autoSpawns: { localX: number; localZ: number; type?: string }[] = [];
+      for (const rNpc of region.npcs ?? []) {
+        for (const q of rNpc.quests ?? []) {
+          const wps = (q as any).waypoints;
+          if (wps && Array.isArray(wps)) {
+            for (const wp of wps) {
+              autoSpawns.push({ localX: wp.x + (Math.random() - 0.5) * 6, localZ: wp.z + (Math.random() - 0.5) * 6 });
+              autoSpawns.push({ localX: wp.x + (Math.random() - 0.5) * 10, localZ: wp.z + (Math.random() - 0.5) * 10 });
+            }
+          }
+        }
+      }
+      if (autoSpawns.length === 0) {
+        const entryX = region.entryLocal?.x ?? 0;
+        const entryZ = region.entryLocal?.z ?? 0;
+        for (let i = 0; i < 10; i++) {
+          const angle = (i / 10) * Math.PI * 2;
+          const dist = 12 + Math.random() * 20;
+          autoSpawns.push({ localX: entryX + Math.sin(angle) * dist, localZ: entryZ + Math.cos(angle) * dist });
+        }
+      }
+      region.mobSpawns = autoSpawns;
+    }
+
     for (let i = 0; i < region.mobSpawns.length; i++) {
       const spawn = region.mobSpawns[i]!;
       const type = spawn.type ?? pickRegionMob(region.biome, Math.random());
@@ -1714,31 +1927,109 @@ export class GameServer {
         dmgMult: 1,
       });
     }
+
+    for (const rNpc of region.npcs ?? []) {
+      const y = sampleRegionHeight(region, rNpc.localX, rNpc.localZ);
+      this.activeRegionNpcs.set(rNpc.id, {
+        id: rNpc.id,
+        name: rNpc.name,
+        regionId: region.id,
+        instanceId,
+        x: rNpc.localX,
+        y,
+        z: rNpc.localZ,
+        startX: rNpc.localX,
+        startZ: rNpc.localZ,
+        hp: 100,
+        maxHp: 100,
+      });
+    }
   }
 
-  private handleRegionPortal(player: PlayerState, regionId: string): void {
-    if (player.dead || player.instanceId) return;
-    const portal = this.regionPortals.get(regionId);
-    const region = this.regionBlueprints.get(regionId);
-    if (!portal || !region) return;
-    if (dist2D(player.move.x, player.move.z, portal.x, portal.z) > DUNGEON_PORTAL_ACTIVATION_RADIUS) return;
+  registerRegionBlueprint(blueprint: RegionBlueprint): void {
+    this.regionBlueprints.set(blueprint.id, blueprint);
+    this.regionPortals.set(blueprint.id, {
+      id: blueprint.id,
+      name: blueprint.name,
+      x: blueprint.portalWorldX,
+      z: blueprint.portalWorldZ,
+    });
+    this.activateRegion(blueprint);
+  }
 
-    this.activateRegion(region);
+  private getStartingRegion(): RegionBlueprint | undefined {
+    for (const region of this.regionBlueprints.values()) {
+      if (region.isStartingRegion) return region;
+    }
+    return (
+      this.regionBlueprints.get("starting_town") ??
+      this.regionBlueprints.get("hub") ??
+      this.regionBlueprints.values().next().value
+    );
+  }
+
+  private teleportToRegion(player: PlayerState, targetRegionId: string, targetX?: number, targetZ?: number): void {
+    if (targetRegionId === "overworld") {
+      this.teleportOutOfRegion(player, this.regionIdFromInstance(player.instanceId) ?? "");
+      return;
+    }
+    const targetRegion = this.regionBlueprints.get(targetRegionId);
+    if (!targetRegion) return;
+
+    const currentRegionId = this.regionIdFromInstance(player.instanceId);
+    if (currentRegionId && currentRegionId !== targetRegionId) {
+      player.lastRegionId = currentRegionId;
+      player.lastRegionX = player.move.x;
+      player.lastRegionZ = player.move.z;
+    }
+
+    this.activateRegion(targetRegion);
     this.dismountForCombat(player);
-    player.instanceId = `region_${regionId}`;
-    player.move = {
-      x: region.entryLocal.x,
-      y: sampleRegionHeight(region, region.entryLocal.x, region.entryLocal.z),
-      z: region.entryLocal.z,
-      vy: 0,
-      grounded: true,
-    };
+    player.instanceId = `region_${targetRegionId}`;
+    const lx = targetX ?? targetRegion.entryLocal.x;
+    const lz = targetZ ?? targetRegion.entryLocal.z;
+    const ly = sampleRegionHeight(targetRegion, lx, lz);
+    player.move = { x: lx, y: ly, z: lz, vy: 0, grounded: true };
     player.dirty = true;
     for (const pet of this.pets.values()) {
       if (pet.ownerId === player.id) pet.instanceId = player.instanceId;
     }
     this.sendSelf(player);
-    this.sendRegionState(player, region);
+    this.sendRegionState(player, targetRegion);
+  }
+
+  private handleRegionPortal(player: PlayerState, targetRegionId: string, portalId?: string): void {
+    if (player.dead) return;
+    const currentRegionId = this.regionIdFromInstance(player.instanceId);
+
+    if (currentRegionId) {
+      const currentRegion = this.regionBlueprints.get(currentRegionId);
+      if (!currentRegion) return;
+
+      // Check inter-region portal links
+      if (currentRegion.portals) {
+        const link = currentRegion.portals.find((p) => p.id === portalId || p.targetRegionId === targetRegionId);
+        if (link) {
+          if (dist2D(player.move.x, player.move.z, link.localX, link.localZ) <= 8.0) {
+            this.teleportToRegion(player, link.targetRegionId, link.targetLocalX, link.targetLocalZ);
+            return;
+          }
+        }
+      }
+
+      // Or check region exit portal (entryLocal)
+      if (dist2D(player.move.x, player.move.z, currentRegion.entryLocal.x, currentRegion.entryLocal.z) <= 6.0) {
+        this.teleportOutOfRegion(player, currentRegionId);
+        return;
+      }
+    } else {
+      // Overworld portal
+      const portal = this.regionPortals.get(targetRegionId);
+      const region = this.regionBlueprints.get(targetRegionId);
+      if (!portal || !region) return;
+      if (dist2D(player.move.x, player.move.z, portal.x, portal.z) > DUNGEON_PORTAL_ACTIVATION_RADIUS) return;
+      this.teleportToRegion(player, targetRegionId);
+    }
   }
 
   private handleRegionLeave(player: PlayerState): void {
@@ -1752,16 +2043,20 @@ export class GameServer {
   }
 
   private teleportOutOfRegion(player: PlayerState, regionId: string): void {
-    const portal = this.regionPortals.get(regionId);
-    const dest = portal ? { x: portal.x, z: portal.z } : this.nearestGraveyard(player.move.x, player.move.z);
-    player.instanceId = null;
-    player.move = { x: dest.x, y: terrainHeight(dest.x, dest.z), z: dest.z, vy: 0, grounded: true };
-    player.dirty = true;
-    for (const pet of this.pets.values()) {
-      if (pet.ownerId === player.id) pet.instanceId = null;
+    if (player.lastRegionId && this.regionBlueprints.has(player.lastRegionId)) {
+      const returnRegionId = player.lastRegionId;
+      const targetX = player.lastRegionX;
+      const targetZ = player.lastRegionZ;
+      player.lastRegionId = undefined;
+      this.teleportToRegion(player, returnRegionId, targetX, targetZ);
+      return;
     }
-    this.sendSelf(player);
-    this.sendTo(player.peer, { t: "regionState", inRegion: false, regionId: null, regionName: null });
+
+    const startingRegion = this.getStartingRegion();
+    if (startingRegion) {
+      this.teleportToRegion(player, startingRegion.id, startingRegion.entryLocal.x, startingRegion.entryLocal.z);
+      return;
+    }
   }
 
   private sendRegionState(player: PlayerState, region: RegionBlueprint): void {
@@ -2458,6 +2753,16 @@ export class GameServer {
       for (const mob of this.mobs.values()) {
         if (mob.targetId === player.id) mob.targetId = null;
       }
+      for (const rNpc of this.activeRegionNpcs.values()) {
+        if (rNpc.instanceId === player.instanceId && rNpc.activeQuestId) {
+          if (player.questProgress.has(rNpc.activeQuestId)) {
+            player.questProgress.delete(rNpc.activeQuestId);
+            player.dirty = true;
+            this.sendTo(player.peer, { t: "questLog", quests: this.questLogFor(player) });
+          }
+          this.handleEscortNpcDeath(rNpc);
+        }
+      }
       if (player.instanceId) this.checkDungeonWipe(player.instanceId);
     }
     this.sendSelf(player);
@@ -2491,6 +2796,7 @@ export class GameServer {
     this.tickMobs(now);
     this.tickPets(now);
     this.tickNodeRespawns(now);
+    this.tickEscortNpcs(TICK_DT);
 
     // Full 20Hz broadcast (sendSnapshots already includes each viewer's own
     // self-ack) -- previously throttled to every 2nd tick, but that 100ms
@@ -2657,7 +2963,7 @@ export class GameServer {
       const owner = this.players.get(proj.ownerId);
       for (const mob of this.mobs.values()) {
         if (mob.hp <= 0 || mob.respawnAt !== null || !this.sameInstance(proj, mob)) continue;
-        if (dist3D(proj.x, proj.y, proj.z, mob.x, mob.y + 0.8, mob.z) < 1.7) {
+        if (dist2D(proj.x, proj.z, mob.x, mob.z) < 2.2 && Math.abs(proj.y - (mob.y + 0.8)) < 4.5) {
           if (owner) this.applySpellEffects(owner, { mob, foe: null }, proj.effects);
           this.broadcastNear(
             proj.x,
@@ -2730,13 +3036,25 @@ export class GameServer {
 
       // Acquire target (only if not currently leashing home)
       if (!mob.targetId && !mob.leashing) {
-        for (const player of this.players.values()) {
-          if (player.dead) continue;
-          if (player.activeAuras.some((a) => a.auraId === "invisible")) continue;
-          if (!this.sameInstance(mob, player)) continue;
-          if (dist2D(mob.x, mob.z, player.move.x, player.move.z) < def.aggroRange) {
-            mob.targetId = player.id;
+        // Priority 1: Active Escort NPC in range
+        for (const [rNpcId, rNpc] of this.activeRegionNpcs) {
+          if (rNpc.hp <= 0 || !rNpc.waypoints) continue;
+          if (rNpc.instanceId !== mob.instanceId) continue;
+          if (dist2D(mob.x, mob.z, rNpc.x, rNpc.z) < Math.max(14, def.aggroRange * 1.3)) {
+            mob.targetId = `rnpc_${rNpcId}`;
             break;
+          }
+        }
+        // Priority 2: Player in range
+        if (!mob.targetId) {
+          for (const player of this.players.values()) {
+            if (player.dead) continue;
+            if (player.activeAuras.some((a) => a.auraId === "invisible")) continue;
+            if (!this.sameInstance(mob, player)) continue;
+            if (dist2D(mob.x, mob.z, player.move.x, player.move.z) < def.aggroRange) {
+              mob.targetId = player.id;
+              break;
+            }
           }
         }
       }
@@ -2784,10 +3102,14 @@ export class GameServer {
     }
   }
 
-  /** Resolves a mob's targetId to whichever it actually is -- a player or a
-   *  pet -- in one normalized shape, so tickMobs' chase/attack logic doesn't
-   *  need two parallel branches for who it's fighting. */
+  /** Resolves a mob's targetId to whichever it actually is -- a player, a pet,
+   *  or an escort NPC -- in one normalized shape. */
   private mobTargetInfo(id: string): { x: number; z: number; dead: boolean } | null {
+    if (id.startsWith("rnpc_")) {
+      const realId = id.slice(5);
+      const rNpc = this.activeRegionNpcs.get(realId);
+      if (rNpc) return { x: rNpc.x, z: rNpc.z, dead: rNpc.hp <= 0 };
+    }
     const player = this.players.get(id);
     if (player) return { x: player.move.x, z: player.move.z, dead: player.dead };
     const pet = this.pets.get(id);
@@ -2802,6 +3124,27 @@ export class GameServer {
 
   /** A mob's attack lands on whichever kind of target it resolved to. */
   private applyMobAttack(mob: MobState, targetId: string, damage: number): void {
+    if (targetId.startsWith("rnpc_")) {
+      const realId = targetId.slice(5);
+      const rNpc = this.activeRegionNpcs.get(realId);
+      if (rNpc) {
+        rNpc.hp = Math.max(0, rNpc.hp - Math.round(damage));
+        this.broadcastEvent({
+          t: "event",
+          kind: "damage",
+          sourceId: mob.id,
+          targetId,
+          amount: Math.round(damage),
+          x: rNpc.x,
+          y: rNpc.y + 1.5,
+          z: rNpc.z,
+        });
+        if (rNpc.hp <= 0) {
+          this.handleEscortNpcDeath(rNpc);
+        }
+      }
+      return;
+    }
     const player = this.players.get(targetId);
     if (player) {
       this.damagePlayer(player, damage, mob.id);
@@ -2809,6 +3152,78 @@ export class GameServer {
     }
     const pet = this.pets.get(targetId);
     if (pet) this.damagePet(pet, damage, mob.id);
+  }
+
+  private handleEscortNpcDeath(rNpc: {
+    id: string;
+    activeQuestId?: string;
+    instanceId: string;
+    startX: number;
+    startZ: number;
+    hp: number;
+    maxHp: number;
+    waypoints?: any;
+    currentWpIdx?: any;
+    x: number;
+    z: number;
+  }): void {
+    const qId = rNpc.activeQuestId;
+    rNpc.hp = rNpc.maxHp;
+    rNpc.x = rNpc.startX;
+    rNpc.z = rNpc.startZ;
+    rNpc.waypoints = undefined;
+    rNpc.currentWpIdx = undefined;
+    rNpc.activeQuestId = undefined;
+
+    for (const player of this.players.values()) {
+      if (player.instanceId === rNpc.instanceId) {
+        if (qId && player.questProgress.has(qId)) {
+          player.questProgress.delete(qId);
+          player.dirty = true;
+          this.sendTo(player.peer, { t: "questLog", quests: this.questLogFor(player) });
+        }
+        this.sendEvent(player, { t: "event", kind: "error", message: "Quest Failed: Escort NPC Perished" });
+      }
+    }
+  }
+
+  private tickEscortNpcs(dt: number): void {
+    for (const rNpc of this.activeRegionNpcs.values()) {
+      if (rNpc.hp <= 0 || !rNpc.waypoints || rNpc.currentWpIdx === undefined) continue;
+
+      const wp = rNpc.waypoints[rNpc.currentWpIdx];
+      if (!wp) continue;
+
+      const dx = wp.x - rNpc.x;
+      const dz = wp.z - rNpc.z;
+      const dist = Math.hypot(dx, dz);
+
+      if (dist > 0.5) {
+        const speed = 3.2;
+        const step = Math.min(dist, speed * dt);
+        rNpc.x += (dx / dist) * step;
+        rNpc.z += (dz / dist) * step;
+      } else {
+        rNpc.currentWpIdx++;
+        if (rNpc.currentWpIdx >= rNpc.waypoints.length) {
+          const qId = rNpc.activeQuestId;
+          rNpc.waypoints = undefined;
+          rNpc.currentWpIdx = undefined;
+          rNpc.activeQuestId = undefined;
+
+          if (qId) {
+            for (const player of this.players.values()) {
+              if (player.instanceId === rNpc.instanceId) {
+                const entry = player.questProgress.get(qId);
+                if (entry && entry.status === "active") {
+                  this.handleQuestAction(player, "turnin", qId);
+                }
+              }
+            }
+          }
+        }
+      }
+    }
   }
 
   /** Generates loot drops, awards XP, updates quests, and leaves mob corpse in the world. */
@@ -3238,8 +3653,8 @@ export class GameServer {
     let bestDist = Infinity;
     for (const mob of this.mobs.values()) {
       if (mob.hp <= 0 || mob.deathAt !== null || mob.respawnAt !== null || !this.sameInstance(player, mob)) continue;
-      const d = dist3D(player.move.x, player.move.y, player.move.z, mob.x, mob.y, mob.z);
-      if (d > range + 0.6 || !inCone(mob.x, mob.z)) continue;
+      const d = dist2D(player.move.x, player.move.z, mob.x, mob.z);
+      if (d > range + 1.2 || Math.abs(player.move.y - mob.y) > 4.5 || !inCone(mob.x, mob.z)) continue;
       if (d < bestDist) {
         bestMob = mob;
         bestFoe = null;
@@ -3317,6 +3732,21 @@ export class GameServer {
             { t: "event", kind: "heal", sourceId: caster.id, targetId: pet.id, amount: petAmount, x: pet.x, y: pet.y + 1.5, z: pet.z },
             pet.instanceId,
           );
+        }
+        // Also heal nearby active Escort NPCs in the same instance
+        for (const [rNpcId, rNpc] of this.activeRegionNpcs) {
+          if (rNpc.hp > 0 && rNpc.hp < rNpc.maxHp && rNpc.instanceId === caster.instanceId) {
+            if (dist2D(caster.move.x, caster.move.z, rNpc.x, rNpc.z) <= 12) {
+              const healAmt = Math.round(amount * 0.8);
+              rNpc.hp = Math.min(rNpc.maxHp, rNpc.hp + healAmt);
+              this.broadcastNear(
+                rNpc.x,
+                rNpc.z,
+                { t: "event", kind: "heal", sourceId: caster.id, targetId: `rnpc_${rNpcId}`, amount: healAmt, x: rNpc.x, y: rNpc.y + 1.5, z: rNpc.z },
+                caster.instanceId,
+              );
+            }
+          }
         }
       } else if (effect.type === "applyAura" && effect.auraId) {
         if (landsOnCaster) {

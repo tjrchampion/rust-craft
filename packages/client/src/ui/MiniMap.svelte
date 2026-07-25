@@ -79,7 +79,7 @@
     return list;
   });
 
-  const GLYPH: Record<string, string> = { available: "!", complete: "?", active: "?" };
+  const GLYPH: Record<string, string> = { available: "!", complete: "?", active: "?", escort: "🛡️" };
 </script>
 
 <div class="minimap-wrap rc-frame">
@@ -99,7 +99,7 @@
       {#each questPoints as q (q.id)}
         {#if q.p.onMap}
           <circle cx={q.p.x} cy={q.p.y} r="6.5" class="mm-quest-dot mm-{q.marker}" />
-          <text x={q.p.x} y={q.p.y + 3.2} class="mm-quest-glyph">{GLYPH[q.marker]}</text>
+          <text x={q.p.x} y={q.p.y + 3.2} class="mm-quest-glyph">{GLYPH[q.marker] ?? "!"}</text>
         {/if}
       {/each}
       {#each partyPoints as pm (pm.id)}
@@ -191,6 +191,15 @@
   }
   .mm-quest-dot.mm-active {
     fill: #9a9a9a;
+  }
+  .mm-quest-dot.mm-escort {
+    fill: #33b5e5;
+    stroke: #ffffff;
+    stroke-width: 1.2;
+    animation: mm-pulse 1.2s ease-in-out infinite;
+  }
+  .mm-arrow.mm-escort {
+    fill: #33b5e5;
   }
   .mm-quest-dot.mm-complete {
     animation: mm-pulse 1.6s ease-in-out infinite;

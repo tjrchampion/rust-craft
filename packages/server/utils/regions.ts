@@ -8,25 +8,40 @@ import type { RegionBlueprint } from "@rustcraft/shared";
 // rebuild -- so this reads the JSON files off disk at request time, not
 // import time. A simple in-memory cache avoids re-reading on every request;
 // it's invalidated by saveRegionBlueprint, the only write path.
-const REGIONS_DIR = resolve(process.cwd(), "../shared/src/content/regionBlueprints");
+function getRegionsDir(): string {
+  const cwd = process.cwd();
+  const candidates = [
+    resolve(cwd, "packages/shared/src/content/regionBlueprints"),
+    resolve(cwd, "../shared/src/content/regionBlueprints"),
+    resolve(cwd, "shared/src/content/regionBlueprints"),
+  ];
+  for (const dir of candidates) {
+    if (existsSync(dir)) return dir;
+  }
+  return candidates[0]!;
+}
 
 let cache: Map<string, RegionBlueprint> | null = null;
 
 function ensureDir(): void {
-  if (!existsSync(REGIONS_DIR)) mkdirSync(REGIONS_DIR, { recursive: true });
+  const dir = getRegionsDir();
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
 }
 
 function loadAll(): Map<string, RegionBlueprint> {
   if (cache) return cache;
   ensureDir();
+  const dir = getRegionsDir();
   const map = new Map<string, RegionBlueprint>();
-  for (const file of readdirSync(REGIONS_DIR)) {
-    if (!file.endsWith(".json")) continue;
-    try {
-      const blueprint = JSON.parse(readFileSync(resolve(REGIONS_DIR, file), "utf-8")) as RegionBlueprint;
-      map.set(blueprint.id, blueprint);
-    } catch {
-      // Skip unreadable/corrupt files rather than failing every region lookup.
+  if (existsSync(dir)) {
+    for (const file of readdirSync(dir)) {
+      if (!file.endsWith(".json")) continue;
+      try {
+        const blueprint = JSON.parse(readFileSync(resolve(dir, file), "utf-8")) as RegionBlueprint;
+        map.set(blueprint.id, blueprint);
+      } catch {
+        // Skip unreadable/corrupt files rather than failing every region lookup.
+      }
     }
   }
   cache = map;
@@ -43,6 +58,7 @@ export function loadRegionBlueprint(id: string): RegionBlueprint | null {
 
 export function saveRegionBlueprint(id: string, blueprint: RegionBlueprint): void {
   ensureDir();
-  writeFileSync(resolve(REGIONS_DIR, `${id}.json`), JSON.stringify(blueprint, null, 2) + "\n", "utf-8");
+  const dir = getRegionsDir();
+  writeFileSync(resolve(dir, `${id}.json`), JSON.stringify(blueprint, null, 2) + "\n", "utf-8");
   cache = null;
 }

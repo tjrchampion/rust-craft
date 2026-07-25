@@ -2,6 +2,7 @@ import { defineEventHandler, readBody, createError } from "h3";
 import { slugifyRegionName, type RegionBlueprint } from "@rustcraft/shared";
 import { listRegionBlueprints, saveRegionBlueprint } from "../../../utils/regions";
 import { IS_DEV } from "../../../utils/env";
+import { getGame } from "../../../game/instance";
 
 // POST /api/debug/region-blueprint { blueprint: RegionBlueprint }
 // IS_DEV-gated editor Save button, same posture as dungeon-blueprint.post.ts
@@ -29,5 +30,6 @@ export default defineEventHandler(async (event) => {
   }
   const toSave: RegionBlueprint = { ...blueprint, id };
   saveRegionBlueprint(id, toSave);
+  getGame().registerRegionBlueprint(toSave);
   return { ok: true, id };
 });

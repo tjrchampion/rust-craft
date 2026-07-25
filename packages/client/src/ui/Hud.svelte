@@ -95,8 +95,10 @@
 
   {#if game.interactLabel && !game.self?.dead}
     <div class="interact">
-      <span class="key">{interactKey}</span>
-      {game.interactLabel}
+      <div class="label">
+        <span class="key">{interactKey}</span>
+        <span class="label-text">{game.interactLabel}</span>
+      </div>
     </div>
   {/if}
 
@@ -211,20 +213,42 @@
     position: absolute;
     bottom: 26%;
     width: 100%;
-    text-align: center;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+  }
+  .interact .label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: rgba(10, 8, 5, 0.72);
+    border: 1px solid rgba(255, 220, 120, 0.25);
+    border-radius: 24px;
+    padding: 6px 18px 6px 12px;
+    max-width: min(560px, 88vw);
+    backdrop-filter: blur(6px);
+  }
+  .interact .label-text {
     font-size: 17px;
     text-shadow: 0 2px 6px rgba(0, 0, 0, 0.9);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: #e8dcc8;
   }
   .interact .key {
-    display: inline-block;
+    display: inline-flex;
+    align-items: center;
+    flex-shrink: 0;
     background: rgba(20, 16, 10, 0.85);
     border: 1px solid var(--rc-gold);
     color: var(--rc-gold-bright);
     border-radius: 5px;
     padding: 2px 9px;
-    margin-right: 8px;
     font-weight: 700;
     font-family: var(--rc-display);
+    font-size: 15px;
   }
   .mounted {
     position: absolute;

@@ -4,6 +4,7 @@ import { TransformControls } from "three/examples/jsm/controls/TransformControls
 import { SkeletonUtils } from "three/examples/jsm/Addons.js";
 import { load, AnimatedModel, PLAYER_ANIMS, logicalFromState } from "./gltf";
 import { CLASS_MODEL_URLS } from "./classModels";
+import { buildNameplate } from "./models";
 import {
   type RegionBlueprint,
   type RegionAssetCategory,
@@ -11,6 +12,8 @@ import {
   type RegionColorGrading,
   type RegionRoad,
   type RegionPointLight,
+  type RegionNPC,
+  type RegionQuest,
   type ClassId,
   sampleRegionWaterDepth,
   REGION_COLOR_PRESETS,
@@ -31,7 +34,7 @@ import { applyGroundBlendShader, regionGroundWeights, regionRoadBlendAt, buildRe
 import { music } from "../game/music";
 
 export type EditorTransformMode = "translate" | "rotate" | "scale";
-export type EditorMarkerKind = "mobSpawn" | "village" | "entry";
+export type EditorMarkerKind = "mobSpawn" | "village" | "entry" | "portal" | "npc";
 export type SculptMode = "raise" | "lower" | "mold" | "smooth" | null;
 export type WaterBrushMode = "add" | "remove" | null;
 
@@ -67,6 +70,8 @@ const MARKER_COLORS: Record<EditorMarkerKind, number> = {
   mobSpawn: 0xff5533,
   village: 0xffd23f,
   entry: 0x44dd66,
+  portal: 0x9944ff,
+  npc: 0x33b5e5,
 };
 
 const ARROW_PAN_STEP = 4;
@@ -80,6 +85,10 @@ export interface EditorSelection {
   markerKind?: EditorMarkerKind;
   name?: string;
   radius?: number;
+  targetRegionId?: string;
+  targetLocalX?: number;
+  targetLocalZ?: number;
+  npcData?: RegionNPC;
   color?: string;
   intensity?: number;
   distance?: number;
@@ -103,7 +112,12 @@ interface MarkerEntry {
   obj: THREE.Object3D;
   name?: string;
   radius?: number;
+  targetRegionId?: string;
+  targetLocalX?: number;
+  targetLocalZ?: number;
+  npcData?: RegionNPC;
   ring?: THREE.Mesh;
+  animModel?: AnimatedModel;
 }
 
 interface LightEntry {
@@ -116,8 +130,8 @@ interface LightEntry {
   bulb: THREE.Sprite;
 }
 
-const DEFAULT_GRID_SIZE = 48;
-const DEFAULT_PITCH = 6;
+const DEFAULT_GRID_SIZE = 64;
+const DEFAULT_PITCH = 2.5;
 
 /** Standalone THREE.js scene for the region editor -- an OrbitControls-driven
  *  viewport over a real sculptable heightmap terrain where the author raises/
@@ -141,7 +155,7 @@ export class RegionEditorScene {
   private ambientLight = new THREE.AmbientLight(0xffffff, 0.9);
   private sunLight = new THREE.DirectionalLight(0xffffff, 1.0);
   private colorGrading: RegionColorGrading = { ...REGION_COLOR_PRESETS.grassland };
-  private meta = { id: "", name: "New Region", biome: "grassland" as RegionBiome, portalWorldX: 0, portalWorldZ: 0, musicTrack: null as string | null };
+  private meta = { id: "", name: "New Region", biome: "grassland" as RegionBiome, portalWorldX: 0, portalWorldZ: 0, isStartingRegion: false, musicTrack: null as string | null };
 
   private gridSize = DEFAULT_GRID_SIZE;
   private pitch = DEFAULT_PITCH;
@@ -177,12 +191,17 @@ export class RegionEditorScene {
    *  (see roadBlendAt) so the dirt strip appears while still dragging. */
   private paintingRoad: { x: number; z: number }[] | null = null;
 
+  public activeEscortQuest: { markerId: string; questId: string } | null = null;
+  public escortPathTracingActive = false;
+  private escortPathGroup = new THREE.Group();
+
   private selectedIds = new Set<string>();
   private selectionGroup = new THREE.Group();
   private selectionHelpers = new Map<string, THREE.BoxHelper>();
   private nextId = 1;
 
   private isDraggingToPlace = false;
+  private isDraggingWaypoint = false;
   private isSculpting = false;
   private isWatering = false;
   private isTexturePainting = false;
@@ -264,6 +283,7 @@ export class RegionEditorScene {
     this.scene.add(this.terrainMesh);
     this.scene.add(this.selectionGroup);
     this.scene.add(this.waterParticlesGroup);
+    this.scene.add(this.escortPathGroup);
     this.applyColorGrading(this.colorGrading);
     this.isRestoring = false;
 
@@ -956,14 +976,14 @@ export class RegionEditorScene {
     this.pushHistory();
   }
 
-  setMeta(patch: Partial<{ id: string; name: string; biome: RegionBiome; portalWorldX: number; portalWorldZ: number; musicTrack: string | null }>): void {
+  setMeta(patch: Partial<{ id: string; name: string; biome: RegionBiome; portalWorldX: number; portalWorldZ: number; isStartingRegion: boolean; musicTrack: string | null }>): void {
     this.meta = { ...this.meta, ...patch };
     if (patch.musicTrack !== undefined && this.playtestActive) {
       music.play(regionMusicTrackUrl(this.meta.musicTrack), 3000);
     }
   }
 
-  getMeta(): { id: string; name: string; biome: RegionBiome; portalWorldX: number; portalWorldZ: number; musicTrack: string | null } {
+  getMeta(): { id: string; name: string; biome: RegionBiome; portalWorldX: number; portalWorldZ: number; isStartingRegion: boolean; musicTrack: string | null } {
     return { ...this.meta };
   }
 
@@ -1447,8 +1467,35 @@ export class RegionEditorScene {
 
   private onMouseDown = (e: MouseEvent): void => {
     if (this.playtestActive) return;
-    if (e.button !== 0) return;
     if (this.transform.dragging) return; // grabbing the gizmo, not placing/sculpting/painting
+    if (this.escortPathTracingActive && this.activeEscortQuest) {
+      if (e.button === 2) {
+        const wpHit = this.waypointHitAt(e);
+        if (wpHit) {
+          this.removeEscortWaypoint(wpHit.index);
+          e.preventDefault();
+          e.stopPropagation();
+          return;
+        }
+      } else if (e.button === 0) {
+        const wpHit = this.waypointHitAt(e);
+        if (wpHit) {
+          this.selectWaypoint(wpHit.index);
+          this.isDraggingWaypoint = true;
+          this.orbit.enabled = false;
+          e.preventDefault();
+          e.stopPropagation();
+          return;
+        }
+        const hit = this.terrainHitAt(e);
+        if (!hit) return;
+        this.addEscortWaypoint(hit.x, hit.z);
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
+    }
+    if (e.button !== 0) return;
     if (this.sculptMode) {
       const hit = this.terrainHitAt(e);
       if (!hit) return;
@@ -1524,6 +1571,26 @@ export class RegionEditorScene {
 
   private onMouseMove = (e: MouseEvent): void => {
     if (this.playtestActive) return;
+    if (this.isDraggingWaypoint && this.selectedWaypointIndex !== null && this.activeEscortQuest) {
+      const hit = this.terrainHitAt(e);
+      if (hit) {
+        const m = this.markers.get(this.activeEscortQuest.markerId);
+        if (m && m.npcData?.quests) {
+          const q = m.npcData.quests.find((q) => q.id === this.activeEscortQuest!.questId);
+          if (q && q.waypoints && q.waypoints[this.selectedWaypointIndex] !== undefined) {
+            const wp = q.waypoints[this.selectedWaypointIndex]!;
+            wp.x = Math.round(hit.x * 10) / 10;
+            wp.z = Math.round(hit.z * 10) / 10;
+            this.rebuildEscortPathVisuals();
+            this.triggerChange();
+            this.emitSelection();
+          }
+        }
+      }
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
     if (this.isSculpting && this.sculptMode) {
       const hit = this.terrainHitAt(e);
       if (hit) this.sculptAt(hit.x, hit.z, this.sculptMode);
@@ -1577,6 +1644,10 @@ export class RegionEditorScene {
   };
 
   private onMouseUp = (): void => {
+    if (this.isDraggingWaypoint) {
+      this.isDraggingWaypoint = false;
+      this.orbit.enabled = true;
+    }
     this.isDraggingToPlace = false;
     this.isSculpting = false;
     this.isWatering = false;
@@ -1780,11 +1851,201 @@ export class RegionEditorScene {
       group.add(entry.ring);
       this.markers.set(id, entry);
       if (!skipVillageGen) this.buildVillageAroundMarker(id);
+    } else if (kind === "npc") {
+      entry.name = `Quest Giver ${this.nextId}`;
+      entry.npcData = {
+        id,
+        name: entry.name,
+        model: "Knight",
+        localX: x,
+        localZ: z,
+        yaw: 0,
+        title: "<Questgiver>",
+        dialogue: "Greetings, adventurer! I need your assistance.",
+        quests: [],
+        generateProceduralQuests: true,
+      };
+      this.markers.set(id, entry);
+      this.rebuildNPCMarkerVisual(entry);
     } else {
       this.markers.set(id, entry);
     }
     this.triggerChange();
     return id;
+  }
+
+  public rebuildNPCMarkerVisual(entry: MarkerEntry): void {
+    if (!entry || entry.kind !== "npc") return;
+
+    for (let i = entry.obj.children.length - 1; i >= 0; i--) {
+      entry.obj.remove(entry.obj.children[i]!);
+    }
+
+    const modelName = entry.npcData?.model ?? "Knight";
+    const npcName = entry.npcData?.name ?? entry.name ?? "Quest Giver";
+    const npcTitle = entry.npcData?.title ?? "<Questgiver>";
+
+    const markerSphere = new THREE.Mesh(
+      new THREE.SphereGeometry(0.7, 12, 10),
+      new THREE.MeshBasicMaterial({ color: MARKER_COLORS.npc }),
+    );
+    markerSphere.position.set(0, 0.5, 0);
+    entry.obj.add(markerSphere);
+
+    const animModel = new AnimatedModel(PLAYER_ANIMS);
+    animModel
+      .loadFrom(`/assets/models/${modelName}.glb`)
+      .then(() => {
+        if (!entry.obj.parent) return;
+        markerSphere.visible = false;
+        entry.obj.add(animModel.group);
+        entry.animModel = animModel;
+      })
+      .catch(() => {});
+
+    const labelText = npcTitle ? `${npcName}\n${npcTitle}` : npcName;
+    const nameplate = buildNameplate(labelText, "#33b5e5");
+    nameplate.position.set(0, 2.6, 0);
+    nameplate.scale.set(3.4, 0.95, 1);
+    entry.obj.add(nameplate);
+
+    if ((entry.npcData?.quests?.length ?? 0) > 0 || entry.npcData?.generateProceduralQuests !== false) {
+      const badge = buildNameplate("!", "#ffd700");
+      badge.position.set(0, 3.4, 0);
+      badge.scale.set(1.4, 1.4, 1);
+      entry.obj.add(badge);
+    }
+  }
+
+  public selectedWaypointIndex: number | null = null;
+  private selectedWaypointMesh: THREE.Mesh | null = null;
+
+  public setEscortPathTracing(markerId: string | null, questId: string | null): void {
+    if (markerId && questId) {
+      this.activeEscortQuest = { markerId, questId };
+      this.escortPathTracingActive = true;
+      this.selectedWaypointIndex = null;
+      this.deselect();
+      this.transform.detach();
+      this.sculptMode = null;
+      this.waterBrushMode = null;
+      this.armedModel = null;
+      this.armedMarkerKind = null;
+      this.orbit.enablePan = false;
+    } else {
+      this.activeEscortQuest = null;
+      this.escortPathTracingActive = false;
+      this.selectedWaypointIndex = null;
+      this.transform.detach();
+      this.orbit.enablePan = true;
+    }
+    this.rebuildEscortPathVisuals();
+  }
+
+  public waypointHitAt(e: MouseEvent): { index: number; mesh: THREE.Mesh } | null {
+    this.raycaster.setFromCamera(this.ndcFromEvent(e), this.camera);
+    const meshes = this.escortPathGroup.children.filter((c) => (c as THREE.Mesh).isMesh && c.userData.waypointIndex !== undefined);
+    const hits = this.raycaster.intersectObjects(meshes, false);
+    if (hits.length > 0 && hits[0]!.object.userData.waypointIndex !== undefined) {
+      return {
+        index: hits[0]!.object.userData.waypointIndex as number,
+        mesh: hits[0]!.object as THREE.Mesh,
+      };
+    }
+    return null;
+  }
+
+  public selectWaypoint(index: number | null): void {
+    this.selectedWaypointIndex = index;
+    this.transform.detach();
+    this.selectedIds.clear();
+    this.updateSelectionGroup();
+    this.rebuildEscortPathVisuals();
+    this.emitSelection();
+  }
+
+  public addEscortWaypoint(x: number, z: number): void {
+    if (!this.activeEscortQuest) return;
+    const m = this.markers.get(this.activeEscortQuest.markerId);
+    if (!m || !m.npcData?.quests) return;
+    const q = m.npcData.quests.find((q) => q.id === this.activeEscortQuest!.questId);
+    if (!q) return;
+    if (!q.waypoints) q.waypoints = [];
+    const newIdx = q.waypoints.length;
+    q.waypoints.push({ x: Math.round(x * 10) / 10, z: Math.round(z * 10) / 10 });
+    this.selectWaypoint(newIdx);
+    this.triggerChange();
+  }
+
+  public removeEscortWaypoint(index: number): void {
+    if (!this.activeEscortQuest) return;
+    const m = this.markers.get(this.activeEscortQuest.markerId);
+    if (!m || !m.npcData?.quests) return;
+    const q = m.npcData.quests.find((q) => q.id === this.activeEscortQuest!.questId);
+    if (!q || !q.waypoints) return;
+    q.waypoints.splice(index, 1);
+    if (this.selectedWaypointIndex === index) {
+      this.selectWaypoint(null);
+    } else if (this.selectedWaypointIndex !== null && this.selectedWaypointIndex > index) {
+      this.selectedWaypointIndex--;
+      this.rebuildEscortPathVisuals();
+    } else {
+      this.rebuildEscortPathVisuals();
+    }
+    this.triggerChange();
+    this.emitSelection();
+  }
+
+  public rebuildEscortPathVisuals(): void {
+    this.selectedWaypointMesh = null;
+    while (this.escortPathGroup.children.length > 0) {
+      const child = this.escortPathGroup.children[0]!;
+      this.escortPathGroup.remove(child);
+    }
+
+    if (!this.activeEscortQuest) return;
+    const m = this.markers.get(this.activeEscortQuest.markerId);
+    if (!m || !m.npcData?.quests) return;
+    const q = m.npcData.quests.find((q) => q.id === this.activeEscortQuest!.questId);
+    if (!q || !q.waypoints || q.waypoints.length === 0) return;
+
+    const points: THREE.Vector3[] = [];
+    const npcPos = m.obj.position;
+    points.push(new THREE.Vector3(npcPos.x, this.heightAt(npcPos.x, npcPos.z) + 0.5, npcPos.z));
+
+    for (let i = 0; i < q.waypoints.length; i++) {
+      const wp = q.waypoints[i]!;
+      const wy = this.heightAt(wp.x, wp.z) + 0.5;
+      const vec = new THREE.Vector3(wp.x, wy, wp.z);
+      points.push(vec);
+
+      const isSelected = this.selectedWaypointIndex === i;
+      const isLast = i === q.waypoints.length - 1;
+      const sphere = new THREE.Mesh(
+        new THREE.SphereGeometry(isSelected ? 0.75 : 0.5, 12, 10),
+        new THREE.MeshBasicMaterial({
+          color: isSelected ? 0xff3366 : isLast ? 0xffd700 : 0x33b5e5,
+        }),
+      );
+      sphere.position.copy(vec);
+      sphere.userData.waypointIndex = i;
+      this.escortPathGroup.add(sphere);
+
+      if (isSelected) {
+        this.selectedWaypointMesh = sphere;
+        this.transform.attach(sphere);
+      }
+
+      const badge = buildNameplate(isLast ? `🚩 Destination` : `WP #${i + 1}`, isSelected ? "#ff3366" : isLast ? "#ffd700" : "#33b5e5");
+      badge.position.set(wp.x, wy + 1.4, wp.z);
+      badge.scale.set(2.4, 0.75, 1);
+      this.escortPathGroup.add(badge);
+    }
+
+    const lineGeo = new THREE.BufferGeometry().setFromPoints(points);
+    const lineMat = new THREE.LineBasicMaterial({ color: 0x33b5e5 });
+    const line = new THREE.Line(lineGeo, lineMat);
+    this.escortPathGroup.add(line);
   }
 
   public buildVillageAroundMarker(id: string): void {
@@ -1967,7 +2228,22 @@ export class RegionEditorScene {
       const m = id === "entry" ? this.entryMarker : this.markers.get(id);
       if (m) {
         const t = worldTransform(m.obj);
-        selItems.push({ kind: "marker", id, markerKind: m.kind, x: t.x, y: t.y, z: t.z, yaw: t.yaw, scale: t.scale, name: m.name, radius: m.radius });
+        selItems.push({
+          kind: "marker",
+          id,
+          markerKind: m.kind,
+          x: t.x,
+          y: t.y,
+          z: t.z,
+          yaw: t.yaw,
+          scale: t.scale,
+          name: m.name,
+          radius: m.radius,
+          targetRegionId: m.targetRegionId,
+          targetLocalX: m.targetLocalX,
+          targetLocalZ: m.targetLocalZ,
+          npcData: m.npcData ? { ...m.npcData } : undefined,
+        });
         continue;
       }
       const l = this.lights.get(id);
@@ -1987,7 +2263,24 @@ export class RegionEditorScene {
     this.emitSelection();
   };
 
-  updateSelectedProps(patch: Partial<{ x: number; y: number; z: number; yaw: number; scale: number; name: string; radius: number; color: string; intensity: number; distance: number }>): void {
+  updateSelectedProps(
+    patch: Partial<{
+      x: number;
+      y: number;
+      z: number;
+      yaw: number;
+      scale: number;
+      name: string;
+      radius: number;
+      targetRegionId: string;
+      targetLocalX: number;
+      targetLocalZ: number;
+      npcData: Partial<RegionNPC>;
+      color: string;
+      intensity: number;
+      distance: number;
+    }>,
+  ): void {
     if (this.selectedIds.size === 0) return;
     for (const obj of [...this.selectionGroup.children]) this.scene.attach(obj);
     for (const id of this.selectedIds) {
@@ -2006,6 +2299,14 @@ export class RegionEditorScene {
         if (patch.y !== undefined) m.obj.position.y = patch.y;
         if (patch.z !== undefined) m.obj.position.z = patch.z;
         if (patch.name !== undefined) m.name = patch.name;
+        if (patch.targetRegionId !== undefined) m.targetRegionId = patch.targetRegionId;
+        if (patch.targetLocalX !== undefined) m.targetLocalX = patch.targetLocalX;
+        if (patch.targetLocalZ !== undefined) m.targetLocalZ = patch.targetLocalZ;
+        if (patch.npcData !== undefined && m.kind === "npc") {
+          m.npcData = { ...m.npcData, ...patch.npcData } as RegionNPC;
+          if (patch.name !== undefined) m.npcData.name = patch.name;
+          this.rebuildNPCMarkerVisual(m);
+        }
         if (patch.radius !== undefined && m.kind === "village") {
           m.radius = patch.radius;
           if (m.ring) {
@@ -2042,6 +2343,10 @@ export class RegionEditorScene {
   }
 
   deleteSelected(): void {
+    if (this.selectedWaypointIndex !== null && this.activeEscortQuest) {
+      this.removeEscortWaypoint(this.selectedWaypointIndex);
+      return;
+    }
     if (this.selectedIds.size === 0) return;
     for (const obj of [...this.selectionGroup.children]) this.scene.attach(obj);
     this.transform.detach();
@@ -2140,7 +2445,7 @@ export class RegionEditorScene {
     this.isRestoring = true;
     try {
       this.clear();
-      this.meta = { id: bp.id, name: bp.name, biome: bp.biome, portalWorldX: bp.portalWorldX, portalWorldZ: bp.portalWorldZ, musicTrack: bp.musicTrack ?? null };
+      this.meta = { id: bp.id, name: bp.name, biome: bp.biome, portalWorldX: bp.portalWorldX, portalWorldZ: bp.portalWorldZ, isStartingRegion: bp.isStartingRegion ?? false, musicTrack: bp.musicTrack ?? null };
       this.gridSize = bp.gridSize;
       this.pitch = bp.pitch;
       this.heights = [...bp.heights];
@@ -2208,6 +2513,26 @@ export class RegionEditorScene {
       for (const light of bp.lights ?? []) {
         this.placeLight(light.localX, light.localY - 1.5, light.localZ, light.color, light.intensity, light.distance);
       }
+      for (const npc of bp.npcs ?? []) {
+        const id = this.placeMarkerAt("npc", npc.localX, this.heightAt(npc.localX, npc.localZ), npc.localZ);
+        const m = this.markers.get(id);
+        if (m) {
+          m.name = npc.name;
+          m.npcData = {
+            id: npc.id || id,
+            name: npc.name,
+            model: npc.model,
+            localX: npc.localX,
+            localZ: npc.localZ,
+            yaw: npc.yaw,
+            title: npc.title,
+            dialogue: npc.dialogue,
+            quests: npc.quests ?? [],
+            generateProceduralQuests: npc.generateProceduralQuests ?? true,
+          };
+          this.rebuildNPCMarkerVisual(m);
+        }
+      }
       this.placeMarkerAt("entry", bp.entryLocal.x, this.heightAt(bp.entryLocal.x, bp.entryLocal.z), bp.entryLocal.z);
     } finally {
       this.isRestoring = false;
@@ -2244,6 +2569,37 @@ export class RegionEditorScene {
         const t = getTransform(m.obj);
         return { name: m.name ?? "Village", localX: t.x, localZ: t.z, radius: m.radius ?? 20 };
       });
+    const portals = [...this.markers.values()]
+      .filter((m) => m.kind === "portal")
+      .map((m) => {
+        const t = getTransform(m.obj);
+        return {
+          id: m.id,
+          name: m.name ?? "Portal to Region",
+          localX: t.x,
+          localZ: t.z,
+          targetRegionId: m.targetRegionId ?? "overworld",
+          targetLocalX: m.targetLocalX,
+          targetLocalZ: m.targetLocalZ,
+        };
+      });
+    const npcs = [...this.markers.values()]
+      .filter((m) => m.kind === "npc")
+      .map((m) => {
+        const t = getTransform(m.obj);
+        return {
+          id: m.id,
+          name: m.npcData?.name ?? m.name ?? "Quest Giver",
+          model: m.npcData?.model ?? "Knight",
+          localX: t.x,
+          localZ: t.z,
+          yaw: t.yaw,
+          title: m.npcData?.title,
+          dialogue: m.npcData?.dialogue,
+          quests: m.npcData?.quests ?? [],
+          generateProceduralQuests: m.npcData?.generateProceduralQuests ?? true,
+        };
+      });
     const lights = [...this.lights.values()].map((l) => {
       const t = getTransform(l.obj);
       return { id: l.id, localX: t.x, localY: t.y, localZ: t.z, color: l.color, intensity: l.intensity, distance: l.distance };
@@ -2261,17 +2617,20 @@ export class RegionEditorScene {
       gridSize: this.gridSize,
       pitch: this.pitch,
       heights: [...this.heights],
-      waterHeights: Array.from(this.waterHeights),
-      customTextures: [...this.customTextures],
+      waterHeights: this.waterHeights.some((w) => w > 0) ? [...this.waterHeights] : undefined,
+      customTextures: this.customTextures.some((t) => t > 0) ? [...this.customTextures] : undefined,
       assets,
       mobSpawns,
       villages,
-      lights,
-      roads: [...this.roads],
+      roads: this.roads.length > 0 ? this.roads : undefined,
       colorGrading: { ...this.colorGrading },
       entryLocal,
       portalWorldX: meta.portalWorldX,
       portalWorldZ: meta.portalWorldZ,
+      isStartingRegion: meta.isStartingRegion ? true : undefined,
+      portals: portals.length > 0 ? portals : undefined,
+      npcs: npcs.length > 0 ? npcs : undefined,
+      lights: lights.length > 0 ? lights : undefined,
       musicTrack: meta.musicTrack,
     };
   }
@@ -2286,6 +2645,11 @@ export class RegionEditorScene {
       this.updatePlaytest(dt);
     } else {
       this.orbit.update();
+    }
+    for (const m of this.markers.values()) {
+      if (m.kind === "npc" && m.animModel) {
+        m.animModel.update(dt);
+      }
     }
     this.stepWaterPhysics(dt);
     this.updateWaterParticles(dt);

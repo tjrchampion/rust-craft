@@ -152,6 +152,12 @@ export const LootCorpseMsg = z.object({
   lootAll: z.boolean().optional().nullable(),
 });
 
+export const RegionPortalMsg = z.object({
+  t: z.literal("regionPortal"),
+  regionId: z.string().max(128).optional().nullable(),
+  portalId: z.string().max(128).optional().nullable(),
+});
+
 export const ClientMsg = z.discriminatedUnion("t", [
   InputMsg,
   InteractMsg,
@@ -176,6 +182,7 @@ export const ClientMsg = z.discriminatedUnion("t", [
   SelectTargetMsg,
   DungeonMsg,
   LootCorpseMsg,
+  RegionPortalMsg,
 ]);
 export type ClientMsg = z.infer<typeof ClientMsg>;
 
@@ -326,11 +333,12 @@ export interface QuestLogEntry {
   id: string;
   name: string;
   tier: number;
-  objectiveKind: "kill" | "gather";
+  objectiveKind: "kill" | "gather" | "escort";
   objectiveTarget: string;
   objectiveCount: number;
   progress: number;
   status: "active" | "complete";
+  waypoints?: { x: number; z: number }[];
 }
 
 export interface ItemSnap {

@@ -65,7 +65,7 @@ import {
 import { AnimatedModel, PLAYER_ANIMS, logicalFromState, dodgeLogicalFor } from "../render/gltf";
 import { buildWorldStatic, buildVillage, animateSettlements, type SettlementHandles } from "../render/settlements";
 import { DUNGEON_THEME_COLORS, DungeonInteriorRenderer } from "../render/dungeonInterior";
-import { RegionInteriorRenderer } from "../render/regionInterior";
+import { RegionInteriorRenderer, preloadRegionAssets } from "../render/regionInterior";
 import { buildShrine } from "../render/models";
 import { NpcManager } from "../render/npcs";
 import { sound } from "./sound";
@@ -116,6 +116,8 @@ export class Game {
   private regionRenderer: RegionInteriorRenderer | null = null;
   private regionBlueprintCache = new Map<string, RegionBlueprint>();
   private regionPortals: { id: string; name: string; x: number; z: number }[] = [];
+  /** id → display name for all known regions, populated at load time. */
+  private regionNameMap = new Map<string, string>();
 
   private connection = new Connection();
   private input: InputManager;
@@ -220,11 +222,10 @@ export class Game {
     this.overworldGroup.add(buildHorizonMountains());
     this.clouds = buildClouds();
     this.overworldGroup.add(this.clouds.group);
-    this.settlements = buildWorldStatic(this.overworldGroup);
-    this.overworldSigns.push(...this.settlements.signs);
+    this.settlements = buildWorldStatic(this.overworldGroup, true);
+    this.grass = new GrassField(this.overworldGroup);
     void this.loadRegionPortals();
     this.npcManager = new NpcManager(this.scene);
-    this.grass = new GrassField(this.overworldGroup);
 
     this.avatar = new AnimatedModel(PLAYER_ANIMS);
     const plate = buildNameplate(characterName, "#ffe9a8");
@@ -272,6 +273,8 @@ export class Game {
       const data = (await res.json()) as {
         regions: { id: string; name: string; portalWorldX: number; portalWorldZ: number }[];
       };
+      // Build full name lookup for all regions (used in portal prompts)
+      for (const r of data.regions) this.regionNameMap.set(r.id, r.name);
       this.regionPortals = data.regions
         .filter((r) => r.portalWorldX !== 0 || r.portalWorldZ !== 0)
         .map((r) => ({ id: r.id, name: r.name, x: r.portalWorldX, z: r.portalWorldZ }));
@@ -459,16 +462,18 @@ export class Game {
         const wasInRegion = ui.regionState !== null;
         if (msg.inRegion && msg.regionId) {
           ui.regionState = { regionId: msg.regionId, regionName: msg.regionName ?? "" };
-          if (!wasInRegion) {
+          if (!wasInRegion || this.activeRegionId !== msg.regionId) {
             this.interactNodeId = null;
             this.reviveTargetId = null;
             this.entities.setTarget(null);
             ui.inventoryOpen = false;
             ui.worldMapOpen = false;
             if (ui.questOffer) this.closeQuestDialog();
+            this.posError.set(0, 0, 0);
           }
         } else {
           ui.regionState = null;
+          this.posError.set(0, 0, 0);
         }
         break;
       }
@@ -941,18 +946,21 @@ export class Game {
     }
     this.animateSelf(dt, actions);
     this.updateCamera(rx, ry, rz);
-    this.nodes?.update(rx, rz, now, dt);
-    this.regionTwoNodes?.update(rx, rz, now, dt);
     if (!this.insideDungeonPortal && !ui.regionState) {
-      this.grass.update(rx, rz, now);
-      this.clouds.update(dt);
-      this.water.update(dt);
-      animateSettlements(this.settlements, now);
+      this.nodes?.update(rx, rz, now, dt);
+      this.regionTwoNodes?.update(rx, rz, now, dt);
+      this.grass?.update(rx, rz, now);
+      this.clouds?.update(dt);
+      this.water?.update(dt);
+      if (this.settlements) animateSettlements(this.settlements, now);
+    } else {
+      this.nodes?.clearScene();
+      this.regionTwoNodes?.clearScene();
     }
     this.entities.update(now, dt);
     this.updateInteractPrompt();
     this.updateDayNight(rx, rz);
-    this.updateZoneAndStreaming(rx, rz);
+    this.updateZoneAndStreaming(rx, rz, dt);
 
     this.renderer.render(this.scene, this.camera);
   };
@@ -973,7 +981,7 @@ export class Game {
     this.currentMount = want;
   }
 
-  private updateZoneAndStreaming(x: number, z: number): void {
+  private updateZoneAndStreaming(x: number, z: number, dt = 0.016): void {
     const inRegion = ui.regionState !== null;
     // A region's local coordinates aren't tied to any real overworld
     // position (unlike a dungeon arena, which reserves a real rectangle),
@@ -1022,7 +1030,7 @@ export class Game {
         void this.enterRegionInterior(regionId);
       }
       if (this.regionRenderer) {
-        this.regionRenderer.update(x, z);
+        this.regionRenderer.update(x, z, this.camera, this.scene.fog, dt);
       }
       return;
     }
@@ -1030,6 +1038,7 @@ export class Game {
     if (this.regionRenderer) {
       this.regionRenderer.destroy();
       this.regionRenderer = null;
+      this.entities.heightSampler = undefined;
       music.stop();
     }
     if (this.activeRegionGroup) {
@@ -1063,7 +1072,7 @@ export class Game {
       if (this.dungeonRenderer) {
         this.dungeonRenderer.update(x, z);
       }
-    } else {
+    } else if (this.overworldGroup) {
       this.overworldGroup.visible = true;
       if (!this.overworldGroup.parent) {
         this.scene.add(this.overworldGroup);
@@ -1114,23 +1123,62 @@ export class Game {
   private async enterRegionInterior(regionId: string): Promise<void> {
     let blueprint = this.regionBlueprintCache.get(regionId);
     if (!blueprint) {
+      // Show a loading screen while we fetch the blueprint over the network.
+      ui.loading = true;
+      ui.loadingMessage = "Loading region…";
+      ui.loadingProgress = 10;
       try {
         const res = await fetch(app.apiUrl(`/api/regions/${regionId}`), { credentials: "include" });
-        if (!res.ok) return;
+        if (!res.ok) { ui.loading = false; return; }
         const data = (await res.json()) as { blueprint: RegionBlueprint };
         blueprint = data.blueprint;
         this.regionBlueprintCache.set(regionId, blueprint);
+        ui.loadingProgress = 20;
       } catch {
+        ui.loading = false;
         return;
       }
     }
     // The player may have already left (or switched to a different region)
     // while this fetch was in flight -- don't build a stale interior.
-    if (this.activeRegionId !== regionId) return;
+    if (this.activeRegionId !== regionId) { ui.loading = false; return; }
+
+    // Preload all unique GLB models with genuine per-file progress (20 → 95%).
+    // Already-cached models resolve instantly so revisiting a region is fast.
+    if (!ui.loading) {
+      // Blueprint was cached -- still show a brief loading screen for the assets.
+      ui.loading = true;
+      ui.loadingMessage = "Loading region…";
+      ui.loadingProgress = 20;
+    }
+    await preloadRegionAssets(blueprint, (loaded, total) => {
+      if (total === 0) return;
+      // Map loaded/total into the 20 → 95 range.
+      ui.loadingProgress = 20 + Math.round((loaded / total) * 75);
+      ui.loadingMessage = `Loading region… (${loaded}/${total})`;
+    });
+    // Guard again in case the player left while models were downloading.
+    if (this.activeRegionId !== regionId) { ui.loading = false; return; }
+
+    ui.loadingProgress = 95;
     this.activeRegionGroup = new THREE.Group();
-    this.regionRenderer = new RegionInteriorRenderer(this.activeRegionGroup, blueprint);
+    this.regionRenderer = new RegionInteriorRenderer(this.activeRegionGroup, blueprint, this.regionNameMap);
+    this.entities.heightSampler = (x, z) => this.regionRenderer?.heightAt(x, z) ?? 0;
     this.scene.add(this.activeRegionGroup);
     music.play(regionMusicTrackUrl(this.regionRenderer.musicTrack), 3000);
+
+    // Immediately snap move height to exact region ground height and clear position error
+    this.move.y = this.regionRenderer.heightAt(this.move.x, this.move.z) + 0.05;
+    this.move.vy = 0;
+    this.move.grounded = true;
+    this.posError.set(0, 0, 0);
+    this.tickRenderFrom.x = this.move.x;
+    this.tickRenderFrom.y = this.move.y;
+    this.tickRenderFrom.z = this.move.z;
+
+    // Done — dismiss loading screen.
+    ui.loadingProgress = 100;
+    ui.loading = false;
   }
 
   private readonly TARGET_RANGE = 60;
@@ -1436,35 +1484,66 @@ export class Game {
       }
     }
     // Shrine nearby?
-    for (const shrine of this.settlements.shrines) {
-      if (dist2D(this.move.x, this.move.z, shrine.x, shrine.z) < 4.5) {
-        ui.interactLabel = "Pray at the Shrine";
-        this.interactNodeId = shrine.id;
-        return;
+    if (this.settlements) {
+      for (const shrine of this.settlements.shrines) {
+        if (dist2D(this.move.x, this.move.z, shrine.x, shrine.z) < 4.5) {
+          ui.interactLabel = "Pray at the Shrine";
+          this.interactNodeId = shrine.id;
+          return;
+        }
+      }
+      // Dungeon portal nearby? Radius matches the server's own authoritative
+      // DUNGEON_PORTAL_ACTIVATION_RADIUS check -- the server still decides
+      // leader/party validity and sends an error toast if it's rejected, but
+      // the level requirement is worth surfacing upfront so it's not a
+      // surprise (this is purely cosmetic -- the server enforces it for real).
+      for (const portal of this.settlements.dungeonPortals) {
+        if (dist2D(this.move.x, this.move.z, portal.x, portal.z) < DUNGEON_PORTAL_ACTIVATION_RADIUS) {
+          const tierDef = dungeonTierDef(portal.tier);
+          const underLevel = (ui.self?.level ?? 1) < tierDef.minLevel;
+          ui.interactLabel = underLevel
+            ? `Enter ${TIER_NAMES[portal.tier]} Dungeon (Requires Level ${tierDef.minLevel})`
+            : `Enter ${TIER_NAMES[portal.tier]} Dungeon`;
+          this.interactNodeId = portal.id;
+          return;
+        }
       }
     }
-    // Dungeon portal nearby? Radius matches the server's own authoritative
-    // DUNGEON_PORTAL_ACTIVATION_RADIUS check -- the server still decides
-    // leader/party validity and sends an error toast if it's rejected, but
-    // the level requirement is worth surfacing upfront so it's not a
-    // surprise (this is purely cosmetic -- the server enforces it for real).
-    for (const portal of this.settlements.dungeonPortals) {
-      if (dist2D(this.move.x, this.move.z, portal.x, portal.z) < DUNGEON_PORTAL_ACTIVATION_RADIUS) {
-        const tierDef = dungeonTierDef(portal.tier);
-        const underLevel = (ui.self?.level ?? 1) < tierDef.minLevel;
-        ui.interactLabel = underLevel
-          ? `Enter ${TIER_NAMES[portal.tier]} Dungeon (Requires Level ${tierDef.minLevel})`
-          : `Enter ${TIER_NAMES[portal.tier]} Dungeon`;
-        this.interactNodeId = portal.id;
+    // If inside a region, check inter-region portal links and region exit
+    if (this.activeRegionId && this.regionRenderer) {
+      const activeBp = this.regionRenderer.blueprint;
+      if (activeBp?.portals) {
+        for (const portalLink of activeBp.portals) {
+          if (dist2D(this.move.x, this.move.z, portalLink.localX, portalLink.localZ) <= 6.0) {
+            const destName = this.regionNameMap.get(portalLink.targetRegionId) || portalLink.name || "Region Portal";
+            ui.interactLabel = `Travel to ${destName}`;
+            this.interactNodeId = `poi_region_link_${portalLink.id}`;
+            return;
+          }
+        }
+      }
+      if (activeBp?.npcs) {
+        for (const rNpc of activeBp.npcs) {
+          if (dist2D(this.move.x, this.move.z, rNpc.localX, rNpc.localZ) <= 6.0) {
+            ui.interactLabel = `Talk to ${rNpc.name}`;
+            this.interactNodeId = `rnpc_${rNpc.id}`;
+            return;
+          }
+        }
+      }
+      if (activeBp && dist2D(this.move.x, this.move.z, activeBp.entryLocal.x, activeBp.entryLocal.z) <= 6.0) {
+        ui.interactLabel = "Return to World";
+        this.interactNodeId = "poi_region_exit";
         return;
       }
-    }
-    // Region portal nearby?
-    for (const portal of this.regionPortals) {
-      if (dist2D(this.move.x, this.move.z, portal.x, portal.z) < DUNGEON_PORTAL_ACTIVATION_RADIUS) {
-        ui.interactLabel = `Enter ${portal.name}`;
-        this.interactNodeId = `poi_region_${portal.id}`;
-        return;
+    } else {
+      // Overworld region portal nearby?
+      for (const portal of this.regionPortals) {
+        if (dist2D(this.move.x, this.move.z, portal.x, portal.z) < DUNGEON_PORTAL_ACTIVATION_RADIUS) {
+          ui.interactLabel = `Enter ${portal.name}`;
+          this.interactNodeId = `poi_region_${portal.id}`;
+          return;
+        }
       }
     }
     // Water nearby?
@@ -1484,6 +1563,7 @@ export class Game {
   private nearCampfire = false;
 
   private nearWater(): boolean {
+    if (this.activeRegionId || this.dungeonRenderer) return false;
     const { x, y, z } = this.move;
     if (y < WATER_LEVEL + 0.5) return true;
     for (const [dx, dz] of [
@@ -1516,10 +1596,11 @@ export class Game {
       }
       return;
     }
-    if (ui.self?.sitting || this.nearCampfire) {
-      this.connection.send({ t: "sit" });
-    } else if (this.interactNodeId) {
+    if (this.interactNodeId) {
+      console.log("[Interact Debug] Sending interact to server for nodeId:", this.interactNodeId);
       this.connection.send({ t: "interact", nodeId: this.interactNodeId });
+    } else if (ui.self?.sitting || this.nearCampfire) {
+      this.connection.send({ t: "sit" });
     } else if (this.nearWater()) {
       this.connection.send({ t: "drink" });
     }

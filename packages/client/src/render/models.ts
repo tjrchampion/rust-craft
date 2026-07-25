@@ -530,3 +530,52 @@ export function buildNameplate(name: string, color = "#ffffff"): THREE.Sprite {
   sprite.scale.set(1.85, 0.46, 1);
   return sprite;
 }
+
+/** Canvas-based floating nameplate sprite with dynamic health bar. */
+export function buildHealthNameplate(name: string, hp: number, maxHp: number, color = "#33b5e5"): THREE.Sprite {
+  const canvas = document.createElement("canvas");
+  canvas.width = 256;
+  canvas.height = 80;
+  const ctx = canvas.getContext("2d")!;
+  ctx.font = "700 22px Cinzel, Georgia, serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "top";
+  ctx.shadowColor = "rgba(0,0,0,0.9)";
+  ctx.shadowBlur = 6;
+  ctx.fillStyle = color;
+  ctx.fillText(name, 128, 6);
+
+  // Draw Health Bar
+  const barW = 160;
+  const barH = 14;
+  const barX = (256 - barW) / 2;
+  const barY = 46;
+  const pct = Math.max(0, Math.min(1, hp / maxHp));
+
+  // Health Bar Background (dark border + fill)
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = "rgba(0,0,0,0.7)";
+  ctx.fillRect(barX - 2, barY - 2, barW + 4, barH + 4);
+
+  ctx.fillStyle = "#222222";
+  ctx.fillRect(barX, barY, barW, barH);
+
+  // Health Fill (Green to Red gradient based on PCT)
+  const hpColor = pct > 0.5 ? "#44d660" : pct > 0.25 ? "#e6a13b" : "#e64444";
+  ctx.fillStyle = hpColor;
+  ctx.fillRect(barX, barY, barW * pct, barH);
+
+  // Health Text (e.g. 85 / 100)
+  ctx.font = "700 11px Inter, sans-serif";
+  ctx.fillStyle = "#ffffff";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(`${Math.round(hp)} / ${maxHp}`, 128, barY + barH / 2 + 1);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  const sprite = new THREE.Sprite(
+    new THREE.SpriteMaterial({ map: texture, transparent: true, depthWrite: false }),
+  );
+  sprite.scale.set(2.2, 0.68, 1);
+  return sprite;
+}

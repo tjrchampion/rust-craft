@@ -67,7 +67,9 @@ export function stepMovement(state: MoveState, input: MoveInput, dt: number): Mo
   const regionWaterDepth = input.regionHeightmap ? sampleRegionWaterDepth(input.regionHeightmap, x, z) : 0;
   const regionGround = input.regionHeightmap ? sampleRegionHeight(input.regionHeightmap, x, z) : null;
   const regionWaterLevel = regionGround !== null && regionWaterDepth > 0 ? regionGround + regionWaterDepth : -Infinity;
-  const swimming = y < WATER_LEVEL - 0.4 || y < regionWaterLevel - 0.4;
+  const swimming = input.regionHeightmap
+    ? (regionWaterLevel > -Infinity && y < regionWaterLevel - 0.4)
+    : (y < WATER_LEVEL - 0.4);
   const mount = input.mount ?? null;
   let speed: number;
   if (mount === "horse") {
@@ -175,8 +177,14 @@ export function stepMovement(state: MoveState, input: MoveInput, dt: number): Mo
     }
   }
   // A raft rides on the surface; a swimmer treads just below it.
-  const activeWaterLevel = regionWaterLevel > -Infinity ? regionWaterLevel : WATER_LEVEL;
-  const surfaceY = mount === "raft" ? activeWaterLevel - 0.1 : activeWaterLevel - 1.1;
+  const activeWaterLevel = input.regionHeightmap
+    ? regionWaterLevel
+    : bridgeHeightAt(x, z) !== null
+      ? -Infinity
+      : WATER_LEVEL;
+  const surfaceY = activeWaterLevel > -Infinity
+    ? (mount === "raft" ? activeWaterLevel - 0.1 : activeWaterLevel - 1.1)
+    : -Infinity;
   const floatY = Math.max(ground, surfaceY);
 
   let grounded = state.grounded;
