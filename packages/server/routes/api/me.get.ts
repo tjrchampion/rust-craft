@@ -17,7 +17,19 @@ export default defineEventHandler(async (event) => {
 
   const characters = await db.query.characters.findMany({
     where: eq(schema.characters.accountId, account.id),
-    columns: { id: true, name: true, level: true, classId: true, lastSeen: true },
+    columns: {
+      id: true,
+      name: true,
+      level: true,
+      classId: true,
+      lastSeen: true,
+      gender: true,
+      hairStyle: true,
+      facialHair: true,
+      hairColor: true,
+      eyeColor: true,
+      outfitHue: true,
+    },
   });
 
   // Fetch each character's equipped gear too, so the character-select

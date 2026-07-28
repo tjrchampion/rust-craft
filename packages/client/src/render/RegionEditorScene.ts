@@ -3,7 +3,7 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
 import { SkeletonUtils } from "three/examples/jsm/Addons.js";
 import { load, AnimatedModel, PLAYER_ANIMS, logicalFromState } from "./gltf";
-import { CLASS_MODEL_URLS } from "./classModels";
+import { GENDER_MODEL_URLS, CLASS_GENDER } from "./classModels";
 import { buildNameplate } from "./models";
 import {
   type RegionBlueprint,
@@ -1114,9 +1114,21 @@ export class RegionEditorScene {
 
   private async spawnPlaytestAvatar(classId: ClassId): Promise<void> {
     const model = new AnimatedModel(PLAYER_ANIMS);
+    const gender = CLASS_GENDER[classId];
     model.group.visible = false;
     this.scene.add(model.group);
-    await model.loadFrom(CLASS_MODEL_URLS[classId], RegionEditorScene.PLAYTEST_AVATAR_HEIGHT);
+    await model.loadFrom(GENDER_MODEL_URLS[gender], RegionEditorScene.PLAYTEST_AVATAR_HEIGHT);
+    // Base rig always hides its baked-in "Eyebrows" node (see AnimatedModel)
+    // in favor of a real hair/eyebrows overlay -- without this the playtest
+    // dummy would render bald and browless.
+    await model.applyAppearance(gender, {
+      gender,
+      hairStyle: "none",
+      facialHair: "none",
+      hairColor: 0x2b1a12,
+      eyeColor: 0x6b4423,
+      outfitHue: 0xffffff,
+    });
     if (!this.playtestActive) {
       // Exited before the model finished loading -- drop it rather than
       // leaving an orphaned, invisible group in the scene.

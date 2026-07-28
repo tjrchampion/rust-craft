@@ -1,18 +1,188 @@
-import type { ClassId } from "@rustcraft/shared";
+import type { ClassId, CharacterGender, HairStyleId, FacialHairId } from "@rustcraft/shared";
 
-/** Cosmetic model used for each class in the character-creation preview. */
-export const CLASS_MODEL_URLS: Record<ClassId, string> = {
-  warrior: "/assets/models/Barbarian.glb",
-  mage: "/assets/models/Mage.glb",
-  rogue: "/assets/models/Rogue.glb",
-  cleric: "/assets/models/Knight.glb",
-  ranger: "/assets/models/Ranger.glb",
-  druid: "/assets/models/Druid.glb",
-  paladin: "/assets/models/Paladin.glb",
-  berserker: "/assets/models/Barbarian_Large.glb",
-  assassin: "/assets/models/Rogue_Hooded.glb",
-  engineer: "/assets/models/Engineer.glb",
+/** Quaternius Universal rig — shared by UAL and Fantasy modular outfits. */
+export const UNIVERSAL_ANIMATION_LIBRARY =
+  "/assets/models/animations/UAL1_Standard.glb";
+
+const MODULAR = "/assets/models/modular";
+const PARTS = `${MODULAR}/Modular Parts`;
+const HAIR_DIR = `${MODULAR}/Hair`;
+
+/** Default gender to assume for a class before a character with a real,
+ *  player-chosen gender exists yet (e.g. seeding the creation screen's
+ *  initial toggle state) -- gender itself is a per-character choice now,
+ *  independent of class, not derived from it. */
+export const CLASS_GENDER: Record<ClassId, CharacterGender> = {
+  warrior: "male",
+  cleric: "male",
+  paladin: "male",
+  berserker: "male",
+  ranger: "male",
+  druid: "female",
+  mage: "male",
+  rogue: "male",
+  assassin: "female",
+  engineer: "male",
 };
+
+export function universalBaseUrl(gender: CharacterGender): string {
+  return gender === "female"
+    ? `${MODULAR}/base/Regular_Female.glb`
+    : `${MODULAR}/base/Regular_Male.glb`;
+}
+
+/** `{gender}` is replaced with Male or Female per the character's own chosen gender. */
+export function resolveModularUrl(gender: CharacterGender, url: string | null | undefined): string | null {
+  if (!url) return null;
+  const token = gender === "female" ? "Female" : "Male";
+  let resolved = url.replaceAll("{gender}", token);
+  if (resolved.endsWith("Male_Ranger_Feet.gltf")) {
+    resolved = resolved.replace("Male_Ranger_Feet.gltf", "Male_Ranger_Feet_Boots.gltf");
+  }
+  return encodeURI(resolved);
+}
+
+export function modularPart(file: string): string {
+  return `${PARTS}/${file}`;
+}
+
+/** Imported Quaternius "Universal Base Characters" hairstyle pieces (see
+ *  scripts/import-hairstyles.mjs) -- skinned to the same shared rig as the
+ *  base body/outfits, attached via AnimatedModel.equipModularSlot("hair", ...)
+ *  same as any other modular gear piece. "none" has no file (bald). */
+const HAIR_STYLE_FILES: Partial<Record<HairStyleId, string>> = {
+  buzzed: `${HAIR_DIR}/Hair_Buzzed.glb`,
+  buzzed_female: `${HAIR_DIR}/Hair_BuzzedFemale.glb`,
+  long: `${HAIR_DIR}/Hair_Long.glb`,
+  simple_parted: `${HAIR_DIR}/Hair_SimpleParted.glb`,
+  buns: `${HAIR_DIR}/Hair_Buns.glb`,
+};
+
+const FACIAL_HAIR_FILES: Partial<Record<FacialHairId, string>> = {
+  beard: `${HAIR_DIR}/Hair_Beard.glb`,
+};
+
+/** Real eyebrow meshes, gender-specific -- needed because the base rig's own
+ *  "Eyebrows"-named node is actually its baked-in default hairstyle (not
+ *  eyebrows at all), which gets hidden the moment a real hair piece takes
+ *  over (see AnimatedModel's hair-slot handling in gltf.ts). */
+const EYEBROWS_FILES: Record<CharacterGender, string> = {
+  male: `${HAIR_DIR}/Eyebrows_Regular.glb`,
+  female: `${HAIR_DIR}/Eyebrows_Female.glb`,
+};
+
+export function hairStyleUrl(hairStyle: HairStyleId): string | null {
+  return HAIR_STYLE_FILES[hairStyle] ?? null;
+}
+
+export function facialHairUrl(facialHair: FacialHairId): string | null {
+  return FACIAL_HAIR_FILES[facialHair] ?? null;
+}
+
+export function eyebrowsUrl(gender: CharacterGender): string {
+  return EYEBROWS_FILES[gender];
+}
+
+export function allHairStyleUrls(): string[] {
+  return Object.values(HAIR_STYLE_FILES);
+}
+
+export function allFacialHairUrls(): string[] {
+  return Object.values(FACIAL_HAIR_FILES);
+}
+
+/** Rigid nudge applied on top of a modular piece's normal skin deformation --
+ *  see AnimatedModel.attachModularMeshes. `quaternion` (an exact rotation,
+ *  used for computed bind-pose corrections) takes priority over `rotation`
+ *  (an Euler-degrees approximation, for hand-tuning) if both are set. */
+export interface ModularFit {
+  position?: [number, number, number];
+  rotation?: [number, number, number]; // degrees
+  quaternion?: [number, number, number, number];
+  scale?: number;
+}
+
+/** Which gender's skeleton each hairstyle piece was actually rigged/fitted
+ *  against. Reported: hair renders correctly on its own authored gender, but
+ *  visibly deforms (not just sits in the wrong spot) when bound to the
+ *  *other* gender's differently-proportioned skeleton -- a plain position
+ *  offset can't fix that, only a real bind-pose correction can (see
+ *  AnimatedModel's headBindWorld/computeHairFit in gltf.ts, which uses this
+ *  table to know which pieces need correcting and against which gender). */
+export const HAIR_AUTHORED_GENDER: Partial<Record<HairStyleId, CharacterGender>> = {
+  buzzed: "male",
+  buzzed_female: "female",
+  long: "female",
+  simple_parted: "female",
+  buns: "female",
+};
+
+/** Extra uniform scale layered on top of the computed bind-pose delta (see
+ *  computeHairFit in gltf.ts) when a female-authored style is worn on male.
+ *  The bind-pose delta alone corrects position/rotation from the Head
+ *  bone's own transform, but the male head *mesh* is modeled visibly bigger
+ *  without that being encoded on the bone itself, so the correctly-
+ *  positioned hair can still have the head poke through it. First-pass
+ *  guess (reported: head cuts through hair) -- adjust directly if still
+ *  too small/big. */
+export const MALE_HEAD_SIZE_COMPENSATION = 1.50;
+
+export interface ModularEquipSet {
+  head?: string;
+  top?: string;
+  bottom?: string;
+  arms?: string;
+  feet?: string;
+}
+
+/** Optional baked-in modular pieces applied after the base rig loads (usually empty — gear comes from items). */
+export const CLASS_MODULAR_DEFAULTS: Record<ClassId, ModularEquipSet> = {
+  warrior: {},
+  cleric: {},
+  paladin: {},
+  berserker: {},
+  ranger: {},
+  druid: {},
+  mage: {},
+  rogue: {},
+  assassin: {},
+  engineer: {},
+};
+
+/** Every player uses the Universal Base skeleton for their own chosen gender. */
+export const GENDER_MODEL_URLS: Record<CharacterGender, string> = {
+  male: universalBaseUrl("male"),
+  female: universalBaseUrl("female"),
+};
+
+export const BASE_CHARACTER_GLB = universalBaseUrl("male");
+
+export function isUniversalCharacterUrl(url: string): boolean {
+  return (
+    url.includes("/modular/base/") ||
+    url.includes("/modular/Outfits/") ||
+    url.includes("/modular/Modular%20Parts/") ||
+    url.includes("/modular/Modular Parts/") ||
+    url.includes("/modular/Hair/")
+  );
+}
+
+export function playerModelUrl(gender: CharacterGender): string {
+  return GENDER_MODEL_URLS[gender] ?? GENDER_MODEL_URLS.male;
+}
+
+export async function applyClassModularDefaults(
+  equip: (slot: string, url: string | null) => void | Promise<void>,
+  classId: ClassId,
+): Promise<void> {
+  const defaults = CLASS_MODULAR_DEFAULTS[classId];
+  const gender = CLASS_GENDER[classId];
+  await equip("head", resolveModularUrl(gender, defaults.head ?? null));
+  await equip("chest", resolveModularUrl(gender, defaults.top ?? null));
+  await equip("legs", resolveModularUrl(gender, defaults.bottom ?? null));
+  await equip("arms", resolveModularUrl(gender, defaults.arms ?? null));
+  await equip("feet", resolveModularUrl(gender, defaults.feet ?? null));
+}
 
 export const CLASS_ICONS: Record<ClassId, string> = {
   warrior: "⚔️",
@@ -27,18 +197,7 @@ export const CLASS_ICONS: Record<ClassId, string> = {
   engineer: "🔧",
 };
 
-/** Every weapon/shield/accessory node name baked into each class's rig --
- *  the universe AnimatedModel.setWeapon() hides from except whatever's
- *  currently equipped. The KayKit "Adventurers 2.0" rig refresh stripped all
- *  baked weapon-variant meshes out of every character file (re-confirmed by
- *  direct GLTF JSON inspection of each current rig: only Body/Arm/Leg/Head
- *  and cosmetic accessory nodes remain, no "1H_Axe"/"Knife"/etc.) -- every
- *  class is empty now, and every weapon-slot item attaches its own model
- *  via ItemDef.weaponProp instead. Leaving a stale non-empty list here (as
- *  this used to be, pre-refresh) is actively harmful: setWeapon() would
- *  wrongly think a weaponModel item's baked mesh exists, take that branch,
- *  and explicitly clear the weaponProp attachment that would have actually
- *  rendered it -- leaving the character holding nothing at all. */
+/** Universal rig — weapons attach via props on hand bones, not baked mesh variants. */
 export const CLASS_WEAPON_NODES: Record<ClassId, string[]> = {
   warrior: [],
   mage: [],
@@ -52,81 +211,68 @@ export const CLASS_WEAPON_NODES: Record<ClassId, string[]> = {
   engineer: [],
 };
 
-/** Baked head-cosmetic node name(s) per class's rig (hat/helmet/mask),
- *  hidden once any head-slot item is equipped -- confirmed via direct GLTF
- *  JSON inspection of each rig file (node names, not just mesh names). */
 export const CLASS_HEAD_NODES: Record<ClassId, string[]> = {
-  warrior: ["Barbarian_BearHat"],
-  mage: ["Mage_Hat"],
+  warrior: [],
+  mage: [],
   rogue: [],
-  cleric: ["Knight_Helmet", "Knight_HelmetVisor"],
+  cleric: [],
   ranger: [],
   druid: [],
   paladin: [],
-  berserker: ["Barbarian_Large_BearHat"],
-  assassin: ["RogueHooded_Mask"],
-  engineer: ["Engineer_Goggles"],
+  berserker: [],
+  assassin: [],
+  engineer: [],
 };
 
-/** Baked chest/back-cosmetic node name(s) per class's rig (cape/backpack/
- *  pelt/shoulderpads) -- there's no separate "back" equip slot in this game,
- *  so these hide once any chest-slot item is equipped. */
 export const CLASS_CHEST_NODES: Record<ClassId, string[]> = {
   warrior: [],
-  mage: ["Mage_Cape"],
-  rogue: ["Rogue_Cape"],
-  cleric: ["Knight_Cape"],
-  ranger: ["Ranger_Cape"],
-  druid: ["Druid_Backpack"],
-  paladin: ["Paladin_Cape"],
-  berserker: ["Barbarian_Large_BearPelt", "Barbarian_Large_ShoulderpadLeft", "Barbarian_Large_ShoulderpadRight"],
-  assassin: ["RogueHooded_Cape"],
-  engineer: ["Engineer_Backpack"],
+  mage: [],
+  rogue: [],
+  cleric: [],
+  ranger: [],
+  druid: [],
+  paladin: [],
+  berserker: [],
+  assassin: [],
+  engineer: [],
 };
 
-/** The rig's single torso mesh, tinted (not hidden -- there's no bare-skin
- *  mesh underneath) once any chest-slot item is equipped. */
+/** Legacy tint targets — unused on Universal modular rigs. */
 export const CLASS_BODY_NODE: Record<ClassId, string> = {
-  warrior: "Barbarian_Body",
-  mage: "Mage_Body",
-  rogue: "Rogue_Body",
-  cleric: "Knight_Body",
-  ranger: "Ranger_Body",
-  druid: "Druid_Body",
-  paladin: "Paladin_Body",
-  berserker: "Barbarian_Large_Body",
-  assassin: "RogueHooded_Body",
-  engineer: "Engineer_Body",
+  warrior: "Mannequin",
+  mage: "Mannequin",
+  rogue: "Mannequin",
+  cleric: "Mannequin",
+  ranger: "Mannequin",
+  druid: "Mannequin",
+  paladin: "Mannequin",
+  berserker: "Mannequin",
+  assassin: "Mannequin",
+  engineer: "Mannequin",
 };
 
-/** The rig's two arm meshes (sleeve/glove fused in), tinted once any
- *  arms-slot item is equipped. */
 export const CLASS_ARM_NODES: Record<ClassId, string[]> = {
-  warrior: ["Barbarian_ArmLeft", "Barbarian_ArmRight"],
-  mage: ["Mage_ArmLeft", "Mage_ArmRight"],
-  rogue: ["Rogue_ArmLeft", "Rogue_ArmRight"],
-  cleric: ["Knight_ArmLeft", "Knight_ArmRight"],
-  ranger: ["Ranger_ArmLeft", "Ranger_ArmRight"],
-  druid: ["Druid_ArmLeft", "Druid_ArmRight"],
-  paladin: ["Paladin_ArmLeft", "Paladin_ArmRight"],
-  berserker: ["Barbarian_Large_ArmLeft", "Barbarian_Large_ArmRight"],
-  assassin: ["RogueHooded_ArmLeft", "RogueHooded_ArmRight"],
-  engineer: ["Engineer_ArmLeft", "Engineer_ArmRight"],
+  warrior: [],
+  mage: [],
+  rogue: [],
+  cleric: [],
+  ranger: [],
+  druid: [],
+  paladin: [],
+  berserker: [],
+  assassin: [],
+  engineer: [],
 };
 
-/** The rig's two leg meshes (pants/boot fused in) -- there's no separate
- *  foot mesh, so both the legs slot and the feet slot tint this same pair;
- *  whichever is equipped wins (legs takes priority if both are), resolved
- *  by the caller before calling setGearTint. */
 export const CLASS_LEG_NODES: Record<ClassId, string[]> = {
-  warrior: ["Barbarian_LegLeft", "Barbarian_LegRight"],
-  mage: ["Mage_LegLeft", "Mage_LegRight"],
-  rogue: ["Rogue_LegLeft", "Rogue_LegRight"],
-  cleric: ["Knight_LegLeft", "Knight_LegRight"],
-  ranger: ["Ranger_LegLeft", "Ranger_LegRight"],
-  druid: ["Druid_LegLeft", "Druid_LegRight"],
-  paladin: ["Paladin_LegLeft", "Paladin_LegRight"],
-  berserker: ["Barbarian_Large_LegLeft", "Barbarian_Large_LegRight"],
-  assassin: ["RogueHooded_LegLeft", "RogueHooded_LegRight"],
-  engineer: ["Engineer_LegLeft", "Engineer_LegRight"],
+  warrior: [],
+  mage: [],
+  rogue: [],
+  cleric: [],
+  ranger: [],
+  druid: [],
+  paladin: [],
+  berserker: [],
+  assassin: [],
+  engineer: [],
 };

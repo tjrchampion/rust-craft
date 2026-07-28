@@ -176,6 +176,12 @@ interface PlayerState {
   move: MoveState;
   yaw: number;
   classId: ClassId;
+  gender: string;
+  hairStyle: string;
+  facialHair: string;
+  hairColor: number;
+  eyeColor: number;
+  outfitHue: number;
   hp: number;
   mana: number;
   hunger: number;
@@ -524,6 +530,12 @@ export class GameServer {
       move: { x, y, z, vy: 0, grounded: true },
       yaw: persisted.yaw,
       classId: (persisted.classId as ClassId) ?? "warrior",
+      gender: persisted.gender,
+      hairStyle: persisted.hairStyle,
+      facialHair: persisted.facialHair,
+      hairColor: persisted.hairColor,
+      eyeColor: persisted.eyeColor,
+      outfitHue: persisted.outfitHue,
       hp: persisted.hp,
       mana: persisted.mana,
       hunger: persisted.hunger,
@@ -623,6 +635,12 @@ export class GameServer {
       selfId: player.id,
       name: player.name,
       classId: player.classId,
+      gender: player.gender,
+      hairStyle: player.hairStyle,
+      facialHair: player.facialHair,
+      hairColor: player.hairColor,
+      eyeColor: player.eyeColor,
+      outfitHue: player.outfitHue,
       self: this.selfState(player),
       inventory: toSnaps(player.inventory),
       learnedSpells: player.learnedSpells,
@@ -3828,6 +3846,12 @@ export class GameServer {
           id: other.id,
           name: other.name,
           classId: other.classId,
+          gender: other.gender,
+          hairStyle: other.hairStyle,
+          facialHair: other.facialHair,
+          hairColor: other.hairColor,
+          eyeColor: other.eyeColor,
+          outfitHue: other.outfitHue,
           x: other.move.x,
           y: other.move.y,
           z: other.move.z,
@@ -3986,6 +4010,12 @@ export class GameServer {
       accountId: player.accountId,
       name: player.name,
       classId: player.classId,
+      gender: player.gender,
+      hairStyle: player.hairStyle,
+      facialHair: player.facialHair,
+      hairColor: player.hairColor,
+      eyeColor: player.eyeColor,
+      outfitHue: player.outfitHue,
       level: player.level,
       xp: player.xp,
       x: player.move.x,

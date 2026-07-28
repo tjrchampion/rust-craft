@@ -13,6 +13,12 @@ export interface PersistedPlayer {
   accountId: string;
   name: string;
   classId: string;
+  gender: string;
+  hairStyle: string;
+  facialHair: string;
+  hairColor: number;
+  eyeColor: number;
+  outfitHue: number;
   level: number;
   xp: number;
   x: number;
@@ -44,6 +50,12 @@ export async function loadPlayer(characterId: string): Promise<PersistedPlayer |
     accountId: character.accountId,
     name: character.name,
     classId: character.classId,
+    gender: character.gender,
+    hairStyle: character.hairStyle,
+    facialHair: character.facialHair,
+    hairColor: character.hairColor,
+    eyeColor: character.eyeColor,
+    outfitHue: character.outfitHue,
     level: character.level,
     xp: character.xp,
     x: character.x,

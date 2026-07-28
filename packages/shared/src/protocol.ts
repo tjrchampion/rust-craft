@@ -205,6 +205,15 @@ export interface PlayerSnap {
   id: string; // character id
   name: string;
   classId: string;
+  /** Appearance -- broadcast to every client (not just the owner) so remote
+   *  players render with the chosen gender/hair/colors instead of a class
+   *  default; see CharacterAppearance in content/appearance.ts. */
+  gender: string;
+  hairStyle: string;
+  facialHair: string;
+  hairColor: number;
+  eyeColor: number;
+  outfitHue: number;
   x: number;
   y: number;
   z: number;
@@ -390,6 +399,12 @@ export type ServerMsg =
       selfId: string;
       name: string;
       classId: string;
+      gender: string;
+      hairStyle: string;
+      facialHair: string;
+      hairColor: number;
+      eyeColor: number;
+      outfitHue: number;
       self: SelfState;
       inventory: ItemSnap[];
       learnedSpells: string[];

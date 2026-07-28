@@ -1,0 +1,151 @@
+{
+  "id": "trail_fire",
+  "sourcePrefab": "Prefabs/Sparks/Sparks red.prefab (hand-tuned: bright orange + additive glow, see the \"MAKE the particle bright orange and glowing\" request)",
+  "duration": 1,
+  "looping": true,
+  "simulationSpace": "local",
+  "maxParticles": 1000,
+  "initial": {
+    "lifetime": {
+      "mode": "constant",
+      "value": 1
+    },
+    "speed": {
+      "mode": "twoConstants",
+      "min": 1,
+      "max": 7
+    },
+    "size": {
+      "mode": "twoConstants",
+      "min": 0.02,
+      "max": 0.04
+    },
+    "size3D": false,
+    "sizeY": null,
+    "sizeZ": null,
+    "rotation": {
+      "mode": "constant",
+      "value": 0
+    },
+    "color": {
+      "mode": "color",
+      "color": {
+        "r": 1,
+        "g": 0.55,
+        "b": 0.05,
+        "a": 1
+      }
+    },
+    "gravityModifier": {
+      "mode": "constant",
+      "value": 0
+    }
+  },
+  "shape": {
+    "type": "sphere",
+    "angle": 20,
+    "radius": 0.0001,
+    "arc": 360,
+    "length": 5,
+    "box": {
+      "x": 0,
+      "y": 0,
+      "z": 0
+    }
+  },
+  "emission": {
+    "rateOverTime": {
+      "mode": "constant",
+      "value": 50
+    },
+    "bursts": []
+  },
+  "sizeOverLifetime": {
+    "curve": {
+      "mode": "curve",
+      "multiplier": 1,
+      "curve": [
+        {
+          "t": 0,
+          "v": 0,
+          "inSlope": 5.420977,
+          "outSlope": 5.420977
+        },
+        {
+          "t": 0.27246094,
+          "v": 1,
+          "inSlope": 0,
+          "outSlope": 0
+        },
+        {
+          "t": 1,
+          "v": 0,
+          "inSlope": -2.2848818,
+          "outSlope": -2.2848818
+        }
+      ]
+    },
+    "separateAxes": false,
+    "y": null,
+    "z": null
+  },
+  "rotationOverLifetime": null,
+  "colorOverLifetime": {
+    "mode": "gradient",
+    "gradient": {
+      "colorKeys": [
+        {
+          "t": 0,
+          "r": 1,
+          "g": 0.9,
+          "b": 0.5
+        },
+        {
+          "t": 1,
+          "r": 1,
+          "g": 0.35,
+          "b": 0
+        }
+      ],
+      "alphaKeys": [
+        {
+          "t": 0,
+          "a": 1
+        },
+        {
+          "t": 1,
+          "a": 1
+        }
+      ]
+    }
+  },
+  "velocityOverLifetime": null,
+  "forceOverLifetime": {
+    "space": "world",
+    "x": {
+      "mode": "constant",
+      "value": 0
+    },
+    "y": {
+      "mode": "constant",
+      "value": -8
+    },
+    "z": {
+      "mode": "constant",
+      "value": 0
+    }
+  },
+  "textureSheet": null,
+  "renderer": {
+    "renderMode": 1,
+    "lengthScale": 2,
+    "velocityScale": 0.02,
+    "materialName": "Point",
+    "texture": "/assets/vfx/textures/trail_fire.png",
+    "blend": "additive",
+    "sortingFudge": 0
+  },
+  "skippedModules": [
+    "Collision"
+  ]
+}

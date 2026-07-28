@@ -44,6 +44,19 @@ export const characters = pgTable(
       .references(() => accounts.id, { onDelete: "cascade" }),
     name: text("name").notNull(),
     classId: text("class_id").notNull().default("warrior"),
+    // Appearance -- chosen at creation (see routes/api/characters.post.ts),
+    // independent of class (CLASS_GENDER used to hardcode gender per class;
+    // this is what replaced that). Colors are stored as 0xRRGGBB ints,
+    // multiplied onto the base mesh color the same way item gearTint works
+    // (see AnimatedModel.setGearTint) -- outfitHue defaults to white
+    // (0xffffff) so a fresh character's gear renders at its own natural
+    // color until the player picks a tint.
+    gender: text("gender").notNull().default("male"),
+    hairStyle: text("hair_style").notNull().default("none"),
+    facialHair: text("facial_hair").notNull().default("none"),
+    hairColor: integer("hair_color").notNull().default(0x2b1a12),
+    eyeColor: integer("eye_color").notNull().default(0x6b4423),
+    outfitHue: integer("outfit_hue").notNull().default(0xffffff),
     level: integer("level").notNull().default(1),
     xp: integer("xp").notNull().default(0),
     x: real("x").notNull().default(0),

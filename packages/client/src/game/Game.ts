@@ -42,6 +42,8 @@ import {
   type PoiSpec,
   type RegionBlueprint,
   type RegionAssetCollider,
+  type CharacterGender,
+  type CharacterAppearance,
   regionAssetColliders,
   regionMusicTrackUrl,
 } from "@rustcraft/shared";
@@ -53,17 +55,17 @@ import { buildClouds, type CloudField } from "../render/clouds";
 import { buildNameplate, buildHorse, buildRaft, type MountParts } from "../render/models";
 import { NodeManager } from "../render/nodes";
 import { GrassField } from "../render/grass";
-import { EntityManager, playerModelUrl } from "../render/entities";
-import {
-  CLASS_WEAPON_NODES,
-  CLASS_HEAD_NODES,
-  CLASS_CHEST_NODES,
-  CLASS_BODY_NODE,
-  CLASS_ARM_NODES,
-  CLASS_LEG_NODES,
-} from "../render/classModels";
+import { EntityManager } from "../render/entities";
+import { applyModularGearFromInventory, applyModularGearFromInventoryAsync } from "../render/modularGear";
+import { playerModelUrl, CLASS_WEAPON_NODES } from "../render/classModels";
 import { AnimatedModel, PLAYER_ANIMS, logicalFromState, dodgeLogicalFor } from "../render/gltf";
-import { buildWorldStatic, buildVillage, animateSettlements, type SettlementHandles } from "../render/settlements";
+import {
+  buildWorldStatic,
+  buildVillage,
+  animateSettlements,
+  flushSettlementQueue,
+  type SettlementHandles,
+} from "../render/settlements";
 import { DUNGEON_THEME_COLORS, DungeonInteriorRenderer } from "../render/dungeonInterior";
 import { RegionInteriorRenderer, preloadRegionAssets } from "../render/regionInterior";
 import { buildShrine } from "../render/models";
@@ -147,6 +149,15 @@ export class Game {
 
   private selfId = "";
   private selfClassId = "warrior";
+  private selfGender: CharacterGender = "male";
+  private selfAppearance: CharacterAppearance = {
+    gender: "male",
+    hairStyle: "none",
+    facialHair: "none",
+    hairColor: 0x2b1a12,
+    eyeColor: 0x6b4423,
+    outfitHue: 0xffffff,
+  };
   private equippedWeaponDef: ItemDef | null = null;
   private avatar: AnimatedModel;
   private move: MoveState = { x: 0, y: 4, z: 0, vy: 0, grounded: true };
@@ -324,12 +335,20 @@ export class Game {
         ui.names.set(msg.selfId, "You");
         this.selfClassId = msg.classId;
         ui.classId = msg.classId;
+        this.selfGender = msg.gender as CharacterGender;
+        this.selfAppearance = {
+          gender: msg.gender as CharacterGender,
+          hairStyle: msg.hairStyle as CharacterAppearance["hairStyle"],
+          facialHair: msg.facialHair as CharacterAppearance["facialHair"],
+          hairColor: msg.hairColor,
+          eyeColor: msg.eyeColor,
+          outfitHue: msg.outfitHue,
+        };
         ui.serverTimeOffset = msg.serverTime - Date.now();
         ui.self = msg.self;
         ui.inventory = msg.inventory;
         ui.learnedSpells = msg.learnedSpells;
         ui.selectedSlot = msg.selectedSlot;
-        this.applyEquippedGear(msg.inventory);
         ui.timeOfDay = msg.timeOfDay;
         this.move = { x: msg.self.x, y: msg.self.y, z: msg.self.z, vy: msg.self.vy, grounded: msg.self.grounded };
         this.depletedNodeIds = msg.depletedNodes;
@@ -516,7 +535,9 @@ export class Game {
 
       ui.loadingMessage = "Entering world...";
       ui.loadingProgress = 95;
-      await this.avatar.loadFrom(playerModelUrl(this.selfClassId), 1.8);
+      await this.avatar.loadFrom(playerModelUrl(this.selfGender), 1.8);
+      await this.avatar.applyAppearance(this.selfGender, this.selfAppearance);
+      await this.applyEquippedGearAsync(msg.inventory);
 
       ui.loadingProgress = 100;
       // Slight delay for smooth visual transition
@@ -627,6 +648,10 @@ export class Game {
    *  model instead, matching gather/attack logic (which already reads the
    *  hotbar selection, not the equip slot, for what you're "using"). */
   private applyEquippedGear(items: ItemSnap[]): void {
+    void this.applyEquippedGearAsync(items);
+  }
+
+  private async applyEquippedGearAsync(items: ItemSnap[]): Promise<void> {
     const weapon = items.find((i) => i.container === "equip" && i.slot === 0);
     const equipDef = weapon ? itemDef(weapon.itemId) : null;
     const allKnown = CLASS_WEAPON_NODES[this.selfClassId as keyof typeof CLASS_WEAPON_NODES] ?? [];
@@ -651,40 +676,8 @@ export class Game {
     // currently held for gathering.
     this.equippedWeaponDef = equipDef;
 
-    // No separate model per craftable head/chest item yet -- characters
-    // start bare (no baked hat/helmet/mask, no cape/backpack/pelt), and
-    // equipping anything in that slot reveals the class rig's own baked
-    // cosmetic as the stand-in visual.
-    const chestItem = items.find((i) => i.container === "equip" && i.slot === EQUIP_SLOTS.indexOf("chest"));
-    const armsItem = items.find((i) => i.container === "equip" && i.slot === EQUIP_SLOTS.indexOf("arms"));
-    const legsItem = items.find((i) => i.container === "equip" && i.slot === EQUIP_SLOTS.indexOf("legs"));
-    const feetItem = items.find((i) => i.container === "equip" && i.slot === EQUIP_SLOTS.indexOf("feet"));
-    this.avatar.setHeadGear(
-      items.some((i) => i.container === "equip" && i.slot === EQUIP_SLOTS.indexOf("head")),
-      CLASS_HEAD_NODES[this.selfClassId as keyof typeof CLASS_HEAD_NODES] ?? [],
-    );
-    this.avatar.setChestGear(!!chestItem, CLASS_CHEST_NODES[this.selfClassId as keyof typeof CLASS_CHEST_NODES] ?? []);
-
-    // No separate armor mesh exists for chest/arms/legs either -- tint the
-    // rig's own Body/Arm/Leg mesh instead of hiding it. Legs/feet share the
-    // same leg mesh (no separate boot geometry), so legs wins if both slots
-    // are filled.
-    this.avatar.setGearTint(
-      "chest",
-      [CLASS_BODY_NODE[this.selfClassId as keyof typeof CLASS_BODY_NODE]].filter(Boolean),
-      chestItem ? (itemDef(chestItem.itemId).gearTint ?? null) : null,
-    );
-    this.avatar.setGearTint(
-      "arms",
-      CLASS_ARM_NODES[this.selfClassId as keyof typeof CLASS_ARM_NODES] ?? [],
-      armsItem ? (itemDef(armsItem.itemId).gearTint ?? null) : null,
-    );
-    const legsColor = legsItem
-      ? (itemDef(legsItem.itemId).gearTint ?? null)
-      : feetItem
-        ? (itemDef(feetItem.itemId).gearTint ?? null)
-        : null;
-    this.avatar.setGearTint("legs", CLASS_LEG_NODES[this.selfClassId as keyof typeof CLASS_LEG_NODES] ?? [], legsColor);
+    // Modular Fantasy outfit pieces (Quaternius Universal rig + UAL clips).
+    await applyModularGearFromInventoryAsync(this.avatar, this.selfGender, items);
   }
 
   /** The unified action bar: a slot either holds a real item (select it, same
@@ -957,7 +950,7 @@ export class Game {
       this.nodes?.clearScene();
       this.regionTwoNodes?.clearScene();
     }
-    this.entities.update(now, dt);
+    this.entities.update(now, dt, this.camera);
     this.updateInteractPrompt();
     this.updateDayNight(rx, rz);
     this.updateZoneAndStreaming(rx, rz, dt);
@@ -1030,7 +1023,7 @@ export class Game {
         void this.enterRegionInterior(regionId);
       }
       if (this.regionRenderer) {
-        this.regionRenderer.update(x, z, this.camera, this.scene.fog, dt);
+        this.regionRenderer.update(dt);
       }
       return;
     }
@@ -1101,6 +1094,9 @@ export class Game {
           this.overworldSigns.push(...vSigns);
         }
       }
+      // Drains a few of a freshly-streamed village's queued building/prop
+      // placements per frame instead of all ~50-60 landing in the same one.
+      flushSettlementQueue();
 
       // Ashenpeak (region 2): nothing about it exists in the scene until the
       // player is already well inside the valley approach — built once, then
@@ -1175,6 +1171,20 @@ export class Game {
     this.tickRenderFrom.x = this.move.x;
     this.tickRenderFrom.y = this.move.y;
     this.tickRenderFrom.z = this.move.z;
+
+    // Wait for every foliage/prop/building instance to actually be built
+    // (region.ready), then force their shaders/geometry onto the GPU now,
+    // while the loading screen is still up -- everything is eagerly
+    // instanced and already in the real scene at this point (see
+    // RegionInteriorRenderer's class doc comment), so a plain compile()
+    // call reaches it all directly; no separate transient warm-up pass
+    // needed. This avoids the first-use shader-compile stall landing on
+    // the first real rendered frame instead.
+    ui.loadingMessage = "Preparing region…";
+    ui.loadingProgress = 98;
+    await this.regionRenderer.ready;
+    if (this.activeRegionId !== regionId) { ui.loading = false; return; }
+    this.renderer.compile(this.scene, this.camera);
 
     // Done — dismiss loading screen.
     ui.loadingProgress = 100;
@@ -1374,6 +1384,7 @@ export class Game {
               : "idle";
     const speed = this.lastAnimSpeed * (actions.sprint ? 6.8 : 4.6);
     const logical = logicalFromState(serverAnim, speed, 3.5, actions.moveX, actions.moveY);
+    this.avatar.setLocomotionSpeed(speed, 3.5);
     const overrides =
       logical === "cast"
         ? this.equippedWeaponDef?.castAnim

@@ -39,20 +39,22 @@ const ASSET_DIR: Record<"building" | "foliage" | "prop", string> = {
   prop: "props",
 };
 
+/** Every unique full-detail model URL a blueprint's assets reference. See
+ *  RegionInteriorRenderer's class doc comment -- foliage currently renders
+ *  at full detail too (same as props/buildings); scripts/generate-foliage-lods.mjs
+ *  still exists if a lower-detail pass is ever needed again. */
+function regionAssetUrls(blueprint: RegionBlueprint): string[] {
+  return [...new Set(blueprint.assets.map((a) => `/assets/models/${ASSET_DIR[a.category]}/${a.model}`))];
+}
+
 /** Pre-warm the GLTF cache for every unique model used by a blueprint so that
- *  when RegionInteriorRenderer.update() fires they resolve instantly.
+ *  RegionInteriorRenderer's eager instancing pass resolves instantly.
  *  onProgress(loaded, total) is called after each file completes. */
 export async function preloadRegionAssets(
   blueprint: RegionBlueprint,
   onProgress: (loaded: number, total: number) => void,
 ): Promise<void> {
-  const urls = [
-    ...new Set(
-      blueprint.assets.map(
-        (a) => `/assets/models/${ASSET_DIR[a.category]}/${a.model}`,
-      ),
-    ),
-  ];
+  const urls = regionAssetUrls(blueprint);
   if (urls.length === 0) { onProgress(0, 0); return; }
   let loaded = 0;
   await Promise.all(
@@ -64,73 +66,54 @@ export async function preloadRegionAssets(
   );
 }
 
-/** How many `SkeletonUtils.clone()` calls are allowed per update() tick.
- *  Cloning is synchronous CPU work -- spreading it across frames prevents
- *  spikes when many cached GLBs resolve at once (especially on first entry
- *  into a dense region). 5 per frame ≈ a few ms at worst. */
-const MAX_CLONES_PER_TICK = 5;
-
-interface CloneJob {
-  i: number;
-  asset: RegionAsset;
-  gltf: GLTF;
-  dist: number; // distance at the time the GLTF resolved — used for priority sort
-}
-
-/** Renders a region's interior once a player has walked through its portal --
- *  modeled directly on DungeonInteriorRenderer's proximity-streaming pattern
- *  (load/unload props as the player wanders, with hysteresis to avoid
- *  thrashing at the boundary), but unlike a dungeon a region has real open
- *  sky and its own sculpted terrain instead of a sealed void-floor/ceiling
- *  box, so this builds a real heightmap mesh instead. Color grading
- *  (sky/fog/ambient/sun) is applied by Game.ts's updateDayNight, the same
- *  place the dungeon's fixed torchlight override already lives, rather than
- *  here -- avoids fighting over the same scene-level fog/background/lights
- *  from two places. Mobs are NOT rendered here -- they flow through the
- *  same generic MobSnap/entity pipeline every other mob does, filtered by
- *  the server's existing instance-visibility check. */
+/**
+ * Renders a region's interior once a player has walked through its portal.
+ *
+ * Every prop/building/foliage placement is instanced and built once, eagerly,
+ * at region entry -- there is deliberately no distance/frustum streaming
+ * here. Earlier versions of this renderer streamed individual assets in and
+ * out as the player moved, which meant a per-frame JS loop deciding what to
+ * load/unload for up to several hundred assets; that loop was the source of
+ * repeated stutter and a load/unload thrashing bug, not a fix for a real
+ * performance problem. A region this size (typically a few hundred meters
+ * across, on the order of a few hundred total assets) is well within what a
+ * modern GPU renders for free once geometry is instanced and submitted --
+ * WebGL's own hardware clipping discards off-screen triangles at effectively
+ * zero cost, so there's no JS-side culling decision worth making at this
+ * scale. Everything (foliage included) renders at full detail; a simplified
+ * LOD variant of the foliage models exists (scripts/generate-foliage-lods.mjs)
+ * if full detail ever proves too much for target hardware -- see buildFoliage.
+ *
+ * Unlike a dungeon, a region has real open sky and its own sculpted terrain
+ * instead of a sealed void-floor/ceiling box, so this builds a real
+ * heightmap mesh instead. Color grading (sky/fog/ambient/sun) is applied by
+ * Game.ts's updateDayNight, the same place the dungeon's fixed torchlight
+ * override already lives, rather than here -- avoids fighting over the same
+ * scene-level fog/background/lights from two places. Mobs are NOT rendered
+ * here -- they flow through the same generic MobSnap/entity pipeline every
+ * other mob does, filtered by the server's existing instance-visibility check.
+ */
 export class RegionInteriorRenderer {
   private group: THREE.Object3D;
   readonly blueprint: RegionBlueprint;
   private terrainMesh: THREE.Mesh;
   private waterField?: RegionWaterMeshField;
-  private loaded = new Map<number, THREE.Object3D>();
-  private loading = new Set<number>();
-  private lastUpdatePos = new THREE.Vector3(Infinity, Infinity, Infinity);
-
-  /** Jobs waiting for their SkeletonUtils.clone() turn, sorted nearest-first. */
-  private cloneQueue: CloneJob[] = [];
   private npcModels: AnimatedModel[] = [];
   private npcInstances: RegionNpcInstance[] = [];
+  /** Every InstancedMesh built by instanceModel (foliage + props/buildings),
+   *  tracked flat for destroy() cleanup. */
+  private instancedGroups: THREE.InstancedMesh[] = [];
 
-  // Pre-allocated scratch objects so update() doesn't allocate on the heap
-  // every frame (avoids GC pressure in tight per-frame loops).
-  private readonly _frustum = new THREE.Frustum();
-  private readonly _projMat = new THREE.Matrix4();
-  private readonly _cullSphere = new THREE.Sphere();
-  private readonly _assetPos = new THREE.Vector3();
-
-  /** Dynamic load radius derived from the region's actual dimensions so it
-   *  scales correctly whether the region is 80m or 400m across. The extra
-   *  80m buffer ensures assets at the far edge are loaded before you reach
-   *  them. Capped at 450m to avoid loading the whole world for giant regions. */
-  private readonly LOAD_RADIUS: number;
-  private readonly UNLOAD_HYSTERESIS = 40;
-  /** Assets within this distance load unconditionally (no frustum check) so
-   *  turning around doesn't leave a ring of invisible props right beside you. */
-  private readonly NEAR_RADIUS = 40;
-  /** Padding sphere around each asset for frustum intersection tests -- larger
-   *  values prevent edge-of-view flickering but load slightly more off-screen. */
-  private readonly ASSET_CULL_RADIUS = 14;
+  /** Resolves once every foliage/prop/building placement has been built and
+   *  added to the scene -- callers (Game.ts) await this before dismissing
+   *  the loading screen / calling renderer.compile(), so the first real
+   *  render already has everything present instead of assets popping in. */
+  readonly ready: Promise<void>;
 
   constructor(group: THREE.Object3D, blueprint: RegionBlueprint, regionNameMap?: ReadonlyMap<string, string>) {
     this.npcModels = [];
     this.group = group;
     this.blueprint = blueprint;
-
-    // Derive a load radius that covers the full diagonal of this region.
-    const halfSpan = ((blueprint.gridSize - 1) * blueprint.pitch) / 2;
-    this.LOAD_RADIUS = Math.min(450, Math.hypot(halfSpan, halfSpan) + 80);
 
     this.terrainMesh = buildRegionBlueprintTerrain(blueprint);
     this.group.add(this.terrainMesh);
@@ -139,6 +122,8 @@ export class RegionInteriorRenderer {
       this.waterField = buildRegionWaterMesh(blueprint.gridSize, blueprint.pitch, blueprint.heights, blueprint.waterHeights);
       this.group.add(this.waterField.mesh);
     }
+
+    this.ready = Promise.all([this.buildFoliage(), this.buildPropsAndBuildings()]).then(() => {});
 
     for (const village of blueprint.villages) {
       const plate = buildNameplate(village.name, "#ffe9a8");
@@ -249,8 +234,6 @@ export class RegionInteriorRenderer {
       pointLight.position.set(l.localX, l.localY, l.localZ);
       this.group.add(pointLight);
     }
-
-    this.update(blueprint.entryLocal.x, blueprint.entryLocal.z);
   }
 
   /** Ground height at (x,z) -- used by Game.ts to place the player correctly
@@ -290,40 +273,108 @@ export class RegionInteriorRenderer {
     return this.blueprint.name;
   }
 
-  /** Place up to MAX_CLONES_PER_TICK queued clone jobs, nearest-first. */
-  private flushCloneQueue(px: number, pz: number): void {
-    if (this.cloneQueue.length === 0) return;
+  /** Build every foliage placement as always-resident, per-species instanced
+   *  full-detail geometry -- see the class doc comment for why this isn't
+   *  streamed. Uses the same full-detail model as everything else; a
+   *  simplified LOD variant exists (scripts/generate-foliage-lods.mjs) if
+   *  full detail ever proves too much for target hardware. */
+  private async buildFoliage(): Promise<void> {
+    const byModel = new Map<string, number[]>();
+    for (let i = 0; i < this.blueprint.assets.length; i++) {
+      const asset = this.blueprint.assets[i]!;
+      if (asset.category !== "foliage") continue;
+      const list = byModel.get(asset.model);
+      if (list) list.push(i);
+      else byModel.set(asset.model, [i]);
+    }
+    if (byModel.size === 0) return;
 
-    // Sort nearest-first so the player always sees the closest assets first.
-    this.cloneQueue.sort((a, b) => a.dist - b.dist);
+    await Promise.all(
+      [...byModel.entries()].map(async ([model, indices]) => {
+        let gltf: GLTF;
+        try {
+          gltf = await load(`/assets/models/${ASSET_DIR.foliage}/${model}`);
+        } catch {
+          console.warn(`[regionInterior] failed to load foliage model '${model}' -- skipping ${indices.length} placement(s)`);
+          return;
+        }
+        this.instanceModel(gltf, indices, { castShadow: true, receiveShadow: false });
+      }),
+    );
+  }
 
-    const batch = this.cloneQueue.splice(0, MAX_CLONES_PER_TICK);
-    for (const { i, asset, gltf } of batch) {
-      // Guard: asset may have already been loaded by a duplicate job.
-      if (this.loaded.has(i)) continue;
-      // Guard: player may have moved away while the job was queued.
-      const dist = Math.hypot(px - asset.localX, pz - asset.localZ);
-      if (dist > this.LOAD_RADIUS + this.UNLOAD_HYSTERESIS) continue;
+  /** Build every prop/building placement as always-resident, per-model
+   *  instanced geometry, using the full-detail model (no LOD variant exists
+   *  for these categories -- far fewer of them than foliage, so none is
+   *  needed at this region size). */
+  private async buildPropsAndBuildings(): Promise<void> {
+    const byModel = new Map<string, { category: RegionAsset["category"]; model: string; indices: number[] }>();
+    for (let i = 0; i < this.blueprint.assets.length; i++) {
+      const asset = this.blueprint.assets[i]!;
+      if (asset.category === "foliage") continue;
+      const key = `${asset.category}/${asset.model}`;
+      const entry = byModel.get(key);
+      if (entry) entry.indices.push(i);
+      else byModel.set(key, { category: asset.category, model: asset.model, indices: [i] });
+    }
+    if (byModel.size === 0) return;
 
-      const obj = SkeletonUtils.clone(gltf.scene);
-      const scale = asset.scale ?? 1.0;
-      obj.scale.set(scale, scale, scale);
+    await Promise.all(
+      [...byModel.values()].map(async ({ category, model, indices }) => {
+        let gltf: GLTF;
+        try {
+          gltf = await load(`/assets/models/${ASSET_DIR[category]}/${model}`);
+        } catch {
+          console.warn(`[regionInterior] failed to load ${category} model '${model}' -- skipping ${indices.length} placement(s)`);
+          return;
+        }
+        // Mirrors the old per-object placement rule: floor-type props never
+        // cast (they'd shadow themselves against the ground right beneath them).
+        const castShadow = category !== "prop" || !model.startsWith("floor");
+        this.instanceModel(gltf, indices, { castShadow, receiveShadow: true });
+      }),
+    );
+  }
+
+  /** Shared instancing helper: one InstancedMesh per submesh/material found
+   *  in the source model, covering every asset index passed in at its real
+   *  authored position/rotation/scale (ground-snapped the same way the old
+   *  per-object placement was, preserving any authored above-ground offset). */
+  private instanceModel(gltf: GLTF, indices: number[], opts: { castShadow: boolean; receiveShadow: boolean }): void {
+    const template = SkeletonUtils.clone(gltf.scene);
+    template.updateMatrixWorld(true);
+    const meshTemplates: THREE.Mesh[] = [];
+    template.traverse((o) => {
+      if ((o as THREE.Mesh).isMesh) meshTemplates.push(o as THREE.Mesh);
+    });
+    if (meshTemplates.length === 0) return;
+
+    const localMatrices = meshTemplates.map((m) => m.matrixWorld.clone());
+    const instancedMeshes = meshTemplates.map((m) => {
+      const im = new THREE.InstancedMesh(m.geometry, m.material, indices.length);
+      im.castShadow = opts.castShadow;
+      im.receiveShadow = opts.receiveShadow;
+      return im;
+    });
+
+    const dummy = new THREE.Object3D();
+    for (let k = 0; k < indices.length; k++) {
+      const asset = this.blueprint.assets[indices[k]!]!;
+      const scale = asset.scale ?? 1;
       const groundY = sampleRegionHeight(this.blueprint, asset.localX, asset.localZ);
       const storedOffset = asset.localY - groundY;
-      obj.position.set(asset.localX, groundY + Math.max(0, storedOffset), asset.localZ);
-      obj.rotation.y = asset.yaw;
-      // Explicit frustumCulled so Three.js skips draw calls for off-screen
-      // objects -- also guards against any child node overriding the default.
-      obj.frustumCulled = true;
-      obj.traverse((child) => {
-        if ((child as THREE.Mesh).isMesh) {
-          child.receiveShadow = true;
-          child.castShadow = asset.category !== "prop" || !asset.model.startsWith("floor");
-          child.frustumCulled = true;
-        }
-      });
-      this.group.add(obj);
-      this.loaded.set(i, obj);
+      dummy.position.set(asset.localX, groundY + Math.max(0, storedOffset), asset.localZ);
+      dummy.rotation.set(0, asset.yaw, 0);
+      dummy.scale.setScalar(scale);
+      dummy.updateMatrix();
+      for (let mi = 0; mi < instancedMeshes.length; mi++) {
+        instancedMeshes[mi]!.setMatrixAt(k, dummy.matrix.clone().multiply(localMatrices[mi]!));
+      }
+    }
+    for (const im of instancedMeshes) {
+      im.instanceMatrix.needsUpdate = true;
+      this.group.add(im);
+      this.instancedGroups.push(im);
     }
   }
 
@@ -340,208 +391,134 @@ export class RegionInteriorRenderer {
     inst.plateSprite = newPlate;
   }
 
-  update(px: number, pz: number, camera?: THREE.Camera, fog?: THREE.Fog | THREE.FogExp2, delta?: number): void {
-    if (delta && delta > 0) {
-      for (const inst of this.npcInstances) {
-        inst.animModel.update(delta);
+  /** Per-frame NPC animation + escort-quest logic. No asset streaming here
+   *  anymore -- see the class doc comment. */
+  update(delta: number): void {
+    if (!(delta > 0)) return;
+    for (const inst of this.npcInstances) {
+      inst.animModel.update(delta);
 
-        // Check if there is an active escort quest for this NPC in game.questLog
-        const activeEscort = game.questLog.find((q) => {
-          if (q.status !== "active") return false;
-          const npcQuestMatch = inst.data.quests?.some(
-            (nq) => nq.id === q.id && (nq.objectiveKind === "escort" || (nq.waypoints && nq.waypoints.length > 0)),
-          );
-          return npcQuestMatch || (q.objectiveKind === "escort" && q.waypoints && q.waypoints.length > 0);
-        });
+      // Check if there is an active escort quest for this NPC in game.questLog
+      const activeEscort = game.questLog.find((q) => {
+        if (q.status !== "active") return false;
+        const npcQuestMatch = inst.data.quests?.some(
+          (nq) => nq.id === q.id && (nq.objectiveKind === "escort" || (nq.waypoints && nq.waypoints.length > 0)),
+        );
+        return npcQuestMatch || (q.objectiveKind === "escort" && q.waypoints && q.waypoints.length > 0);
+      });
 
-        if (activeEscort && !inst.escortState) {
-          const authoredQuest = inst.data.quests?.find((nq) => nq.id === activeEscort.id);
-          const waypoints =
-            authoredQuest?.waypoints && authoredQuest.waypoints.length > 0
-              ? authoredQuest.waypoints
-              : activeEscort.waypoints && activeEscort.waypoints.length > 0
-                ? activeEscort.waypoints
-                : null;
+      if (activeEscort && !inst.escortState) {
+        const authoredQuest = inst.data.quests?.find((nq) => nq.id === activeEscort.id);
+        const waypoints =
+          authoredQuest?.waypoints && authoredQuest.waypoints.length > 0
+            ? authoredQuest.waypoints
+            : activeEscort.waypoints && activeEscort.waypoints.length > 0
+              ? activeEscort.waypoints
+              : null;
 
-          if (waypoints && waypoints.length > 0) {
-            inst.escortState = { questId: activeEscort.id, waypoints, index: 0, completed: false };
-          }
-        }
-
-        if (inst.escortState && !inst.escortState.completed) {
-          const state = inst.escortState;
-          const markerId = `escort_${inst.data.id}`;
-
-          // Update minimap marker position while escorting
-          const existingIdx = game.questMarkers.findIndex((m) => m.id === markerId);
-          const newMarker = {
-            id: markerId,
-            name: inst.data.name,
-            x: inst.group.position.x,
-            z: inst.group.position.z,
-            marker: "escort" as const,
-          };
-          if (existingIdx >= 0) {
-            game.questMarkers[existingIdx] = newMarker;
-          } else {
-            game.questMarkers.push(newMarker);
-          }
-
-          // 1. Check Player Death Fail Condition
-          if (game.self?.hp !== undefined && game.self.hp <= 0) {
-            const qId = state.questId;
-            inst.escortState = undefined;
-            inst.hp = inst.maxHp;
-            inst.group.position.set(inst.initialX, inst.initialY, inst.initialZ);
-            inst.group.rotation.y = inst.initialYaw;
-            inst.animModel.play("idle");
-            game.questMarkers = game.questMarkers.filter((m) => m.id !== markerId);
-            game.questLog = game.questLog.filter((q) => q.id !== qId);
-            getGame()?.sendQuestAction("decline", qId);
-            getGame()?.toasts.add("Quest Failed: You Died", "error");
-            continue;
-          }
-
-          // 2. Check Mob Attacks on Escort NPC
-          const now = performance.now();
-          if (now - inst.lastHitTime > 1500) {
-            const mobList = game.mobSnaps ?? [];
-            const nearMob = mobList.find((m) => {
-              if (m.hp <= 0) return false;
-              return Math.hypot(m.x - inst.group.position.x, m.z - inst.group.position.z) <= 6.0;
-            });
-            if (nearMob) {
-              inst.lastHitTime = now;
-              const dmg = Math.floor(12 + Math.random() * 10);
-              inst.hp = Math.max(0, inst.hp - dmg);
-              this.updateNpcNameplate(inst);
-              getGame()?.toasts.add(`${inst.data.name} took ${dmg} damage! (${inst.hp}/${inst.maxHp} HP)`, "error");
-            }
-          }
-
-          // 3. Check NPC Death Fail Condition
-          if (inst.hp <= 0) {
-            const qId = state.questId;
-            inst.escortState = undefined;
-            inst.hp = inst.maxHp;
-            this.updateNpcNameplate(inst);
-            inst.group.position.set(inst.initialX, inst.initialY, inst.initialZ);
-            inst.group.rotation.y = inst.initialYaw;
-            inst.animModel.play("idle");
-            game.questMarkers = game.questMarkers.filter((m) => m.id !== markerId);
-            game.questLog = game.questLog.filter((q) => q.id !== qId);
-            getGame()?.sendQuestAction("decline", qId);
-            getGame()?.toasts.add("Quest Failed: Escort NPC Perished", "error");
-            continue;
-          }
-
-          // 4. Move along waypoints
-          const targetWp = state.waypoints[state.index];
-          if (targetWp) {
-            const dx = targetWp.x - inst.group.position.x;
-            const dz = targetWp.z - inst.group.position.z;
-            const dist = Math.hypot(dx, dz);
-
-            if (dist > 0.5) {
-              const moveSpeed = 3.2; // Walking speed
-              const targetYaw = Math.atan2(dx, dz);
-              inst.group.rotation.y = targetYaw;
-
-              const step = Math.min(dist, moveSpeed * delta);
-              inst.group.position.x += (dx / dist) * step;
-              inst.group.position.z += (dz / dist) * step;
-
-              const groundY = sampleRegionHeight(this.blueprint, inst.group.position.x, inst.group.position.z);
-              inst.group.position.y = groundY;
-
-              inst.animModel.play("run");
-            } else {
-              state.index++;
-              if (state.index >= state.waypoints.length) {
-                state.completed = true;
-                inst.animModel.play("idle");
-                game.questMarkers = game.questMarkers.filter((m) => m.id !== markerId);
-                getGame()?.toasts.add("Escort Quest Complete!", "quest");
-                getGame()?.sendQuestAction("turnin", state.questId);
-              }
-            }
-          }
+        if (waypoints && waypoints.length > 0) {
+          inst.escortState = { questId: activeEscort.id, waypoints, index: 0, completed: false };
         }
       }
-    }
-    // Only re-check the full asset list when the player moves meaningfully.
-    const distMoved = Math.hypot(px - this.lastUpdatePos.x, pz - this.lastUpdatePos.z);
-    const hasMoved = distMoved >= 0.5;
-    if (hasMoved) this.lastUpdatePos.set(px, 0, pz);
 
-    // Always drain the clone queue on every tick regardless of movement
-    // so queued jobs finish as fast as possible after a burst of GLTF resolves.
-    this.flushCloneQueue(px, pz);
+      if (inst.escortState && !inst.escortState.completed) {
+        const state = inst.escortState;
+        const markerId = `escort_${inst.data.id}`;
 
-    if (!hasMoved) return;
+        // Update minimap marker position while escorting
+        const existingIdx = game.questMarkers.findIndex((m) => m.id === markerId);
+        const newMarker = {
+          id: markerId,
+          name: inst.data.name,
+          x: inst.group.position.x,
+          z: inst.group.position.z,
+          marker: "escort" as const,
+        };
+        if (existingIdx >= 0) {
+          game.questMarkers[existingIdx] = newMarker;
+        } else {
+          game.questMarkers.push(newMarker);
+        }
 
-    // Rebuild frustum from camera (using pre-allocated scratch objects).
-    let hasFrustum = false;
-    if (camera) {
-      camera.updateMatrixWorld();
-      this._projMat.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
-      this._frustum.setFromProjectionMatrix(this._projMat);
-      hasFrustum = true;
-    }
+        // 1. Check Player Death Fail Condition
+        if (game.self?.hp !== undefined && game.self.hp <= 0) {
+          const qId = state.questId;
+          inst.escortState = undefined;
+          inst.hp = inst.maxHp;
+          inst.group.position.set(inst.initialX, inst.initialY, inst.initialZ);
+          inst.group.rotation.y = inst.initialYaw;
+          inst.animModel.play("idle");
+          game.questMarkers = game.questMarkers.filter((m) => m.id !== markerId);
+          game.questLog = game.questLog.filter((q) => q.id !== qId);
+          getGame()?.sendQuestAction("decline", qId);
+          getGame()?.toasts.add("Quest Failed: You Died", "error");
+          continue;
+        }
 
-    // Determine fog visibility limit so assets obscured by fog aren't streamed or rendered.
-    let fogMaxDist = Infinity;
-    if (fog instanceof THREE.FogExp2 && fog.density > 0) {
-      fogMaxDist = 3.5 / fog.density;
-    } else if (fog instanceof THREE.Fog) {
-      fogMaxDist = fog.far;
-    } else if (this.blueprint.colorGrading?.fogDensity && this.blueprint.colorGrading.fogDensity > 0) {
-      fogMaxDist = 3.5 / this.blueprint.colorGrading.fogDensity;
-    }
-
-    const effectiveLoadRadius = Math.min(this.LOAD_RADIUS, fogMaxDist);
-    const { UNLOAD_HYSTERESIS, NEAR_RADIUS, ASSET_CULL_RADIUS } = this;
-
-    for (let i = 0; i < this.blueprint.assets.length; i++) {
-      const asset = this.blueprint.assets[i]!;
-      const dist = Math.hypot(px - asset.localX, pz - asset.localZ);
-
-      if (dist < effectiveLoadRadius) {
-        if (!this.loaded.has(i) && !this.loading.has(i)) {
-          // Frustum gate: skip starting a load for assets clearly out of view,
-          // unless they're so close that turning around would reveal them immediately.
-          if (hasFrustum && dist > NEAR_RADIUS) {
-            this._assetPos.set(asset.localX, asset.localY, asset.localZ);
-            this._cullSphere.set(this._assetPos, ASSET_CULL_RADIUS);
-            if (!this._frustum.intersectsSphere(this._cullSphere)) continue;
+        // 2. Check Mob Attacks on Escort NPC
+        const now = performance.now();
+        if (now - inst.lastHitTime > 1500) {
+          const mobList = game.mobSnaps ?? [];
+          const nearMob = mobList.find((m) => {
+            if (m.hp <= 0) return false;
+            return Math.hypot(m.x - inst.group.position.x, m.z - inst.group.position.z) <= 6.0;
+          });
+          if (nearMob) {
+            inst.lastHitTime = now;
+            const dmg = Math.floor(12 + Math.random() * 10);
+            inst.hp = Math.max(0, inst.hp - dmg);
+            this.updateNpcNameplate(inst);
+            getGame()?.toasts.add(`${inst.data.name} took ${dmg} damage! (${inst.hp}/${inst.maxHp} HP)`, "error");
           }
+        }
 
-          this.loading.add(i);
-          const url = `/assets/models/${ASSET_DIR[asset.category]}/${asset.model}`;
-          load(url)
-            .then((gltf) => {
-              this.loading.delete(i);
-              // Don't clone synchronously here -- queue it for frame-budget
-              // processing so many resolving promises don't spike one frame.
-              const currentDist = Math.hypot(px - asset.localX, pz - asset.localZ);
-              if (currentDist <= effectiveLoadRadius + UNLOAD_HYSTERESIS) {
-                this.cloneQueue.push({ i, asset, gltf, dist: currentDist });
-              }
-            })
-            .catch(() => {
-              this.loading.delete(i);
-            });
+        // 3. Check NPC Death Fail Condition
+        if (inst.hp <= 0) {
+          const qId = state.questId;
+          inst.escortState = undefined;
+          inst.hp = inst.maxHp;
+          this.updateNpcNameplate(inst);
+          inst.group.position.set(inst.initialX, inst.initialY, inst.initialZ);
+          inst.group.rotation.y = inst.initialYaw;
+          inst.animModel.play("idle");
+          game.questMarkers = game.questMarkers.filter((m) => m.id !== markerId);
+          game.questLog = game.questLog.filter((q) => q.id !== qId);
+          getGame()?.sendQuestAction("decline", qId);
+          getGame()?.toasts.add("Quest Failed: Escort NPC Perished", "error");
+          continue;
         }
-      } else if (dist > effectiveLoadRadius + UNLOAD_HYSTERESIS) {
-        // Unload when far enough away (or hidden by fog) regardless of view direction.
-        if (this.loaded.has(i)) {
-          this.group.remove(this.loaded.get(i)!);
-          this.loaded.delete(i);
+
+        // 4. Move along waypoints
+        const targetWp = state.waypoints[state.index];
+        if (targetWp) {
+          const dx = targetWp.x - inst.group.position.x;
+          const dz = targetWp.z - inst.group.position.z;
+          const dist = Math.hypot(dx, dz);
+
+          if (dist > 0.5) {
+            const moveSpeed = 3.2; // Walking speed
+            const targetYaw = Math.atan2(dx, dz);
+            inst.group.rotation.y = targetYaw;
+
+            const step = Math.min(dist, moveSpeed * delta);
+            inst.group.position.x += (dx / dist) * step;
+            inst.group.position.z += (dz / dist) * step;
+
+            const groundY = sampleRegionHeight(this.blueprint, inst.group.position.x, inst.group.position.z);
+            inst.group.position.y = groundY;
+
+            inst.animModel.play("run");
+          } else {
+            state.index++;
+            if (state.index >= state.waypoints.length) {
+              state.completed = true;
+              inst.animModel.play("idle");
+              game.questMarkers = game.questMarkers.filter((m) => m.id !== markerId);
+              getGame()?.toasts.add("Escort Quest Complete!", "quest");
+              getGame()?.sendQuestAction("turnin", state.questId);
+            }
+          }
         }
-        this.loading.delete(i);
-        // Drop any pending clone job for this asset too.
-        const qi = this.cloneQueue.findIndex((j) => j.i === i);
-        if (qi !== -1) this.cloneQueue.splice(qi, 1);
       }
     }
   }
@@ -549,10 +526,8 @@ export class RegionInteriorRenderer {
   destroy(): void {
     this.group.remove(this.terrainMesh);
     this.terrainMesh.geometry.dispose();
-    for (const obj of this.loaded.values()) this.group.remove(obj);
-    this.loaded.clear();
-    this.loading.clear();
-    this.cloneQueue.length = 0;
+    for (const im of this.instancedGroups) this.group.remove(im);
+    this.instancedGroups = [];
     this.npcModels = [];
   }
 }

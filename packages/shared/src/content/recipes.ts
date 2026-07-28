@@ -724,4 +724,48 @@ export const RECIPES: Record<string, RecipeDef> = {
       { itemId: "bone", qty: 4 },
     ],
   },
+  // Ultimate RPG Items Pack chest armor (see armorProp in items.ts) --
+  // rigid plate-style pieces, tiered roughly by ore rarity.
+  plate_armor_leather: {
+    id: "plate_armor_leather",
+    output: "plate_armor_leather",
+    outputQty: 1,
+    ingredients: [{ itemId: "hide", qty: 20 }],
+  },
+  plate_armor_metal: {
+    id: "plate_armor_metal",
+    output: "plate_armor_metal",
+    outputQty: 1,
+    ingredients: [
+      { itemId: "iron_ore", qty: 20 },
+      { itemId: "wood", qty: 5 },
+    ],
+  },
+  plate_armor_metal2: {
+    id: "plate_armor_metal2",
+    output: "plate_armor_metal2",
+    outputQty: 1,
+    ingredients: [
+      { itemId: "mithril_ore", qty: 15 },
+      { itemId: "iron_ore", qty: 10 },
+    ],
+  },
+  plate_armor_golden: {
+    id: "plate_armor_golden",
+    output: "plate_armor_golden",
+    outputQty: 1,
+    ingredients: [
+      { itemId: "gold_ore", qty: 15 },
+      { itemId: "silver_ore", qty: 10 },
+    ],
+  },
+  plate_armor_black: {
+    id: "plate_armor_black",
+    output: "plate_armor_black",
+    outputQty: 1,
+    ingredients: [
+      { itemId: "thorium_ore", qty: 15 },
+      { itemId: "ancient_dust", qty: 5 },
+    ],
+  },
 };

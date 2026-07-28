@@ -29,6 +29,13 @@
       "when": 1784047141157,
       "tag": "0003_light_dust",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1785226773945,
+      "tag": "0004_fast_thaddeus_ross",
+      "breakpoints": true
     }
   ]
 }

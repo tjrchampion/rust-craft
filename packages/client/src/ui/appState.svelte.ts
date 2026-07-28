@@ -1,6 +1,8 @@
+import type { CharacterAppearance } from "@rustcraft/shared";
+
 export type Screen = "loading" | "login" | "charselect" | "ingame" | "dungeoneditor" | "regioneditor";
 
-export interface CharacterSummary {
+export interface CharacterSummary extends CharacterAppearance {
   id: string;
   name: string;
   level: number;
@@ -122,13 +124,13 @@ class AppState {
     await this.refresh();
   }
 
-  async createCharacter(name: string, classId: string) {
+  async createCharacter(name: string, classId: string, appearance?: Partial<CharacterAppearance>) {
     this.error = null;
     const res = await fetch(this.apiUrl("/api/characters"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       credentials: "include",
-      body: JSON.stringify({ name, classId }),
+      body: JSON.stringify({ name, classId, ...appearance }),
     });
     const data = await res.json().catch(() => null);
     if (!res.ok) {

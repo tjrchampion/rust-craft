@@ -12,11 +12,15 @@
     "@fontsource/cinzel": "^5.2.8",
     "@rustcraft/shared": "workspace:*",
     "svelte": "^5.56.4",
-    "three": "^0.185.1"
+    "three": "^0.185.1",
+    "three.quarks": "^0.17.1"
   },
   "devDependencies": {
+    "@gltf-transform/core": "^4.4.2",
     "@sveltejs/vite-plugin-svelte": "^7.2.0",
+    "@types/js-yaml": "^4.0.9",
     "@types/three": "^0.185.1",
+    "js-yaml": "4",
     "svelte-check": "^4.7.2",
     "typescript": "^5.9.3",
     "vite": "^8.1.4",

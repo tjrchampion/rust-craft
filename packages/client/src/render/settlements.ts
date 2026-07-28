@@ -63,6 +63,22 @@ function loadProp(type: string): Promise<GLTF> {
   return loadGltf(`/assets/models/buildings/${type}.gltf`);
 }
 
+/** Queued clone+placement jobs -- see flushSettlementQueue. Each job is the
+ *  synchronous, CPU-bound tail end of a placeBuilding/placeProp/instanceProp
+ *  call (deep clone, bbox measurement, scene.add), deferred so a freshly-
+ *  streamed-in village's ~50-60 placements don't all land in the same
+ *  rendered frame. */
+const pendingWork: (() => void)[] = [];
+
+/** Drain a bounded number of queued placement jobs -- call once per frame
+ *  from the main render loop (mirrors RegionInteriorRenderer's own
+ *  MAX_CLONES_PER_TICK-style clone-queue draining). */
+export function flushSettlementQueue(maxPerFrame = 4): void {
+  for (let i = 0; i < maxPerFrame && pendingWork.length > 0; i++) {
+    pendingWork.shift()!();
+  }
+}
+
 async function placeBuilding(
   scene: THREE.Object3D,
   type: string,
@@ -71,23 +87,28 @@ async function placeBuilding(
   z: number,
   yaw: number,
   scaleMul: number,
+  queued = false,
 ): Promise<void> {
   try {
     const gltf = await loadBuilding(type);
-    const model = gltf.scene.clone(true);
-    const bbox = new THREE.Box3().setFromObject(model);
-    const size = new THREE.Vector3();
-    bbox.getSize(size);
-    const target = (BUILDING_HEIGHTS[type] ?? 4.5) * scaleMul;
-    const scale = size.y > 0.01 ? target / size.y : 1;
-    model.scale.setScalar(scale);
-    // Feet on the ground, slightly sunk to hug uneven terrain.
-    model.position.set(x, y - bbox.min.y * scale - 0.12, z);
-    model.rotation.y = yaw;
-    model.traverse((o) => {
-      if ((o as THREE.Mesh).isMesh) o.castShadow = true;
-    });
-    scene.add(model);
+    const finish = () => {
+      const model = gltf.scene.clone(true);
+      const bbox = new THREE.Box3().setFromObject(model);
+      const size = new THREE.Vector3();
+      bbox.getSize(size);
+      const target = (BUILDING_HEIGHTS[type] ?? 4.5) * scaleMul;
+      const scale = size.y > 0.01 ? target / size.y : 1;
+      model.scale.setScalar(scale);
+      // Feet on the ground, slightly sunk to hug uneven terrain.
+      model.position.set(x, y - bbox.min.y * scale - 0.12, z);
+      model.rotation.y = yaw;
+      model.traverse((o) => {
+        if ((o as THREE.Mesh).isMesh) o.castShadow = true;
+      });
+      scene.add(model);
+    };
+    if (queued) pendingWork.push(finish);
+    else finish();
   } catch (err) {
     console.warn(`[settlements] failed to load building '${type}'`, err);
   }
@@ -100,25 +121,90 @@ async function placeProp(
   z: number,
   yaw: number,
   scaleMul = 1,
+  queued = false,
 ): Promise<void> {
   try {
     const gltf = await loadProp(type);
-    const model = gltf.scene.clone(true);
-    const bbox = new THREE.Box3().setFromObject(model);
-    const size = new THREE.Vector3();
-    bbox.getSize(size);
-    const target = (PROP_HEIGHTS[type] ?? 1) * scaleMul;
-    const scale = size.y > 0.01 ? target / size.y : 1;
-    model.scale.setScalar(scale);
-    const y = terrainHeight(x, z);
-    model.position.set(x, y - bbox.min.y * scale - 0.05, z);
-    model.rotation.y = yaw;
-    model.traverse((o) => {
-      if ((o as THREE.Mesh).isMesh) o.castShadow = true;
-    });
-    scene.add(model);
+    const finish = () => {
+      const model = gltf.scene.clone(true);
+      const bbox = new THREE.Box3().setFromObject(model);
+      const size = new THREE.Vector3();
+      bbox.getSize(size);
+      const target = (PROP_HEIGHTS[type] ?? 1) * scaleMul;
+      const scale = size.y > 0.01 ? target / size.y : 1;
+      model.scale.setScalar(scale);
+      const y = terrainHeight(x, z);
+      model.position.set(x, y - bbox.min.y * scale - 0.05, z);
+      model.rotation.y = yaw;
+      model.traverse((o) => {
+        if ((o as THREE.Mesh).isMesh) o.castShadow = true;
+      });
+      scene.add(model);
+    };
+    if (queued) pendingWork.push(finish);
+    else finish();
   } catch (err) {
     console.warn(`[settlements] failed to load prop '${type}'`, err);
+  }
+}
+
+/** Same visual placement as N `placeProp` calls (bbox-normalized height,
+ *  ground-hugging Y, per-position yaw) but as ONE draw call via
+ *  THREE.InstancedMesh -- for props repeated many times identically per
+ *  village, like the ~25-segment perimeter fence, where cloning a whole
+ *  separate Object3D per segment (the old approach) was 25 draw calls doing
+ *  the exact same geometry/material for no visual benefit. */
+async function instanceProp(
+  scene: THREE.Object3D,
+  type: string,
+  placements: { x: number; z: number; yaw: number }[],
+  queued = false,
+): Promise<void> {
+  if (placements.length === 0) return;
+  try {
+    const gltf = await loadProp(type);
+    const finish = () => {
+      const template = gltf.scene.clone(true);
+      template.updateMatrixWorld(true);
+      const bbox = new THREE.Box3().setFromObject(template);
+      const size = new THREE.Vector3();
+      bbox.getSize(size);
+      const target = PROP_HEIGHTS[type] ?? 1;
+      const scale = size.y > 0.01 ? target / size.y : 1;
+      const minY = bbox.min.y;
+
+      const meshes: THREE.Mesh[] = [];
+      template.traverse((o) => {
+        if ((o as THREE.Mesh).isMesh) meshes.push(o as THREE.Mesh);
+      });
+
+      const dummy = new THREE.Object3D();
+      for (const mesh of meshes) {
+        // Preserve this submesh's own offset within the template (e.g. posts
+        // vs. rails authored as separate parts, not both centered at root)
+        // -- `mesh.matrixWorld` is relative to the template's own
+        // untransformed root since `template` is never itself added to the
+        // real scene.
+        const localMatrix = mesh.matrixWorld.clone();
+        const instanced = new THREE.InstancedMesh(mesh.geometry, mesh.material, placements.length);
+        instanced.castShadow = true;
+        for (let i = 0; i < placements.length; i++) {
+          const p = placements[i]!;
+          const y = terrainHeight(p.x, p.z);
+          dummy.position.set(p.x, y - minY * scale - 0.05, p.z);
+          dummy.rotation.set(0, p.yaw, 0);
+          dummy.scale.setScalar(scale);
+          dummy.updateMatrix();
+          instanced.setMatrixAt(i, dummy.matrix.clone().multiply(localMatrix));
+        }
+        instanced.instanceMatrix.needsUpdate = true;
+        scene.add(instanced);
+      }
+    };
+    if (queued) pendingWork.push(finish);
+    else finish();
+  } catch (err) {
+    console.warn(`[settlements] failed to instance prop '${type}'`, err);
   }
 }
 
@@ -137,20 +223,32 @@ function scatterVillageClutter(
       const type = clutterTypes[Math.floor(rng() * clutterTypes.length)]!;
       const a = rng() * Math.PI * 2;
       const d = 2 + rng() * 2.5;
-      void placeProp(scene, type, b.x + Math.sin(a) * d, b.z + Math.cos(a) * d, rng() * Math.PI * 2);
+      void placeProp(scene, type, b.x + Math.sin(a) * d, b.z + Math.cos(a) * d, rng() * Math.PI * 2, 1, true);
     }
   }
 
   // Banners flanking the central plaza well.
   for (let i = 0; i < 2; i++) {
     const a = i === 0 ? 0.6 : -0.6;
-    void placeProp(scene, i === 0 ? "flag_red" : "flag_blue", village.x + Math.sin(a) * 3.5, village.z + Math.cos(a) * 3.5, a);
+    void placeProp(
+      scene,
+      i === 0 ? "flag_red" : "flag_blue",
+      village.x + Math.sin(a) * 3.5,
+      village.z + Math.cos(a) * 3.5,
+      a,
+      1,
+      true,
+    );
   }
 
   // Wooden fence ring around the town with a gate facing world-origin.
+  // Straight segments (~24 of the 26) are identical geometry repeated around
+  // the perimeter -- instanced into one draw call instead of 24 separate
+  // Object3D clones. The one-off gate segment isn't worth instancing.
   const segments = 26;
   const gateAngle = Math.atan2(-village.x, -village.z); // toward spawn/paths
   const fenceR = village.radius + 3;
+  const straightPlacements: { x: number; z: number; yaw: number }[] = [];
   for (let i = 0; i < segments; i++) {
     const a = (i / segments) * Math.PI * 2;
     // Leave a gap (gate) near the path entrance.
@@ -159,11 +257,12 @@ function scatterVillageClutter(
     const fx = village.x + Math.sin(a) * fenceR;
     const fz = village.z + Math.cos(a) * fenceR;
     if (nearGate) {
-      if (delta < 0.12) void placeProp(scene, "fence_wood_straight_gate", fx, fz, a);
+      if (delta < 0.12) void placeProp(scene, "fence_wood_straight_gate", fx, fz, a, 1, true);
       continue; // gap either side of the gate
     }
-    void placeProp(scene, "fence_wood_straight", fx, fz, a);
+    straightPlacements.push({ x: fx, z: fz, yaw: a });
   }
+  void instanceProp(scene, "fence_wood_straight", straightPlacements, true);
 }
 
 /**
@@ -186,7 +285,7 @@ export function buildVillage(
 ): THREE.Object3D[] {
   const signs: THREE.Object3D[] = [];
   for (const b of village.buildings) {
-    void placeBuilding(scene, b.type, b.x, b.y, b.z, b.yaw, b.scale);
+    void placeBuilding(scene, b.type, b.x, b.y, b.z, b.yaw, b.scale, true);
   }
   scatterVillageClutter(scene, village);
   if (withSigns) {

@@ -1,18 +1,24 @@
 import * as THREE from "three";
-import type { PlayerSnap, MobSnap, PetSnap, ProjectileSnap, StructureSnap, AnimState, ClassId } from "@rustcraft/shared";
+import type {
+  PlayerSnap,
+  MobSnap,
+  PetSnap,
+  ProjectileSnap,
+  StructureSnap,
+  AnimState,
+  ClassId,
+  CharacterGender,
+  CharacterAppearance,
+} from "@rustcraft/shared";
 import { wrapAngle, mobDef, itemDef, auraDef } from "@rustcraft/shared";
 import { buildNameplate, buildCampfire, buildHorse, buildRaft } from "./models";
 import { AnimatedModel, PLAYER_ANIMS, mobModelSpec, logicalFromState, dodgeLogicalFor } from "./gltf";
-import {
-  CLASS_MODEL_URLS,
-  CLASS_WEAPON_NODES,
-  CLASS_HEAD_NODES,
-  CLASS_CHEST_NODES,
-  CLASS_BODY_NODE,
-  CLASS_ARM_NODES,
-  CLASS_LEG_NODES,
-} from "./classModels";
+import { playerModelUrl, CLASS_WEAPON_NODES } from "./classModels";
+import { applyModularGearFromSnapAsync } from "./modularGear";
 import { buildSchoolProjectile, recycleSchoolProjectile, buildSchoolParticle, SCHOOL_VFX, schoolProfile, spellSchool, type School, projectilePools } from "./vfx";
+import { SpellVfxSystem } from "./spellVfx";
+import { SchoolFlashSystem } from "./schoolFlash";
+import type * as QUARKS from "three.quarks";
 
 // Snapshots broadcast at a full 20Hz (see GameServer.tick), so 2 snapshot
 // intervals (100ms) plus a little slack for jitter is enough buffer to avoid
@@ -20,6 +26,30 @@ import { buildSchoolProjectile, recycleSchoolProjectile, buildSchoolParticle, SC
 // own zero-latency client-side prediction.
 const INTERP_DELAY_MS = 130;
 const DESPAWN_AFTER_MS = 1200;
+
+/** Which schools have a textured effect extracted from the Hovl Studio pack
+ *  (see scripts/hovl/) instead of SpellVfxSystem's built-in procedural
+ *  fallback -- loaded via SpellVfxSystem.loadEffect in the constructor. */
+const HOVL_HIT_EFFECT: Partial<Record<School, string>> = {
+  fire: "fire_hit",
+  heal: "heal_hit",
+};
+
+/** Which schools have a continuous "Sparks <color>" trail extracted from the
+ *  Hovl Studio pack (as opposed to the "explode" one-shots above) for a
+ *  projectile's in-flight trail -- schools missing here fall back to the
+ *  old per-frame mesh sparks (see spawnTrailSpark). A handful of colors
+ *  covers most schools by closest match rather than extracting all 9. */
+const HOVL_TRAIL_EFFECT: Partial<Record<School, string>> = {
+  fire: "trail_fire",
+  frost: "trail_blue",
+  arcane: "trail_pink",
+  shadow: "trail_pink",
+  nature: "trail_green",
+  heal: "trail_green",
+  holy: "trail_yellow",
+  buff: "trail_yellow",
+};
 
 interface Sample {
   t: number;
@@ -34,6 +64,8 @@ interface RemoteEntity {
   id: string;
   name: string | null;
   classId: string;
+  gender: CharacterGender;
+  appearance: CharacterAppearance | null;
   group: THREE.Group;
   model: AnimatedModel;
   nameplate?: THREE.Sprite;
@@ -106,6 +138,10 @@ interface ProjectileInstance {
   group: THREE.Group;
   target: THREE.Vector3;
   school: School;
+  /** Continuous quarks trail following this projectile in flight (see
+   *  SpellVfxSystem.attachTrail) -- null for schools with no extracted
+   *  trail effect, which fall back to the old per-frame mesh sparks. */
+  trailPs: QUARKS.ParticleSystem | null;
 }
 
 function createDamageSprite(text: string, color: string): THREE.Sprite {
@@ -213,10 +249,6 @@ function paintDebuffIcons(sprite: THREE.Sprite, auraIds: string[]): void {
   sprite.visible = auraIds.length > 0;
 }
 
-export function playerModelUrl(classId: string): string {
-  return CLASS_MODEL_URLS[classId as ClassId] ?? CLASS_MODEL_URLS.warrior;
-}
-
 export class EntityManager {
   private scene: THREE.Scene;
   private entities = new Map<string, RemoteEntity>();
@@ -231,9 +263,32 @@ export class EntityManager {
   private raycaster = new THREE.Raycaster();
   private targetId: string | null = null;
   private targetRing: THREE.Mesh;
+  /** Reused scratch objects for the per-frame coarse visibility cull in
+   *  update() -- avoids allocating a Frustum/Matrix4/Sphere every frame. */
+  private cullFrustum = new THREE.Frustum();
+  private cullMatrix = new THREE.Matrix4();
+  private cullSphere = new THREE.Sphere(new THREE.Vector3(), 2.5);
+  /** Real three.quarks-driven spell VFX -- every school's hit burst (see
+   *  spawnBurst) goes through this now, either an extracted Hovl Studio
+   *  effect (public/assets/vfx/effects/*.json, see scripts/hovl/) or a
+   *  procedural quarks system built from SCHOOL_VFX for schools without one
+   *  extracted yet. */
+  private spellVfx: SpellVfxSystem;
+  /** Shader-driven flash layered on top of the particle burst -- particles
+   *  alone read weak for the instantaneous punch a hit wants, this adds a
+   *  school-parametrized noise/ring/spoke flash at the impact point. */
+  private schoolFlash: SchoolFlashSystem;
 
   constructor(scene: THREE.Scene) {
     this.scene = scene;
+    this.spellVfx = new SpellVfxSystem(scene);
+    this.schoolFlash = new SchoolFlashSystem(scene);
+    for (const [school, effectId] of Object.entries(HOVL_HIT_EFFECT) as [School, string][]) {
+      void this.spellVfx.loadEffect(school, effectId, `/assets/vfx/effects/${effectId}.json`);
+    }
+    for (const trailId of new Set(Object.values(HOVL_TRAIL_EFFECT))) {
+      void this.spellVfx.loadTrailEffect(trailId, `/assets/vfx/effects/${trailId}.json`);
+    }
     // Selection ring drawn on the ground under the current target.
     const ringGeo = new THREE.RingGeometry(0.7, 0.95, 32);
     ringGeo.rotateX(-Math.PI / 2);
@@ -322,6 +377,8 @@ export class EntityManager {
     now: number,
     mobType?: string,
     classId?: string,
+    gender?: CharacterGender,
+    appearance?: CharacterAppearance,
   ): RemoteEntity {
     let model: AnimatedModel;
     let plateY = 2.35;
@@ -331,7 +388,9 @@ export class EntityManager {
 
     if (kind === "player") {
       model = new AnimatedModel(PLAYER_ANIMS);
-      void model.loadFrom(playerModelUrl(classId ?? "warrior"), 1.8);
+      const g = gender ?? "male";
+      void model.loadFrom(playerModelUrl(g), 1.8);
+      if (appearance) void model.applyAppearance(g, appearance);
     } else {
       const def = mobDef(mobType ?? "wolf");
       const spec = mobModelSpec(def.render.model);
@@ -367,6 +426,8 @@ export class EntityManager {
       id,
       name: plateName,
       classId: classId ?? "warrior",
+      gender: gender ?? "male",
+      appearance: appearance ?? null,
       group,
       model,
       nameplate,
@@ -457,27 +518,25 @@ export class EntityManager {
    *  mirrors Game.ts's applyEquippedGear for the local player, so other
    *  players see the same gear appearance. */
   private setGearAppearance(entity: RemoteEntity, snap: PlayerSnap): void {
-    const classId = entity.classId as ClassId;
-    if (entity.headId !== snap.headId) {
+    if (
+      entity.headId !== snap.headId ||
+      entity.chestId !== snap.chestId ||
+      entity.armsId !== snap.armsId ||
+      entity.legsId !== snap.legsId ||
+      entity.feetId !== snap.feetId
+    ) {
       entity.headId = snap.headId;
-      entity.model.setHeadGear(snap.headId !== null, CLASS_HEAD_NODES[classId] ?? []);
-    }
-    if (entity.chestId !== snap.chestId) {
       entity.chestId = snap.chestId;
-      entity.model.setChestGear(snap.chestId !== null, CLASS_CHEST_NODES[classId] ?? []);
-      const def = snap.chestId ? itemDef(snap.chestId) : null;
-      entity.model.setGearTint("chest", [CLASS_BODY_NODE[classId]].filter(Boolean), def?.gearTint ?? null);
-    }
-    if (entity.armsId !== snap.armsId) {
       entity.armsId = snap.armsId;
-      const def = snap.armsId ? itemDef(snap.armsId) : null;
-      entity.model.setGearTint("arms", CLASS_ARM_NODES[classId] ?? [], def?.gearTint ?? null);
-    }
-    if (entity.legsId !== snap.legsId || entity.feetId !== snap.feetId) {
       entity.legsId = snap.legsId;
       entity.feetId = snap.feetId;
-      const def = snap.legsId ? itemDef(snap.legsId) : snap.feetId ? itemDef(snap.feetId) : null;
-      entity.model.setGearTint("legs", CLASS_LEG_NODES[classId] ?? [], def?.gearTint ?? null);
+      void applyModularGearFromSnapAsync(entity.model, entity.gender, {
+        headId: snap.headId,
+        chestId: snap.chestId,
+        armsId: snap.armsId,
+        legsId: snap.legsId,
+        feetId: snap.feetId,
+      });
     }
   }
 
@@ -486,7 +545,23 @@ export class EntityManager {
       if (snap.id === selfId) continue;
       let entity = this.entities.get(snap.id);
       if (!entity) {
-        entity = this.createEntity("player", snap.id, snap.name, now, undefined, snap.classId);
+        entity = this.createEntity(
+          "player",
+          snap.id,
+          snap.name,
+          now,
+          undefined,
+          snap.classId,
+          snap.gender as CharacterGender,
+          {
+            gender: snap.gender as CharacterGender,
+            hairStyle: snap.hairStyle as CharacterAppearance["hairStyle"],
+            facialHair: snap.facialHair as CharacterAppearance["facialHair"],
+            hairColor: snap.hairColor,
+            eyeColor: snap.eyeColor,
+            outfitHue: snap.outfitHue,
+          },
+        );
         entity.lastX = snap.x;
         entity.lastZ = snap.z;
       }
@@ -707,7 +782,9 @@ export class EntityManager {
         if (!group.parent) {
           this.scene.add(group);
         }
-        proj = { group, target: new THREE.Vector3(snap.x, snap.y, snap.z), school };
+        const trailId = HOVL_TRAIL_EFFECT[school];
+        const trailPs = trailId ? this.spellVfx.attachTrail(trailId, group.position) : null;
+        proj = { group, target: new THREE.Vector3(snap.x, snap.y, snap.z), school, trailPs };
         this.projectiles.set(snap.id, proj);
       }
       proj.target.set(snap.x, snap.y, snap.z);
@@ -719,6 +796,7 @@ export class EntityManager {
         if (core) core.visible = false;
         const light = proj.group.getObjectByName("light") as THREE.PointLight | undefined;
         if (light) light.intensity = 0;
+        if (proj.trailPs) this.spellVfx.detachTrail(proj.trailPs);
         recycleSchoolProjectile(proj.school, proj.group);
         this.projectiles.delete(id);
       }
@@ -792,69 +870,14 @@ export class EntityManager {
    *  Shadow wisps look like they're being sucked toward the impact point. */
   private spawnBurst(pos: THREE.Vector3, school: School): void {
     const profile = schoolProfile(school);
-    const pool = this.sparkPools.get(school) ?? [];
-    for (let i = 0; i < profile.count; i++) {
-      const spark = pool.pop();
-      const mesh = spark ? spark.mesh : buildSchoolParticle(profile);
-      const ang = Math.random() * Math.PI * 2;
-      let vx: number;
-      let vy: number;
-      let vz: number;
-      let spawnPos = pos;
-      if (profile.spread === "implode") {
-        const offR = 0.6 + Math.random() * 1.2;
-        const ox = Math.cos(ang) * offR;
-        const oy = (Math.random() - 0.3) * offR;
-        const oz = Math.sin(ang) * offR;
-        spawnPos = new THREE.Vector3(pos.x + ox, pos.y + oy, pos.z + oz);
-        const speed = 1.5 + Math.random() * 1.5;
-        vx = (-ox / offR) * speed;
-        vy = (-oy / offR) * speed * 0.6;
-        vz = (-oz / offR) * speed;
-      } else if (profile.spread === "rising") {
-        const upAng = Math.random() * Math.PI * 0.5 + Math.PI * 0.15;
-        const spd = 1.0 + Math.random() * 1.8;
-        vx = Math.cos(ang) * Math.cos(upAng) * spd * 0.6;
-        vy = Math.sin(upAng) * spd;
-        vz = Math.sin(ang) * Math.cos(upAng) * spd * 0.6;
-      } else if (profile.spread === "hover") {
-        const spd = 0.3 + Math.random() * 0.6;
-        vx = Math.cos(ang) * spd;
-        vy = (Math.random() - 0.3) * spd;
-        vz = Math.sin(ang) * spd;
-      } else {
-        const upAng = Math.random() * Math.PI - Math.PI / 2;
-        const spd = 1.8 + Math.random() * 2.4;
-        vx = Math.cos(ang) * Math.cos(upAng) * spd;
-        vy = Math.sin(upAng) * spd;
-        vz = Math.sin(ang) * Math.cos(upAng) * spd;
-      }
-      if (spark) {
-        spark.mesh.visible = true;
-        spark.mesh.scale.setScalar(profile.particleSize);
-        spark.mesh.position.copy(spawnPos);
-        const material = spark.mesh.material as THREE.MeshBasicMaterial;
-        material.opacity = 1;
-        material.transparent = true;
-        material.depthWrite = false;
-        material.blending = THREE.AdditiveBlending;
-        material.color.set(profile.color);
-        material.needsUpdate = true;
-        spark.vx = vx;
-        spark.vy = vy;
-        spark.vz = vz;
-        spark.gravity = profile.gravity;
-        spark.drag = profile.drag;
-        spark.spin = profile.spin;
-        spark.born = performance.now();
-        spark.lifeMs = profile.lifeMs;
-        this.sparks.push(spark);
-      } else {
-        mesh.position.copy(spawnPos);
-        this.scene.add(mesh);
-        this.sparks.push({ school, mesh, vx, vy, vz, gravity: profile.gravity, drag: profile.drag, spin: profile.spin, born: performance.now(), lifeMs: profile.lifeMs });
-      }
-    }
+    // Every school's hit burst now goes through SpellVfxSystem -- a real
+    // three.quarks particle system, either the school's extracted Hovl
+    // Studio effect (see loadEffect calls in the constructor) or, absent
+    // one, a procedural quarks system built straight from this school's
+    // SCHOOL_VFX profile (see buildProceduralParticleSystem in spellVfx.ts).
+    // The ground ring stays a separate, simpler procedural shockwave either way.
+    this.spellVfx.spawnForSchool(school, pos);
+    this.schoolFlash.spawn(school, pos);
     this.spawnGroundRing(pos, profile.ringColor, profile.ringDuration, school);
   }
 
@@ -955,8 +978,12 @@ export class EntityManager {
   }
 
   /** Advance interpolation + animation. Call once per frame. */
-  update(now: number, dt: number): void {
+  update(now: number, dt: number, camera?: THREE.Camera): void {
     const renderT = now - INTERP_DELAY_MS;
+    if (camera) {
+      this.cullMatrix.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+      this.cullFrustum.setFromProjectionMatrix(this.cullMatrix);
+    }
 
     for (const [id, entity] of this.entities) {
       if (now - entity.lastSeen > DESPAWN_AFTER_MS) {
@@ -1000,18 +1027,34 @@ export class EntityManager {
         entity.group.rotation.y = yaw;
       }
 
-      const logical = logicalFromState(
-        entity.anim,
-        entity.speed,
-        entity.kind === "player" ? 3.5 : 3,
-        entity.localMoveX,
-        entity.localMoveY,
-      );
-      const weapon = entity.weaponId ? itemDef(entity.weaponId) : null;
-      const overrides =
-        logical === "attack" ? weapon?.attackAnim : logical === "cast" ? weapon?.castAnim : undefined;
-      entity.model.play(logical, overrides);
-      entity.model.update(dt);
+      // Coarse visibility cull: skip the animation mixer/state-machine work
+      // (and the draw calls themselves -- AnimatedModel forces
+      // frustumCulled=false on every mesh, see gltf.ts, so Three.js would
+      // otherwise never skip an off-screen character on its own) for
+      // entities clearly outside the camera frustum. Left paused mid-pose
+      // off-screen, which is imperceptible, and resumes cleanly the instant
+      // it's back in view.
+      let inView = true;
+      if (camera) {
+        this.cullSphere.center.set(entity.group.position.x, entity.group.position.y + 1, entity.group.position.z);
+        inView = this.cullFrustum.intersectsSphere(this.cullSphere);
+      }
+      entity.group.visible = inView;
+      if (inView) {
+        entity.model.setLocomotionSpeed(entity.speed, entity.kind === "player" ? 3.5 : 3);
+        const logical = logicalFromState(
+          entity.anim,
+          entity.speed,
+          entity.kind === "player" ? 3.5 : 3,
+          entity.localMoveX,
+          entity.localMoveY,
+        );
+        const weapon = entity.weaponId ? itemDef(entity.weaponId) : null;
+        const overrides =
+          logical === "attack" ? weapon?.attackAnim : logical === "cast" ? weapon?.castAnim : undefined;
+        entity.model.play(logical, overrides);
+        entity.model.update(dt);
+      }
 
       // Pulse the loot ring light if present and visible
       if (entity.lootRing?.visible) {
@@ -1049,7 +1092,11 @@ export class EntityManager {
       proj.group.position.lerp(proj.target, Math.min(1, dt * 18));
       const spinSpeed = (proj.group.userData.spinSpeed as number | undefined) ?? 0;
       if (spinSpeed) proj.group.rotation.y += spinSpeed * dt;
-      this.spawnTrailSpark(proj.group.position, proj.school);
+      if (proj.trailPs) {
+        this.spellVfx.moveTrail(proj.trailPs, proj.group.position);
+      } else {
+        this.spawnTrailSpark(proj.group.position, proj.school);
+      }
     }
 
     for (let i = this.sparks.length - 1; i >= 0; i--) {
@@ -1097,6 +1144,9 @@ export class EntityManager {
       const flame = group.getObjectByName("flame");
       if (flame) flame.scale.y = 0.9 + Math.sin(now / 90) * 0.18;
     }
+
+    this.spellVfx.update(dt);
+    if (camera) this.schoolFlash.update(camera);
 
     for (let i = this.damageNumbers.length - 1; i >= 0; i--) {
       const dn = this.damageNumbers[i]!;
