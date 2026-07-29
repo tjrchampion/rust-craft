@@ -45,6 +45,7 @@ import {
   type CharacterGender,
   type CharacterAppearance,
   regionAssetColliders,
+  regionVolumeColliders,
   regionMusicTrackUrl,
 } from "@rustcraft/shared";
 import { Connection } from "../net/connection";
@@ -1023,7 +1024,7 @@ export class Game {
         void this.enterRegionInterior(regionId);
       }
       if (this.regionRenderer) {
-        this.regionRenderer.update(dt);
+        this.regionRenderer.update(dt, this.sun);
       }
       return;
     }
@@ -1271,7 +1272,12 @@ export class Game {
 
     const inDungeon = ui.dungeonState !== null;
     const regionHeightmap = this.regionRenderer?.heightmap;
-    const regionAssets = this.regionRenderer ? regionAssetColliders(this.regionRenderer.assets) : undefined;
+    const regionAssets = this.regionRenderer
+      ? [
+          ...regionAssetColliders(this.regionRenderer.assets),
+          ...regionVolumeColliders(this.regionRenderer.terrainVolumes ?? []),
+        ]
+      : undefined;
     const seq = ++this.inputSeq;
     this.pending.push({ seq, ...input, mount, inDungeon, regionHeightmap, regionAssets });
     if (this.pending.length > 120) this.pending.shift();

@@ -105,6 +105,7 @@ import {
   type RegionBlueprint,
   sampleRegionHeight,
   regionAssetColliders,
+  regionVolumeColliders,
   pickRegionMob,
   ClientMsg as ClientMsgSchema,
 } from "@rustcraft/shared";
@@ -2842,7 +2843,12 @@ export class GameServer {
     const regionId = this.regionIdFromInstance(player.instanceId);
     const region = regionId ? this.regionBlueprints.get(regionId) : undefined;
     const regionHeightmap = region;
-    const regionAssets = region ? regionAssetColliders(region.assets) : undefined;
+    const regionAssets = region
+      ? [
+          ...regionAssetColliders(region.assets),
+          ...regionVolumeColliders(region.terrainVolumes ?? []),
+        ]
+      : undefined;
     if (inputs.length === 0) {
       // Keep physics ticking (falling, water) even without fresh input.
       player.move = stepMovement(

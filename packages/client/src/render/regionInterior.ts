@@ -5,6 +5,14 @@ import type { GLTF } from "three/examples/jsm/loaders/GLTFLoader.js";
 import * as SkeletonUtils from "three/examples/jsm/utils/SkeletonUtils.js";
 import { buildShrine, buildNameplate, buildHealthNameplate } from "./models";
 import { buildRegionBlueprintTerrain, buildRegionWaterMesh, type RegionWaterMeshField } from "./terrain";
+import { buildGrassInstances, type GrassField } from "./grassField";
+import { createTreeWindUniforms, applyTreeWindSway, applyRegionWind, type TreeWindUniforms } from "./windSway";
+import { createTerrainVolumeMesh } from "./terrainVolumes";
+
+/** Base tree canopy sway amplitude (meters) at RegionWind strength 1 --
+ *  chosen smaller than grass's own base since tree branches are much larger
+ *  levers, so a little displacement reads as a lot of visible motion. */
+const BASE_TREE_WIND_STRENGTH = 0.15;
 
 import { game } from "../ui/gameState.svelte";
 import { getGame } from "../game/instance";
@@ -103,6 +111,15 @@ export class RegionInteriorRenderer {
   /** Every InstancedMesh built by instanceModel (foliage + props/buildings),
    *  tracked flat for destroy() cleanup. */
   private instancedGroups: THREE.InstancedMesh[] = [];
+  /** Painted grass patches, expanded once at construction -- see
+   *  buildGrassPatches. Null if the blueprint has none. */
+  private grassField: GrassField | null = null;
+  /** Stamped 3D terrain volumes (boulder/block/etc.) from the volume sculpt
+   *  brush. Shared geometries -- destroy() only removes meshes from the group. */
+  private volumeMeshes: THREE.Mesh[] = [];
+  /** Shared by every foliage material patched via applyTreeWindSway in
+   *  instanceModel -- seeded from blueprint.wind at construction. */
+  private treeWindUniforms: TreeWindUniforms = createTreeWindUniforms();
 
   /** Resolves once every foliage/prop/building placement has been built and
    *  added to the scene -- callers (Game.ts) await this before dismissing
@@ -123,6 +140,10 @@ export class RegionInteriorRenderer {
       this.group.add(this.waterField.mesh);
     }
 
+    if (blueprint.wind) applyRegionWind(this.treeWindUniforms, blueprint.wind, BASE_TREE_WIND_STRENGTH);
+
+    this.buildGrassPatches();
+    this.buildTerrainVolumes();
     this.ready = Promise.all([this.buildFoliage(), this.buildPropsAndBuildings()]).then(() => {});
 
     for (const village of blueprint.villages) {
@@ -265,12 +286,46 @@ export class RegionInteriorRenderer {
     return this.blueprint.assets;
   }
 
+  /** Stamped 3D terrain volumes for collision merge with assets. */
+  get terrainVolumes(): RegionBlueprint["terrainVolumes"] {
+    return this.blueprint.terrainVolumes;
+  }
+
   get musicTrack(): string | null {
     return this.blueprint.musicTrack ?? null;
   }
 
   get regionName(): string {
     return this.blueprint.name;
+  }
+
+  /** Expand this region's painted grass patches (see GrassPatch) into
+   *  wind-shaded blade InstancedMeshes -- synchronous, no GLTF load, so this
+   *  doesn't need to participate in `ready` the way the async foliage/prop
+   *  builds do. */
+  private buildGrassPatches(): void {
+    const patches = this.blueprint.grassPatches;
+    if (!patches || patches.length === 0) return;
+    this.grassField = buildGrassInstances(patches, this.blueprint.grassExclusions, this.blueprint, {
+      color: this.blueprint.grassColor,
+      wind: this.blueprint.wind,
+    });
+    for (const mesh of this.grassField.meshes) {
+      this.group.add(mesh);
+      this.instancedGroups.push(mesh);
+    }
+  }
+
+  /** Add freeform sculpted terrain volumes (boulder/block/pillar/spike/ramp).
+   *  Synchronous -- uses shared cached geometries from terrainVolumes.ts. */
+  private buildTerrainVolumes(): void {
+    const volumes = this.blueprint.terrainVolumes;
+    if (!volumes || volumes.length === 0) return;
+    for (const v of volumes) {
+      const mesh = createTerrainVolumeMesh(v);
+      this.group.add(mesh);
+      this.volumeMeshes.push(mesh);
+    }
   }
 
   /** Build every foliage placement as always-resident, per-species instanced
@@ -298,7 +353,7 @@ export class RegionInteriorRenderer {
           console.warn(`[regionInterior] failed to load foliage model '${model}' -- skipping ${indices.length} placement(s)`);
           return;
         }
-        this.instanceModel(gltf, indices, { castShadow: true, receiveShadow: false });
+        this.instanceModel(gltf, indices, { castShadow: true, receiveShadow: false, applyWind: true });
       }),
     );
   }
@@ -336,11 +391,22 @@ export class RegionInteriorRenderer {
     );
   }
 
-  /** Shared instancing helper: one InstancedMesh per submesh/material found
-   *  in the source model, covering every asset index passed in at its real
-   *  authored position/rotation/scale (ground-snapped the same way the old
-   *  per-object placement was, preserving any authored above-ground offset). */
-  private instanceModel(gltf: GLTF, indices: number[], opts: { castShadow: boolean; receiveShadow: boolean }): void {
+  /** World-unit size of the spatial grid instanceModel buckets instances
+   *  into. One InstancedMesh spanning an entire region has a bounding sphere
+   *  that's almost always inside the camera frustum, so Three.js's free
+   *  per-object culling is close to a no-op at that scale -- chunking into
+   *  cells this size gives that same free culling a tight-enough bounding
+   *  sphere per batch to actually skip whole off-screen cells. */
+  private static readonly CHUNK_SIZE = 80;
+
+  /** Shared instancing helper: one InstancedMesh per submesh/material per
+   *  spatial cell (see CHUNK_SIZE), covering every asset index passed in at
+   *  its real authored position/rotation/scale (ground-snapped the same way
+   *  the old per-object placement was, preserving any authored above-ground
+   *  offset). Everything is still eagerly resident -- chunking only affects
+   *  which InstancedMesh an instance's transform lives in, not whether it's
+   *  loaded, so there's no streaming/popping behavior here. */
+  private instanceModel(gltf: GLTF, indices: number[], opts: { castShadow: boolean; receiveShadow: boolean; applyWind?: boolean }): void {
     const template = SkeletonUtils.clone(gltf.scene);
     template.updateMatrixWorld(true);
     const meshTemplates: THREE.Mesh[] = [];
@@ -349,32 +415,60 @@ export class RegionInteriorRenderer {
     });
     if (meshTemplates.length === 0) return;
 
-    const localMatrices = meshTemplates.map((m) => m.matrixWorld.clone());
-    const instancedMeshes = meshTemplates.map((m) => {
-      const im = new THREE.InstancedMesh(m.geometry, m.material, indices.length);
-      im.castShadow = opts.castShadow;
-      im.receiveShadow = opts.receiveShadow;
-      return im;
-    });
-
-    const dummy = new THREE.Object3D();
-    for (let k = 0; k < indices.length; k++) {
-      const asset = this.blueprint.assets[indices[k]!]!;
-      const scale = asset.scale ?? 1;
-      const groundY = sampleRegionHeight(this.blueprint, asset.localX, asset.localZ);
-      const storedOffset = asset.localY - groundY;
-      dummy.position.set(asset.localX, groundY + Math.max(0, storedOffset), asset.localZ);
-      dummy.rotation.set(0, asset.yaw, 0);
-      dummy.scale.setScalar(scale);
-      dummy.updateMatrix();
-      for (let mi = 0; mi < instancedMeshes.length; mi++) {
-        instancedMeshes[mi]!.setMatrixAt(k, dummy.matrix.clone().multiply(localMatrices[mi]!));
+    // Patched once per mesh template (not per cell/instance below) since
+    // every InstancedMesh built from this template shares the same material
+    // reference -- each gets its own uMinY/uMaxY baked from that specific
+    // mesh's own geometry bounds (trunk vs. canopy meshes differ).
+    if (opts.applyWind) {
+      for (const m of meshTemplates) {
+        m.geometry.computeBoundingBox();
+        const bbox = m.geometry.boundingBox!;
+        const mats = Array.isArray(m.material) ? m.material : [m.material];
+        const patched = mats.map((mat) => applyTreeWindSway(mat, this.treeWindUniforms, bbox.min.y, bbox.max.y));
+        m.material = Array.isArray(m.material) ? patched : patched[0]!;
       }
     }
-    for (const im of instancedMeshes) {
-      im.instanceMatrix.needsUpdate = true;
-      this.group.add(im);
-      this.instancedGroups.push(im);
+
+    const localMatrices = meshTemplates.map((m) => m.matrixWorld.clone());
+
+    const cells = new Map<string, number[]>();
+    for (const i of indices) {
+      const asset = this.blueprint.assets[i]!;
+      const cx = Math.floor(asset.localX / RegionInteriorRenderer.CHUNK_SIZE);
+      const cz = Math.floor(asset.localZ / RegionInteriorRenderer.CHUNK_SIZE);
+      const key = `${cx},${cz}`;
+      const list = cells.get(key);
+      if (list) list.push(i);
+      else cells.set(key, [i]);
+    }
+
+    const dummy = new THREE.Object3D();
+    for (const cellIndices of cells.values()) {
+      const instancedMeshes = meshTemplates.map((m) => {
+        const im = new THREE.InstancedMesh(m.geometry, m.material, cellIndices.length);
+        im.castShadow = opts.castShadow;
+        im.receiveShadow = opts.receiveShadow;
+        return im;
+      });
+
+      for (let k = 0; k < cellIndices.length; k++) {
+        const asset = this.blueprint.assets[cellIndices[k]!]!;
+        const scale = asset.scale ?? 1;
+        const groundY = sampleRegionHeight(this.blueprint, asset.localX, asset.localZ);
+        const storedOffset = asset.localY - groundY;
+        dummy.position.set(asset.localX, groundY + Math.max(0, storedOffset), asset.localZ);
+        dummy.rotation.set(0, asset.yaw, 0);
+        dummy.scale.setScalar(scale);
+        dummy.updateMatrix();
+        for (let mi = 0; mi < instancedMeshes.length; mi++) {
+          instancedMeshes[mi]!.setMatrixAt(k, dummy.matrix.clone().multiply(localMatrices[mi]!));
+        }
+      }
+      for (const im of instancedMeshes) {
+        im.instanceMatrix.needsUpdate = true;
+        this.group.add(im);
+        this.instancedGroups.push(im);
+      }
     }
   }
 
@@ -391,10 +485,23 @@ export class RegionInteriorRenderer {
     inst.plateSprite = newPlate;
   }
 
-  /** Per-frame NPC animation + escort-quest logic. No asset streaming here
-   *  anymore -- see the class doc comment. */
-  update(delta: number): void {
+  /** Per-frame NPC animation + escort-quest logic, plus the grass shader's
+   *  time/sun uniforms. No asset streaming here anymore -- see the class
+   *  doc comment. `sun` is optional so callers without a directional light
+   *  handy (there are none today, but keeps this defensive) just leave the
+   *  blade shader's sun uniforms at their static defaults. */
+  update(delta: number, sun?: THREE.DirectionalLight): void {
     if (!(delta > 0)) return;
+
+    if (this.grassField) {
+      this.grassField.uniforms.uTime.value += delta;
+      if (sun) {
+        this.grassField.uniforms.uSunDir.value.copy(sun.position).sub(sun.target.position).normalize();
+        this.grassField.uniforms.uSunColor.value.copy(sun.color).multiplyScalar(sun.intensity);
+      }
+    }
+    this.treeWindUniforms.uTime.value += delta;
+
     for (const inst of this.npcInstances) {
       inst.animModel.update(delta);
 
@@ -528,6 +635,11 @@ export class RegionInteriorRenderer {
     this.terrainMesh.geometry.dispose();
     for (const im of this.instancedGroups) this.group.remove(im);
     this.instancedGroups = [];
+    for (const mesh of this.volumeMeshes) {
+      this.group.remove(mesh);
+      if (!mesh.userData.sharedGeometry) mesh.geometry.dispose();
+    }
+    this.volumeMeshes = [];
     this.npcModels = [];
   }
 }

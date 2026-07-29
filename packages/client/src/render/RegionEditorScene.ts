@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
+import { SelectionBox } from "three/examples/jsm/interactive/SelectionBox.js";
 import { SkeletonUtils } from "three/examples/jsm/Addons.js";
 import { load, AnimatedModel, PLAYER_ANIMS, logicalFromState } from "./gltf";
 import { GENDER_MODEL_URLS, CLASS_GENDER } from "./classModels";
@@ -15,10 +16,16 @@ import {
   type RegionNPC,
   type RegionQuest,
   type ClassId,
+  type GrassPatch,
+  type GrassExclusion,
+  type GrassColor,
+  type RegionWind,
+  type RegionTerrainVolume,
+  type TerrainVolumeShape,
+  type TerrainVolumeMaterial,
   sampleRegionWaterDepth,
   REGION_COLOR_PRESETS,
   REGION_FOLIAGE,
-  REGION_GRASS_COVER,
   REGION_ASSET_COLLISION_RADIUS,
   REGION_ASSET_COLLISION_HEIGHT,
   REGION_ASSET_CLIMBABLE,
@@ -29,13 +36,36 @@ import {
   JUMP_VELOCITY,
   GRAVITY,
   regionMusicTrackUrl,
+  hashString,
+  terrainVolumeRadius,
+  terrainVolumeTopY,
+  isTerrainStroke,
+  strokePointHalfWidth,
+  strokePointTopY,
+  carveBlocksSurface,
+  type TerrainVolumeCarve,
 } from "@rustcraft/shared";
 import { applyGroundBlendShader, regionGroundWeights, regionRoadBlendAt, buildRegionWaterMesh, type RegionWaterMeshField } from "./terrain";
+import { buildGrassInstances, type GrassField } from "./grassField";
+import { applyRegionWind } from "./windSway";
+import { generateHouseAssets, type HouseType } from "./houseGen";
+import {
+  createTerrainVolumeMesh,
+  createTerrainVolumeGhost,
+  defaultVolumeScale,
+  rebuildTerrainStrokeMesh,
+  rebuildTerrainVolumeMesh,
+  strokeSizeFromBrush,
+} from "./terrainVolumes";
+
+/** Matches grassField.ts's own BASE_GRASS_WIND_STRENGTH -- kept local since
+ *  it's only needed here for the editor's live-preview uniform update. */
+const BASE_GRASS_WIND_STRENGTH = 0.3;
 import { music } from "../game/music";
 
 export type EditorTransformMode = "translate" | "rotate" | "scale";
 export type EditorMarkerKind = "mobSpawn" | "village" | "entry" | "portal" | "npc";
-export type SculptMode = "raise" | "lower" | "mold" | "smooth" | null;
+export type SculptMode = "raise" | "lower" | "mold" | "smooth" | "carve" | null;
 export type WaterBrushMode = "add" | "remove" | null;
 
 type CanvasWithScene = HTMLCanvasElement & { __regionEditorScene?: RegionEditorScene };
@@ -78,7 +108,7 @@ const ARROW_PAN_STEP = 4;
 const ARROW_PAN_STEP_FAST = 16;
 
 export interface EditorSelection {
-  kind: "asset" | "marker" | "light";
+  kind: "asset" | "marker" | "light" | "volume";
   id: string;
   model?: string;
   category?: RegionAssetCategory;
@@ -92,6 +122,10 @@ export interface EditorSelection {
   color?: string;
   intensity?: number;
   distance?: number;
+  /** Present when this asset is part of a generated house (or similar). */
+  groupId?: string;
+  volumeShape?: TerrainVolumeShape;
+  volumeMaterial?: TerrainVolumeMaterial;
   x: number;
   y: number;
   z: number;
@@ -104,6 +138,14 @@ interface AssetEntry {
   model: string;
   category: RegionAssetCategory;
   obj: THREE.Object3D;
+  /** Shared across every piece of a generated house -- see RegionAsset.groupId. */
+  groupId?: string;
+}
+
+interface VolumeEntry {
+  id: string;
+  data: RegionTerrainVolume;
+  obj: THREE.Mesh;
 }
 
 interface MarkerEntry {
@@ -164,6 +206,7 @@ export class RegionEditorScene {
   private terrainMesh: THREE.Mesh;
 
   private assets = new Map<string, AssetEntry>();
+  private volumes = new Map<string, VolumeEntry>();
   private markers = new Map<string, MarkerEntry>();
   private lights = new Map<string, LightEntry>();
   private entryMarker: MarkerEntry | null = null;
@@ -171,9 +214,41 @@ export class RegionEditorScene {
   private armedModel: { model: string; category: RegionAssetCategory } | null = null;
   private armedMarkerKind: EditorMarkerKind | null = null;
   private armedLightColor: string | null = null;
+  /** House-placement tool armed -- next click generates a procedural house
+   *  (see houseGen.ts's generateHouseAssets) centered on the clicked ground
+   *  point, placed as ordinary building-category assets. Single-click only
+   *  (unlike armedModel's click-and-drag painting): a house is dozens of
+   *  pieces, so dragging would spam-generate overlapping houses. */
+  private armedHouse = false;
+  private armedHouseType: HouseType = "random";
+  /** Volume-sculpt brush -- stamps real 3D primitives into the world instead
+   *  of deforming the heightmap. `place` drops one shape at a time; `sculpt`
+   *  is a continuous drag brush that sprays overlapping stamps along the stroke. */
+  private volumeStampActive = false;
+  private volumeBrushStyle: "place" | "sculpt" = "place";
+  private volumeShape: TerrainVolumeShape = "boulder";
+  private volumeMaterial: TerrainVolumeMaterial = "rock";
+  private volumeGhost: THREE.Mesh | null = null;
+  /** Flat ring showing the sculpt-brush footprint while dragging/hovering. */
+  private volumeBrushRing: THREE.Mesh | null = null;
+  private isVolumeStamping = false;
+  /** Last world hit along the current volume stroke -- distance-spaced stamps. */
+  private lastVolumeStrokePos: THREE.Vector3 | null = null;
+  /** In-progress drag-sculpt stroke (one continuous mesh, finalized on mouseup).
+   *  Centerline appends along the mouse path on the starting-height plane so
+   *  the ridge tracks the cursor exactly without climbing onto itself. */
+  private activeStroke: {
+    id: string;
+    start: { x: number; y: number; z: number };
+    path: Array<{ x: number; y: number; z: number }>;
+    mesh: THREE.Mesh;
+    data: RegionTerrainVolume;
+  } | null = null;
   private sculptMode: SculptMode = null;
   private texturePaintMode: number | null = null;
   private moldTargetHeight: number | null = null;
+  /** Last carve stamp position while drag-punching holes (distance-spaced). */
+  private lastCarvePos: THREE.Vector3 | null = null;
   private waterBrushMode: WaterBrushMode = null;
   private waterPhysicsSimulating = true;
   private waterHeights: Float32Array = new Float32Array(0);
@@ -182,6 +257,21 @@ export class RegionEditorScene {
   private waterParticles: { obj: THREE.Mesh; vel: THREE.Vector3; life: number; maxLife: number }[] = [];
   private brushRadius = 8;
   private brushStrength = 1;
+
+  private grassPatches: GrassPatch[] = [];
+  /** Fine-grained holes carved by the erase-grass brush -- see
+   *  GrassExclusion's doc comment. Kept separate from erasing whole
+   *  grassPatches records so a small brush stroke can thin out part of a
+   *  large patch without deleting the rest of it. */
+  private grassExclusions: GrassExclusion[] = [];
+  private grassColor: GrassColor = { bottom: "#4f7c13", top: "#79a01c" };
+  private wind: RegionWind = { direction: 0, strength: 1 };
+  private grassLength = 1;
+  /** Live preview of grassPatches -- rebuilt (not incrementally updated) on
+   *  mouseup after a grass-brush stroke, or on blueprint load. Null when
+   *  there are no patches. */
+  private grassField: GrassField | null = null;
+  private grassPreviewDirty = false;
 
   private roads: RegionRoad[] = [];
   private roadPaintArmed = false;
@@ -209,7 +299,8 @@ export class RegionEditorScene {
   private randomTreeBrushActive = false;
   private isGrassBrushing = false;
   private grassBrushActive = false;
-  private grassBrushModel: string | null = null;
+  private isErasingGrass = false;
+  private grassEraseBrushActive = false;
   private isErasing = false;
   private eraseBrushActive = false;
   private lastPlaceTime = 0;
@@ -222,6 +313,12 @@ export class RegionEditorScene {
   private history: string[] = [];
   private historyIndex = -1;
   private clipboardIds: Set<string> = new Set();
+
+  /** Shift+drag marquee multi-select (same SelectionBox pattern as the dungeon editor). */
+  private selectionBox: SelectionBox;
+  private marqueeStart: { x: number; y: number } | null = null;
+  private lastMarqueeEnd = 0;
+  private onMarqueeUpdate?: (box: { startX: number; startY: number; endX: number; endY: number } | null) => void;
 
   // ============================ playtest ============================
   // Mirrors Game.ts's real third-person controller (camera-orbit constants,
@@ -250,6 +347,7 @@ export class RegionEditorScene {
     private onSelectionChange: (sel: EditorSelection[]) => void,
     private onChange?: () => void,
     private onPlaytestChange?: (active: boolean) => void,
+    onMarquee?: (box: { startX: number; startY: number; endX: number; endY: number } | null) => void,
   ) {
     // Guard against two live instances ever listening on the same canvas at
     // once (e.g. a leftover instance from a Vite HMR reload that never got
@@ -259,6 +357,7 @@ export class RegionEditorScene {
     if (stale) stale.dispose();
     (canvas as CanvasWithScene).__regionEditorScene = this;
 
+    this.onMarqueeUpdate = onMarquee;
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 
@@ -269,6 +368,8 @@ export class RegionEditorScene {
     this.sunLight.position.set(80, 100, 40);
     this.scene.add(this.sunLight);
     this.scene.fog = new THREE.FogExp2(0xbcd9f0, 0.006);
+
+    this.selectionBox = new SelectionBox(this.camera, this.scene);
 
     // isRestoring suppresses triggerChange's onChange/pushHistory -- needed
     // here because applyColorGrading() below fires triggerChange, and
@@ -406,8 +507,22 @@ export class RegionEditorScene {
     return this.heights[tz * this.gridSize + tx] ?? 0;
   }
 
-  private sculptAt(hitX: number, hitZ: number, mode: SculptMode): void {
+  private sculptAt(hitX: number, hitY: number, hitZ: number, mode: SculptMode): void {
     if (!mode) return;
+
+    if (mode === "carve") {
+      this.carveAt(hitX, hitY, hitZ);
+      return;
+    }
+
+    // With volumes selected, deform only those -- leave the heightmap alone.
+    const selectedVolumes = this.selectedVolumeIds();
+    if (selectedVolumes.size > 0) {
+      this.sculptVolumesAt(hitX, hitZ, mode, selectedVolumes);
+      this.triggerChange();
+      return;
+    }
+
     const half = ((this.gridSize - 1) * this.pitch) / 2;
 
     if (mode === "raise" || mode === "lower") {
@@ -467,7 +582,218 @@ export class RegionEditorScene {
     }
 
     this.syncTerrainMeshHeights();
+    // No volume selection -- only sculpt the heightmap (volumes need an
+    // explicit selection so nearby stamps aren't accidentally reshaped).
     this.triggerChange();
+  }
+
+  /**
+   * Punch holes through terrain volumes only (never the heightmap). Hole
+   * radius follows brush size. With a selection, only those volumes; otherwise
+   * any volume the brush sphere intersects.
+   */
+  private carveAt(hitX: number, hitY: number, hitZ: number): void {
+    const radius = Math.max(0.35, this.brushRadius * 0.55);
+    const spacing = Math.max(0.25, radius * 0.55);
+    if (this.lastCarvePos) {
+      const dist = Math.hypot(
+        hitX - this.lastCarvePos.x,
+        hitY - this.lastCarvePos.y,
+        hitZ - this.lastCarvePos.z,
+      );
+      if (dist < spacing) return;
+    }
+    this.lastCarvePos = new THREE.Vector3(hitX, hitY, hitZ);
+
+    const selected = this.selectedVolumeIds();
+    const carve: TerrainVolumeCarve = { x: hitX, y: hitY, z: hitZ, radius };
+    let any = false;
+
+    for (const entry of this.volumes.values()) {
+      if (selected.size > 0 && !selected.has(entry.id)) continue;
+      if (!this.volumeIntersectsCarve(entry.data, carve)) continue;
+      if (!entry.data.carves) entry.data.carves = [];
+      const dup = entry.data.carves.some(
+        (c) => Math.hypot(c.x - carve.x, c.y - carve.y, c.z - carve.z) < radius * 0.35
+          && Math.abs(c.radius - carve.radius) < 0.05,
+      );
+      if (dup) continue;
+      entry.data.carves.push({ ...carve });
+      rebuildTerrainVolumeMesh(entry.obj, entry.data);
+      any = true;
+    }
+
+    if (any) {
+      for (const helper of this.selectionHelpers.values()) helper.update();
+      this.triggerChange();
+    }
+  }
+
+  /** Rough intersection test: carve sphere vs volume footprint/top. */
+  private volumeIntersectsCarve(v: RegionTerrainVolume, carve: TerrainVolumeCarve): boolean {
+    if (isTerrainStroke(v) && v.path) {
+      for (const p of v.path) {
+        const halfW = strokePointHalfWidth(v, p);
+        const top = strokePointTopY(v, p);
+        const midY = (p.y + top) * 0.5;
+        const dx = p.x - carve.x;
+        const dy = midY - carve.y;
+        const dz = p.z - carve.z;
+        const reach = halfW + carve.radius + Math.max(0.1, (top - p.y) * 0.5);
+        if (dx * dx + dy * dy + dz * dz < reach * reach) return true;
+      }
+      return false;
+    }
+    const r = terrainVolumeRadius(v) + carve.radius;
+    const dx = v.localX - carve.x;
+    const dz = v.localZ - carve.z;
+    if (dx * dx + dz * dz > r * r) return false;
+    const top = terrainVolumeTopY(v);
+    const bot = top - v.scaleY * 2;
+    return carve.y + carve.radius >= bot && carve.y - carve.radius <= top;
+  }
+
+  /** Ids of currently selected terrain volumes (empty if none). */
+  private selectedVolumeIds(): Set<string> {
+    const ids = new Set<string>();
+    for (const id of this.selectedIds) {
+      if (this.volumes.has(id)) ids.add(id);
+    }
+    return ids;
+  }
+
+  /** Raise / lower / mold / smooth stamped terrain volumes the same way the
+   *  heightmap brush works -- strokes deform locally via path `h`/`w`, discrete
+   *  stamps grow/shrink while keeping their base planted.
+   *  When `onlyIds` is set, only those volumes are touched. */
+  private sculptVolumesAt(
+    hitX: number,
+    hitZ: number,
+    mode: SculptMode,
+    onlyIds?: Set<string>,
+  ): void {
+    if (!mode) return;
+    let anyTouched = false;
+
+    for (const entry of this.volumes.values()) {
+      if (onlyIds && !onlyIds.has(entry.id)) continue;
+      const v = entry.data;
+      if (isTerrainStroke(v) && v.path && v.path.length >= 2) {
+        let strokeTouched = false;
+        if (mode === "smooth") {
+          const copy = v.path.map((p) => ({
+            h: p.h ?? 1,
+            w: p.w ?? 1,
+            y: p.y,
+          }));
+          for (let i = 0; i < v.path.length; i++) {
+            const p = v.path[i]!;
+            const d = Math.hypot(p.x - hitX, p.z - hitZ);
+            if (d > this.brushRadius) continue;
+            const falloff = 1 - d / this.brushRadius;
+            let sumH = copy[i]!.h;
+            let sumW = copy[i]!.w;
+            let sumY = copy[i]!.y;
+            let count = 1;
+            if (i > 0) {
+              sumH += copy[i - 1]!.h;
+              sumW += copy[i - 1]!.w;
+              sumY += copy[i - 1]!.y;
+              count++;
+            }
+            if (i < v.path.length - 1) {
+              sumH += copy[i + 1]!.h;
+              sumW += copy[i + 1]!.w;
+              sumY += copy[i + 1]!.y;
+              count++;
+            }
+            const factor = Math.min(0.8, this.brushStrength * falloff * 0.3);
+            p.h = copy[i]!.h + (sumH / count - copy[i]!.h) * factor;
+            p.w = copy[i]!.w + (sumW / count - copy[i]!.w) * factor;
+            p.y = copy[i]!.y + (sumY / count - copy[i]!.y) * factor;
+            strokeTouched = true;
+          }
+        } else {
+          for (const p of v.path) {
+            const d = Math.hypot(p.x - hitX, p.z - hitZ);
+            if (d > this.brushRadius) continue;
+            const falloff = 1 - d / this.brushRadius;
+            const curH = p.h ?? 1;
+            const curW = p.w ?? 1;
+            if (mode === "raise" || mode === "lower") {
+              const sign = mode === "raise" ? 1 : -1;
+              p.h = Math.max(0.08, curH + sign * this.brushStrength * falloff * 0.18);
+              p.w = Math.max(0.15, curW + sign * this.brushStrength * falloff * 0.06);
+              strokeTouched = true;
+            } else if (mode === "mold" && this.moldTargetHeight !== null) {
+              const targetH = Math.max(0.08, (this.moldTargetHeight - p.y) / Math.max(0.08, v.scaleY));
+              const factor = Math.min(0.8, this.brushStrength * falloff * 0.25);
+              p.h = curH + (targetH - curH) * factor;
+              const widthTarget = Math.max(0.2, Math.min(1.6, 0.55 + p.h * 0.45));
+              p.w = curW + (widthTarget - curW) * factor * 0.5;
+              strokeTouched = true;
+            }
+          }
+        }
+        if (strokeTouched) {
+          const cx = v.path.reduce((s, p) => s + p.x, 0) / v.path.length;
+          const cy = v.path.reduce((s, p) => s + p.y, 0) / v.path.length;
+          const cz = v.path.reduce((s, p) => s + p.z, 0) / v.path.length;
+          v.localX = cx;
+          v.localY = cy;
+          v.localZ = cz;
+          rebuildTerrainStrokeMesh(entry.obj, v);
+          anyTouched = true;
+        }
+        continue;
+      }
+
+      // Discrete stamp -- deform scale while keeping the underside planted.
+      const r = terrainVolumeRadius(v);
+      const d = Math.hypot(v.localX - hitX, v.localZ - hitZ);
+      if (d > this.brushRadius + r * 0.35) continue;
+      const falloff = 1 - Math.min(1, d / Math.max(0.01, this.brushRadius + r * 0.35));
+      const oldSY = v.scaleY;
+      if (mode === "raise" || mode === "lower") {
+        const sign = mode === "raise" ? 1 : -1;
+        const next = Math.max(0.15, oldSY + sign * this.brushStrength * falloff * 0.25);
+        v.scaleY = next;
+        v.scaleX = Math.max(0.15, v.scaleX + sign * this.brushStrength * falloff * 0.1);
+        v.scaleZ = Math.max(0.15, v.scaleZ + sign * this.brushStrength * falloff * 0.1);
+        v.localY += next - oldSY;
+      } else if (mode === "mold" && this.moldTargetHeight !== null) {
+        const top = terrainVolumeTopY(v);
+        const factor = Math.min(0.8, this.brushStrength * falloff * 0.25);
+        const newTop = top + (this.moldTargetHeight - top) * factor;
+        const next = Math.max(0.15, oldSY + (newTop - top));
+        v.scaleY = next;
+        v.localY += next - oldSY;
+      } else if (mode === "smooth") {
+        let sum = oldSY;
+        let count = 1;
+        for (const other of this.volumes.values()) {
+          if (other.id === entry.id || isTerrainStroke(other.data)) continue;
+          const od = Math.hypot(other.data.localX - v.localX, other.data.localZ - v.localZ);
+          if (od > this.brushRadius * 1.5) continue;
+          sum += other.data.scaleY;
+          count++;
+        }
+        const avg = sum / count;
+        const factor = Math.min(0.8, this.brushStrength * falloff * 0.3);
+        const next = Math.max(0.15, oldSY + (avg - oldSY) * factor);
+        v.scaleY = next;
+        v.localY += next - oldSY;
+      } else {
+        continue;
+      }
+      entry.obj.position.set(v.localX, v.localY, v.localZ);
+      entry.obj.scale.set(v.scaleX, v.scaleY, v.scaleZ);
+      anyTouched = true;
+    }
+
+    if (anyTouched) {
+      for (const helper of this.selectionHelpers.values()) helper.update();
+    }
   }
 
   setTexturePaintMode(mode: number | null): void {
@@ -475,11 +801,14 @@ export class RegionEditorScene {
     if (mode !== null) {
       this.armedModel = null;
       this.armedMarkerKind = null;
+      this.armedHouse = false;
       this.armedLightColor = null;
+      this.clearVolumeStamp();
       this.sculptMode = null;
       this.waterBrushMode = null;
       this.randomTreeBrushActive = false;
       this.grassBrushActive = false;
+      this.grassEraseBrushActive = false;
       this.eraseBrushActive = false;
       this.roadPaintArmed = false;
       this.transform.detach();
@@ -520,28 +849,145 @@ export class RegionEditorScene {
     if (mode) {
       this.armedModel = null;
       this.armedMarkerKind = null;
+      this.armedHouse = false;
+      this.clearVolumeStamp();
       this.armedLightColor = null;
       this.texturePaintMode = null;
       this.waterBrushMode = null;
       this.randomTreeBrushActive = false;
       this.grassBrushActive = false;
+      this.grassEraseBrushActive = false;
       this.eraseBrushActive = false;
       this.roadPaintArmed = false;
+      // Keep volume selection so raise/lower/mold/smooth can target only those
+      // volumes. Detach them into world space (and hide the gizmo) so stroke
+      // rebuilds write world positions correctly while sculpting.
+      for (const obj of [...this.selectionGroup.children]) this.scene.attach(obj);
       this.transform.detach();
-      this.deselect();
+      for (const helper of this.selectionHelpers.values()) helper.update();
+    } else if (this.selectedIds.size > 0) {
+      this.updateSelectionGroup();
     }
     this.orbit.enablePan = !mode;
+  }
+
+  /** Arms the freeform volume tool. `place` = drop one primitive (click or
+   *  light drag). `sculpt` = continuous drag brush that sprays a cluster of
+   *  overlapping stamps along the stroke path (distance-spaced). */
+  armVolumeStamp(
+    shape: TerrainVolumeShape,
+    material: TerrainVolumeMaterial = this.volumeMaterial,
+    style: "place" | "sculpt" = "place",
+  ): void {
+    this.armedModel = null;
+    this.armedMarkerKind = null;
+    this.armedHouse = false;
+    this.armedLightColor = null;
+    this.sculptMode = null;
+    this.texturePaintMode = null;
+    this.waterBrushMode = null;
+    this.randomTreeBrushActive = false;
+    this.grassBrushActive = false;
+    this.grassEraseBrushActive = false;
+    this.eraseBrushActive = false;
+    this.roadPaintArmed = false;
+    this.volumeStampActive = true;
+    this.volumeBrushStyle = style;
+    this.volumeShape = shape;
+    this.volumeMaterial = material;
+    this.lastVolumeStrokePos = null;
+    this.rebuildVolumeGhost();
+    this.transform.detach();
+    this.deselect();
+    this.orbit.enablePan = false;
+  }
+
+  setVolumeMaterial(material: TerrainVolumeMaterial): void {
+    this.volumeMaterial = material;
+    if (this.volumeStampActive) this.rebuildVolumeGhost();
+  }
+
+  setVolumeShape(shape: TerrainVolumeShape): void {
+    this.volumeShape = shape;
+    if (this.volumeStampActive) this.rebuildVolumeGhost();
+  }
+
+  get volumeBrushStyleActive(): "place" | "sculpt" | null {
+    return this.volumeStampActive ? this.volumeBrushStyle : null;
+  }
+
+  private clearVolumeStamp(): void {
+    this.volumeStampActive = false;
+    this.isVolumeStamping = false;
+    this.lastVolumeStrokePos = null;
+    this.cancelActiveStroke();
+    if (this.volumeGhost) {
+      this.scene.remove(this.volumeGhost);
+      // Ghost uses a cloned material; shared geometry must not be disposed.
+      (this.volumeGhost.material as THREE.Material).dispose();
+      this.volumeGhost = null;
+    }
+    if (this.volumeBrushRing) {
+      this.scene.remove(this.volumeBrushRing);
+      this.volumeBrushRing.geometry.dispose();
+      (this.volumeBrushRing.material as THREE.Material).dispose();
+      this.volumeBrushRing = null;
+    }
+  }
+
+  private rebuildVolumeGhost(): void {
+    if (this.volumeGhost) {
+      this.scene.remove(this.volumeGhost);
+      (this.volumeGhost.material as THREE.Material).dispose();
+      this.volumeGhost = null;
+    }
+    if (this.volumeBrushRing) {
+      this.scene.remove(this.volumeBrushRing);
+      this.volumeBrushRing.geometry.dispose();
+      (this.volumeBrushRing.material as THREE.Material).dispose();
+      this.volumeBrushRing = null;
+    }
+    if (!this.volumeStampActive) return;
+    this.volumeGhost = createTerrainVolumeGhost(this.volumeShape, this.volumeMaterial);
+    const s = defaultVolumeScale(
+      this.volumeShape,
+      this.volumeBrushStyle === "sculpt" ? this.brushRadius * 0.45 : this.brushRadius,
+    );
+    this.volumeGhost.scale.set(s.scaleX, s.scaleY, s.scaleZ);
+    this.volumeGhost.visible = false;
+    this.scene.add(this.volumeGhost);
+
+    if (this.volumeBrushStyle === "sculpt") {
+      const ringGeo = new THREE.RingGeometry(this.brushRadius * 0.92, this.brushRadius, 48);
+      ringGeo.rotateX(-Math.PI / 2);
+      this.volumeBrushRing = new THREE.Mesh(
+        ringGeo,
+        new THREE.MeshBasicMaterial({
+          color: 0x7dd3a0,
+          transparent: true,
+          opacity: 0.55,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+        }),
+      );
+      this.volumeBrushRing.visible = false;
+      this.volumeBrushRing.frustumCulled = false;
+      this.scene.add(this.volumeBrushRing);
+    }
   }
 
   armLightPlacement(color = "#ff9933"): void {
     this.armedModel = null;
     this.armedMarkerKind = null;
+    this.armedHouse = false;
+    this.clearVolumeStamp();
     this.armedLightColor = color;
     this.sculptMode = null;
     this.texturePaintMode = null;
     this.waterBrushMode = null;
     this.randomTreeBrushActive = false;
     this.grassBrushActive = false;
+    this.grassEraseBrushActive = false;
     this.eraseBrushActive = false;
     this.roadPaintArmed = false;
     this.transform.detach();
@@ -580,6 +1026,10 @@ export class RegionEditorScene {
 
   setBrushRadius(r: number): void {
     this.brushRadius = Math.max(1, r);
+    if (this.volumeStampActive) {
+      // Rebuild so the sculpt ring matches the new radius.
+      this.rebuildVolumeGhost();
+    }
   }
 
   setBrushStrength(s: number): void {
@@ -591,10 +1041,13 @@ export class RegionEditorScene {
   armRoadPainting(): void {
     this.armedModel = null;
     this.armedMarkerKind = null;
+    this.armedHouse = false;
+    this.clearVolumeStamp();
     this.sculptMode = null;
     this.waterBrushMode = null;
     this.randomTreeBrushActive = false;
     this.grassBrushActive = false;
+    this.grassEraseBrushActive = false;
     this.eraseBrushActive = false;
     this.roadPaintArmed = true;
     this.transform.detach();
@@ -613,9 +1066,12 @@ export class RegionEditorScene {
     if (mode) {
       this.armedModel = null;
       this.armedMarkerKind = null;
+      this.armedHouse = false;
+      this.clearVolumeStamp();
       this.sculptMode = null;
       this.randomTreeBrushActive = false;
       this.grassBrushActive = false;
+      this.grassEraseBrushActive = false;
       this.eraseBrushActive = false;
       this.roadPaintArmed = false;
       this.transform.detach();
@@ -633,10 +1089,13 @@ export class RegionEditorScene {
     if (active) {
       this.armedModel = null;
       this.armedMarkerKind = null;
+      this.armedHouse = false;
+      this.clearVolumeStamp();
       this.sculptMode = null;
       this.waterBrushMode = null;
       this.roadPaintArmed = false;
       this.grassBrushActive = false;
+      this.grassEraseBrushActive = false;
       this.eraseBrushActive = false;
       this.transform.detach();
       this.deselect();
@@ -649,10 +1108,13 @@ export class RegionEditorScene {
     if (active) {
       this.armedModel = null;
       this.armedMarkerKind = null;
+      this.armedHouse = false;
+      this.clearVolumeStamp();
       this.sculptMode = null;
       this.waterBrushMode = null;
       this.roadPaintArmed = false;
       this.randomTreeBrushActive = false;
+      this.grassEraseBrushActive = false;
       this.eraseBrushActive = false;
       this.transform.detach();
       this.deselect();
@@ -660,8 +1122,23 @@ export class RegionEditorScene {
     this.orbit.enablePan = !active;
   }
 
-  setGrassBrushModel(model: string | null): void {
-    this.grassBrushModel = model;
+  setGrassEraseBrush(active: boolean): void {
+    this.grassEraseBrushActive = active;
+    if (active) {
+      this.armedModel = null;
+      this.armedMarkerKind = null;
+      this.armedHouse = false;
+      this.clearVolumeStamp();
+      this.sculptMode = null;
+      this.waterBrushMode = null;
+      this.roadPaintArmed = false;
+      this.randomTreeBrushActive = false;
+      this.grassBrushActive = false;
+      this.eraseBrushActive = false;
+      this.transform.detach();
+      this.deselect();
+    }
+    this.orbit.enablePan = !active;
   }
 
   setEraseBrush(active: boolean): void {
@@ -669,6 +1146,8 @@ export class RegionEditorScene {
     if (active) {
       this.armedModel = null;
       this.armedMarkerKind = null;
+      this.armedHouse = false;
+      this.clearVolumeStamp();
       this.armedLightColor = null;
       this.sculptMode = null;
       this.waterBrushMode = null;
@@ -676,6 +1155,7 @@ export class RegionEditorScene {
       this.roadPaintArmed = false;
       this.randomTreeBrushActive = false;
       this.grassBrushActive = false;
+      this.grassEraseBrushActive = false;
       this.transform.detach();
       this.deselect();
     }
@@ -702,6 +1182,31 @@ export class RegionEditorScene {
       this.disposeObject(a.obj);
       this.assets.delete(id);
     }
+
+    for (const [id, v] of [...this.volumes]) {
+      const dx = v.obj.position.x - hitX;
+      const dz = v.obj.position.z - hitZ;
+      if (dx * dx + dz * dz > this.brushRadius * this.brushRadius) continue;
+      const helper = this.selectionHelpers.get(id);
+      if (helper) {
+        this.scene.remove(helper);
+        helper.dispose();
+        this.selectionHelpers.delete(id);
+      }
+      this.selectedIds.delete(id);
+      this.removeVolume(id);
+    }
+
+    // Grass patches have no per-object scene presence to clean up
+    // individually -- just drop matching records and mark the preview dirty.
+    const before = this.grassPatches.length;
+    this.grassPatches = this.grassPatches.filter((p) => {
+      const dx = p.localX - hitX;
+      const dz = p.localZ - hitZ;
+      return dx * dx + dz * dz > this.brushRadius * this.brushRadius;
+    });
+    if (this.grassPatches.length !== before) this.rebuildGrassPreview();
+
     this.emitSelection();
     this.triggerChange();
   }
@@ -733,30 +1238,78 @@ export class RegionEditorScene {
     }
   }
 
-  private scatterGrassAt(hitX: number, hitZ: number): void {
+  /** Appends one compact GrassPatch record per brush tick (same throttle
+   *  shape as the tree-scatter brush it replaces) instead of scattering
+   *  discrete assets -- see GrassPatch's doc comment. The live preview mesh
+   *  is NOT rebuilt here (potentially hundreds of blade transforms per
+   *  patch, and a long drag would re-walk every prior patch each tick) --
+   *  it's rebuilt once on mouseup, see the pointerup handler. */
+  private paintGrassPatchAt(hitX: number, hitZ: number): void {
     const now = performance.now();
     if (now - this.lastPlaceTime < 240) return;
     this.lastPlaceTime = now;
 
-    const grassList = REGION_GRASS_COVER[this.meta.biome] ?? REGION_GRASS_COVER.grassland;
-    const grassCount = Math.max(1, Math.floor(this.brushStrength * 6));
+    const waterDepth = this.sampleWaterDepth(hitX, hitZ);
+    if (waterDepth > 0.05) return;
 
-    for (let i = 0; i < grassCount; i++) {
-      const angle = Math.random() * Math.PI * 2;
-      const dist = Math.random() * this.brushRadius;
-      const gx = hitX + Math.cos(angle) * dist;
-      const gz = hitZ + Math.sin(angle) * dist;
+    const id = `grass_${this.nextId++}`;
+    this.grassPatches.push({
+      id,
+      localX: hitX,
+      localZ: hitZ,
+      radius: this.brushRadius,
+      density: Math.min(1, Math.max(0.1, this.brushStrength / 3)),
+      seed: hashString(id),
+      lengthScale: this.grassLength,
+    });
+    this.grassPreviewDirty = true;
+  }
 
-      const waterDepth = this.sampleWaterDepth(gx, gz);
-      if (waterDepth > 0.05) continue;
+  /** Fine-grained grass removal: carves a small exclusion circle out of the
+   *  blade field at the brush position instead of deleting whole GrassPatch
+   *  records (see eraseAssetsAt) -- lets a large painted patch be thinned out
+   *  in one spot without losing the rest of it. */
+  private eraseGrassAt(hitX: number, hitZ: number): void {
+    const now = performance.now();
+    if (now - this.lastPlaceTime < 240) return;
+    this.lastPlaceTime = now;
 
-      const gy = this.heightAt(gx, gz);
-      const grassModel = this.grassBrushModel ?? grassList[Math.floor(Math.random() * grassList.length)]!;
-      const yaw = Math.random() * Math.PI * 2;
-      const scale = 0.7 + Math.random() * 0.5;
+    const id = `grasserase_${this.nextId++}`;
+    this.grassExclusions.push({
+      localX: hitX,
+      localZ: hitZ,
+      radius: this.brushRadius,
+      strength: Math.min(1, Math.max(0.05, this.brushStrength / 3)),
+      seed: hashString(id),
+    });
+    this.grassPreviewDirty = true;
+  }
 
-      void this.placeAsset(grassModel, "foliage", gx, gy, gz, yaw, scale);
+  /** Rebuilds the grass preview InstancedMeshes from this.grassPatches --
+   *  called on mouseup after a paint/erase stroke, and after loading a
+   *  blueprint. Not incremental: regenerates every patch's blades from
+   *  scratch, same buildGrassInstances the runtime renderer uses, so the
+   *  editor preview and the saved region always agree. */
+  private rebuildGrassPreview(): void {
+    if (this.grassField) {
+      for (const mesh of this.grassField.meshes) {
+        this.scene.remove(mesh);
+        (mesh.material as THREE.Material).dispose();
+      }
     }
+    this.grassField =
+      this.grassPatches.length > 0
+        ? buildGrassInstances(
+            this.grassPatches,
+            this.grassExclusions,
+            { gridSize: this.gridSize, pitch: this.pitch, heights: this.heights },
+            { color: this.grassColor, wind: this.wind },
+          )
+        : null;
+    if (this.grassField) {
+      for (const mesh of this.grassField.meshes) this.scene.add(mesh);
+    }
+    this.grassPreviewDirty = false;
   }
 
   clearWater(): void {
@@ -1236,6 +1789,9 @@ export class RegionEditorScene {
     // a step that would change ground height by more than 2.5 units is
     // rejected outright, which is what makes the boundary mountain ring (and
     // any other steep terrain) an actual wall instead of just a tall prop.
+    // a step that would change ground height by more than 2.5 units is
+    // rejected outright, which is what makes the boundary mountain ring (and
+    // any other steep terrain) an actual wall instead of just a tall prop.
     const slopeBlocked = Math.abs(this.groundHeightAt(nextX, nextZ) - oldGroundHeight) > 2.5;
     // Same collision-circle check shared stepMovement() applies against
     // regionAssets -- placed trees/rocks/buildings block walking through
@@ -1324,6 +1880,39 @@ export class RegionEditorScene {
         if (!alreadyInside) return true;
       }
     }
+    for (const v of this.volumes.values()) {
+      this.syncVolumeDataFromMesh(v);
+      if (isTerrainStroke(v.data) && v.data.path) {
+        for (const p of v.data.path) {
+          const halfW = strokePointHalfWidth(v.data, p);
+          const topY = strokePointTopY(v.data, p);
+          if (carveBlocksSurface(v.data, p.x, p.z, topY)) continue;
+          if (playerY >= topY - 0.3) continue;
+          const dx = x - p.x;
+          const dz = z - p.z;
+          if (dx * dx + dz * dz < halfW * halfW) {
+            const oldDx = oldX - p.x;
+            const oldDz = oldZ - p.z;
+            if (oldDx * oldDx + oldDz * oldDz >= halfW * halfW) return true;
+          }
+        }
+        continue;
+      }
+      const radius = terrainVolumeRadius(v.data);
+      if (radius <= 0.05) continue;
+      if (v.data.shape === "ramp") continue;
+      const topY = terrainVolumeTopY(v.data);
+      if (carveBlocksSurface(v.data, x, z, topY)) continue;
+      if (playerY >= topY - 0.3) continue;
+      const dx = x - v.data.localX;
+      const dz = z - v.data.localZ;
+      if (dx * dx + dz * dz < radius * radius) {
+        const oldDx = oldX - v.data.localX;
+        const oldDz = oldZ - v.data.localZ;
+        const alreadyInside = oldDx * oldDx + oldDz * oldDz < radius * radius;
+        if (!alreadyInside) return true;
+      }
+    }
     return false;
   }
 
@@ -1359,6 +1948,42 @@ export class RegionEditorScene {
         if (rampY > ground) ground = rampY;
       } else if (ov.climbable) {
         const topY = a.obj.position.y + ov.height * scale;
+        if (topY > ground) ground = topY;
+      }
+    }
+    for (const v of this.volumes.values()) {
+      this.syncVolumeDataFromMesh(v);
+      if (isTerrainStroke(v.data) && v.data.path) {
+        for (const p of v.data.path) {
+          const halfW = strokePointHalfWidth(v.data, p);
+          const dx = x - p.x;
+          const dz = z - p.z;
+          if (dx * dx + dz * dz >= halfW * halfW) continue;
+          const topY = strokePointTopY(v.data, p);
+          if (carveBlocksSurface(v.data, p.x, p.z, topY)) continue;
+          if (topY > ground) ground = topY;
+        }
+        continue;
+      }
+      const radius = terrainVolumeRadius(v.data);
+      if (radius <= 0.05) continue;
+      const dx = x - v.data.localX;
+      const dz = z - v.data.localZ;
+      if (dx * dx + dz * dz >= radius * radius) continue;
+      if (v.data.shape === "ramp") {
+        const sin = Math.sin(v.data.yaw);
+        const cos = Math.cos(v.data.yaw);
+        const halfLength = Math.max(0.5, v.data.scaleZ);
+        const rise = v.data.scaleY * 2;
+        const proj = (dx * -sin + dz * -cos) / halfLength;
+        const t = Math.max(0, Math.min(1, (proj + 1) / 2));
+        const baseY = v.data.localY - v.data.scaleY;
+        const rampY = baseY + t * rise;
+        if (carveBlocksSurface(v.data, x, z, rampY)) continue;
+        if (rampY > ground) ground = rampY;
+      } else {
+        const topY = terrainVolumeTopY(v.data);
+        if (carveBlocksSurface(v.data, x, z, topY)) continue;
         if (topY > ground) ground = topY;
       }
     }
@@ -1406,10 +2031,60 @@ export class RegionEditorScene {
     return { ...this.colorGrading };
   }
 
+  // ============================ grass color ============================
+
+  /** Updates the grass blade bottom/tip gradient colors -- mutates the
+   *  already-built preview's shader uniforms directly (they're shared
+   *  THREE.Color uniforms, not per-instance data) so the change previews
+   *  instantly without rebuilding any blade InstancedMeshes. */
+  applyGrassColor(gc: GrassColor): void {
+    this.grassColor = { ...gc };
+    if (this.grassField) {
+      this.grassField.uniforms.uGrassBottom.value.set(gc.bottom);
+      this.grassField.uniforms.uGrassTop.value.set(gc.top);
+    }
+    this.triggerChange();
+  }
+
+  getGrassColor(): GrassColor {
+    return { ...this.grassColor };
+  }
+
+  /** Brush setting, same shape as setBrushRadius/setBrushStrength -- baked
+   *  into each patch's own lengthScale at paint time (see
+   *  paintGrassPatchAt), not a region-wide value, so different brush strokes
+   *  can paint different grass lengths side by side. */
+  setGrassLength(length: number): void {
+    this.grassLength = Math.max(0.2, length);
+  }
+
+  getGrassLength(): number {
+    return this.grassLength;
+  }
+
+  /** Region-wide wind, affecting grass sway here and tree sway at runtime
+   *  (see RegionInteriorRenderer -- the editor places foliage as individual,
+   *  non-instanced objects, so trees don't sway in this preview, only grass
+   *  does). Live-updates the already-built grass uniforms directly, same as
+   *  applyGrassColor, no rebuild needed. */
+  applyWind(w: RegionWind): void {
+    this.wind = { ...w };
+    if (this.grassField) {
+      applyRegionWind(this.grassField.uniforms, this.wind, BASE_GRASS_WIND_STRENGTH);
+    }
+    this.triggerChange();
+  }
+
+  getWind(): RegionWind {
+    return { ...this.wind };
+  }
+
   // ============================ placement arming ============================
 
   armPlacement(model: string, category: RegionAssetCategory): void {
     this.armedMarkerKind = null;
+    this.armedHouse = false;
+    this.clearVolumeStamp();
     this.sculptMode = null;
     this.roadPaintArmed = false;
     this.armedModel = { model, category };
@@ -1419,6 +2094,8 @@ export class RegionEditorScene {
 
   armMarkerPlacement(kind: EditorMarkerKind): void {
     this.armedModel = null;
+    this.armedHouse = false;
+    this.clearVolumeStamp();
     this.sculptMode = null;
     this.roadPaintArmed = false;
     this.armedMarkerKind = kind;
@@ -1426,15 +2103,43 @@ export class RegionEditorScene {
     this.transform.detach();
   }
 
+  /** Arms the procedural-house tool -- the next click on the terrain
+   *  generates a full house (random footprint/style/door/window layout from
+   *  houseGen.ts, or a fixed type if `type` is given) centered on that point
+   *  and places it as ordinary editable building-category assets sharing one
+   *  groupId. Stays armed after placing so multiple houses can be dropped in
+   *  a row; call `disarm()` (or arm a different tool) to stop. */
+  armHousePlacement(type: HouseType = "random"): void {
+    this.armedModel = null;
+    this.armedMarkerKind = null;
+    this.sculptMode = null;
+    this.waterBrushMode = null;
+    this.texturePaintMode = null;
+    this.randomTreeBrushActive = false;
+    this.grassBrushActive = false;
+    this.grassEraseBrushActive = false;
+    this.eraseBrushActive = false;
+    this.roadPaintArmed = false;
+    this.clearVolumeStamp();
+    this.armedHouse = true;
+    this.armedHouseType = type;
+    this.orbit.enablePan = false;
+    this.transform.detach();
+    this.deselect();
+  }
+
   disarm(): void {
     this.armedModel = null;
     this.armedMarkerKind = null;
+    this.armedHouse = false;
+    this.clearVolumeStamp();
     this.armedLightColor = null;
     this.sculptMode = null;
     this.waterBrushMode = null;
     this.texturePaintMode = null;
     this.randomTreeBrushActive = false;
     this.grassBrushActive = false;
+    this.grassEraseBrushActive = false;
     this.eraseBrushActive = false;
     this.roadPaintArmed = false;
     if (this.paintingRoad) {
@@ -1451,11 +2156,14 @@ export class RegionEditorScene {
       this.armedModel !== null ||
       this.armedMarkerKind !== null ||
       this.armedLightColor !== null ||
+      this.armedHouse ||
+      this.volumeStampActive ||
       this.sculptMode !== null ||
       this.waterBrushMode !== null ||
       this.texturePaintMode !== null ||
       this.randomTreeBrushActive ||
       this.grassBrushActive ||
+      this.grassEraseBrushActive ||
       this.eraseBrushActive ||
       this.roadPaintArmed
     );
@@ -1475,6 +2183,258 @@ export class RegionEditorScene {
     this.raycaster.setFromCamera(this.ndcFromEvent(e), this.camera);
     const hit = this.raycaster.intersectObject(this.terrainMesh, false)[0];
     return hit ? hit.point : null;
+  }
+
+  /** Raycast against the heightmap AND stamped volumes so the volume brush
+   *  can stack stamps on top of previously sculpted features. */
+  private volumeSurfaceHitAt(e: MouseEvent): THREE.Vector3 | null {
+    this.raycaster.setFromCamera(this.ndcFromEvent(e), this.camera);
+    const targets: THREE.Object3D[] = [this.terrainMesh, ...[...this.volumes.values()].map((v) => v.obj)];
+    const hits = this.raycaster.intersectObjects(targets, false);
+    return hits[0]?.point ?? null;
+  }
+
+  /** Cursor hit on the infinite horizontal plane at `y` -- used by the drag
+   *  sculpt brush so the stroke can stretch to any distance while staying on
+   *  the elevation where it started (terrain/volume raycasts miss or climb
+   *  once the live mesh is under the cursor). */
+  private planeHitAt(e: MouseEvent, y: number): THREE.Vector3 | null {
+    this.raycaster.setFromCamera(this.ndcFromEvent(e), this.camera);
+    const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -y);
+    const hit = new THREE.Vector3();
+    return this.raycaster.ray.intersectPlane(plane, hit) ? hit : null;
+  }
+
+  private stampVolumeAt(hit: THREE.Vector3): void {
+    if (this.volumeBrushStyle === "sculpt") {
+      this.sculptVolumeStroke(hit);
+      return;
+    }
+    const now = performance.now();
+    // Place mode: light drag still works, but throttle so one click ≠ a pile.
+    if (now - this.lastPlaceTime < 90) return;
+    this.lastPlaceTime = now;
+    this.placeOneVolume(hit.x, hit.y, hit.z, this.brushRadius, 0.35);
+    this.triggerChange();
+  }
+
+  /** Continuous drag-sculpt: grow ONE extruded mesh that follows the mouse
+   *  path exactly (XZ), locked to the starting height. */
+  private sculptVolumeStroke(hit: THREE.Vector3): void {
+    if (!this.activeStroke) {
+      this.beginActiveStroke(hit);
+      return;
+    }
+    const y = this.activeStroke.start.y;
+    const target = { x: hit.x, y, z: hit.z };
+    const last = this.activeStroke.path[this.activeStroke.path.length - 1]!;
+    const dist = Math.hypot(target.x - last.x, target.z - last.z);
+    // Tight spacing so fast curves still hug the cursor path.
+    const spacing = Math.max(0.15, this.brushRadius * 0.12);
+    if (dist < spacing) return;
+
+    const steps = Math.max(1, Math.floor(dist / spacing));
+    for (let i = 1; i <= steps; i++) {
+      const t = i / steps;
+      this.activeStroke.path.push({
+        x: last.x + (target.x - last.x) * t,
+        y,
+        z: last.z + (target.z - last.z) * t,
+      });
+    }
+    this.refreshActiveStrokeMesh();
+  }
+
+  private beginActiveStroke(hit: THREE.Vector3): void {
+    const size = strokeSizeFromBrush(this.volumeShape, this.brushRadius, this.brushStrength);
+    const id = `volume_${this.nextId++}`;
+    const start = { x: hit.x, y: hit.y, z: hit.z };
+    // Need 2+ path points for stroke mesh construction; the second is a
+    // tiny seed that the first real mouse move replaces/extends past.
+    const path = [
+      { ...start },
+      { x: hit.x + 0.02, y: hit.y, z: hit.z },
+    ];
+    const data: RegionTerrainVolume = {
+      id,
+      shape: this.volumeShape,
+      material: this.volumeMaterial,
+      localX: hit.x,
+      localY: hit.y,
+      localZ: hit.z,
+      yaw: 0,
+      scaleX: size.halfWidth,
+      scaleY: size.height,
+      scaleZ: size.halfWidth,
+      path,
+    };
+    const mesh = createTerrainVolumeMesh(data);
+    const mat = (mesh.material as THREE.MeshStandardMaterial).clone();
+    mat.transparent = true;
+    mat.opacity = 0.85;
+    mesh.material = mat;
+    this.scene.add(mesh);
+    this.activeStroke = { id, start, path, mesh, data };
+  }
+
+  private refreshActiveStrokeMesh(): void {
+    if (!this.activeStroke) return;
+    const size = strokeSizeFromBrush(this.volumeShape, this.brushRadius, this.brushStrength);
+    const path = this.activeStroke.path;
+    const cx = path.reduce((s, p) => s + p.x, 0) / path.length;
+    const cy = path.reduce((s, p) => s + p.y, 0) / path.length;
+    const cz = path.reduce((s, p) => s + p.z, 0) / path.length;
+    this.activeStroke.data.shape = this.volumeShape;
+    this.activeStroke.data.material = this.volumeMaterial;
+    this.activeStroke.data.scaleX = size.halfWidth;
+    this.activeStroke.data.scaleY = size.height;
+    this.activeStroke.data.scaleZ = size.halfWidth;
+    this.activeStroke.data.path = path;
+    this.activeStroke.data.localX = cx;
+    this.activeStroke.data.localY = cy;
+    this.activeStroke.data.localZ = cz;
+    rebuildTerrainStrokeMesh(this.activeStroke.mesh, this.activeStroke.data);
+  }
+
+  private cancelActiveStroke(): void {
+    if (!this.activeStroke) return;
+    this.scene.remove(this.activeStroke.mesh);
+    this.activeStroke.mesh.geometry.dispose();
+    (this.activeStroke.mesh.material as THREE.Material).dispose();
+    this.activeStroke = null;
+  }
+
+  /** Finalize the in-progress stroke as one committed volume entry. */
+  private commitActiveStroke(): void {
+    if (!this.activeStroke) return;
+    const stroke = this.activeStroke;
+    this.activeStroke = null;
+
+    const path = stroke.path;
+    let len = 0;
+    for (let i = 1; i < path.length; i++) {
+      const a = path[i - 1]!;
+      const b = path[i]!;
+      len += Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z);
+    }
+
+    // Discard the live preview mesh (unique geo + cloned material).
+    this.scene.remove(stroke.mesh);
+    stroke.mesh.geometry.dispose();
+    (stroke.mesh.material as THREE.Material).dispose();
+
+    // Too short = discrete stamp instead of a degenerate ribbon.
+    if (path.length < 3 || len < 0.6) {
+      const p = path[0]!;
+      this.placeOneVolume(p.x, p.y, p.z, this.brushRadius, 0.1);
+      this.triggerChange();
+      return;
+    }
+
+    const size = strokeSizeFromBrush(this.volumeShape, this.brushRadius, this.brushStrength);
+    const cx = path.reduce((s, p) => s + p.x, 0) / path.length;
+    const cy = path.reduce((s, p) => s + p.y, 0) / path.length;
+    const cz = path.reduce((s, p) => s + p.z, 0) / path.length;
+    const data: RegionTerrainVolume = {
+      id: stroke.id,
+      shape: this.volumeShape,
+      material: this.volumeMaterial,
+      localX: cx,
+      localY: cy,
+      localZ: cz,
+      yaw: 0,
+      scaleX: size.halfWidth,
+      scaleY: size.height,
+      scaleZ: size.halfWidth,
+      path: path.map((p) => ({ ...p })),
+    };
+    const mesh = createTerrainVolumeMesh(data);
+    this.scene.add(mesh);
+    this.volumes.set(data.id, { id: data.id, data, obj: mesh });
+    this.triggerChange();
+  }
+
+  /** Approximate surface Y at (x,z) from heightmap + volume tops (for stacking). */
+  private volumeSurfaceYAt(x: number, z: number): number {
+    let y = this.heightAt(x, z);
+    for (const v of this.volumes.values()) {
+      if (isTerrainStroke(v.data) && v.data.path) {
+        for (const p of v.data.path) {
+          const halfW = strokePointHalfWidth(v.data, p);
+          const dx = x - p.x;
+          const dz = z - p.z;
+          if (dx * dx + dz * dz > halfW * halfW) continue;
+          const top = strokePointTopY(v.data, p);
+          if (carveBlocksSurface(v.data, p.x, p.z, top)) continue;
+          if (top > y) y = top;
+        }
+        continue;
+      }
+      const r = terrainVolumeRadius(v.data);
+      const dx = x - v.data.localX;
+      const dz = z - v.data.localZ;
+      if (dx * dx + dz * dz > r * r) continue;
+      const top = terrainVolumeTopY(v.data);
+      if (carveBlocksSurface(v.data, x, z, top)) continue;
+      if (top > y) y = top;
+    }
+    return y;
+  }
+
+  private placeOneVolume(
+    x: number,
+    surfaceY: number,
+    z: number,
+    sizeRadius: number,
+    jitterFrac: number,
+  ): void {
+    const scale = defaultVolumeScale(this.volumeShape, sizeRadius);
+    const jitterR = sizeRadius * jitterFrac;
+    const ang = Math.random() * Math.PI * 2;
+    const dist = Math.random() * jitterR;
+    const jx = Math.cos(ang) * dist;
+    const jz = Math.sin(ang) * dist;
+    const lift = 0.45 + Math.random() * 0.3;
+    const cy = surfaceY + scale.scaleY * lift;
+    const yaw = Math.random() * Math.PI * 2;
+    const id = `volume_${this.nextId++}`;
+    const data: RegionTerrainVolume = {
+      id,
+      shape: this.volumeShape,
+      material: this.volumeMaterial,
+      localX: x + jx,
+      localY: cy,
+      localZ: z + jz,
+      yaw,
+      scaleX: scale.scaleX * (0.8 + Math.random() * 0.4),
+      scaleY: scale.scaleY * (0.8 + Math.random() * 0.4),
+      scaleZ: scale.scaleZ * (0.8 + Math.random() * 0.4),
+    };
+    const mesh = createTerrainVolumeMesh(data);
+    this.scene.add(mesh);
+    this.volumes.set(id, { id, data, obj: mesh });
+  }
+
+  private updateVolumeGhost(e: MouseEvent): void {
+    if (!this.volumeGhost || !this.volumeStampActive) return;
+    const hit =
+      this.volumeBrushStyle === "sculpt" && this.activeStroke
+        ? this.planeHitAt(e, this.activeStroke.start.y)
+        : this.volumeSurfaceHitAt(e) ?? this.terrainHitAt(e);
+    if (!hit) {
+      this.volumeGhost.visible = false;
+      if (this.volumeBrushRing) this.volumeBrushRing.visible = false;
+      return;
+    }
+    const ghostR = this.volumeBrushStyle === "sculpt" ? this.brushRadius * 0.45 : this.brushRadius;
+    const s = defaultVolumeScale(this.volumeShape, ghostR);
+    this.volumeGhost.visible = true;
+    this.volumeGhost.position.set(hit.x, hit.y + s.scaleY * 0.7, hit.z);
+    this.volumeGhost.scale.set(s.scaleX, s.scaleY, s.scaleZ);
+    if (this.volumeBrushRing) {
+      this.volumeBrushRing.visible = true;
+      this.volumeBrushRing.position.set(hit.x, hit.y + 0.08, hit.z);
+    }
   }
 
   private onMouseDown = (e: MouseEvent): void => {
@@ -1509,12 +2469,31 @@ export class RegionEditorScene {
     }
     if (e.button !== 0) return;
     if (this.sculptMode) {
-      const hit = this.terrainHitAt(e);
+      const hit = this.volumeSurfaceHitAt(e) ?? this.terrainHitAt(e);
       if (!hit) return;
       this.isSculpting = true;
       this.moldTargetHeight = hit.y;
+      this.lastCarvePos = null;
       this.dragStart = { x: e.clientX, y: e.clientY };
-      this.sculptAt(hit.x, hit.z, this.sculptMode);
+      this.sculptAt(hit.x, hit.y, hit.z, this.sculptMode);
+      e.preventDefault();
+      e.stopPropagation();
+    } else if (this.volumeStampActive) {
+      const hit =
+        this.volumeBrushStyle === "sculpt"
+          ? this.volumeSurfaceHitAt(e) ?? this.terrainHitAt(e)
+          : this.volumeSurfaceHitAt(e);
+      if (!hit) return;
+      this.isVolumeStamping = true;
+      this.dragStart = { x: e.clientX, y: e.clientY };
+      this.lastPlaceTime = 0;
+      this.lastVolumeStrokePos = null;
+      if (this.volumeBrushStyle === "sculpt") {
+        this.cancelActiveStroke();
+        this.sculptVolumeStroke(hit);
+      } else {
+        this.stampVolumeAt(hit);
+      }
       e.preventDefault();
       e.stopPropagation();
     } else if (this.waterBrushMode) {
@@ -1540,7 +2519,16 @@ export class RegionEditorScene {
       this.isGrassBrushing = true;
       this.dragStart = { x: e.clientX, y: e.clientY };
       this.lastPlaceTime = 0;
-      this.scatterGrassAt(hit.x, hit.z);
+      this.paintGrassPatchAt(hit.x, hit.z);
+      e.preventDefault();
+      e.stopPropagation();
+    } else if (this.grassEraseBrushActive) {
+      const hit = this.terrainHitAt(e);
+      if (!hit) return;
+      this.isErasingGrass = true;
+      this.dragStart = { x: e.clientX, y: e.clientY };
+      this.lastPlaceTime = 0;
+      this.eraseGrassAt(hit.x, hit.z);
       e.preventDefault();
       e.stopPropagation();
     } else if (this.eraseBrushActive) {
@@ -1573,11 +2561,26 @@ export class RegionEditorScene {
       this.placeAtEvent(e);
       e.preventDefault();
       e.stopPropagation();
+    } else if (this.armedHouse) {
+      // Deliberately not wired into isDraggingToPlace/placeAtEvent's
+      // click-and-drag painting -- a house is dozens of assets, so each
+      // press should drop exactly one, not one per drag tick.
+      const hit = this.terrainHitAt(e);
+      if (hit) void this.placeHouseAt(hit.x, hit.y, hit.z);
+      e.preventDefault();
+      e.stopPropagation();
+    } else if (e.shiftKey) {
+      // Shift+drag marquee multi-select (disabled while any paint/place tool is armed).
+      this.marqueeStart = { x: e.clientX, y: e.clientY };
+      this.orbit.enabled = false;
+      e.preventDefault();
+      e.stopPropagation();
     }
   };
 
   private onClick = (e: MouseEvent): void => {
     if (this.playtestActive) return;
+    if (performance.now() - this.lastMarqueeEnd < 100) return;
     if (!this.isArmed) this.handleSelectClick(e);
   };
 
@@ -1604,8 +2607,18 @@ export class RegionEditorScene {
       return;
     }
     if (this.isSculpting && this.sculptMode) {
-      const hit = this.terrainHitAt(e);
-      if (hit) this.sculptAt(hit.x, hit.z, this.sculptMode);
+      const hit = this.volumeSurfaceHitAt(e) ?? this.terrainHitAt(e);
+      if (hit) this.sculptAt(hit.x, hit.y, hit.z, this.sculptMode);
+      e.preventDefault();
+      e.stopPropagation();
+    } else if (this.isVolumeStamping && this.volumeStampActive) {
+      if (this.volumeBrushStyle === "sculpt" && this.activeStroke) {
+        const hit = this.planeHitAt(e, this.activeStroke.start.y);
+        if (hit) this.sculptVolumeStroke(hit);
+      } else {
+        const hit = this.volumeSurfaceHitAt(e);
+        if (hit) this.stampVolumeAt(hit);
+      }
       e.preventDefault();
       e.stopPropagation();
     } else if (this.isWatering && this.waterBrushMode) {
@@ -1625,7 +2638,12 @@ export class RegionEditorScene {
       e.stopPropagation();
     } else if (this.isGrassBrushing && this.grassBrushActive) {
       const hit = this.terrainHitAt(e);
-      if (hit) this.scatterGrassAt(hit.x, hit.z);
+      if (hit) this.paintGrassPatchAt(hit.x, hit.z);
+      e.preventDefault();
+      e.stopPropagation();
+    } else if (this.isErasingGrass && this.grassEraseBrushActive) {
+      const hit = this.terrainHitAt(e);
+      if (hit) this.eraseGrassAt(hit.x, hit.z);
       e.preventDefault();
       e.stopPropagation();
     } else if (this.isErasing && this.eraseBrushActive) {
@@ -1652,23 +2670,61 @@ export class RegionEditorScene {
       }
       e.preventDefault();
       e.stopPropagation();
+    } else if (this.marqueeStart) {
+      this.onMarqueeUpdate?.({
+        startX: this.marqueeStart.x,
+        startY: this.marqueeStart.y,
+        endX: e.clientX,
+        endY: e.clientY,
+      });
+      e.preventDefault();
+      e.stopPropagation();
+    } else if (this.volumeStampActive) {
+      this.updateVolumeGhost(e);
     }
   };
 
-  private onMouseUp = (): void => {
+  private onMouseUp = (e?: MouseEvent): void => {
     if (this.isDraggingWaypoint) {
       this.isDraggingWaypoint = false;
       this.orbit.enabled = true;
     }
+
+    if (this.marqueeStart) {
+      const start = this.marqueeStart;
+      this.marqueeStart = null;
+      this.onMarqueeUpdate?.(null);
+      this.orbit.enabled = true;
+
+      if (e && e.type === "mouseup") {
+        const end = { x: e.clientX, y: e.clientY };
+        const dist = Math.hypot(end.x - start.x, end.y - start.y);
+        if (dist > 5) {
+          this.lastMarqueeEnd = performance.now();
+          // Shift starts the marquee (left-drag is orbit pan); Ctrl/Cmd keeps
+          // prior selection so a second box can add to it. Plain Shift+drag replaces.
+          this.applyMarqueeSelection(start, end, e.ctrlKey || e.metaKey);
+        }
+      }
+    }
+
     this.isDraggingToPlace = false;
     this.isSculpting = false;
+    if (this.isVolumeStamping && this.volumeBrushStyle === "sculpt") {
+      this.commitActiveStroke();
+    }
+    this.isVolumeStamping = false;
+    this.lastVolumeStrokePos = null;
+    this.lastCarvePos = null;
     this.isWatering = false;
     this.isTexturePainting = false;
     this.isTreeBrushing = false;
     this.isGrassBrushing = false;
+    this.isErasingGrass = false;
     this.isErasing = false;
     this.moldTargetHeight = null;
     this.dragStart = null;
+    if (this.grassPreviewDirty) this.rebuildGrassPreview();
     if (this.paintingRoad) {
       if (this.paintingRoad.length >= 2) {
         this.roads.push({ points: this.paintingRoad, width: this.roadWidth });
@@ -1677,6 +2733,47 @@ export class RegionEditorScene {
       this.triggerChange();
     }
   };
+
+  /** Frustum-select every editor object whose mesh falls inside the screen
+   *  rectangle from `start`→`end`. House pieces expand to their full groupId
+   *  set so a marquee that catches one wall selects the whole house. */
+  private applyMarqueeSelection(
+    start: { x: number; y: number },
+    end: { x: number; y: number },
+    additive: boolean,
+  ): void {
+    const rect = this.canvas.getBoundingClientRect();
+    this.selectionBox.startPoint.set(
+      ((start.x - rect.left) / rect.width) * 2 - 1,
+      -((start.y - rect.top) / rect.height) * 2 + 1,
+      0.5,
+    );
+    this.selectionBox.endPoint.set(
+      ((end.x - rect.left) / rect.width) * 2 - 1,
+      -((end.y - rect.top) / rect.height) * 2 + 1,
+      0.5,
+    );
+
+    const selected = this.selectionBox.select();
+    const idsToAdd = new Set<string>();
+    for (const obj of selected) {
+      let curr: THREE.Object3D | null = obj;
+      while (curr && !curr.userData.editorId) curr = curr.parent;
+      if (!curr?.userData.editorId) continue;
+      const id = curr.userData.editorId as string;
+      const kind = curr.userData.editorKind as "asset" | "marker" | "light" | "volume" | undefined;
+      if (kind === "asset" || kind === "marker" || kind === "light" || kind === "volume") {
+        for (const expanded of this.idsForSelection(kind, id)) idsToAdd.add(expanded);
+      } else {
+        idsToAdd.add(id);
+      }
+    }
+
+    if (idsToAdd.size === 0) return;
+    if (!additive) this.selectedIds.clear();
+    for (const id of idsToAdd) this.selectedIds.add(id);
+    this.updateSelectionGroup();
+  }
 
   private placeAtEvent(e: MouseEvent): void {
     const hit = this.terrainHitAt(e);
@@ -1703,6 +2800,7 @@ export class RegionEditorScene {
     this.raycaster.setFromCamera(this.ndcFromEvent(e), this.camera);
     const pickable: THREE.Object3D[] = [
       ...[...this.assets.values()].map((a) => a.obj),
+      ...[...this.volumes.values()].map((v) => v.obj),
       ...[...this.markers.values()].map((m) => m.obj),
       ...[...this.lights.values()].map((l) => l.obj),
     ];
@@ -1772,6 +2870,9 @@ export class RegionEditorScene {
 
   private cloneEntities(ids: string[]): string[] {
     const newIds: string[] = [];
+    // Remap groupIds so a duplicated house becomes its own independent group
+    // instead of joining the original's selection set.
+    const groupRemap = new Map<string, string>();
     for (const id of ids) {
       const asset = this.assets.get(id);
       if (asset) {
@@ -1784,9 +2885,29 @@ export class RegionEditorScene {
         asset.obj.getWorldQuaternion(newObj.quaternion);
         asset.obj.getWorldScale(newObj.scale);
         newObj.position.x += 4;
-        this.assets.set(newId, { id: newId, model: asset.model, category: asset.category, obj: newObj });
+        let newGroupId = asset.groupId;
+        if (asset.groupId) {
+          if (!groupRemap.has(asset.groupId)) groupRemap.set(asset.groupId, `house_${this.nextId++}`);
+          newGroupId = groupRemap.get(asset.groupId);
+        }
+        this.assets.set(newId, { id: newId, model: asset.model, category: asset.category, obj: newObj, groupId: newGroupId });
         newIds.push(newId);
       } else {
+        const volume = this.volumes.get(id);
+        if (volume) {
+          this.syncVolumeDataFromMesh(volume);
+          const newId = `volume_${this.nextId++}`;
+          const data: RegionTerrainVolume = {
+            ...volume.data,
+            id: newId,
+            localX: volume.data.localX + 4,
+            path: volume.data.path?.map((p) => ({ x: p.x + 4, y: p.y, z: p.z })),
+          };
+          const mesh = createTerrainVolumeMesh(data);
+          this.scene.add(mesh);
+          this.volumes.set(newId, { id: newId, data, obj: mesh });
+          newIds.push(newId);
+        } else {
         const marker = this.markers.get(id);
         if (marker && marker.kind !== "entry") {
           const newId = `marker_${this.nextId++}`;
@@ -1799,6 +2920,7 @@ export class RegionEditorScene {
           this.markers.set(newId, { id: newId, kind: marker.kind, obj: newObj, name: marker.name, radius: marker.radius });
           newIds.push(newId);
         }
+        }
       }
     }
     return newIds;
@@ -1806,7 +2928,16 @@ export class RegionEditorScene {
 
   // ============================ assets / markers ============================
 
-  private async placeAsset(model: string, category: RegionAssetCategory, x: number, y: number, z: number, yaw: number, scaleOverride?: number): Promise<void> {
+  private async placeAsset(
+    model: string,
+    category: RegionAssetCategory,
+    x: number,
+    y: number,
+    z: number,
+    yaw: number,
+    scaleOverride?: number,
+    opts?: { groupId?: string; skipSelect?: boolean },
+  ): Promise<string> {
     const id = `asset_${this.nextId++}`;
     const gltf = await load(`/assets/models/${ASSET_DIR[category]}/${model}`);
     const obj = SkeletonUtils.clone(gltf.scene);
@@ -1818,8 +2949,42 @@ export class RegionEditorScene {
     obj.userData.editorKind = "asset";
     obj.userData.editorId = id;
     this.scene.add(obj);
-    this.assets.set(id, { id, model, category, obj });
-    this.select("asset", id, false);
+    this.assets.set(id, { id, model, category, obj, groupId: opts?.groupId });
+    if (!opts?.skipSelect) {
+      this.select("asset", id, false);
+      this.triggerChange();
+    }
+    return id;
+  }
+
+  /** Generates one procedural house (see houseGen.ts) centered on the given
+   *  ground point and places every returned piece as an ordinary building
+   *  asset via placeAsset -- so a generated house is just a pile of normal,
+   *  individually selectable/movable/erasable assets afterward, same as
+   *  anything hand-placed from the palette. All pieces share one groupId so
+   *  clicking any one of them selects (and therefore moves) the whole house.
+   *  Each piece's `scale` is passed through as placeAsset's scaleOverride so
+   *  the "building"-category default-scale heuristic never kicks in on the
+   *  modular MV Wall_/Corner_/Door_/Roof_ pieces. */
+  private async placeHouseAt(x: number, y: number, z: number): Promise<void> {
+    const groupId = `house_${this.nextId++}`;
+    const pieces = generateHouseAssets(x, z, y, { type: this.armedHouseType, groupId });
+    const ids: string[] = [];
+    for (const piece of pieces) {
+      const id = await this.placeAsset(
+        piece.model,
+        piece.category,
+        piece.localX,
+        piece.localY,
+        piece.localZ,
+        piece.yaw,
+        piece.scale,
+        { groupId, skipSelect: true },
+      );
+      ids.push(id);
+    }
+    this.selectedIds = new Set(ids);
+    this.updateSelectionGroup();
     this.triggerChange();
   }
 
@@ -1943,6 +3108,8 @@ export class RegionEditorScene {
       this.waterBrushMode = null;
       this.armedModel = null;
       this.armedMarkerKind = null;
+      this.armedHouse = false;
+      this.clearVolumeStamp();
       this.orbit.enablePan = false;
     } else {
       this.activeEscortQuest = null;
@@ -2148,11 +3315,30 @@ export class RegionEditorScene {
     this.triggerChange();
   }
 
-  private select(kind: "asset" | "marker" | "light", id: string, additive: boolean): void {
+  private select(kind: "asset" | "marker" | "light" | "volume", id: string, additive: boolean): void {
+    const ids = this.idsForSelection(kind, id);
     if (!additive) this.selectedIds.clear();
-    if (this.selectedIds.has(id)) this.selectedIds.delete(id);
-    else this.selectedIds.add(id);
+    const allSelected = ids.length > 0 && ids.every((i) => this.selectedIds.has(i));
+    if (allSelected) {
+      for (const i of ids) this.selectedIds.delete(i);
+    } else {
+      for (const i of ids) this.selectedIds.add(i);
+    }
     this.updateSelectionGroup();
+  }
+
+  /** Expands a single asset click into its whole house group when the asset
+   *  carries a groupId -- so clicking any wall/roof/floor of a generated
+   *  house selects (and therefore moves) every piece together. Markers and
+   *  lights, and ungrouped hand-placed assets, stay single-id. */
+  private idsForSelection(kind: "asset" | "marker" | "light" | "volume", id: string): string[] {
+    if (kind === "asset") {
+      const asset = this.assets.get(id);
+      if (asset?.groupId) {
+        return [...this.assets.values()].filter((a) => a.groupId === asset.groupId).map((a) => a.id);
+      }
+    }
+    return [id];
   }
 
   private deselect(): void {
@@ -2172,7 +3358,12 @@ export class RegionEditorScene {
     const center = new THREE.Vector3();
     const objs: THREE.Object3D[] = [];
     for (const id of this.selectedIds) {
-      const entry = this.assets.get(id) ?? this.markers.get(id) ?? this.lights.get(id) ?? (id === "entry" ? this.entryMarker : null);
+      const entry =
+        this.assets.get(id) ??
+        this.volumes.get(id) ??
+        this.markers.get(id) ??
+        this.lights.get(id) ??
+        (id === "entry" ? this.entryMarker : null);
       if (entry) {
         objs.push(entry.obj);
         center.add(entry.obj.position);
@@ -2234,7 +3425,35 @@ export class RegionEditorScene {
       const a = this.assets.get(id);
       if (a) {
         const t = worldTransform(a.obj);
-        selItems.push({ kind: "asset", id, model: a.model, category: a.category, x: t.x, y: t.y, z: t.z, yaw: t.yaw, scale: t.scale });
+        selItems.push({
+          kind: "asset",
+          id,
+          model: a.model,
+          category: a.category,
+          groupId: a.groupId,
+          x: t.x,
+          y: t.y,
+          z: t.z,
+          yaw: t.yaw,
+          scale: t.scale,
+        });
+        continue;
+      }
+      const v = this.volumes.get(id);
+      if (v) {
+        this.syncVolumeDataFromMesh(v);
+        const t = worldTransform(v.obj);
+        selItems.push({
+          kind: "volume",
+          id,
+          volumeShape: v.data.shape,
+          volumeMaterial: v.data.material,
+          x: t.x,
+          y: t.y,
+          z: t.z,
+          yaw: t.yaw,
+          scale: t.scale,
+        });
         continue;
       }
       const m = id === "entry" ? this.entryMarker : this.markers.get(id);
@@ -2271,6 +3490,10 @@ export class RegionEditorScene {
     if (this.selectedIds.size === 0) return;
     this.selectionGroup.updateMatrixWorld(true);
     for (const helper of this.selectionHelpers.values()) helper.update();
+    for (const id of this.selectedIds) {
+      const v = this.volumes.get(id);
+      if (v) this.syncVolumeDataFromMesh(v);
+    }
     this.triggerChange();
     this.emitSelection();
   };
@@ -2303,6 +3526,20 @@ export class RegionEditorScene {
         if (patch.z !== undefined) a.obj.position.z = patch.z;
         if (patch.yaw !== undefined) a.obj.rotation.y = patch.yaw;
         if (patch.scale !== undefined) a.obj.scale.setScalar(patch.scale);
+        continue;
+      }
+      const v = this.volumes.get(id);
+      if (v) {
+        if (patch.x !== undefined) v.obj.position.x = patch.x;
+        if (patch.y !== undefined) v.obj.position.y = patch.y;
+        if (patch.z !== undefined) v.obj.position.z = patch.z;
+        if (patch.yaw !== undefined) v.obj.rotation.y = patch.yaw;
+        if (patch.scale !== undefined) {
+          const sx = v.obj.scale.x || 1;
+          const ratio = patch.scale / sx;
+          v.obj.scale.multiplyScalar(ratio);
+        }
+        this.syncVolumeDataFromMesh(v);
         continue;
       }
       const m = id === "entry" ? this.entryMarker : this.markers.get(id);
@@ -2376,6 +3613,10 @@ export class RegionEditorScene {
         this.assets.delete(id);
         continue;
       }
+      if (this.volumes.has(id)) {
+        this.removeVolume(id);
+        continue;
+      }
       const m = id === "entry" ? this.entryMarker : this.markers.get(id);
       if (m) {
         this.scene.remove(m.obj);
@@ -2399,8 +3640,65 @@ export class RegionEditorScene {
   private disposeObject(obj: THREE.Object3D): void {
     obj.traverse((child) => {
       const mesh = child as THREE.Mesh;
-      if (mesh.isMesh) mesh.geometry?.dispose();
+      // Terrain volumes share cached BufferGeometries -- never dispose those.
+      if (mesh.isMesh && !mesh.userData.sharedGeometry) mesh.geometry?.dispose();
     });
+  }
+
+  /** Removes a stamped volume. Disposes unique stroke geometry; shared
+   *  primitive geometries are left alone. */
+  private removeVolume(id: string): void {
+    const v = this.volumes.get(id);
+    if (!v) return;
+    this.scene.remove(v.obj);
+    if (!v.obj.userData.sharedGeometry) {
+      v.obj.geometry.dispose();
+    }
+    this.volumes.delete(id);
+  }
+
+  /** Writes the live mesh world transform back into the volume record so
+   *  export / playtest collision stay accurate after gizmo moves. */
+  private syncVolumeDataFromMesh(v: VolumeEntry): void {
+    const worldPos = new THREE.Vector3();
+    const worldQuat = new THREE.Quaternion();
+    const worldScale = new THREE.Vector3();
+    v.obj.getWorldPosition(worldPos);
+    v.obj.getWorldQuaternion(worldQuat);
+    v.obj.getWorldScale(worldScale);
+
+    if (isTerrainStroke(v.data) && v.data.path) {
+      const dx = worldPos.x - v.data.localX;
+      const dy = worldPos.y - v.data.localY;
+      const dz = worldPos.z - v.data.localZ;
+      if (Math.abs(dx) > 1e-6 || Math.abs(dy) > 1e-6 || Math.abs(dz) > 1e-6) {
+        for (const p of v.data.path) {
+          p.x += dx;
+          p.y += dy;
+          p.z += dz;
+        }
+        v.data.localX = worldPos.x;
+        v.data.localY = worldPos.y;
+        v.data.localZ = worldPos.z;
+        // Keep mesh at centroid with local geometry (no accumulated parent offset).
+        if (v.obj.parent === this.scene) {
+          v.obj.position.set(v.data.localX, v.data.localY, v.data.localZ);
+          v.obj.rotation.set(0, 0, 0);
+          v.obj.scale.set(1, 1, 1);
+          rebuildTerrainStrokeMesh(v.obj, v.data);
+        }
+      }
+      return;
+    }
+
+    const euler = new THREE.Euler().setFromQuaternion(worldQuat);
+    v.data.localX = worldPos.x;
+    v.data.localY = worldPos.y;
+    v.data.localZ = worldPos.z;
+    v.data.yaw = euler.y;
+    v.data.scaleX = worldScale.x;
+    v.data.scaleY = worldScale.y;
+    v.data.scaleZ = worldScale.z;
   }
 
   // ============================ load / export ============================
@@ -2417,6 +3715,7 @@ export class RegionEditorScene {
       this.scene.remove(a.obj);
       this.disposeObject(a.obj);
     }
+    for (const id of [...this.volumes.keys()]) this.removeVolume(id);
     for (const m of this.markers.values()) {
       this.scene.remove(m.obj);
       this.disposeObject(m.obj);
@@ -2430,12 +3729,15 @@ export class RegionEditorScene {
       this.disposeObject(this.entryMarker.obj);
     }
     this.assets.clear();
+    this.volumes.clear();
     this.markers.clear();
     this.lights.clear();
     this.entryMarker = null;
     this.selectedIds.clear();
     this.armedModel = null;
     this.armedMarkerKind = null;
+    this.armedHouse = false;
+    this.clearVolumeStamp();
     this.armedLightColor = null;
     this.texturePaintMode = null;
     this.waterBrushMode = null;
@@ -2449,6 +3751,17 @@ export class RegionEditorScene {
     this.roadPaintArmed = false;
     this.paintingRoad = null;
     this.roads = [];
+    if (this.grassField) {
+      for (const mesh of this.grassField.meshes) {
+        this.scene.remove(mesh);
+        (mesh.material as THREE.Material).dispose();
+      }
+      this.grassField = null;
+    }
+    this.grassPatches = [];
+    this.grassExclusions = [];
+    this.grassColor = { bottom: "#4f7c13", top: "#79a01c" };
+    this.wind = { direction: 0, strength: 1 };
     this.nextId = 1;
     this.onSelectionChange([]);
   }
@@ -2470,6 +3783,11 @@ export class RegionEditorScene {
       }
       this.syncWaterMesh();
       this.roads = (bp.roads ?? []).map((r) => ({ points: r.points.map((p) => ({ ...p })), width: r.width }));
+      this.grassPatches = (bp.grassPatches ?? []).map((p) => ({ ...p }));
+      this.grassExclusions = (bp.grassExclusions ?? []).map((ex) => ({ ...ex }));
+      this.grassColor = bp.grassColor ? { ...bp.grassColor } : { bottom: "#4f7c13", top: "#79a01c" };
+      this.wind = bp.wind ? { ...bp.wind } : { direction: 0, strength: 1 };
+      this.rebuildGrassPreview();
       this.scene.remove(this.terrainMesh);
       this.terrainMesh.geometry.dispose();
       this.terrainMesh = this.buildTerrainGeometry();
@@ -2488,7 +3806,7 @@ export class RegionEditorScene {
         obj.userData.editorKind = "asset";
         obj.userData.editorId = id;
         this.scene.add(obj);
-        this.assets.set(id, { id, model: asset.model, category: asset.category, obj });
+        this.assets.set(id, { id, model: asset.model, category: asset.category, obj, groupId: asset.groupId });
       }
 
       // Advance nextId past every loaded asset id BEFORE anything below can
@@ -2499,6 +3817,15 @@ export class RegionEditorScene {
       // orphaned (still rendered, no longer tracked/selectable/exportable).
       for (const id of this.assets.keys()) {
         const match = /^asset_(\d+)$/.exec(id);
+        if (match) this.nextId = Math.max(this.nextId, Number(match[1]) + 1);
+      }
+
+      for (const vol of bp.terrainVolumes ?? []) {
+        const data: RegionTerrainVolume = { ...vol };
+        const mesh = createTerrainVolumeMesh(data);
+        this.scene.add(mesh);
+        this.volumes.set(data.id, { id: data.id, data, obj: mesh });
+        const match = /^volume_(\d+)$/.exec(data.id);
         if (match) this.nextId = Math.max(this.nextId, Number(match[1]) + 1);
       }
 
@@ -2567,7 +3894,17 @@ export class RegionEditorScene {
 
     const assets = [...this.assets.values()].map((a) => {
       const t = getTransform(a.obj);
-      return { id: a.id, model: a.model, category: a.category, localX: t.x, localY: t.y, localZ: t.z, yaw: t.yaw, scale: t.scale };
+      return {
+        id: a.id,
+        model: a.model,
+        category: a.category,
+        localX: t.x,
+        localY: t.y,
+        localZ: t.z,
+        yaw: t.yaw,
+        scale: t.scale,
+        ...(a.groupId ? { groupId: a.groupId } : {}),
+      };
     });
     const mobSpawns = [...this.markers.values()]
       .filter((m) => m.kind === "mobSpawn")
@@ -2616,6 +3953,10 @@ export class RegionEditorScene {
       const t = getTransform(l.obj);
       return { id: l.id, localX: t.x, localY: t.y, localZ: t.z, color: l.color, intensity: l.intensity, distance: l.distance };
     });
+    const terrainVolumes = [...this.volumes.values()].map((v) => {
+      this.syncVolumeDataFromMesh(v);
+      return { ...v.data };
+    });
     let entryLocal = { x: 0, z: 0 };
     if (this.entryMarker) {
       const t = getTransform(this.entryMarker.obj);
@@ -2635,6 +3976,10 @@ export class RegionEditorScene {
       mobSpawns,
       villages,
       roads: this.roads.length > 0 ? this.roads : undefined,
+      grassPatches: this.grassPatches.length > 0 ? this.grassPatches : undefined,
+      grassExclusions: this.grassExclusions.length > 0 ? this.grassExclusions : undefined,
+      grassColor: { ...this.grassColor },
+      wind: { ...this.wind },
       colorGrading: { ...this.colorGrading },
       entryLocal,
       portalWorldX: meta.portalWorldX,
@@ -2643,6 +3988,7 @@ export class RegionEditorScene {
       portals: portals.length > 0 ? portals : undefined,
       npcs: npcs.length > 0 ? npcs : undefined,
       lights: lights.length > 0 ? lights : undefined,
+      terrainVolumes: terrainVolumes.length > 0 ? terrainVolumes : undefined,
       musicTrack: meta.musicTrack,
     };
   }
@@ -2666,6 +4012,11 @@ export class RegionEditorScene {
     this.stepWaterPhysics(dt);
     this.updateWaterParticles(dt);
     this.waterMeshField?.update(dt);
+    if (this.grassField) {
+      this.grassField.uniforms.uTime.value += dt;
+      this.grassField.uniforms.uSunDir.value.copy(this.sunLight.position).sub(this.sunLight.target.position).normalize();
+      this.grassField.uniforms.uSunColor.value.copy(this.sunLight.color).multiplyScalar(this.sunLight.intensity);
+    }
     this.renderer.render(this.scene, this.camera);
   };
 

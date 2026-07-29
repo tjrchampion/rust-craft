@@ -49,6 +49,117 @@ export interface RegionAsset {
   localZ: number;
   yaw: number;
   scale?: number;
+  /** Optional editor grouping key -- assets that share a groupId (e.g. every
+   *  piece of a procedurally-generated house) are selected/moved/deleted
+   *  together when any one of them is clicked. Purely an authoring aid;
+   *  the runtime renderer ignores it. */
+  groupId?: string;
+}
+
+/** Shape stamped by the region editor's volume-sculpt brush -- real 3D
+ *  primitives added into the world (not heightmap deformation). */
+export type TerrainVolumeShape = "boulder" | "block" | "pillar" | "spike" | "ramp";
+
+/** Surface material for a stamped volume -- maps onto the same ground
+ *  textures the heightmap terrain blends (rock/dirt/grass/sand/cobble). */
+export type TerrainVolumeMaterial = "rock" | "dirt" | "grass" | "sand" | "cobble";
+
+/** Centerline sample for a continuous terrain stroke. Optional `w`/`h` let
+ *  raise/lower/mold/smooth deform the ridge locally (default 1 = authored size). */
+export interface TerrainVolumePathPoint {
+  x: number;
+  y: number;
+  z: number;
+  /** Local half-width multiplier (default 1). */
+  w?: number;
+  /** Local height multiplier (default 1). */
+  h?: number;
+}
+
+/** A single freeform terrain volume. Origin is the geometric center; scale*
+ *  are half-extents in world units for box/ramp, and radius (X/Z) / half-
+ *  height (Y) for boulder/pillar/spike. Climbable in playtest/gameplay via
+ *  regionVolumeColliders().
+ *
+ *  When `path` has 2+ points, this is a continuous stroke extruded along
+ *  that polyline (cross-section from `shape`); scaleX = half-width,
+ *  scaleY = height, and localX/Y/Z store the path centroid. */
+export interface RegionTerrainVolume {
+  id: string;
+  shape: TerrainVolumeShape;
+  material: TerrainVolumeMaterial;
+  localX: number;
+  localY: number;
+  localZ: number;
+  yaw: number;
+  scaleX: number;
+  scaleY: number;
+  scaleZ: number;
+  /** World-space centerline for a drag-sculpt stroke. Absent on discrete stamps. */
+  path?: TerrainVolumePathPoint[];
+  /** Spherical holes punched through this volume (world space). Brush radius
+   *  sets each carve's radius -- used by the Carve Hole sculpt tool. */
+  carves?: TerrainVolumeCarve[];
+}
+
+/** A spherical hole carved through a terrain volume. */
+export interface TerrainVolumeCarve {
+  x: number;
+  y: number;
+  z: number;
+  radius: number;
+}
+
+/** True when (x,y,z) lies inside any carve sphere on the volume. */
+export function pointInVolumeCarve(
+  v: Pick<RegionTerrainVolume, "carves">,
+  x: number,
+  y: number,
+  z: number,
+): boolean {
+  const carves = v.carves;
+  if (!carves || carves.length === 0) return false;
+  for (const c of carves) {
+    const dx = x - c.x;
+    const dy = y - c.y;
+    const dz = z - c.z;
+    if (dx * dx + dy * dy + dz * dz < c.radius * c.radius) return true;
+  }
+  return false;
+}
+
+/** True when a walkable top sample at (x,z,topY) is punched out by a carve. */
+export function carveBlocksSurface(
+  v: Pick<RegionTerrainVolume, "carves">,
+  x: number,
+  z: number,
+  topY: number,
+): boolean {
+  const carves = v.carves;
+  if (!carves || carves.length === 0) return false;
+  for (const c of carves) {
+    const dx = x - c.x;
+    const dz = z - c.z;
+    const r = c.radius;
+    if (dx * dx + dz * dz >= r * r) continue;
+    const yDist = Math.abs(c.y - topY);
+    if (yDist <= r) return true;
+  }
+  return false;
+}
+
+/** Stroke half-width at a path sample (scaleX × optional local `w`). */
+export function strokePointHalfWidth(v: RegionTerrainVolume, p: TerrainVolumePathPoint): number {
+  return Math.max(0.05, v.scaleX * (p.w ?? 1));
+}
+
+/** Walkable top Y at a path sample (path.y + scaleY × optional local `h`). */
+export function strokePointTopY(v: RegionTerrainVolume, p: TerrainVolumePathPoint): number {
+  return p.y + Math.max(0.05, v.scaleY * (p.h ?? 1));
+}
+
+export function isTerrainStroke(v: RegionTerrainVolume): boolean {
+  return (v.path?.length ?? 0) >= 2;
 }
 
 /** Fallback collision-circle radius per category, used when a model has no
@@ -483,6 +594,123 @@ export function regionAssetColliders(assets: RegionAsset[]): RegionAssetCollider
   return out;
 }
 
+/** Horizontal footprint radius of a terrain volume (XZ plane). */
+export function terrainVolumeRadius(v: RegionTerrainVolume): number {
+  if (isTerrainStroke(v)) return Math.max(0.05, v.scaleX);
+  switch (v.shape) {
+    case "boulder":
+      return Math.max(v.scaleX, v.scaleZ);
+    case "pillar":
+    case "spike":
+      return Math.max(v.scaleX, v.scaleZ);
+    case "block":
+    case "ramp":
+      return Math.hypot(v.scaleX, v.scaleZ) * 0.85;
+  }
+}
+
+/** World Y of the walkable top surface of a terrain volume. Volumes are
+ *  authored with their geometric center at localY, so the top is localY +
+ *  half-extent on Y (boulder/block/pillar) or localY + scaleY for spike/ramp
+ *  (which sit with their base near the center-minus-half). Strokes sit on
+ *  the path (ground) and rise by scaleY × local `h`. */
+export function terrainVolumeTopY(v: RegionTerrainVolume): number {
+  if (isTerrainStroke(v) && v.path && v.path.length > 0) {
+    let top = -Infinity;
+    for (const p of v.path) top = Math.max(top, strokePointTopY(v, p));
+    return top;
+  }
+  switch (v.shape) {
+    case "boulder":
+    case "block":
+    case "pillar":
+      return v.localY + v.scaleY;
+    case "spike":
+      return v.localY + v.scaleY;
+    case "ramp":
+      return v.localY + v.scaleY;
+  }
+}
+
+/** Bottom Y of a volume (used when placing so the stamp sits on a surface). */
+export function terrainVolumeHalfHeight(v: Pick<RegionTerrainVolume, "shape" | "scaleY">): number {
+  return v.scaleY;
+}
+
+/** Flattens stamped terrain volumes into climbable collision circles so
+ *  stepMovement / playtest can walk on sculpted cliffs and boulders.
+ *  Continuous strokes are sampled along their path. */
+export function regionVolumeColliders(volumes: RegionTerrainVolume[]): RegionAssetCollider[] {
+  const out: RegionAssetCollider[] = [];
+  for (const v of volumes) {
+    if (isTerrainStroke(v) && v.path) {
+      const baseW = Math.max(0.05, v.scaleX);
+      const spacing = Math.max(0.4, baseW * 0.75);
+      let carry = 0;
+      let prev = v.path[0]!;
+      const pushSample = (p: TerrainVolumePathPoint) => {
+        const topY = strokePointTopY(v, p);
+        if (carveBlocksSurface(v, p.x, p.z, topY)) return;
+        out.push({
+          x: p.x,
+          z: p.z,
+          radius: strokePointHalfWidth(v, p),
+          topY,
+          climbable: true,
+        });
+      };
+      pushSample(prev);
+      for (let i = 1; i < v.path.length; i++) {
+        const cur = v.path[i]!;
+        const seg = Math.hypot(cur.x - prev.x, cur.z - prev.z);
+        carry += seg;
+        while (carry >= spacing) {
+          const over = carry - spacing;
+          const t = seg > 1e-6 ? 1 - over / seg : 1;
+          const sample: TerrainVolumePathPoint = {
+            x: prev.x + (cur.x - prev.x) * t,
+            y: prev.y + (cur.y - prev.y) * t,
+            z: prev.z + (cur.z - prev.z) * t,
+            w: (prev.w ?? 1) + ((cur.w ?? 1) - (prev.w ?? 1)) * t,
+            h: (prev.h ?? 1) + ((cur.h ?? 1) - (prev.h ?? 1)) * t,
+          };
+          pushSample(sample);
+          carry -= spacing;
+        }
+        prev = cur;
+      }
+      pushSample(v.path[v.path.length - 1]!);
+      continue;
+    }
+
+    const radius = terrainVolumeRadius(v);
+    if (radius <= 0.05) continue;
+    const topY = terrainVolumeTopY(v);
+    if (carveBlocksSurface(v, v.localX, v.localZ, topY)) continue;
+    const collider: RegionAssetCollider = {
+      x: v.localX,
+      z: v.localZ,
+      radius,
+      topY,
+      climbable: true,
+    };
+    if (v.shape === "ramp") {
+      const sin = Math.sin(v.yaw);
+      const cos = Math.cos(v.yaw);
+      collider.stairRamp = {
+        dx: -sin,
+        dz: -cos,
+        halfLength: Math.max(0.5, v.scaleZ),
+        rise: v.scaleY * 2,
+      };
+      // Ramp base sits at localY - scaleY; top at localY + scaleY.
+      collider.topY = v.localY + v.scaleY;
+    }
+    out.push(collider);
+  }
+  return out;
+}
+
 export interface RegionMobSpawn {
   localX: number;
   localZ: number;
@@ -524,6 +752,68 @@ export interface RegionRoad {
   points: { x: number; z: number }[];
   /** Full width in world units -- the dirt blend fades out over ~1.5 units past width/2. */
   width: number;
+}
+
+/** A painted grass patch: a compact stroke record, not a discrete asset.
+ *  Expanded procedurally into many wind-shaded blade instances at render
+ *  time (see client/render/grassField.ts's buildGrassInstances, used
+ *  identically by the region editor's live preview and the runtime
+ *  RegionInteriorRenderer) rather than stored as one RegionAsset per blade,
+ *  which would bloat the region file badly at any real density. */
+export interface GrassPatch {
+  id?: string;
+  localX: number;
+  localZ: number;
+  radius: number;
+  /** 0..1 fill fraction feeding the jittered-grid inclusion roll. */
+  density: number;
+  /** Deterministic seed so the same patch always expands to the same blade
+   *  layout on every load -- editor preview and runtime must agree, and a
+   *  reload must not re-roll a different-looking field. */
+  seed: number;
+  /** Multiplier on the base blade height for this patch specifically --
+   *  baked from the brush's Length setting at paint time, so different
+   *  patches (brush strokes) can have different grass lengths. Absent on
+   *  patches painted before this existed, treated as 1. */
+  lengthScale?: number;
+}
+
+/** Region-wide ambient wind, affecting both grass sway (grassBlade.ts) and
+ *  tree sway (windSway.ts) -- one shared direction/strength dial so both
+ *  systems respond consistently to the same setting. */
+export interface RegionWind {
+  /** Degrees, 0..360 -- 0 blows toward +X, increasing clockwise. */
+  direction: number;
+  /** Multiplier on each system's own base sway amplitude -- 1 is the
+   *  default calm-breeze feel; 0 is still air. */
+  strength: number;
+}
+
+/** Per-region grass blade base/tip gradient colors (hex strings) -- feeds
+ *  grassBlade.ts's uGrassBottom/uGrassTop uniforms. Absent on regions saved
+ *  before this existed; every reader falls back to grassBlade.ts's own
+ *  hardcoded defaults. */
+export interface GrassColor {
+  bottom: string;
+  top: string;
+}
+
+/** A fine-grained "hole" carved out of the grass field by the erase-grass
+ *  brush -- unlike deleting a whole GrassPatch (coarse: only removes patches
+ *  whose center falls within the brush), this subtracts a small circle from
+ *  the blade field at generation time, so a single large patch can be
+ *  partially thinned out without losing the rest of it. */
+export interface GrassExclusion {
+  localX: number;
+  localZ: number;
+  radius: number;
+  /** 0..1 fraction of blades within the circle to remove -- 1 fully clears
+   *  it, lower values thin it out instead of an all-or-nothing erase. */
+  strength: number;
+  /** Deterministic seed so which specific blades get thinned out (at
+   *  strength < 1) is stable across reloads, same rationale as
+   *  GrassPatch.seed. */
+  seed: number;
 }
 
 /** Hand-authored (or procedurally-drafted) standalone zone, produced by the
@@ -618,6 +908,22 @@ export interface RegionBlueprint {
   customTextures?: number[];
   /** Optional -- authored point lights placed in the region. */
   lights?: RegionPointLight[];
+  /** Optional -- absent on regions saved before the grass-patch brush
+   *  existed; every reader falls back to an empty array. */
+  grassPatches?: GrassPatch[];
+  /** Optional -- fine-grained holes carved out of the grass field by the
+   *  erase-grass brush. Absent on regions saved before it existed. */
+  grassExclusions?: GrassExclusion[];
+  /** Optional -- per-region grass blade color override, see GrassColor. */
+  grassColor?: GrassColor;
+  /** Optional -- region-wide wind direction/strength, see RegionWind. Absent
+   *  means the default calm-breeze feel (direction 0, strength 1) that grass
+   *  already had before this was configurable -- not still air. */
+  wind?: RegionWind;
+  /** Optional -- freeform 3D terrain volumes stamped by the volume-sculpt
+   *  brush (spheres/boxes/etc. that ADD geometry rather than deforming the
+   *  heightmap). Absent on regions saved before the tool existed. */
+  terrainVolumes?: RegionTerrainVolume[];
   /** Optional -- id of the REGION_MUSIC_TRACKS entry to loop while inside this
    *  region (fades in on entry, out on exit). Absent/null means no music. */
   musicTrack?: string | null;
@@ -801,29 +1107,6 @@ export const REGION_FOLIAGE: Record<RegionBiome, string[]> = {
   cosmic: ["rock_2.glb", "rock_3.glb", "mushroom.glb", "bush_flowers.glb", "twisted_1.glb"],
 };
 
-/** Low ground-cover clutter for the grass brush -- denser and smaller-scale
- *  than REGION_FOLIAGE's trees/shrubs. Biomes without real grass/flower art
- *  (desert, volcanic, alien, underground, cosmic) fall back to whichever
- *  sparse clutter they already use for foliage. */
-export const REGION_GRASS_COVER: Record<RegionBiome, string[]> = {
-  grassland: [
-    "stylized_nature/Grass_Common_Short.gltf", "stylized_nature/Grass_Common_Tall.gltf",
-    "stylized_nature/Grass_Wispy_Short.gltf", "stylized_nature/Grass_Wispy_Tall.gltf",
-    "stylized_nature/Flower_3_Single.gltf", "stylized_nature/Flower_4_Single.gltf",
-  ],
-  forest: [
-    "stylized_nature/Grass_Common_Short.gltf", "stylized_nature/Grass_Wispy_Short.gltf",
-    "stylized_nature/Grass_Wispy_Tall.gltf", "fern.glb",
-  ],
-  jungle: ["fern.glb", "stylized_nature/Grass_Wispy_Tall.gltf", "stylized_nature/Flower_4_Group.gltf", "mushroom.glb"],
-  desert: ["dead_1.glb", "rock_1.glb"],
-  arctic: ["dead_1.glb", "dead_2.glb"],
-  swamp: ["fern.glb", "mushroom.glb", "bush.glb"],
-  volcanic: ["rock_1.glb", "rock_2.glb"],
-  alien: ["mushroom.glb", "bush_flowers.glb"],
-  underground: ["mushroom.glb"],
-  cosmic: ["mushroom.glb", "bush_flowers.glb"],
-};
 
 /** Real props/ directory rock decor, layered on top of the foliage rocks
  *  above for bigger set-dressing clusters. */

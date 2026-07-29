@@ -14,7 +14,30 @@
       "Bash(node scripts/_lb.mjs packages/client/public/assets/models/modular/base/Regular_Male.glb)",
       "Bash(cp /tmp/try_gltfloader.mjs /Users/champion/Development/Web/rust-craft/packages/client/_try.mjs)",
       "Bash(node _try.mjs public/assets/models/animations/Rig_Medium/Rig_Medium_MovementAdvanced.glb)",
-      "Bash(python3 -c ' *)"
+      "Bash(python3 -c ' *)",
+      "Bash(pnpm --filter @rustcraft/client typecheck)",
+      "Bash(pnpm --filter @rustcraft/client build)",
+      "Read(//tmp/**)",
+      "WebFetch(domain:github.com)",
+      "Bash(awk '/private async placeAsset/,0' /Users/champion/Development/Web/rust-craft/packages/client/src/render/RegionEditorScene.ts)",
+      "Bash(gh api *)",
+      "Bash(curl -s \"https://api.github.com/repos/cortiz2894/stylized-components/git/trees/main?recursive=true\")",
+      "Bash(curl -s \"https://raw.githubusercontent.com/cortiz2894/stylized-components/main/src/components/grassField/shaders/grassBlade.ts\")",
+      "Bash(curl -s \"https://raw.githubusercontent.com/cortiz2894/stylized-components/main/src/components/grassField/materials/bladeMaterial.ts\")",
+      "Bash(curl -s \"https://raw.githubusercontent.com/cortiz2894/stylized-components/main/LICENSE\")",
+      "Bash(curl -s \"https://raw.githubusercontent.com/cortiz2894/stylized-components/main/package.json\")",
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\('license:', d.get\\('license'\\)\\); print\\('name:', d.get\\('name'\\)\\)\")",
+      "Bash(curl -s \"https://raw.githubusercontent.com/cortiz2894/stylized-components/main/src/components/grassField/shaders/groundMask.ts\")",
+      "Bash(curl -s \"https://raw.githubusercontent.com/cortiz2894/stylized-components/main/src/components/grassField/uniforms.ts\")",
+      "Bash(pnpm --filter @rustcraft/shared exec tsc --noEmit)",
+      "Bash(pnpm --filter @rustcraft/client build > /tmp/client-build-grass.log 2>&1; tail -30 /tmp/client-build-grass.log; rm -rf /Users/champion/Development/Web/rust-craft/packages/client/dist)",
+      "Bash(pnpm --filter @rustcraft/client exec tsc --noEmit)",
+      "Bash(node scripts/cleanup-grass-collision-cover.mjs --dry-run)",
+      "Bash(node scripts/cleanup-grass-collision-cover.mjs)",
+      "Bash(grep -v 'let grassLength\\\\|grassLength = $state\\\\|grassLength}\\\\|grassLength.toFixed\\\\|bind:value={grassLength}\\\\|private grassLength\\\\|this.grassLength\\\\|setGrassLength\\\\|getGrassLength\\\\|value={grassLength}')"
+    ],
+    "additionalDirectories": [
+      "/tmp"
     ]
   }
 }

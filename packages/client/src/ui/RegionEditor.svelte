@@ -5,7 +5,6 @@
     REGION_BIOMES,
     REGION_BIOME_LABELS,
     REGION_COLOR_PRESETS,
-    REGION_GRASS_COVER,
     REGION_MUSIC_TRACKS,
     generateRandomRegionBlueprint,
     type RegionBiome,
@@ -24,6 +23,12 @@
     type WaterBrushMode,
   } from "../render/RegionEditorScene";
   import { REGION_PROP_PALETTE } from "../render/regionPropPalette";
+  import { HOUSE_TYPE_OPTIONS, type HouseType } from "../render/houseGen";
+  import {
+    TERRAIN_VOLUME_SHAPES,
+    TERRAIN_VOLUME_MATERIALS,
+  } from "../render/terrainVolumes";
+  import type { TerrainVolumeShape, TerrainVolumeMaterial } from "@rustcraft/shared";
 
   let canvas: HTMLCanvasElement;
   let fileInput: HTMLInputElement;
@@ -39,8 +44,12 @@
   let musicTrack = $state<string | null>(null);
 
   let selection = $state<EditorSelection[]>([]);
+  let marqueeBox = $state<{ startX: number; startY: number; endX: number; endY: number } | null>(null);
   let transformMode = $state<EditorTransformMode>("translate");
   let sculptMode = $state<SculptMode>(null);
+  let volumeStampShape = $state<TerrainVolumeShape | null>(null);
+  let volumeSculptBrushActive = $state(false);
+  let volumeMaterial = $state<TerrainVolumeMaterial>("rock");
   let waterBrushMode = $state<WaterBrushMode>(null);
   let waterPhysicsSimulating = $state(true);
   let brushRadius = $state(8);
@@ -55,6 +64,9 @@
   let playtestActive = $state(false);
   let openGroups = $state<Set<string>>(new Set([REGION_PROP_PALETTE[0]?.label ?? ""]));
   let colorGrading = $state<RegionColorGrading>({ ...REGION_COLOR_PRESETS.grassland });
+  let grassColor = $state<{ bottom: string; top: string }>({ bottom: "#4f7c13", top: "#79a01c" });
+  let grassLength = $state(1);
+  let wind = $state<{ direction: number; strength: number }>({ direction: 0, strength: 1 });
   let showColorPanel = $state(false);
   let status = $state<string | null>(null);
   let activeDropdown = $state<"sculpt" | "water" | "textures" | "lights" | "markers" | "env" | "file" | null>(null);
@@ -80,6 +92,9 @@
       () => scheduleSave(),
       (active) => {
         playtestActive = active;
+      },
+      (box) => {
+        marqueeBox = box;
       },
     );
     const urlParams = new URLSearchParams(window.location.search);
@@ -120,8 +135,11 @@
   function pickModel(model: string, category: "building" | "foliage" | "prop"): void {
     armedMarker = null;
     sculptMode = null;
+    volumeStampShape = null;
+    volumeSculptBrushActive = false;
     waterBrushMode = null;
     roadPaintActive = false;
+    houseToolActive = false;
     armedModel = model;
     scene?.armPlacement(model, category);
   }
@@ -129,8 +147,11 @@
   function pickMarker(kind: EditorMarkerKind): void {
     armedModel = null;
     sculptMode = null;
+    volumeStampShape = null;
+    volumeSculptBrushActive = false;
     waterBrushMode = null;
     roadPaintActive = false;
+    houseToolActive = false;
     armedMarker = kind;
     scene?.armMarkerPlacement(kind);
   }
@@ -140,15 +161,72 @@
     armedMarker = null;
     waterBrushMode = null;
     roadPaintActive = false;
+    houseToolActive = false;
+    volumeStampShape = null;
+    volumeSculptBrushActive = false;
     sculptMode = sculptMode === mode ? null : mode;
     scene?.setSculptMode(sculptMode);
+  }
+
+  /** Freeform volume place -- stamps one 3D primitive at a time (click/light drag). */
+  function pickVolumeStamp(shape: TerrainVolumeShape): void {
+    armedModel = null;
+    armedMarker = null;
+    sculptMode = null;
+    waterBrushMode = null;
+    roadPaintActive = false;
+    houseToolActive = false;
+    randomTreeBrushActive = false;
+    grassBrushActive = false;
+    grassEraseBrushActive = false;
+    eraseBrushActive = false;
+    texturePaintMode = null;
+    armedLightColor = null;
+    volumeSculptBrushActive = false;
+    volumeStampShape = volumeStampShape === shape ? null : shape;
+    if (volumeStampShape) scene?.armVolumeStamp(volumeStampShape, volumeMaterial, "place");
+    else scene?.disarm();
+  }
+
+  /** Continuous drag brush -- sprays overlapping volume stamps along the stroke. */
+  function pickVolumeSculptBrush(): void {
+    armedModel = null;
+    armedMarker = null;
+    sculptMode = null;
+    waterBrushMode = null;
+    roadPaintActive = false;
+    houseToolActive = false;
+    randomTreeBrushActive = false;
+    grassBrushActive = false;
+    grassEraseBrushActive = false;
+    eraseBrushActive = false;
+    texturePaintMode = null;
+    armedLightColor = null;
+    const next = !volumeSculptBrushActive;
+    volumeSculptBrushActive = next;
+    volumeStampShape = next ? (volumeStampShape ?? "boulder") : null;
+    if (next) scene?.armVolumeStamp(volumeStampShape ?? "boulder", volumeMaterial, "sculpt");
+    else scene?.disarm();
+  }
+
+  function pickVolumeMaterial(mat: TerrainVolumeMaterial): void {
+    volumeMaterial = mat;
+    scene?.setVolumeMaterial(mat);
+  }
+
+  function pickVolumeShapeForBrush(shape: TerrainVolumeShape): void {
+    volumeStampShape = shape;
+    scene?.setVolumeShape(shape);
   }
 
   function pickWaterBrush(mode: WaterBrushMode): void {
     armedModel = null;
     armedMarker = null;
     sculptMode = null;
+    volumeStampShape = null;
+    volumeSculptBrushActive = false;
     roadPaintActive = false;
+    houseToolActive = false;
     waterBrushMode = waterBrushMode === mode ? null : mode;
     scene?.setWaterBrushMode(waterBrushMode);
   }
@@ -166,7 +244,10 @@
     armedModel = null;
     armedMarker = null;
     sculptMode = null;
+    volumeStampShape = null;
+    volumeSculptBrushActive = false;
     waterBrushMode = null;
+    houseToolActive = false;
     roadPaintActive = !roadPaintActive;
     if (roadPaintActive) scene?.armRoadPainting();
     else scene?.disarm();
@@ -179,49 +260,104 @@
 
   let randomTreeBrushActive = $state(false);
   let grassBrushActive = $state(false);
-  let grassBrushModel = $state<string | null>(null);
+  let grassEraseBrushActive = $state(false);
   let eraseBrushActive = $state(false);
-  let grassOptions = $derived(REGION_GRASS_COVER[biome] ?? REGION_GRASS_COVER.grassland);
+  let houseToolActive = $state(false);
+  let houseType = $state<HouseType>("random");
 
   function pickRandomTreeBrush(): void {
     armedModel = null;
     armedMarker = null;
     sculptMode = null;
+    volumeStampShape = null;
+    volumeSculptBrushActive = false;
     waterBrushMode = null;
     roadPaintActive = false;
     grassBrushActive = false;
+    grassEraseBrushActive = false;
     eraseBrushActive = false;
+    houseToolActive = false;
     randomTreeBrushActive = !randomTreeBrushActive;
     scene?.setRandomTreeBrush(randomTreeBrushActive);
+  }
+
+  /** One-click house generator (see houseGen.ts / RegionEditorScene's
+   *  armHousePlacement): drops a fully assembled house of the chosen type
+   *  (or random) wherever you next click, as ordinary editable assets that
+   *  share a groupId so clicking any piece selects/moves the whole house.
+   *  Stays armed so you can drop several in a row -- click the same type
+   *  again, pick another tool, or hit Escape to stop. */
+  function pickHouseTool(type: HouseType = houseType): void {
+    armedModel = null;
+    armedMarker = null;
+    sculptMode = null;
+    volumeStampShape = null;
+    volumeSculptBrushActive = false;
+    waterBrushMode = null;
+    roadPaintActive = false;
+    randomTreeBrushActive = false;
+    grassBrushActive = false;
+    grassEraseBrushActive = false;
+    eraseBrushActive = false;
+    texturePaintMode = null;
+    armedLightColor = null;
+    // Re-clicking the same type disarms; picking a different type switches.
+    if (houseToolActive && houseType === type) {
+      houseToolActive = false;
+      scene?.disarm();
+      return;
+    }
+    houseType = type;
+    houseToolActive = true;
+    scene?.armHousePlacement(type);
   }
 
   function pickGrassBrush(): void {
     armedModel = null;
     armedMarker = null;
     sculptMode = null;
+    volumeStampShape = null;
+    volumeSculptBrushActive = false;
     waterBrushMode = null;
     roadPaintActive = false;
     randomTreeBrushActive = false;
+    grassEraseBrushActive = false;
     eraseBrushActive = false;
+    houseToolActive = false;
     grassBrushActive = !grassBrushActive;
     scene?.setGrassBrush(grassBrushActive);
   }
 
-  function pickGrassBrushModel(model: string | null): void {
-    grassBrushModel = model;
-    scene?.setGrassBrushModel(model);
+  function pickGrassEraseBrush(): void {
+    armedModel = null;
+    armedMarker = null;
+    sculptMode = null;
+    volumeStampShape = null;
+    volumeSculptBrushActive = false;
+    waterBrushMode = null;
+    roadPaintActive = false;
+    randomTreeBrushActive = false;
+    grassBrushActive = false;
+    eraseBrushActive = false;
+    houseToolActive = false;
+    grassEraseBrushActive = !grassEraseBrushActive;
+    scene?.setGrassEraseBrush(grassEraseBrushActive);
   }
 
   function pickEraseBrush(): void {
     armedModel = null;
     armedMarker = null;
     sculptMode = null;
+    volumeStampShape = null;
+    volumeSculptBrushActive = false;
     waterBrushMode = null;
     roadPaintActive = false;
     randomTreeBrushActive = false;
     grassBrushActive = false;
+    grassEraseBrushActive = false;
     texturePaintMode = null;
     armedLightColor = null;
+    houseToolActive = false;
     eraseBrushActive = !eraseBrushActive;
     scene?.setEraseBrush(eraseBrushActive);
   }
@@ -233,12 +369,16 @@
     armedModel = null;
     armedMarker = null;
     sculptMode = null;
+    volumeStampShape = null;
+    volumeSculptBrushActive = false;
     waterBrushMode = null;
     roadPaintActive = false;
     randomTreeBrushActive = false;
     grassBrushActive = false;
+    grassEraseBrushActive = false;
     eraseBrushActive = false;
     armedLightColor = null;
+    houseToolActive = false;
     texturePaintMode = texturePaintMode === mode ? null : mode;
     scene?.setTexturePaintMode(texturePaintMode);
   }
@@ -247,12 +387,16 @@
     armedModel = null;
     armedMarker = null;
     sculptMode = null;
+    volumeStampShape = null;
+    volumeSculptBrushActive = false;
     waterBrushMode = null;
     roadPaintActive = false;
     randomTreeBrushActive = false;
     grassBrushActive = false;
+    grassEraseBrushActive = false;
     eraseBrushActive = false;
     texturePaintMode = null;
+    houseToolActive = false;
     armedLightColor = armedLightColor === color ? null : color;
     if (armedLightColor) scene?.armLightPlacement(armedLightColor);
     else scene?.disarm();
@@ -262,15 +406,20 @@
     armedModel = null;
     armedMarker = null;
     sculptMode = null;
+    volumeStampShape = null;
+    volumeSculptBrushActive = false;
     waterBrushMode = null;
     roadPaintActive = false;
     randomTreeBrushActive = false;
     grassBrushActive = false;
+    grassEraseBrushActive = false;
     eraseBrushActive = false;
     texturePaintMode = null;
     armedLightColor = null;
+    houseToolActive = false;
     scene?.setRandomTreeBrush(false);
     scene?.setGrassBrush(false);
+    scene?.setGrassEraseBrush(false);
     scene?.setEraseBrush(false);
     scene?.setTexturePaintMode(null);
     scene?.disarm();
@@ -365,6 +514,18 @@
     scene?.applyColorGrading(colorGrading);
   }
 
+  function applyGrassColor(): void {
+    scene?.applyGrassColor(grassColor);
+  }
+
+  function applyGrassLength(): void {
+    scene?.setGrassLength(grassLength);
+  }
+
+  function applyWind(): void {
+    scene?.applyWind(wind);
+  }
+
   function applyBiomePreset(): void {
     colorGrading = { ...REGION_COLOR_PRESETS[biome] };
     applyColorGrading();
@@ -401,6 +562,8 @@
       isStartingRegion = data.blueprint.isStartingRegion ?? false;
       musicTrack = data.blueprint.musicTrack ?? null;
       colorGrading = scene.getColorGrading();
+      grassColor = scene.getGrassColor();
+      wind = scene.getWind();
       status = `Loaded "${data.blueprint.name}".`;
       localStorage.setItem("rustcraft_last_region_id", data.blueprint.id);
       const url = new URL(window.location.href);
@@ -423,6 +586,8 @@
     await scene.loadBlueprint(bp);
     scene.initHistory();
     colorGrading = scene.getColorGrading();
+    grassColor = scene.getGrassColor();
+    wind = scene.getWind();
     status = "Generated a random region -- review, tweak, then Save.";
   }
 
@@ -501,6 +666,8 @@
       portalWorldZ = blueprint.portalWorldZ;
       musicTrack = blueprint.musicTrack ?? null;
       colorGrading = scene?.getColorGrading() ?? colorGrading;
+      grassColor = scene?.getGrassColor() ?? grassColor;
+      wind = scene?.getWind() ?? wind;
       status = `Imported "${blueprint.name}".`;
     } catch {
       status = "Import failed -- invalid JSON.";
@@ -557,7 +724,7 @@
 
       <!-- Sculpt Dropdown Menu -->
       <div class="dropdown-wrapper">
-        <button class="dropdown-trigger" class:active={sculptMode !== null} onclick={() => toggleDropdown("sculpt")}>
+        <button class="dropdown-trigger" class:active={sculptMode !== null || volumeStampShape !== null || volumeSculptBrushActive} onclick={() => toggleDropdown("sculpt")}>
           🏔️ Sculpt <span class="caret">▾</span>
         </button>
         {#if activeDropdown === "sculpt"}
@@ -574,6 +741,19 @@
             <button class:active={sculptMode === "smooth"} onclick={() => { pickSculpt("smooth"); activeDropdown = null; }}>
               🌊 Smooth Terrain
             </button>
+            <button class:active={sculptMode === "carve"} onclick={() => { pickSculpt("carve"); activeDropdown = null; }}>
+              🕳️ Carve Hole
+            </button>
+            <div class="dropdown-divider"></div>
+            <div class="dropdown-section-label">Add Terrain Volumes</div>
+            <button class:active={volumeSculptBrushActive} onclick={() => { pickVolumeSculptBrush(); activeDropdown = null; }}>
+              🖌️ Drag Sculpt Brush
+            </button>
+            {#each TERRAIN_VOLUME_SHAPES as shape}
+              <button class:active={volumeStampShape === shape.id && !volumeSculptBrushActive} onclick={() => { pickVolumeStamp(shape.id); activeDropdown = null; }}>
+                {shape.label}
+              </button>
+            {/each}
           </div>
         {/if}
       </div>
@@ -662,7 +842,7 @@
 
       <!-- Roads & Spawns Dropdown Menu -->
       <div class="dropdown-wrapper">
-        <button class="dropdown-trigger" class:active={roadPaintActive || armedMarker !== null || randomTreeBrushActive || grassBrushActive || eraseBrushActive} onclick={() => toggleDropdown("markers")}>
+        <button class="dropdown-trigger" class:active={roadPaintActive || armedMarker !== null || randomTreeBrushActive || grassBrushActive || grassEraseBrushActive || eraseBrushActive || houseToolActive} onclick={() => toggleDropdown("markers")}>
           📍 Roads & Nature <span class="caret">▾</span>
         </button>
         {#if activeDropdown === "markers"}
@@ -670,11 +850,21 @@
             <button class:active={roadPaintActive} onclick={() => { pickRoadTool(); activeDropdown = null; }}>
               🛣️ Paint Dirt Road
             </button>
+            <div class="dropdown-divider"></div>
+            {#each HOUSE_TYPE_OPTIONS as opt}
+              <button class:active={houseToolActive && houseType === opt.id} onclick={() => { pickHouseTool(opt.id); activeDropdown = null; }}>
+                {opt.label}
+              </button>
+            {/each}
+            <div class="dropdown-divider"></div>
             <button class:active={randomTreeBrushActive} onclick={() => { pickRandomTreeBrush(); activeDropdown = null; }}>
               🌲 Random Tree Brush
             </button>
             <button class:active={grassBrushActive} onclick={() => { pickGrassBrush(); activeDropdown = null; }}>
               🌿 Grass Brush
+            </button>
+            <button class:active={grassEraseBrushActive} onclick={() => { pickGrassEraseBrush(); activeDropdown = null; }}>
+              🌾✂️ Erase Grass
             </button>
             <button class:active={eraseBrushActive} onclick={() => { pickEraseBrush(); activeDropdown = null; }}>
               🧹 Erase Brush
@@ -760,6 +950,17 @@
               </select>
             </label>
             <div class="dropdown-divider"></div>
+            <label class="menu-field">
+              🍃 Wind Direction
+              <input type="range" min="0" max="360" step="5" bind:value={wind.direction} oninput={applyWind} />
+              <span class="readout">{wind.direction}°</span>
+            </label>
+            <label class="menu-field">
+              🍃 Wind Strength
+              <input type="range" min="0" max="3" step="0.1" bind:value={wind.strength} oninput={applyWind} />
+              <span class="readout">{wind.strength.toFixed(1)}x</span>
+            </label>
+            <div class="dropdown-divider"></div>
             <button class="menu-action" class:active={showColorPanel} onclick={() => { showColorPanel = !showColorPanel; activeDropdown = null; }}>
               🎨 Toggle Color Grading
             </button>
@@ -793,11 +994,20 @@
   </div>
 
   <!-- Active Context Sub-Bar (only shown when a sculpt, water, texture, light, tree, or road tool is active) -->
-  {#if sculptMode || waterBrushMode || texturePaintMode !== null || armedLightColor !== null || randomTreeBrushActive || grassBrushActive || eraseBrushActive || roadPaintActive}
+  {#if sculptMode || volumeSculptBrushActive || volumeStampShape || waterBrushMode || texturePaintMode !== null || armedLightColor !== null || randomTreeBrushActive || grassBrushActive || grassEraseBrushActive || eraseBrushActive || roadPaintActive}
     <div class="context-bar">
       <span class="context-title">
-        {#if sculptMode}
-          🏔️ Sculpting Mode: <strong>{sculptMode.toUpperCase()}</strong>
+        {#if volumeSculptBrushActive}
+          🖌️ Volume Sculpt Brush: <strong>DRAG ONE CONTINUOUS MESH</strong>
+        {:else if volumeStampShape}
+          🗿 Place Volume: <strong>{volumeStampShape.toUpperCase()}</strong>
+        {:else if sculptMode}
+          🏔️ Sculpting Mode: <strong>{sculptMode === "carve" ? "CARVE HOLE" : sculptMode.toUpperCase()}</strong>
+          {#if sculptMode === "carve"}
+            <span class="context-hint"> — volumes only (radius = brush size)</span>
+          {:else if selection.some((s) => s.kind === "volume")}
+            <span class="context-hint"> — selected volume only</span>
+          {/if}
         {:else if waterBrushMode}
           💧 Water Mode: <strong>{waterBrushMode === "add" ? "DROP WATER" : "DRAIN WATER"}</strong>
         {:else if texturePaintMode !== null}
@@ -808,6 +1018,8 @@
           🌲 Nature Mode: <strong>RANDOM TREE BRUSH</strong>
         {:else if grassBrushActive}
           🌿 Nature Mode: <strong>GRASS BRUSH</strong>
+        {:else if grassEraseBrushActive}
+          🌾✂️ Nature Mode: <strong>ERASE GRASS</strong>
         {:else if eraseBrushActive}
           🧹 Nature Mode: <strong>ERASE BRUSH</strong>
         {:else if roadPaintActive}
@@ -816,28 +1028,50 @@
       </span>
 
       <div class="context-fields">
-        {#if sculptMode || waterBrushMode || texturePaintMode !== null || randomTreeBrushActive || grassBrushActive || eraseBrushActive}
+        {#if sculptMode || volumeSculptBrushActive || volumeStampShape || waterBrushMode || texturePaintMode !== null || randomTreeBrushActive || grassBrushActive || grassEraseBrushActive || eraseBrushActive}
           <label class="context-field">
             Radius
             <input type="range" min="2" max="30" value={brushRadius} oninput={(e) => updateBrushRadius(Number((e.target as HTMLInputElement).value))} />
             <span>{brushRadius}m</span>
           </label>
-          {#if sculptMode || waterBrushMode || randomTreeBrushActive || grassBrushActive}
+          {#if volumeSculptBrushActive || volumeStampShape}
             <label class="context-field">
-              {randomTreeBrushActive ? "Density" : grassBrushActive ? "Frequency" : "Strength"}
+              Shape
+              <select value={volumeStampShape ?? "boulder"} onchange={(e) => pickVolumeShapeForBrush((e.target as HTMLSelectElement).value as TerrainVolumeShape)}>
+                {#each TERRAIN_VOLUME_SHAPES as shape}
+                  <option value={shape.id}>{shape.label}</option>
+                {/each}
+              </select>
+            </label>
+            <label class="context-field">
+              Material
+              <select value={volumeMaterial} onchange={(e) => pickVolumeMaterial((e.target as HTMLSelectElement).value as TerrainVolumeMaterial)}>
+                {#each TERRAIN_VOLUME_MATERIALS as mat}
+                  <option value={mat.id}>{mat.label}</option>
+                {/each}
+              </select>
+            </label>
+          {/if}
+          {#if sculptMode || volumeSculptBrushActive || waterBrushMode || randomTreeBrushActive || grassBrushActive || grassEraseBrushActive}
+            <label class="context-field">
+              {volumeSculptBrushActive ? "Height" : randomTreeBrushActive ? "Density" : grassBrushActive ? "Frequency" : "Strength"}
               <input type="range" min="0.2" max="3" step="0.1" value={brushStrength} oninput={(e) => updateBrushStrength(Number((e.target as HTMLInputElement).value))} />
               <span>{brushStrength}x</span>
             </label>
           {/if}
           {#if grassBrushActive}
             <label class="context-field">
-              Type
-              <select value={grassBrushModel ?? "__random__"} onchange={(e) => pickGrassBrushModel((e.target as HTMLSelectElement).value === "__random__" ? null : (e.target as HTMLSelectElement).value)}>
-                <option value="__random__">🎲 Random</option>
-                {#each grassOptions as model (model)}
-                  <option value={model}>{model.replace(/^.*\//, "").replace(/\.(gltf|glb)$/, "")}</option>
-                {/each}
-              </select>
+              Bottom
+              <input type="color" bind:value={grassColor.bottom} oninput={applyGrassColor} />
+            </label>
+            <label class="context-field">
+              Top
+              <input type="color" bind:value={grassColor.top} oninput={applyGrassColor} />
+            </label>
+            <label class="context-field">
+              Length
+              <input type="range" min="0.4" max="2.5" step="0.05" bind:value={grassLength} oninput={applyGrassLength} />
+              <span>{grassLength.toFixed(2)}x</span>
             </label>
           {/if}
         {:else if roadPaintActive}
@@ -876,6 +1110,17 @@
 
     <canvas bind:this={canvas} class="viewport"></canvas>
 
+    {#if marqueeBox}
+      {@const left = Math.min(marqueeBox.startX, marqueeBox.endX)}
+      {@const top = Math.min(marqueeBox.startY, marqueeBox.endY)}
+      {@const width = Math.abs(marqueeBox.endX - marqueeBox.startX)}
+      {@const height = Math.abs(marqueeBox.endY - marqueeBox.startY)}
+      <div
+        class="marquee"
+        style="left: {left}px; top: {top}px; width: {width}px; height: {height}px;"
+      ></div>
+    {/if}
+
     {#if playtestActive}
       <div class="playtest-hint">WASD to move &middot; Mouse to look &middot; Shift to run &middot; Esc to exit</div>
     {/if}
@@ -912,11 +1157,11 @@
     {#if selection.length === 1}
       {@const sel = selection[0]!}
       <div class="properties">
-        <h3>{sel.kind === "asset" ? sel.model?.replace(/\.(gltf|glb)$/, "") : sel.kind === "light" ? "Point Light Source" : sel.markerKind}</h3>
+        <h3>{sel.kind === "asset" ? sel.model?.replace(/\.(gltf|glb)$/, "") : sel.kind === "light" ? "Point Light Source" : sel.kind === "volume" ? `${sel.volumeShape ?? "volume"} (${sel.volumeMaterial ?? "rock"})` : sel.markerKind}</h3>
         <label>X <input type="number" step="0.1" value={sel.x} onchange={(e) => applyPatch({ x: Number((e.target as HTMLInputElement).value) })} /></label>
         <label>Y <input type="number" step="0.1" value={sel.y} onchange={(e) => applyPatch({ y: Number((e.target as HTMLInputElement).value) })} /></label>
         <label>Z <input type="number" step="0.1" value={sel.z} onchange={(e) => applyPatch({ z: Number((e.target as HTMLInputElement).value) })} /></label>
-        {#if sel.kind === "asset"}
+        {#if sel.kind === "asset" || sel.kind === "volume"}
           <label>Yaw <input type="number" step="0.01" value={sel.yaw} onchange={(e) => applyPatch({ yaw: Number((e.target as HTMLInputElement).value) })} /></label>
           <label>Scale <input type="number" step="0.05" value={sel.scale} onchange={(e) => applyPatch({ scale: Number((e.target as HTMLInputElement).value) })} /></label>
         {:else if sel.kind === "light"}
@@ -1032,7 +1277,12 @@
       </div>
     {:else if selection.length > 1}
       <div class="properties">
-        <h3>{selection.length} Items Selected</h3>
+        {#if selection.every((s) => s.groupId && s.groupId === selection[0]?.groupId)}
+          <h3>🏠 House ({selection.length} pieces)</h3>
+          <p class="hint">Move / rotate / scale moves the whole house. Delete removes all pieces.</p>
+        {:else}
+          <h3>{selection.length} Items Selected</h3>
+        {/if}
         <button class="delete" onclick={deleteSelected}>Delete All</button>
       </div>
     {/if}
@@ -1222,6 +1472,13 @@
     background: #2d3546;
     margin: 4px 0;
   }
+  .dropdown-section-label {
+    font-size: 10px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: #64748b;
+    padding: 6px 10px 2px;
+  }
   .menu-field {
     display: flex;
     justify-content: space-between;
@@ -1390,6 +1647,13 @@
     min-width: 0;
     height: 100%;
   }
+  .marquee {
+    position: fixed;
+    border: 1px solid #4a90e2;
+    background: rgba(74, 144, 226, 0.2);
+    pointer-events: none;
+    z-index: 1000;
+  }
   .properties,
   .color-panel {
     position: absolute;
@@ -1417,6 +1681,12 @@
     margin: 0 0 6px;
     font-size: 14px;
     word-break: break-word;
+  }
+  .properties .hint {
+    margin: 0 0 10px;
+    font-size: 11px;
+    opacity: 0.7;
+    line-height: 1.35;
   }
   .properties label,
   .color-panel label {
