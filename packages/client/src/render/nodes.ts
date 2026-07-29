@@ -123,6 +123,26 @@ export class NodeManager {
     }
   }
 
+  /** Drop mesh GPU objects while keeping node metadata (depleted flags, positions). */
+  disposeVisuals(): void {
+    for (const entry of this.nodes.values()) {
+      if (entry.mesh) {
+        this.scene.remove(entry.mesh);
+        entry.mesh.traverse((o) => {
+          const im = o as THREE.InstancedMesh;
+          if (im.isInstancedMesh) im.dispose();
+          const mesh = o as THREE.Mesh;
+          if (!mesh.isMesh || mesh.userData.fromGltf) return;
+          mesh.geometry?.dispose();
+        });
+        entry.mesh = null;
+        entry.inScene = false;
+      }
+    }
+    for (const c of this.chips) this.scene.remove(c.mesh);
+    this.chips.length = 0;
+  }
+
   /** Spatial windowing (throttled) + per-frame shake/particle animation. */
   update(px: number, pz: number, timeMs: number, dt = 0.016): void {
     // Windowing: only re-evaluate which nodes are in-scene a few times a second.

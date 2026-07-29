@@ -309,11 +309,13 @@ export class RegionInteriorRenderer {
     this.grassField = buildGrassInstances(patches, this.blueprint.grassExclusions, this.blueprint, {
       color: this.blueprint.grassColor,
       wind: this.blueprint.wind,
+      stream: true,
+      parent: this.group,
+      visibleRadius: 95,
     });
-    for (const mesh of this.grassField.meshes) {
-      this.group.add(mesh);
-      this.instancedGroups.push(mesh);
-    }
+    // Streamed meshes are parented by buildGrassInstances; seed around entry.
+    const entry = this.blueprint.entryLocal;
+    this.grassField.update(entry.x, entry.z);
   }
 
   /** Add freeform sculpted terrain volumes (boulder/block/pillar/spike/ramp).
@@ -490,7 +492,8 @@ export class RegionInteriorRenderer {
    *  doc comment. `sun` is optional so callers without a directional light
    *  handy (there are none today, but keeps this defensive) just leave the
    *  blade shader's sun uniforms at their static defaults. */
-  update(delta: number, sun?: THREE.DirectionalLight): void {
+  update(delta: number, sun?: THREE.DirectionalLight, viewerX = 0, viewerZ = 0): void {
+    if (this.grassField) this.grassField.update(viewerX, viewerZ);
     if (!(delta > 0)) return;
 
     if (this.grassField) {
@@ -631,6 +634,10 @@ export class RegionInteriorRenderer {
   }
 
   destroy(): void {
+    if (this.grassField) {
+      this.grassField.dispose();
+      this.grassField = null;
+    }
     this.group.remove(this.terrainMesh);
     this.terrainMesh.geometry.dispose();
     for (const im of this.instancedGroups) this.group.remove(im);

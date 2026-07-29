@@ -134,6 +134,19 @@ import {
 } from "./persistence";
 import { type DungeonInstance, computeMobMultiplier } from "./dungeons";
 import { listRegionBlueprints } from "../utils/regions";
+import {
+  type WorldEventRuntime,
+  createWorldEventRuntime,
+  computeEventScale,
+  cooldownMs,
+  dist2 as eventDist2,
+  recordEventDamage,
+  decayParticipation,
+  markInRadius,
+  tierForScore,
+  rollEventRewards,
+  snapshotWorldEvent,
+} from "./worldEvents";
 
 const DAY_LENGTH_S = 1800; // full day/night cycle — slow, ambient pacing
 const SAVE_INTERVAL_MS = 30_000;
@@ -264,6 +277,8 @@ interface MobState {
   deathAt?: number | null;
   moving?: boolean;
   leashing?: boolean;
+  /** When set, this mob belongs to an active world event (no corpse loot; personal rewards on success). */
+  eventId?: string;
 }
 
 /** A summoned companion (currently just Beast Mastery's wolf) -- deliberately
@@ -370,6 +385,8 @@ export class GameServer {
    *  respawn normally for the rest of this process's life, mirroring
    *  region-two's own lazy-activation precedent (see regionTwoActive). */
   private activeRegionIds = new Set<string>();
+  /** Active/cooldown world-event runtimes keyed by `${regionId}:${eventId}`. */
+  private worldEvents = new Map<string, WorldEventRuntime>();
   /** Ashenpeak (region 2) stays dormant — not generated, not ticked — until a
    *  player first walks through the valley; then it's resident for the rest
    *  of this process's life (resets to dormant on a restart). */
@@ -1963,6 +1980,13 @@ export class GameServer {
         maxHp: 100,
       });
     }
+
+    const now = Date.now();
+    for (const ev of region.worldEvents ?? []) {
+      const key = `${region.id}:${ev.id}`;
+      if (this.worldEvents.has(key)) continue;
+      this.worldEvents.set(key, createWorldEventRuntime(ev, region.id, now));
+    }
   }
 
   registerRegionBlueprint(blueprint: RegionBlueprint): void {
@@ -2080,6 +2104,231 @@ export class GameServer {
 
   private sendRegionState(player: PlayerState, region: RegionBlueprint): void {
     this.sendTo(player.peer, { t: "regionState", inRegion: true, regionId: region.id, regionName: region.name });
+    this.sendWorldEventsToPlayer(player, region.id);
+  }
+
+  private worldEventKey(regionId: string, eventId: string): string {
+    return `${regionId}:${eventId}`;
+  }
+
+  private worldEventKeyForMob(mob: MobState): string | null {
+    if (!mob.eventId || !mob.instanceId?.startsWith("region_")) return null;
+    const regionId = mob.instanceId.slice("region_".length);
+    return this.worldEventKey(regionId, mob.eventId);
+  }
+
+  private tickWorldEvents(now: number): void {
+    for (const rt of this.worldEvents.values()) {
+      decayParticipation(rt, now);
+
+      // Count players in radius for this region instance.
+      let count = 0;
+      for (const player of this.players.values()) {
+        if (player.dead) continue;
+        if (player.instanceId !== rt.instanceId) continue;
+        if (eventDist2(player.move.x, player.move.z, rt.def.localX, rt.def.localZ) > rt.def.radius) continue;
+        count++;
+        markInRadius(rt, player.id, now);
+      }
+      if (count !== rt.playerCount) {
+        rt.playerCount = count;
+        rt.dirty = true;
+      }
+
+      if (
+        (rt.phase === "success" || rt.phase === "failed") &&
+        rt.phaseHoldUntil != null &&
+        now >= rt.phaseHoldUntil
+      ) {
+        rt.phase = "cooldown";
+        rt.phaseHoldUntil = null;
+        rt.scores.clear();
+        rt.dirty = true;
+        continue;
+      }
+
+      if (rt.phase === "cooldown" && now >= rt.nextActiveAt) {
+        this.startWorldEvent(rt, now);
+        continue;
+      }
+
+      if (rt.phase === "active") {
+        this.scaleWorldEventMobs(rt);
+        // Prune dead mob ids from the set.
+        for (const id of [...rt.mobIds]) {
+          const mob = this.mobs.get(id);
+          if (!mob || mob.hp <= 0) rt.mobIds.delete(id);
+        }
+        const bossDead = !rt.bossMobId || !rt.mobIds.has(rt.bossMobId);
+        const waveClear = rt.mobIds.size === 0;
+        const success = rt.def.bossType ? bossDead && waveClear : waveClear;
+        if (success) {
+          this.completeWorldEvent(rt, now, true);
+          continue;
+        }
+        if (rt.endsAt != null && now >= rt.endsAt) {
+          this.completeWorldEvent(rt, now, false);
+        }
+      }
+    }
+  }
+
+  private startWorldEvent(rt: WorldEventRuntime, now: number): void {
+    const region = this.regionBlueprints.get(rt.regionId);
+    if (!region) return;
+    this.despawnWorldEventMobs(rt);
+
+    const scale = computeEventScale(rt.def.difficulty, Math.max(1, rt.playerCount));
+    rt.lastScale = scale;
+    rt.mobIds.clear();
+    rt.bossMobId = null;
+    rt.scores.clear();
+
+    const types = rt.def.mobTypes.length > 0 ? rt.def.mobTypes : ["wolf"];
+    const spawnCount = Math.min(8, Math.max(types.length, 3));
+    for (let i = 0; i < spawnCount; i++) {
+      const type = types[i % types.length]!;
+      const ang = (i / spawnCount) * Math.PI * 2 + Math.random() * 0.4;
+      const dist = 4 + Math.random() * Math.max(4, rt.def.radius * 0.35);
+      const x = rt.def.localX + Math.cos(ang) * dist;
+      const z = rt.def.localZ + Math.sin(ang) * dist;
+      const id = this.spawnWorldEventMob(rt, region, type, x, z, scale);
+      rt.mobIds.add(id);
+    }
+    if (rt.def.bossType) {
+      const id = this.spawnWorldEventMob(rt, region, rt.def.bossType, rt.def.localX, rt.def.localZ, scale * 1.15);
+      rt.mobIds.add(id);
+      rt.bossMobId = id;
+    }
+
+    rt.phase = "active";
+    rt.endsAt = now + Math.max(60, rt.def.durationSec ?? 600) * 1000;
+    rt.phaseHoldUntil = null;
+    rt.dirty = true;
+  }
+
+  private spawnWorldEventMob(
+    rt: WorldEventRuntime,
+    region: RegionBlueprint,
+    type: string,
+    x: number,
+    z: number,
+    scale: number,
+  ): string {
+    const def = mobDef(type);
+    const y = sampleRegionHeight(region, x, z);
+    const id = `wevt_${rt.regionId}_${rt.def.id}_${this.tickCount}_${Math.floor(Math.random() * 1e6)}`;
+    this.mobs.set(id, {
+      id,
+      type,
+      x,
+      y,
+      z,
+      yaw: Math.random() * Math.PI * 2,
+      hp: def.maxHp * scale,
+      homeX: x,
+      homeZ: z,
+      targetId: null,
+      attackReadyAt: 0,
+      respawnAt: Infinity, // event mobs never respawn on the normal timer
+      wanderTx: x,
+      wanderTz: z,
+      nextWanderAt: 0,
+      actionAnimUntil: 0,
+      activeAuras: [],
+      instanceId: rt.instanceId,
+      hpMult: scale,
+      dmgMult: scale,
+      eventId: rt.def.id,
+    });
+    return id;
+  }
+
+  private scaleWorldEventMobs(rt: WorldEventRuntime): void {
+    const scale = computeEventScale(rt.def.difficulty, Math.max(1, rt.playerCount));
+    if (Math.abs(scale - rt.lastScale) < 0.05) return;
+    const ratio = scale / Math.max(0.01, rt.lastScale);
+    for (const id of rt.mobIds) {
+      const mob = this.mobs.get(id);
+      if (!mob || mob.hp <= 0) continue;
+      const def = mobDef(mob.type);
+      mob.hpMult = scale;
+      mob.dmgMult = scale;
+      const newMax = def.maxHp * scale;
+      mob.hp = Math.min(newMax, Math.max(1, mob.hp * ratio));
+    }
+    rt.lastScale = scale;
+    rt.dirty = true;
+  }
+
+  private despawnWorldEventMobs(rt: WorldEventRuntime): void {
+    for (const id of rt.mobIds) {
+      this.mobs.delete(id);
+    }
+    rt.mobIds.clear();
+    rt.bossMobId = null;
+  }
+
+  private completeWorldEvent(rt: WorldEventRuntime, now: number, success: boolean): void {
+    if (success) {
+      rt.phase = "success";
+      for (const [playerId, part] of rt.scores) {
+        const tier = tierForScore(part.score);
+        if (!tier) continue;
+        const player = this.players.get(playerId);
+        if (!player || player.instanceId !== rt.instanceId) continue;
+        const rewards = rollEventRewards(tier, rt.def.lootAmount);
+        for (const r of rewards) {
+          addItem(player.inventory, r.itemId, r.qty);
+          this.sendEvent(player, { t: "event", kind: "loot", itemId: r.itemId, amount: r.qty });
+        }
+        const xpGain = Math.round((tier === "gold" ? 80 : tier === "silver" ? 45 : 20) * rt.def.lootAmount);
+        player.xp += xpGain;
+        while (player.level < MAX_LEVEL && player.xp >= xpForLevel(player.level)) {
+          player.xp -= xpForLevel(player.level);
+          player.level++;
+          player.hp = this.maxHp(player);
+          player.mana = this.maxMana(player);
+          this.sendEvent(player, { t: "event", kind: "levelup", amount: player.level });
+        }
+        this.sendEvent(player, { t: "event", kind: "xp", amount: xpGain });
+        this.sendTo(player.peer, {
+          t: "chat",
+          channel: "system",
+          from: "system",
+          text: `${rt.def.name} complete — ${tier.toUpperCase()} rewards!`,
+        });
+        this.sendInventory(player);
+        this.sendSelf(player);
+        player.dirty = true;
+      }
+    } else {
+      rt.phase = "failed";
+    }
+    this.despawnWorldEventMobs(rt);
+    rt.endsAt = null;
+    rt.nextActiveAt = now + Math.round(cooldownMs(rt.def.frequencyMin) * (success ? 1 : 0.65));
+    // Hold success/fail on clients briefly, then cooldown starts at nextActiveAt - frequency.
+    rt.phaseHoldUntil = now + 4000;
+    rt.dirty = true;
+  }
+
+  private broadcastWorldEventStates(): void {
+    for (const player of this.players.values()) {
+      const regionId = this.regionIdFromInstance(player.instanceId);
+      if (!regionId) continue;
+      this.sendWorldEventsToPlayer(player, regionId);
+    }
+    for (const rt of this.worldEvents.values()) rt.dirty = false;
+  }
+
+  private sendWorldEventsToPlayer(player: PlayerState, regionId: string): void {
+    const events = [];
+    for (const rt of this.worldEvents.values()) {
+      if (rt.regionId !== regionId) continue;
+      events.push(snapshotWorldEvent(rt, player.id));
+    }
+    this.sendTo(player.peer, { t: "worldEventState", events });
   }
 
   // ============================ actions ============================
@@ -2816,6 +3065,7 @@ export class GameServer {
     this.tickPets(now);
     this.tickNodeRespawns(now);
     this.tickEscortNpcs(TICK_DT);
+    if (this.tickCount % 20 === 0) this.tickWorldEvents(now);
 
     // Full 20Hz broadcast (sendSnapshots already includes each viewer's own
     // self-ack) -- previously throttled to every 2nd tick, but that 100ms
@@ -2829,6 +3079,7 @@ export class GameServer {
       for (const partyId of this.parties.keys()) this.broadcastPartyState(partyId);
       this.broadcastRoster();
       this.tickDungeons(now);
+      this.broadcastWorldEventStates();
     }
   }
 
@@ -3029,6 +3280,11 @@ export class GameServer {
       const def = mobDef(mob.type);
 
       if (mob.respawnAt !== null) {
+        if (mob.eventId && mob.hp <= 0) {
+          const corpseAge = mob.deathAt ? now - mob.deathAt : 0;
+          if (corpseAge > 30000) this.mobs.delete(mob.id);
+          continue;
+        }
         if (now >= mob.respawnAt) {
           mob.respawnAt = null;
           mob.hp = def.maxHp * mob.hpMult;
@@ -3048,6 +3304,8 @@ export class GameServer {
         if (mob.respawnAt === null && corpseAge > 30000) {
           mob.loot = [];
           mob.respawnAt = this.isDungeonInstance(mob.instanceId) ? Infinity : now + def.respawnS * 1000;
+        } else if (mob.eventId && corpseAge > 30000) {
+          this.mobs.delete(mob.id);
         }
         continue;
       }
@@ -3257,10 +3515,10 @@ export class GameServer {
     mob.hp = 0;
     mob.targetId = null;
     mob.deathAt = Date.now();
-    mob.respawnAt = null;
+    mob.respawnAt = mob.eventId ? Infinity : null;
 
     mob.loot = [];
-    if (def.loot) {
+    if (!mob.eventId && def.loot) {
       for (const drop of def.loot) {
         if (drop.chance === undefined || Math.random() < drop.chance) {
           const qty = drop.min + Math.floor(Math.random() * (drop.max - drop.min + 1));
@@ -3305,6 +3563,11 @@ export class GameServer {
     if (mob.hp <= 0) return;
     mob.hp -= amount;
     mob.targetId = attacker.id;
+    if (mob.eventId) {
+      const key = this.worldEventKeyForMob(mob);
+      const rt = key ? this.worldEvents.get(key) : undefined;
+      if (rt) recordEventDamage(rt, attacker.id, mob.id, amount, Date.now());
+    }
     this.broadcastNear(
       mob.x,
       mob.z,

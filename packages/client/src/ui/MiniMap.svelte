@@ -45,6 +45,11 @@
 
   const villagePoints = $derived(villages.map((v) => ({ id: v.id, p: project(v.x, v.z) })));
   const questPoints = $derived(game.questMarkers.map((m) => ({ ...m, p: project(m.x, m.z) })));
+  const worldEventPoints = $derived(
+    game.worldEvents
+      .filter((e) => e.phase === "active" || e.phase === "success" || e.phase === "failed")
+      .map((e) => ({ ...e, p: project(e.localX, e.localZ) })),
+  );
 
   interface PartyPoint {
     id: string;
@@ -107,6 +112,12 @@
           <circle cx={pm.p.x} cy={pm.p.y} r="4" class="mm-party-dot" />
         {/if}
       {/each}
+      {#each worldEventPoints as ev (ev.id)}
+        {#if ev.p.onMap}
+          <circle cx={ev.p.x} cy={ev.p.y} r="7" class="mm-event-ring" />
+          <circle cx={ev.p.x} cy={ev.p.y} r="3.5" class="mm-event-dot mm-event-{ev.phase}" />
+        {/if}
+      {/each}
     </g>
     <circle cx={CENTER} cy={CENTER} r={RADIUS} class="mm-rim" />
     <text x={CENTER} y="15" class="mm-cardinal">N</text>
@@ -131,6 +142,13 @@
         <text x={pm.p.x} y={pm.p.y > CENTER ? pm.p.y + 11 : pm.p.y - 7} class="mm-party-dist">
           {pm.name.slice(0, 3)}
         </text>
+      {/if}
+    {/each}
+    {#each worldEventPoints as ev (ev.id)}
+      {#if !ev.p.onMap}
+        <g transform="translate({ev.p.x} {ev.p.y}) rotate({ev.p.angleDeg})">
+          <path d="M 0 -7 L 5.5 6 L 0 3 L -5.5 6 Z" class="mm-event-arrow" />
+        </g>
       {/if}
     {/each}
     <g transform="translate({CENTER} {CENTER}) rotate({heading})">
@@ -250,5 +268,29 @@
     fill: #93c5fd;
     font-weight: bold;
     text-anchor: middle;
+  }
+  .mm-event-dot {
+    stroke: rgba(0, 0, 0, 0.75);
+    stroke-width: 0.8;
+  }
+  .mm-event-dot.mm-event-active {
+    fill: #ff8800;
+    animation: mm-pulse 1.1s ease-in-out infinite;
+  }
+  .mm-event-dot.mm-event-success {
+    fill: #7adf5a;
+  }
+  .mm-event-dot.mm-event-failed {
+    fill: #e06060;
+  }
+  .mm-event-ring {
+    fill: none;
+    stroke: rgba(255, 136, 0, 0.55);
+    stroke-width: 1.4;
+  }
+  .mm-event-arrow {
+    fill: #ff8800;
+    stroke: rgba(0, 0, 0, 0.7);
+    stroke-width: 0.7;
   }
 </style>

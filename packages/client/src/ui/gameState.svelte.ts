@@ -98,6 +98,24 @@ class GameState {
    *  drives the persistent HUD chip the same way dungeonState does. */
   regionState = $state<{ regionId: string; regionName: string } | null>(null);
 
+  /** World events in the current region (from worldEventState). */
+  worldEvents = $state<
+    Array<{
+      id: string;
+      regionId: string;
+      name: string;
+      phase: "cooldown" | "active" | "success" | "failed";
+      localX: number;
+      localZ: number;
+      radius: number;
+      playerCount: number;
+      endsAt?: number;
+      nextActiveAt?: number;
+      myScore?: number;
+      myTier?: "gold" | "silver" | "bronze" | null;
+    }>
+  >([]);
+
   /** Currently active corpse loot items (null when loot window is closed) */
   activeCorpseLoot = $state<{ mobId: string; mobType: string; items: { itemId: string; qty: number }[] } | null>(null);
 
@@ -108,10 +126,38 @@ class GameState {
       : false,
   );
 
+  /** SFX master volume 0–1 (persisted). */
+  sfxVolume = $state<number>(
+    typeof localStorage !== "undefined" && localStorage.getItem("rc_sfx_vol") !== null
+      ? Math.max(0, Math.min(1, Number(localStorage.getItem("rc_sfx_vol"))))
+      : 0.55,
+  );
+
+  /** Music master volume 0–1 (persisted). */
+  musicVolume = $state<number>(
+    typeof localStorage !== "undefined" && localStorage.getItem("rc_music_vol") !== null
+      ? Math.max(0, Math.min(1, Number(localStorage.getItem("rc_music_vol"))))
+      : 0.55,
+  );
+
   setAutoLoot(enabled: boolean): void {
     this.autoLoot = enabled;
     if (typeof localStorage !== "undefined") {
       localStorage.setItem("rc_autoloot", String(enabled));
+    }
+  }
+
+  setSfxVolume(v: number): void {
+    this.sfxVolume = Math.max(0, Math.min(1, v));
+    if (typeof localStorage !== "undefined") {
+      localStorage.setItem("rc_sfx_vol", String(this.sfxVolume));
+    }
+  }
+
+  setMusicVolume(v: number): void {
+    this.musicVolume = Math.max(0, Math.min(1, v));
+    if (typeof localStorage !== "undefined") {
+      localStorage.setItem("rc_music_vol", String(this.musicVolume));
     }
   }
 
@@ -175,6 +221,7 @@ class GameState {
     this.questMarkers = [];
     this.dungeonState = null;
     this.regionState = null;
+    this.worldEvents = [];
     this.loading = false;
     this.loadingProgress = 0;
     this.loadingMessage = "";

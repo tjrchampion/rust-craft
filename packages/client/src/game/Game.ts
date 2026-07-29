@@ -34,6 +34,7 @@ import {
   WORLD_MAX_X,
   WORLD_MIN_Z,
   WORLD_MAX_Z,
+  sampleRegionWaterDepth,
   type MoveState,
   type ServerMsg,
   type SelfState,
@@ -65,13 +66,14 @@ import {
   buildVillage,
   animateSettlements,
   flushSettlementQueue,
+  clearSettlementQueue,
   type SettlementHandles,
 } from "../render/settlements";
 import { DUNGEON_THEME_COLORS, DungeonInteriorRenderer } from "../render/dungeonInterior";
 import { RegionInteriorRenderer, preloadRegionAssets } from "../render/regionInterior";
 import { buildShrine } from "../render/models";
 import { NpcManager } from "../render/npcs";
-import { sound } from "./sound";
+import { sound, resolveFootSurface } from "./sound";
 import { music } from "./music";
 import { game as ui, type CharacterTab } from "../ui/gameState.svelte";
 import { app } from "../ui/appState.svelte";
@@ -121,6 +123,8 @@ export class Game {
   private regionPortals: { id: string; name: string; x: number; z: number }[] = [];
   /** id → display name for all known regions, populated at load time. */
   private regionNameMap = new Map<string, string>();
+  /** True after tearDownOverworld() until rebuildOverworld() -- region/dungeon visits. */
+  private overworldSuspended = false;
 
   private connection = new Connection();
   private input: InputManager;
@@ -129,8 +133,8 @@ export class Game {
   private settlements!: SettlementHandles;
   private overworldSigns: THREE.Object3D[] = [];
   private npcManager!: NpcManager;
-  private grass: GrassField;
-  private clouds: CloudField;
+  private grass!: GrassField;
+  private clouds!: CloudField;
   private water!: WaterField;
   /** Villages stream in once the player nears their zone, rather than every
    *  building loading at connect time; the GLTF cache makes re-entry free. */
@@ -194,6 +198,7 @@ export class Game {
   private disposed = false;
   private animTime = 0;
   private lastAnimSpeed = 0;
+  private footstepAccum = 0;
   private unsubscribe: (() => void) | null = null;
 
   constructor(
@@ -228,14 +233,7 @@ export class Game {
     this.scene.add(this.sun, this.ambient);
 
     this.scene.add(this.overworldGroup);
-    this.overworldGroup.add(buildTerrain());
-    this.water = buildWater();
-    this.overworldGroup.add(this.water.mesh);
-    this.overworldGroup.add(buildHorizonMountains());
-    this.clouds = buildClouds();
-    this.overworldGroup.add(this.clouds.group);
-    this.settlements = buildWorldStatic(this.overworldGroup, true);
-    this.grass = new GrassField(this.overworldGroup);
+    this.buildOverworldContents();
     void this.loadRegionPortals();
     this.npcManager = new NpcManager(this.scene);
 
@@ -256,6 +254,8 @@ export class Game {
 
     // Unlock/synthesize audio (constructed within the character-select gesture).
     sound.init();
+    sound.setVolume(ui.sfxVolume);
+    music.setVolume(ui.musicVolume);
 
     // Dev-only handle for verification tooling (scene inspection, teleporting).
     if (import.meta.env.DEV) (window as unknown as { __rc: Game }).__rc = this;
@@ -269,6 +269,66 @@ export class Game {
       entities: this.entities,
       selfId: this.selfId,
     };
+  }
+
+  /** Terrain, water, sky props, POIs, ambient grass — rebuilt after a region/dungeon visit. */
+  private buildOverworldContents(): void {
+    this.overworldGroup.add(buildTerrain());
+    this.water = buildWater();
+    this.overworldGroup.add(this.water.mesh);
+    this.overworldGroup.add(buildHorizonMountains());
+    this.clouds = buildClouds();
+    this.overworldGroup.add(this.clouds.group);
+    this.settlements = buildWorldStatic(this.overworldGroup, true);
+    this.grass = new GrassField(this.overworldGroup);
+    this.overworldSuspended = false;
+  }
+
+  /**
+   * Free overworld GPU content while inside a region/dungeon so we don't keep
+   * two full worlds resident. Templates stay in GLTF/texture caches for a
+   * fast rebuild on exit.
+   */
+  private tearDownOverworld(): void {
+    if (this.overworldSuspended) return;
+    this.overworldSuspended = true;
+
+    clearSettlementQueue();
+    this.nodes?.disposeVisuals();
+    this.regionTwoNodes?.disposeVisuals();
+    this.regionTwoNodes = null;
+    this.regionTwoBuilt = false;
+
+    this.grass?.dispose();
+    if (this.overworldGroup.parent) this.scene.remove(this.overworldGroup);
+
+    this.overworldGroup.traverse((o) => {
+      const im = o as THREE.InstancedMesh;
+      if (im.isInstancedMesh) {
+        im.dispose();
+        return;
+      }
+      const mesh = o as THREE.Mesh;
+      if (!mesh.isMesh || mesh.userData.fromGltf) return;
+      mesh.geometry?.dispose();
+      const mats = Array.isArray(mesh.material) ? mesh.material : mesh.material ? [mesh.material] : [];
+      for (const mat of mats) mat.dispose();
+    });
+    this.overworldGroup.clear();
+    this.overworldSigns = [];
+    this.streamedVillages.clear();
+  }
+
+  private rebuildOverworld(): void {
+    if (!this.overworldSuspended) {
+      this.overworldGroup.visible = true;
+      if (!this.overworldGroup.parent) this.scene.add(this.overworldGroup);
+      return;
+    }
+    this.buildOverworldContents();
+    this.scene.add(this.overworldGroup);
+    this.overworldGroup.visible = true;
+    void this.loadRegionPortals();
   }
 
   /** Fetches every saved region's portal placement and drops a visible
@@ -290,6 +350,7 @@ export class Game {
       this.regionPortals = data.regions
         .filter((r) => r.portalWorldX !== 0 || r.portalWorldZ !== 0)
         .map((r) => ({ id: r.id, name: r.name, x: r.portalWorldX, z: r.portalWorldZ }));
+      if (this.overworldSuspended) return;
       for (const portal of this.regionPortals) {
         const y = terrainHeight(portal.x, portal.z);
         const prop = buildShrine();
@@ -493,14 +554,20 @@ export class Game {
           }
         } else {
           ui.regionState = null;
+          ui.worldEvents = [];
           this.posError.set(0, 0, 0);
         }
+        break;
+      }
+      case "worldEventState": {
+        ui.worldEvents = msg.events ?? [];
         break;
       }
       case "corpseLoot":
         if (msg.items && msg.items.length > 0) {
           ui.activeCorpseLoot = { mobId: msg.mobId, mobType: msg.mobType, items: msg.items };
           this.setUiMode(true);
+          sound.play("lootDrop");
         } else {
           ui.activeCorpseLoot = null;
           this.setUiMode(false);
@@ -573,7 +640,9 @@ export class Game {
             ui.addCombat(
               `${ui.nameOf(msg.sourceId)} hit ${ui.nameOf(msg.targetId)} for ${Math.round(msg.amount)}`,
             );
-            sound.play(toMe ? "hitTaken" : "hitFlesh");
+            sound.play(toMe ? "hitTaken" : "hitFlesh", { classId: this.selfClassId });
+          } else if (msg.sourceId?.startsWith("m_") || msg.sourceId?.startsWith("wevt_")) {
+            sound.play("mobAttack", { volume: 0.5 });
           }
         }
         break;
@@ -588,7 +657,10 @@ export class Game {
         }
         break;
       case "gather":
-        if (msg.itemId && msg.amount) ui.toast(`+${msg.amount} ${itemDef(msg.itemId).name}`);
+        if (msg.itemId && msg.amount) {
+          ui.toast(`+${msg.amount} ${itemDef(msg.itemId).name}`);
+          sound.play("loot", { volume: 0.7 });
+        }
         break;
       case "xp":
         if (msg.amount) {
@@ -613,7 +685,7 @@ export class Game {
       case "death":
         ui.toast("You died");
         ui.addCombat("You died");
-        sound.play("death");
+        sound.play("death", { classId: this.selfClassId });
         break;
       case "revive":
         if (msg.targetId === this.selfId) {
@@ -623,7 +695,7 @@ export class Game {
         ui.addCombat(`${ui.nameOf(msg.sourceId)} revived ${ui.nameOf(msg.targetId)}`);
         break;
       case "spellHit":
-        sound.play("spellHit");
+        sound.play("spellHit", { spellId: msg.spellId, classId: this.selfClassId });
         // Melee/self instant spells carry sourceId (see GameServer's
         // resolveSpell) and have no projectile of their own to spawn a
         // burst on impact — do it here instead. Projectile hits already
@@ -634,7 +706,7 @@ export class Game {
         }
         break;
       case "castStart":
-        if (msg.sourceId === this.selfId) sound.play("castStart");
+        if (msg.sourceId === this.selfId) sound.play("castStart", { spellId: msg.spellId, classId: this.selfClassId });
         break;
       case "error":
         if (msg.message) ui.toast(msg.message);
@@ -694,7 +766,17 @@ export class Game {
       // the server's own "casting" pose never kicks in for them — play the
       // swing predictively here, same as a plain attack, so pressing the key
       // doesn't look like nothing happened.
-      if (spellDef(spellId).castTimeS <= 0) this.avatar.play("attack");
+      const def = spellDef(spellId);
+      if (def.castTimeS <= 0) {
+        this.avatar.play("attack");
+        const school = def.effects.find((e) => e.type === "damage")?.damageType;
+        if (school === "physical") {
+          const ranged = this.equippedWeaponDef?.weaponType === "bow" || this.equippedWeaponDef?.weaponType === "crossbow";
+          sound.play(ranged ? "bowShot" : "swing", { classId: this.selfClassId });
+        } else {
+          sound.play("castStart", { spellId, classId: this.selfClassId });
+        }
+      }
       return;
     }
     this.connection.send({ t: "selectSlot", slot });
@@ -876,6 +958,9 @@ export class Game {
         this.faceTarget();
         this.connection.send({ t: "attack" });
         this.avatar.play("attack", this.equippedWeaponDef?.attackAnim);
+        const ranged =
+          this.equippedWeaponDef?.weaponType === "bow" || this.equippedWeaponDef?.weaponType === "crossbow";
+        sound.play(ranged ? "bowShot" : "swing", { classId: this.selfClassId });
       }
       if (actions.dodgePressed) this.tryDodge(actions);
       if (actions.interactPressed) {
@@ -997,8 +1082,7 @@ export class Game {
     }
 
     if (inRegion) {
-      this.overworldGroup.visible = false;
-      if (this.overworldGroup.parent) this.scene.remove(this.overworldGroup);
+      this.tearDownOverworld();
       if (this.dungeonRenderer) {
         this.dungeonRenderer.destroy();
         this.dungeonRenderer = null;
@@ -1024,7 +1108,7 @@ export class Game {
         void this.enterRegionInterior(regionId);
       }
       if (this.regionRenderer) {
-        this.regionRenderer.update(dt, this.sun);
+        this.regionRenderer.update(dt, this.sun, x, z);
       }
       return;
     }
@@ -1043,10 +1127,7 @@ export class Game {
     }
 
     if (this.insideDungeonPortal) {
-      this.overworldGroup.visible = false;
-      if (this.overworldGroup.parent) {
-        this.scene.remove(this.overworldGroup);
-      }
+      this.tearDownOverworld();
       if (this.activeDungeonPortalId !== this.insideDungeonPortal.id) {
         if (this.dungeonRenderer) {
           this.dungeonRenderer.destroy();
@@ -1066,11 +1147,8 @@ export class Game {
       if (this.dungeonRenderer) {
         this.dungeonRenderer.update(x, z);
       }
-    } else if (this.overworldGroup) {
-      this.overworldGroup.visible = true;
-      if (!this.overworldGroup.parent) {
-        this.scene.add(this.overworldGroup);
-      }
+    } else {
+      this.rebuildOverworld();
       if (this.dungeonRenderer) {
         this.dungeonRenderer.destroy();
         this.dungeonRenderer = null;
@@ -1358,6 +1436,7 @@ export class Game {
 
     this.avatar.play(dodgeLogicalFor(this.cameraYaw, nx, nz));
     this.entities.spawnDodgeBurst(tx, this.move.y, tz, nx, nz);
+    sound.play("dodge", { volume: 0.75, classId: this.selfClassId });
 
     // Send the normalized dodge direction only; the server owns the final
     // movement resolution and collision/charge validation.
@@ -1399,6 +1478,41 @@ export class Game {
           : undefined;
     this.avatar.play(logical, overrides);
     this.avatar.update(dt);
+
+    // Footsteps: same clip bank for walk/sprint; only cadence (+ slight rate) changes.
+    const isLoco =
+      !ui.self?.dead &&
+      !ui.self?.sitting &&
+      this.move.grounded &&
+      this.move.vy === 0 &&
+      this.lastAnimSpeed > 0.18 &&
+      serverAnim === "idle";
+    if (isLoco) {
+      const stepEvery = actions.sprint ? 0.32 : 0.48;
+      this.footstepAccum += dt * (0.65 + this.lastAnimSpeed);
+      if (this.footstepAccum >= stepEvery) {
+        this.footstepAccum = 0;
+        const regionWater =
+          this.regionRenderer != null
+            ? sampleRegionWaterDepth(this.regionRenderer.heightmap, this.move.x, this.move.z)
+            : 0;
+        const surface = resolveFootSurface({
+          x: this.move.x,
+          y: this.move.y,
+          z: this.move.z,
+          inRegion: !!ui.regionState,
+          inDungeon: !!this.insideDungeonPortal,
+          regionWaterDepth: regionWater,
+        });
+        sound.play("footstep", {
+          surface,
+          volume: actions.sprint ? 0.62 : 0.5,
+          playbackRate: actions.sprint ? 1.08 : 1,
+        });
+      }
+    } else {
+      this.footstepAccum = 0;
+    }
   }
 
   private updateCamera(px: number, py: number, pz: number): void {
@@ -1763,6 +1877,7 @@ export class Game {
 
   sendLootCorpse(mobId: string, slot?: number, lootAll?: boolean): void {
     this.connection.send({ t: "lootCorpse", mobId, slot, lootAll });
+    sound.play("loot");
   }
 
   setUiMode(open: boolean): void {

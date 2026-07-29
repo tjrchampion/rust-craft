@@ -15,6 +15,7 @@ import {
   type RegionPointLight,
   type RegionNPC,
   type RegionQuest,
+  type RegionWorldEvent,
   type ClassId,
   type GrassPatch,
   type GrassExclusion,
@@ -64,7 +65,7 @@ const BASE_GRASS_WIND_STRENGTH = 0.3;
 import { music } from "../game/music";
 
 export type EditorTransformMode = "translate" | "rotate" | "scale";
-export type EditorMarkerKind = "mobSpawn" | "village" | "entry" | "portal" | "npc";
+export type EditorMarkerKind = "mobSpawn" | "village" | "entry" | "portal" | "npc" | "worldEvent";
 export type SculptMode = "raise" | "lower" | "mold" | "smooth" | "carve" | null;
 export type WaterBrushMode = "add" | "remove" | null;
 
@@ -102,6 +103,7 @@ const MARKER_COLORS: Record<EditorMarkerKind, number> = {
   entry: 0x44dd66,
   portal: 0x9944ff,
   npc: 0x33b5e5,
+  worldEvent: 0xff8800,
 };
 
 const ARROW_PAN_STEP = 4;
@@ -126,6 +128,12 @@ export interface EditorSelection {
   groupId?: string;
   volumeShape?: TerrainVolumeShape;
   volumeMaterial?: TerrainVolumeMaterial;
+  frequencyMin?: number;
+  difficulty?: number;
+  lootAmount?: number;
+  mobTypes?: string[];
+  bossType?: string;
+  durationSec?: number;
   x: number;
   y: number;
   z: number;
@@ -160,6 +168,12 @@ interface MarkerEntry {
   npcData?: RegionNPC;
   ring?: THREE.Mesh;
   animModel?: AnimatedModel;
+  frequencyMin?: number;
+  difficulty?: number;
+  lootAmount?: number;
+  mobTypes?: string[];
+  bossType?: string;
+  durationSec?: number;
 }
 
 interface LightEntry {
@@ -1292,10 +1306,8 @@ export class RegionEditorScene {
    *  editor preview and the saved region always agree. */
   private rebuildGrassPreview(): void {
     if (this.grassField) {
-      for (const mesh of this.grassField.meshes) {
-        this.scene.remove(mesh);
-        (mesh.material as THREE.Material).dispose();
-      }
+      for (const mesh of this.grassField.meshes) this.scene.remove(mesh);
+      this.grassField.dispose();
     }
     this.grassField =
       this.grassPatches.length > 0
@@ -2917,7 +2929,21 @@ export class RegionEditorScene {
           this.scene.add(newObj);
           marker.obj.getWorldPosition(newObj.position);
           newObj.position.x += 4;
-          this.markers.set(newId, { id: newId, kind: marker.kind, obj: newObj, name: marker.name, radius: marker.radius });
+          this.markers.set(newId, {
+            id: newId,
+            kind: marker.kind,
+            obj: newObj,
+            name: marker.name,
+            radius: marker.radius,
+            frequencyMin: marker.frequencyMin,
+            difficulty: marker.difficulty,
+            lootAmount: marker.lootAmount,
+            mobTypes: marker.mobTypes ? [...marker.mobTypes] : undefined,
+            bossType: marker.bossType,
+            durationSec: marker.durationSec,
+            npcData: marker.npcData ? { ...marker.npcData, id: newId } : undefined,
+            targetRegionId: marker.targetRegionId,
+          });
           newIds.push(newId);
         }
         }
@@ -2988,10 +3014,10 @@ export class RegionEditorScene {
     this.triggerChange();
   }
 
-  private buildVillageRing(radius: number): THREE.Mesh {
+  private buildVillageRing(radius: number, color = MARKER_COLORS.village): THREE.Mesh {
     const ring = new THREE.Mesh(
       new THREE.RingGeometry(Math.max(0.5, radius - 0.4), radius, 32),
-      new THREE.MeshBasicMaterial({ color: MARKER_COLORS.village, transparent: true, opacity: 0.35, side: THREE.DoubleSide }),
+      new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.35, side: THREE.DoubleSide }),
     );
     ring.rotation.x = -Math.PI / 2;
     ring.position.y = 0.05;
@@ -3044,6 +3070,18 @@ export class RegionEditorScene {
       };
       this.markers.set(id, entry);
       this.rebuildNPCMarkerVisual(entry);
+    } else if (kind === "worldEvent") {
+      entry.name = `World Event ${this.nextId}`;
+      entry.radius = 40;
+      entry.frequencyMin = 15;
+      entry.difficulty = 1;
+      entry.lootAmount = 1;
+      entry.mobTypes = ["wolf", "goblin"];
+      entry.bossType = "";
+      entry.durationSec = 600;
+      entry.ring = this.buildVillageRing(entry.radius, MARKER_COLORS.worldEvent);
+      group.add(entry.ring);
+      this.markers.set(id, entry);
     } else {
       this.markers.set(id, entry);
     }
@@ -3474,6 +3512,12 @@ export class RegionEditorScene {
           targetLocalX: m.targetLocalX,
           targetLocalZ: m.targetLocalZ,
           npcData: m.npcData ? { ...m.npcData } : undefined,
+          frequencyMin: m.frequencyMin,
+          difficulty: m.difficulty,
+          lootAmount: m.lootAmount,
+          mobTypes: m.mobTypes ? [...m.mobTypes] : undefined,
+          bossType: m.bossType,
+          durationSec: m.durationSec,
         });
         continue;
       }
@@ -3514,6 +3558,12 @@ export class RegionEditorScene {
       color: string;
       intensity: number;
       distance: number;
+      frequencyMin: number;
+      difficulty: number;
+      lootAmount: number;
+      mobTypes: string[];
+      bossType: string;
+      durationSec: number;
     }>,
   ): void {
     if (this.selectedIds.size === 0) return;
@@ -3556,14 +3606,25 @@ export class RegionEditorScene {
           if (patch.name !== undefined) m.npcData.name = patch.name;
           this.rebuildNPCMarkerVisual(m);
         }
-        if (patch.radius !== undefined && m.kind === "village") {
+        if (patch.radius !== undefined && (m.kind === "village" || m.kind === "worldEvent")) {
           m.radius = patch.radius;
           if (m.ring) {
             m.obj.remove(m.ring);
             m.ring.geometry.dispose();
           }
-          m.ring = this.buildVillageRing(patch.radius);
+          m.ring = this.buildVillageRing(
+            patch.radius,
+            m.kind === "worldEvent" ? MARKER_COLORS.worldEvent : MARKER_COLORS.village,
+          );
           m.obj.add(m.ring);
+        }
+        if (m.kind === "worldEvent") {
+          if (patch.frequencyMin !== undefined) m.frequencyMin = patch.frequencyMin;
+          if (patch.difficulty !== undefined) m.difficulty = patch.difficulty;
+          if (patch.lootAmount !== undefined) m.lootAmount = patch.lootAmount;
+          if (patch.mobTypes !== undefined) m.mobTypes = patch.mobTypes;
+          if (patch.bossType !== undefined) m.bossType = patch.bossType;
+          if (patch.durationSec !== undefined) m.durationSec = patch.durationSec;
         }
         continue;
       }
@@ -3752,10 +3813,8 @@ export class RegionEditorScene {
     this.paintingRoad = null;
     this.roads = [];
     if (this.grassField) {
-      for (const mesh of this.grassField.meshes) {
-        this.scene.remove(mesh);
-        (mesh.material as THREE.Material).dispose();
-      }
+      for (const mesh of this.grassField.meshes) this.scene.remove(mesh);
+      this.grassField.dispose();
       this.grassField = null;
     }
     this.grassPatches = [];
@@ -3872,6 +3931,35 @@ export class RegionEditorScene {
           this.rebuildNPCMarkerVisual(m);
         }
       }
+      for (const ev of bp.worldEvents ?? []) {
+        const id = this.placeMarkerAt("worldEvent", ev.localX, this.heightAt(ev.localX, ev.localZ), ev.localZ);
+        const m = this.markers.get(id);
+        if (m) {
+          // Keep authored id so runtime/server can match across reloads.
+          if (ev.id && ev.id !== id) {
+            this.markers.delete(id);
+            m.id = ev.id;
+            m.obj.userData.editorId = ev.id;
+            this.markers.set(ev.id, m);
+            const match = /^marker_(\d+)$/.exec(ev.id);
+            if (match) this.nextId = Math.max(this.nextId, Number(match[1]) + 1);
+          }
+          m.name = ev.name;
+          m.radius = ev.radius;
+          m.frequencyMin = ev.frequencyMin;
+          m.difficulty = ev.difficulty;
+          m.lootAmount = ev.lootAmount;
+          m.mobTypes = [...ev.mobTypes];
+          m.bossType = ev.bossType ?? "";
+          m.durationSec = ev.durationSec ?? 600;
+          if (m.ring) {
+            m.obj.remove(m.ring);
+            m.ring.geometry.dispose();
+          }
+          m.ring = this.buildVillageRing(ev.radius, MARKER_COLORS.worldEvent);
+          m.obj.add(m.ring);
+        }
+      }
       this.placeMarkerAt("entry", bp.entryLocal.x, this.heightAt(bp.entryLocal.x, bp.entryLocal.z), bp.entryLocal.z);
     } finally {
       this.isRestoring = false;
@@ -3949,6 +4037,25 @@ export class RegionEditorScene {
           generateProceduralQuests: m.npcData?.generateProceduralQuests ?? true,
         };
       });
+    const worldEvents: RegionWorldEvent[] = [...this.markers.values()]
+      .filter((m) => m.kind === "worldEvent")
+      .map((m) => {
+        const t = getTransform(m.obj);
+        const ev: RegionWorldEvent = {
+          id: m.id,
+          name: m.name ?? "World Event",
+          localX: t.x,
+          localZ: t.z,
+          radius: m.radius ?? 40,
+          frequencyMin: m.frequencyMin ?? 15,
+          difficulty: m.difficulty ?? 1,
+          lootAmount: m.lootAmount ?? 1,
+          mobTypes: m.mobTypes && m.mobTypes.length > 0 ? [...m.mobTypes] : ["wolf"],
+          durationSec: m.durationSec ?? 600,
+        };
+        if (m.bossType) ev.bossType = m.bossType;
+        return ev;
+      });
     const lights = [...this.lights.values()].map((l) => {
       const t = getTransform(l.obj);
       return { id: l.id, localX: t.x, localY: t.y, localZ: t.z, color: l.color, intensity: l.intensity, distance: l.distance };
@@ -3987,6 +4094,7 @@ export class RegionEditorScene {
       isStartingRegion: meta.isStartingRegion ? true : undefined,
       portals: portals.length > 0 ? portals : undefined,
       npcs: npcs.length > 0 ? npcs : undefined,
+      worldEvents: worldEvents.length > 0 ? worldEvents : undefined,
       lights: lights.length > 0 ? lights : undefined,
       terrainVolumes: terrainVolumes.length > 0 ? terrainVolumes : undefined,
       musicTrack: meta.musicTrack,

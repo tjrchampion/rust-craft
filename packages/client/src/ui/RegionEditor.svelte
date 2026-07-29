@@ -7,6 +7,7 @@
     REGION_COLOR_PRESETS,
     REGION_MUSIC_TRACKS,
     generateRandomRegionBlueprint,
+    MOBS,
     type RegionBiome,
     type RegionBlueprint,
     type RegionColorGrading,
@@ -885,6 +886,9 @@
             <button class:active={armedMarker === "npc"} onclick={() => { pickMarker("npc"); activeDropdown = null; }}>
               📜 + Quest Giver NPC
             </button>
+            <button class:active={armedMarker === "worldEvent"} onclick={() => { pickMarker("worldEvent"); activeDropdown = null; }}>
+              ⚔️ + World Event
+            </button>
           </div>
         {/if}
       </div>
@@ -1179,6 +1183,43 @@
           <label>Name <input type="text" value={sel.name} onchange={(e) => applyPatch({ name: (e.target as HTMLInputElement).value })} /></label>
           <label>Radius <input type="number" step="1" value={sel.radius} onchange={(e) => applyPatch({ radius: Number((e.target as HTMLInputElement).value) })} /></label>
           <button class="build-village-btn" onclick={() => scene?.buildVillageAroundMarker(sel.id)}>🏰 Build Village Here</button>
+        {:else if sel.markerKind === "worldEvent"}
+          <label>Event Name <input type="text" value={sel.name ?? "World Event"} onchange={(e) => applyPatch({ name: (e.target as HTMLInputElement).value })} /></label>
+          <label>Radius (m)
+            <input type="number" min="10" max="120" step="1" value={sel.radius ?? 40} onchange={(e) => applyPatch({ radius: Number((e.target as HTMLInputElement).value) })} />
+          </label>
+          <label>Frequency (min)
+            <input type="number" min="1" max="180" step="1" value={sel.frequencyMin ?? 15} onchange={(e) => applyPatch({ frequencyMin: Number((e.target as HTMLInputElement).value) })} />
+          </label>
+          <label>Difficulty
+            <input type="range" min="0.5" max="3" step="0.1" value={sel.difficulty ?? 1} oninput={(e) => applyPatch({ difficulty: Number((e.target as HTMLInputElement).value) })} />
+            <span>{(sel.difficulty ?? 1).toFixed(1)}x</span>
+          </label>
+          <label>Loot Amount
+            <input type="range" min="0.5" max="3" step="0.1" value={sel.lootAmount ?? 1} oninput={(e) => applyPatch({ lootAmount: Number((e.target as HTMLInputElement).value) })} />
+            <span>{(sel.lootAmount ?? 1).toFixed(1)}x</span>
+          </label>
+          <label>Duration (sec)
+            <input type="number" min="60" max="1800" step="30" value={sel.durationSec ?? 600} onchange={(e) => applyPatch({ durationSec: Number((e.target as HTMLInputElement).value) })} />
+          </label>
+          <label>Wave Mobs
+            <select multiple size="6" value={sel.mobTypes ?? ["wolf"]} onchange={(e) => {
+              const opts = [...(e.target as HTMLSelectElement).selectedOptions].map((o) => o.value);
+              applyPatch({ mobTypes: opts.length > 0 ? opts : ["wolf"] });
+            }}>
+              {#each Object.values(MOBS) as mob}
+                <option value={mob.id} selected={(sel.mobTypes ?? []).includes(mob.id)}>{mob.name} ({mob.id})</option>
+              {/each}
+            </select>
+          </label>
+          <label>Boss (optional)
+            <select value={sel.bossType ?? ""} onchange={(e) => applyPatch({ bossType: (e.target as HTMLSelectElement).value })}>
+              <option value="">— none —</option>
+              {#each Object.values(MOBS) as mob}
+                <option value={mob.id}>{mob.name} ({mob.id})</option>
+              {/each}
+            </select>
+          </label>
         {:else if sel.markerKind === "portal"}
           <label>Portal Label <input type="text" value={sel.name ?? "Portal to Region"} onchange={(e) => applyPatch({ name: (e.target as HTMLInputElement).value })} /></label>
           <label>Destination

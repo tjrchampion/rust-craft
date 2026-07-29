@@ -492,4 +492,21 @@ export type ServerMsg =
     }
   | { t: "dungeonComplete"; tier: number; xp: number; items: { itemId: string; qty: number }[] }
   | { t: "regionState"; inRegion: boolean; regionId: string | null; regionName: string | null }
+  | {
+      t: "worldEventState";
+      events: Array<{
+        id: string;
+        regionId: string;
+        name: string;
+        phase: "cooldown" | "active" | "success" | "failed";
+        localX: number;
+        localZ: number;
+        radius: number;
+        playerCount: number;
+        endsAt?: number;
+        nextActiveAt?: number;
+        myScore?: number;
+        myTier?: "gold" | "silver" | "bronze" | null;
+      }>;
+    }
   | { t: "error"; message: string };

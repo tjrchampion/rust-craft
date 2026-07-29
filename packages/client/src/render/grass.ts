@@ -230,4 +230,17 @@ export class GrassField {
     mesh.receiveShadow = true;
     return mesh;
   }
+
+  /** Free every built chunk's GPU instance buffers (overworld suspend). */
+  dispose(): void {
+    for (const mesh of this.built.values()) {
+      if (!mesh) continue;
+      this.scene.remove(mesh);
+      mesh.dispose();
+    }
+    this.built.clear();
+    this.inScene.clear();
+    this.pendingKeys.length = 0;
+    this.queued.clear();
+  }
 }

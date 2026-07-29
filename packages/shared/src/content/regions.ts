@@ -871,6 +871,53 @@ export interface RegionNPC {
   generateProceduralQuests?: boolean;
 }
 
+/** A placeable dynamic world event (GW2-style simple fight). Authored in the
+ *  region editor; the server runs cooldown → active → success/fail. */
+export interface RegionWorldEvent {
+  id: string;
+  name: string;
+  localX: number;
+  localZ: number;
+  /** Participation + spawn volume radius (world units). */
+  radius: number;
+  /** Minutes between completions (and after failure). */
+  frequencyMin: number;
+  /** 0.5–3 multiplier on base mob HP/dmg before proximity scaling. */
+  difficulty: number;
+  /** 0.5–3 multiplier on personal reward quantity. */
+  lootAmount: number;
+  /** MobDef ids to spawn for the fight wave. */
+  mobTypes: string[];
+  /** Optional elite/boss MobDef id; when set, success requires this mob dead. */
+  bossType?: string;
+  /** Fail timer while Active (seconds). Default 600. */
+  durationSec?: number;
+}
+
+/** Personal reward tier after a successful world event. */
+export type WorldEventRewardTier = "gold" | "silver" | "bronze";
+
+/** Default personal loot table for world-event success (scaled by lootAmount). */
+export const WORLD_EVENT_REWARD_TABLE: Record<
+  WorldEventRewardTier,
+  Array<{ itemId: string; min: number; max: number }>
+> = {
+  gold: [
+    { itemId: "gold_ore", min: 2, max: 4 },
+    { itemId: "iron_ore", min: 3, max: 6 },
+    { itemId: "hide", min: 2, max: 4 },
+  ],
+  silver: [
+    { itemId: "iron_ore", min: 2, max: 4 },
+    { itemId: "hide", min: 1, max: 3 },
+    { itemId: "raw_meat", min: 1, max: 2 },
+  ],
+  bronze: [
+    { itemId: "hide", min: 1, max: 2 },
+    { itemId: "raw_meat", min: 1, max: 2 },
+  ],
+};
+
 export interface RegionBlueprint {
   id: string;
   name: string;
@@ -900,6 +947,8 @@ export interface RegionBlueprint {
   portals?: RegionPortalLink[];
   /** Optional -- Authored quest giver NPCs placed in this region. */
   npcs?: RegionNPC[];
+  /** Optional -- placeable dynamic world events (cooldown → fight → loot). */
+  worldEvents?: RegionWorldEvent[];
   /** Optional -- flattened gridSize*gridSize water depth values (in world units).
    *  If absent or 0 at a cell, there is no water surface there. */
   waterHeights?: number[];

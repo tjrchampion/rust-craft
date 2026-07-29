@@ -3,12 +3,12 @@
  * synthesized ambience in sound.ts), crossfaded on region enter/exit/switch.
  */
 
-const TARGET_VOLUME = 0.55;
-
 class MusicManager {
   private current: HTMLAudioElement | null = null;
   private currentUrl: string | null = null;
   private fadeToken = 0;
+  /** User music level 0–1. */
+  private userVolume = 0.55;
 
   /** No-op if `url` is already what's playing (or already silent). */
   play(url: string | null, fadeMs = 3000): void {
@@ -30,11 +30,20 @@ class MusicManager {
       // caller only ever invokes this from within an already-unlocked page.
     });
     this.current = audio;
-    this.fadeTo(audio, TARGET_VOLUME, fadeMs, this.fadeToken);
+    this.fadeTo(audio, this.userVolume, fadeMs, this.fadeToken);
   }
 
   stop(): void {
     this.play(null, 800);
+  }
+
+  setVolume(v: number): void {
+    this.userVolume = Math.max(0, Math.min(1, v));
+    if (this.current) this.current.volume = this.userVolume;
+  }
+
+  getVolume(): number {
+    return this.userVolume;
   }
 
   private fadeTo(audio: HTMLAudioElement, target: number, ms: number, token: number): void {

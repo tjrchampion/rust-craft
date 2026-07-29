@@ -1,7 +1,6 @@
 import * as THREE from "three";
-import { GLTFLoader, type GLTF } from "three/examples/jsm/loaders/GLTFLoader.js";
+import { type GLTF } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { SkeletonUtils } from "three/examples/jsm/Addons.js";
-import { MeshoptDecoder } from "three/examples/jsm/libs/meshopt_decoder.module.js";
 import { ITEMS, type CharacterAppearance, type CharacterGender, type HairStyleId } from "@rustcraft/shared";
 import {
   UNIVERSAL_ANIMATION_LIBRARY,
@@ -16,9 +15,9 @@ import {
   GENDER_MODEL_URLS,
   type ModularFit,
 } from "./classModels";
+import { createSharedGltfLoader } from "./sharedGltf";
 
-const loader = new GLTFLoader();
-loader.setMeshoptDecoder(MeshoptDecoder);
+const loader = createSharedGltfLoader();
 const cache = new Map<string, Promise<GLTF>>();
 
 /** Free-tier directional locomotion for the Universal rig -- UAL1_Standard
@@ -1237,17 +1236,12 @@ export function logicalFromState(
 }
 
 export function preloadCharacterAssets(): Promise<void> {
+  // Essentials only -- modular outfit parts load on equip (see modularGear.ts).
+  // Eager-loading every gender×slot GLTF used to re-upload the same 4K maps
+  // many times and balloon VRAM into multi-GB territory.
   const propUrls = Object.values(ITEMS)
     .map((i) => i.weaponProp?.url)
     .filter((url): url is string => !!url);
-  const modularUrls = Object.values(ITEMS).flatMap((i) => {
-    const m = i.modularModel;
-    if (!m) return [];
-    return [m.head, m.chest, m.arms, m.legs, m.feet].filter((u): u is string => !!u).flatMap((u) => [
-      encodeURI(u.replaceAll("{gender}", "Male")),
-      encodeURI(u.replaceAll("{gender}", "Female")),
-    ]);
-  });
   const urls = [
     UNIVERSAL_ANIMATION_LIBRARY,
     "/assets/models/modular/base/Regular_Male.glb",
@@ -1256,13 +1250,11 @@ export function preloadCharacterAssets(): Promise<void> {
     ...allFacialHairUrls(),
     eyebrowsUrl("male"),
     eyebrowsUrl("female"),
-    ...modularUrls,
     "/assets/models/bundled/base/BaseMale_Animated.glb",
     "/assets/models/bundled/base/BaseFemale_Animated.glb",
     ...PLAYER_MODELS,
     WOLF_MODEL,
     ...Object.values(SKELETON_MODELS),
-    ...Object.values(CREATURE_MODELS).map((c) => c.url),
     ...propUrls,
   ];
   return Promise.all([

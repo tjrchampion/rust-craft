@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { GLTFLoader, type GLTF } from "three/examples/jsm/loaders/GLTFLoader.js";
+import { type GLTF } from "three/examples/jsm/loaders/GLTFLoader.js";
 import {
   generateVillages,
   generatePois,
@@ -11,8 +11,9 @@ import {
   dungeonTierDef,
 } from "@rustcraft/shared";
 import { buildShrine, buildStump, buildCampfire, buildNameplate, buildRock } from "./models";
+import { createSharedGltfLoader } from "./sharedGltf";
 
-const loader = new GLTFLoader();
+const loader = createSharedGltfLoader();
 const cache = new Map<string, Promise<GLTF>>();
 
 /** Target real-world height (m) per building type after normalization.
@@ -79,6 +80,11 @@ export function flushSettlementQueue(maxPerFrame = 4): void {
   }
 }
 
+/** Drop any queued village placements (e.g. overworld torn down mid-stream). */
+export function clearSettlementQueue(): void {
+  pendingWork.length = 0;
+}
+
 async function placeBuilding(
   scene: THREE.Object3D,
   type: string,
@@ -93,6 +99,10 @@ async function placeBuilding(
     const gltf = await loadBuilding(type);
     const finish = () => {
       const model = gltf.scene.clone(true);
+      model.userData.fromGltf = true;
+      model.traverse((o) => {
+        o.userData.fromGltf = true;
+      });
       const bbox = new THREE.Box3().setFromObject(model);
       const size = new THREE.Vector3();
       bbox.getSize(size);
@@ -127,6 +137,10 @@ async function placeProp(
     const gltf = await loadProp(type);
     const finish = () => {
       const model = gltf.scene.clone(true);
+      model.userData.fromGltf = true;
+      model.traverse((o) => {
+        o.userData.fromGltf = true;
+      });
       const bbox = new THREE.Box3().setFromObject(model);
       const size = new THREE.Vector3();
       bbox.getSize(size);
@@ -187,6 +201,8 @@ async function instanceProp(
         // real scene.
         const localMatrix = mesh.matrixWorld.clone();
         const instanced = new THREE.InstancedMesh(mesh.geometry, mesh.material, placements.length);
+        instanced.userData.fromGltf = true;
+        instanced.userData.sharedGeometry = true;
         instanced.castShadow = true;
         for (let i = 0; i < placements.length; i++) {
           const p = placements[i]!;

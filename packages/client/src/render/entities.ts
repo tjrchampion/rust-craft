@@ -18,6 +18,7 @@ import { applyModularGearFromSnapAsync } from "./modularGear";
 import { buildSchoolProjectile, recycleSchoolProjectile, buildSchoolParticle, SCHOOL_VFX, schoolProfile, spellSchool, type School, projectilePools } from "./vfx";
 import { SpellVfxSystem } from "./spellVfx";
 import { SchoolFlashSystem } from "./schoolFlash";
+import { sound } from "../game/sound";
 import type * as QUARKS from "three.quarks";
 
 // Snapshots broadcast at a full 20Hz (see GameServer.tick), so 2 snapshot
@@ -76,6 +77,8 @@ interface RemoteEntity {
   samples: Sample[];
   lastSeen: number;
   anim: AnimState;
+  /** Previous anim, for one-shot SFX on attack/death transitions. */
+  prevAnim: AnimState;
   lastX: number;
   lastZ: number;
   speed: number;
@@ -437,6 +440,7 @@ export class EntityManager {
       samples: [],
       lastSeen: now,
       anim: "idle",
+      prevAnim: "idle",
       lastX: 0,
       lastZ: 0,
       localMoveX: 0,
@@ -614,6 +618,9 @@ export class EntityManager {
         entity.lastZ = snap.z;
       }
       entity.lastSeen = now;
+      const prevAnim = entity.anim;
+      const wasLootable = !!entity.lootable;
+      const prevHp = entity.hp;
       entity.anim = snap.anim;
       entity.hp = snap.hp;
       entity.maxHp = snap.maxHp;
@@ -623,10 +630,20 @@ export class EntityManager {
           entity.lootRing = this.createLootRing();
           entity.group.add(entity.lootRing);
         }
+        if (!wasLootable) sound.play("lootDrop", { volume: 0.8 });
         entity.lootRing.visible = true;
       } else if (entity.lootRing) {
         entity.lootRing.visible = false;
       }
+      if (entity.kind === "mob") {
+        if (prevAnim !== "attack" && snap.anim === "attack") {
+          sound.play("mobAttack", { volume: 0.65 });
+        }
+        if ((prevHp > 0 && snap.hp <= 0) || (prevAnim !== "dead" && snap.anim === "dead")) {
+          sound.play("mobDeath", { volume: 0.75 });
+        }
+      }
+      entity.prevAnim = snap.anim;
       if (entity.hpBar) {
         entity.hpBar.visible = snap.hp > 0;
         if (snap.hp > 0) paintHpBar(entity.hpBar, snap.hp / snap.maxHp);

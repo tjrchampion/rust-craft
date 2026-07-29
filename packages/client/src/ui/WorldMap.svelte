@@ -25,6 +25,13 @@
   const villagePoints = $derived(villages.map((v) => ({ id: v.id, name: v.name, p: project(v.x, v.z) })));
   const poiPoints = $derived(pois.map((poi) => ({ id: poi.id, type: poi.type, p: project(poi.x, poi.z) })));
   const questPoints = $derived(game.questMarkers.map((m) => ({ ...m, p: project(m.x, m.z) })));
+  const worldEventPoints = $derived(
+    game.regionState
+      ? game.worldEvents
+          .filter((e) => e.phase === "active" || e.phase === "success" || e.phase === "failed")
+          .map((e) => ({ ...e, p: project(e.localX, e.localZ) }))
+      : [],
+  );
   const playerPoint = $derived(project(game.playerX, game.playerZ));
 
   const partyPoints = $derived.by(() => {
@@ -103,6 +110,11 @@
           <circle cx={q.p.x} cy={q.p.y} r="8" class="wm-quest-dot wm-{q.marker}" />
           <text x={q.p.x} y={q.p.y + 3.5} class="wm-quest-glyph">{GLYPH[q.marker]}</text>
         {/each}
+        {#each worldEventPoints as ev (ev.id)}
+          <circle cx={ev.p.x} cy={ev.p.y} r="9" class="wm-event-ring" />
+          <circle cx={ev.p.x} cy={ev.p.y} r="5" class="wm-event-dot" />
+          <text x={ev.p.x} y={ev.p.y - 14} class="wm-event-label">{ev.name}</text>
+        {/each}
         {#each partyPoints as pm (pm.id)}
           <circle cx={pm.p.x} cy={pm.p.y} r="8" class="wm-party-dot" />
           <text x={pm.p.x} y={pm.p.y - 13} class="wm-party-label">{pm.name}</text>
@@ -117,6 +129,7 @@
       </svg>
       <div class="legend">
         <span><span class="dot" style="background:#ffd400"></span>Quest</span>
+        <span><span class="dot" style="background:#ff8800"></span>Event</span>
         <span><span class="dot" style="background:{POI_COLOR.shrine}"></span>Shrine</span>
         <span><span class="dot" style="background:{POI_COLOR.tower}"></span>Tower</span>
         <span><span class="dot" style="background:{POI_COLOR.camp}"></span>Camp</span>
@@ -235,6 +248,23 @@
     font-weight: 900;
     font-size: 10px;
     fill: #1a1408;
+    text-anchor: middle;
+  }
+  .wm-event-dot {
+    fill: #ff8800;
+    stroke: rgba(0, 0, 0, 0.7);
+    stroke-width: 0.8;
+  }
+  .wm-event-ring {
+    fill: none;
+    stroke: rgba(255, 136, 0, 0.55);
+    stroke-width: 1.6;
+  }
+  .wm-event-label {
+    font-family: var(--rc-display);
+    font-size: 11px;
+    font-weight: 700;
+    fill: #ffb060;
     text-anchor: middle;
   }
   .wm-player {

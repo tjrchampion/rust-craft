@@ -182,13 +182,9 @@
       .preloadAll()
       .then(() => scene?.setClass(stageClassId, stageAppearance.gender, stageAppearance, stageEquip))
       .finally(() => (previewLoading = false));
-    // Fire-and-forget: warms the *full* asset set (every weapon prop, every
-    // modular gear piece for both genders, creature/skeleton rigs, anim
-    // libraries -- see gltf.ts) in the background while the player is still
-    // browsing/picking here, so Game.ts's own preloadCharacterAssets() call
-    // right after "Enter World" is clicked mostly hits an already-warm
-    // cache instead of starting cold. ClassPreviewScene.preloadAll() above
-    // only loads the bare class rigs, a small subset of this.
+    // Fire-and-forget: warm base rigs / anim libs / hair while the player
+    // browses character select. Modular outfit parts load on equip instead
+    // of preloading every gender×slot GLTF (that path used to balloon VRAM).
     void preloadCharacterAssets();
     const onResize = () => scene?.resize();
     window.addEventListener("resize", onResize);

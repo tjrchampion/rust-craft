@@ -14,6 +14,7 @@
   import QuestTracker from "./QuestTracker.svelte";
   import QuestDialog from "./QuestDialog.svelte";
   import ZoneBanner from "./ZoneBanner.svelte";
+  import WorldEventBanner from "./WorldEventBanner.svelte";
   import MiniMap from "./MiniMap.svelte";
   import WorldMap from "./WorldMap.svelte";
   import LootModal from "./LootModal.svelte";
@@ -150,6 +151,7 @@
     <TargetFrame />
     <MiniMap />
     <QuestTracker />
+    <WorldEventBanner />
     <ZoneBanner />
   {/if}
 

@@ -7,6 +7,8 @@
   import IconGlyph from "./IconGlyph.svelte";
   import { promptLabel } from "./padGlyphs";
   import { wikiMarkdown } from "./wikiContent";
+  import { sound } from "../game/sound";
+  import { music } from "../game/music";
 
   const KBM_LABELS = ["1", "2", "3", "4", "5", "6", "Q", "Z", "X", "C"];
   const PAD_LABELS = ["LB+A", "LB+B", "LB+X", "LB+Y", "LB+↑", "LB+↓", "LB+←", "LB+→", "RB+A", "RB+B"];
@@ -1259,7 +1261,7 @@
                 systemSubFocus = "sidebar";
               }}
             >
-              Game Options
+              Settings
             </button>
             <button
               class="sub-tab-btn"
@@ -1277,30 +1279,81 @@
           <!-- Content display area -->
           <div class="system-content-panel">
             {#if systemTabSub === "game"}
-              <div class="col system-col">
-                <h3>Game Options</h3>
-                <label class="setting-toggle">
-                  <input
-                    type="checkbox"
-                    checked={game.autoLoot}
-                    onchange={(e) => game.setAutoLoot(e.currentTarget.checked)}
-                  />
-                  <span class="setting-label">Auto Loot Corpses</span>
-                </label>
-                <button
-                  class="rc-btn"
-                  class:selected={systemSubFocus === "content" && systemCursor === 0}
-                  onclick={toggleFullscreen}
-                >
-                  {isFullscreen ? "Exit Fullscreen" : "Enter Fullscreen"}
-                </button>
-                <button
-                  class="rc-btn ghost"
-                  class:selected={systemSubFocus === "content" && systemCursor === 1}
-                  onclick={exitToCharacterSelect}
-                >
-                  Exit to Character Select
-                </button>
+              <div class="col system-col settings-col">
+                <h3>Settings</h3>
+
+                <div class="settings-section">
+                  <div class="settings-section-title">Gameplay</div>
+                  <label class="setting-toggle">
+                    <input
+                      type="checkbox"
+                      checked={game.autoLoot}
+                      onchange={(e) => game.setAutoLoot(e.currentTarget.checked)}
+                    />
+                    <span class="setting-label">Auto Loot Corpses</span>
+                  </label>
+                </div>
+
+                <div class="settings-section">
+                  <div class="settings-section-title">Audio</div>
+                  <label class="setting-slider">
+                    <span class="setting-label">
+                      Sound Effects
+                      <span class="setting-value">{Math.round(game.sfxVolume * 100)}%</span>
+                    </span>
+                    <input
+                      type="range"
+                      min="0"
+                      max="100"
+                      step="1"
+                      value={Math.round(game.sfxVolume * 100)}
+                      oninput={(e) => {
+                        const v = Number(e.currentTarget.value) / 100;
+                        game.setSfxVolume(v);
+                        sound.setVolume(v);
+                      }}
+                    />
+                  </label>
+                  <label class="setting-slider">
+                    <span class="setting-label">
+                      Music
+                      <span class="setting-value">{Math.round(game.musicVolume * 100)}%</span>
+                    </span>
+                    <input
+                      type="range"
+                      min="0"
+                      max="100"
+                      step="1"
+                      value={Math.round(game.musicVolume * 100)}
+                      oninput={(e) => {
+                        const v = Number(e.currentTarget.value) / 100;
+                        game.setMusicVolume(v);
+                        music.setVolume(v);
+                      }}
+                    />
+                  </label>
+                </div>
+
+                <div class="settings-section">
+                  <div class="settings-section-title">Display</div>
+                  <button
+                    class="rc-btn"
+                    class:selected={systemSubFocus === "content" && systemCursor === 0}
+                    onclick={toggleFullscreen}
+                  >
+                    {isFullscreen ? "Exit Fullscreen" : "Enter Fullscreen"}
+                  </button>
+                </div>
+
+                <div class="settings-section">
+                  <button
+                    class="rc-btn ghost"
+                    class:selected={systemSubFocus === "content" && systemCursor === 1}
+                    onclick={exitToCharacterSelect}
+                  >
+                    Exit to Character Select
+                  </button>
+                </div>
               </div>
             {:else if systemTabSub === "wiki"}
               <div class="wiki-panel">
@@ -2139,6 +2192,49 @@
     accent-color: #d4af37;
     width: 16px;
     height: 16px;
+  }
+  .settings-col {
+    gap: 14px;
+  }
+  .settings-section {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .settings-section-title {
+    font-family: var(--rc-display);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--rc-gold-bright);
+    opacity: 0.85;
+  }
+  .setting-slider {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 8px 12px;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 6px;
+    font-size: 13px;
+    color: var(--rc-parchment);
+  }
+  .setting-slider .setting-label {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+  }
+  .setting-value {
+    font-variant-numeric: tabular-nums;
+    color: var(--rc-gold-bright);
+    font-size: 12px;
+  }
+  .setting-slider input[type="range"] {
+    width: 100%;
+    accent-color: #d4af37;
+    cursor: pointer;
   }
 
   .system-menu-container {
