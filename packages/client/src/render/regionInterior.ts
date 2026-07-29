@@ -4,19 +4,19 @@ import { load, AnimatedModel, PLAYER_ANIMS } from "./gltf";
 import type { GLTF } from "three/examples/jsm/loaders/GLTFLoader.js";
 import * as SkeletonUtils from "three/examples/jsm/utils/SkeletonUtils.js";
 import { buildShrine, buildNameplate, buildHealthNameplate } from "./models";
-import { buildRegionBlueprintTerrain, buildRegionWaterMesh, type RegionWaterMeshField } from "./terrain";
+import { RegionAdtTerrainStreamer } from "./regionAdtTerrain";
+import { RegionAdtWaterStreamer } from "./regionAdtWater";
 import { buildGrassInstances, type GrassField } from "./grassField";
 import { createTreeWindUniforms, applyTreeWindSway, applyRegionWind, type TreeWindUniforms } from "./windSway";
 import { createTerrainVolumeMesh } from "./terrainVolumes";
+import { game } from "../ui/gameState.svelte";
+import { getGame } from "../game/instance";
+import type { RegionNpc } from "@rustcraft/shared";
 
 /** Base tree canopy sway amplitude (meters) at RegionWind strength 1 --
  *  chosen smaller than grass's own base since tree branches are much larger
  *  levers, so a little displacement reads as a lot of visible motion. */
 const BASE_TREE_WIND_STRENGTH = 0.15;
-
-import { game } from "../ui/gameState.svelte";
-import { getGame } from "../game/instance";
-import type { RegionNpc } from "@rustcraft/shared";
 
 interface RegionNpcInstance {
   group: THREE.Group;
@@ -93,19 +93,17 @@ export async function preloadRegionAssets(
  * if full detail ever proves too much for target hardware -- see buildFoliage.
  *
  * Unlike a dungeon, a region has real open sky and its own sculpted terrain
- * instead of a sealed void-floor/ceiling box, so this builds a real
- * heightmap mesh instead. Color grading (sky/fog/ambient/sun) is applied by
- * Game.ts's updateDayNight, the same place the dungeon's fixed torchlight
- * override already lives, rather than here -- avoids fighting over the same
- * scene-level fog/background/lights from two places. Mobs are NOT rendered
- * here -- they flow through the same generic MobSnap/entity pipeline every
- * other mob does, filtered by the server's existing instance-visibility check.
+ * instead of a sealed void-floor/ceiling box. Terrain + painted grass stream
+ * as 64 m ADT tiles around the player; foliage/props/buildings stay eagerly
+ * instanced (see below). Color grading (sky/fog/ambient/sun) is applied by
+ * Game.ts's updateDayNight. Mobs are NOT rendered here -- they flow through
+ * the same generic MobSnap/entity pipeline.
  */
 export class RegionInteriorRenderer {
   private group: THREE.Object3D;
   readonly blueprint: RegionBlueprint;
-  private terrainMesh: THREE.Mesh;
-  private waterField?: RegionWaterMeshField;
+  private adtTerrain: RegionAdtTerrainStreamer;
+  private adtWater: RegionAdtWaterStreamer | null = null;
   private npcModels: AnimatedModel[] = [];
   private npcInstances: RegionNpcInstance[] = [];
   /** Every InstancedMesh built by instanceModel (foliage + props/buildings),
@@ -132,12 +130,18 @@ export class RegionInteriorRenderer {
     this.group = group;
     this.blueprint = blueprint;
 
-    this.terrainMesh = buildRegionBlueprintTerrain(blueprint);
-    this.group.add(this.terrainMesh);
+    // Heightmap streams as 64 m ADT tiles around the player (not one full mesh).
+    this.adtTerrain = new RegionAdtTerrainStreamer(this.group, blueprint);
+    this.adtTerrain.warm(blueprint.entryLocal.x, blueprint.entryLocal.z);
 
     if (blueprint.waterHeights && blueprint.waterHeights.some((w) => w > 0)) {
-      this.waterField = buildRegionWaterMesh(blueprint.gridSize, blueprint.pitch, blueprint.heights, blueprint.waterHeights);
-      this.group.add(this.waterField.mesh);
+      this.adtWater = new RegionAdtWaterStreamer(this.group, {
+        gridSize: blueprint.gridSize,
+        pitch: blueprint.pitch,
+        heights: blueprint.heights,
+        waterHeights: blueprint.waterHeights,
+      });
+      this.adtWater.warm(blueprint.entryLocal.x, blueprint.entryLocal.z);
     }
 
     if (blueprint.wind) applyRegionWind(this.treeWindUniforms, blueprint.wind, BASE_TREE_WIND_STRENGTH);
@@ -295,6 +299,13 @@ export class RegionInteriorRenderer {
     return this.blueprint.musicTrack ?? null;
   }
 
+  /** Sync-build ADT terrain + water + grass around a viewer position (loading screen). */
+  warmAround(x: number, z: number): void {
+    this.adtTerrain.warm(x, z);
+    this.adtWater?.warm(x, z);
+    this.grassField?.warm(x, z);
+  }
+
   get regionName(): string {
     return this.blueprint.name;
   }
@@ -311,11 +322,10 @@ export class RegionInteriorRenderer {
       wind: this.blueprint.wind,
       stream: true,
       parent: this.group,
-      visibleRadius: 95,
     });
-    // Streamed meshes are parented by buildGrassInstances; seed around entry.
+    // Build the ADT grass ring around entry before the loading screen drops.
     const entry = this.blueprint.entryLocal;
-    this.grassField.update(entry.x, entry.z);
+    this.grassField.warm(entry.x, entry.z);
   }
 
   /** Add freeform sculpted terrain volumes (boulder/block/pillar/spike/ramp).
@@ -494,6 +504,9 @@ export class RegionInteriorRenderer {
    *  blade shader's sun uniforms at their static defaults. */
   update(delta: number, sun?: THREE.DirectionalLight, viewerX = 0, viewerZ = 0): void {
     if (this.grassField) this.grassField.update(viewerX, viewerZ);
+    this.adtTerrain.update(viewerX, viewerZ);
+    this.adtWater?.update(viewerX, viewerZ);
+    this.adtWater?.updateScroll(delta);
     if (!(delta > 0)) return;
 
     if (this.grassField) {
@@ -638,8 +651,9 @@ export class RegionInteriorRenderer {
       this.grassField.dispose();
       this.grassField = null;
     }
-    this.group.remove(this.terrainMesh);
-    this.terrainMesh.geometry.dispose();
+    this.adtTerrain.dispose();
+    this.adtWater?.dispose();
+    this.adtWater = null;
     for (const im of this.instancedGroups) this.group.remove(im);
     this.instancedGroups = [];
     for (const mesh of this.volumeMeshes) {

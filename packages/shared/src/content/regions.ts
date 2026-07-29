@@ -1156,6 +1156,56 @@ export const REGION_FOLIAGE: Record<RegionBiome, string[]> = {
   cosmic: ["rock_2.glb", "rock_3.glb", "mushroom.glb", "bush_flowers.glb", "twisted_1.glb"],
 };
 
+/**
+ * Tree-placement brush catalog — trees only (no bushes/flowers/ferns/mushrooms/rocks).
+ * Broader variety than REGION_FOLIAGE so the brush paints a mixed canopy.
+ */
+export const REGION_TREE_BRUSH: Record<RegionBiome, string[]> = {
+  grassland: [
+    "oak_1.glb", "oak_2.glb", "oak_3.glb", "oak_4.glb", "oak_5.glb",
+    "pine_1.glb", "pine_2.glb", "pine_3.glb",
+  ],
+  forest: [
+    "oak_1.glb", "oak_2.glb", "oak_3.glb", "oak_4.glb", "oak_5.glb",
+    "pine_1.glb", "pine_2.glb", "pine_3.glb", "pine_4.glb", "pine_5.glb",
+  ],
+  jungle: [
+    "oak_2.glb", "oak_3.glb", "oak_4.glb", "oak_5.glb",
+    "twisted_1.glb", "twisted_2.glb", "twisted_3.glb",
+    "pine_1.glb", "pine_2.glb",
+  ],
+  desert: [
+    "dead_1.glb", "dead_2.glb", "dead_3.glb",
+    "twisted_1.glb", "twisted_2.glb", "twisted_3.glb",
+  ],
+  arctic: [
+    "pine_1.glb", "pine_2.glb", "pine_3.glb", "pine_4.glb", "pine_5.glb",
+    "dead_1.glb", "dead_2.glb", "dead_3.glb",
+  ],
+  swamp: [
+    "twisted_1.glb", "twisted_2.glb", "twisted_3.glb",
+    "dead_1.glb", "dead_2.glb", "dead_3.glb",
+    "oak_3.glb", "oak_5.glb",
+  ],
+  volcanic: [
+    "dead_1.glb", "dead_2.glb", "dead_3.glb",
+    "twisted_1.glb", "twisted_2.glb", "twisted_3.glb",
+  ],
+  alien: [
+    "twisted_1.glb", "twisted_2.glb", "twisted_3.glb",
+    "dead_1.glb", "dead_2.glb", "dead_3.glb",
+  ],
+  underground: [
+    "dead_1.glb", "dead_2.glb", "dead_3.glb",
+    "twisted_2.glb", "twisted_3.glb",
+  ],
+  cosmic: [
+    "twisted_1.glb", "twisted_2.glb", "twisted_3.glb",
+    "dead_2.glb", "dead_3.glb",
+    "pine_4.glb", "pine_5.glb",
+  ],
+};
+
 
 /** Real props/ directory rock decor, layered on top of the foliage rocks
  *  above for bigger set-dressing clusters. */

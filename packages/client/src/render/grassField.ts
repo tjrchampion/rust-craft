@@ -5,6 +5,11 @@ import {
   fbm,
   smoothstep,
   sampleRegionHeight,
+  ADT_SIZE,
+  adtIndex,
+  adtKey,
+  adtRingKeysInBounds,
+  ADT_GRASS_RING,
   type GrassPatch,
   type GrassExclusion,
   type GrassColor,
@@ -28,15 +33,8 @@ const GRASS_FEATHER_START = 0.55;
  *  these blades are individually visible up close, not a distant tuft impostor. */
 const GRASS_BLADE_CELL = 0.35;
 
-/** Spatial culling chunk size, matching the open-world ambient grass's own
- *  40m chunk (not RegionInteriorRenderer's 80m building/prop chunk) -- grass
- *  needs a tighter cell so Three.js's free per-object frustum culling has
- *  something worth skipping. */
-const GRASS_CHUNK_SIZE = 40;
-
-/** Runtime streaming radius -- chunks farther than this are removed from the
- *  scene (and their instance buffers disposed) until the player walks back. */
-const GRASS_STREAM_RADIUS = 95;
+/** ADT tile size for grass chunking (matches region/overworld terrain tiles). */
+const GRASS_CHUNK_SIZE = ADT_SIZE;
 
 const BLADE_WIDTH = 0.06;
 const BLADE_HEIGHT = 0.28;
@@ -49,6 +47,8 @@ export interface GrassField {
   /** When streaming, call each frame with the viewer position. No-op for
    *  eagerly-built editor previews. */
   update(px: number, pz: number): void;
+  /** Sync-build the ADT grass ring (region entry / loading screen). */
+  warm(px: number, pz: number): void;
   dispose(): void;
 }
 
@@ -56,12 +56,13 @@ export interface GrassVisualOptions {
   color?: GrassColor;
   wind?: RegionWind;
   /**
-   * When true (runtime regions), only build InstancedMeshes for chunks near
+   * When true (runtime regions), only build InstancedMeshes for ADT tiles near
    * the player. When false (editor preview), build every chunk immediately.
    */
   stream?: boolean;
   /** Parent group to add/remove streamed chunk meshes. Required when stream. */
   parent?: THREE.Object3D;
+  /** @deprecated Prefer ADT_GRASS_RING — kept for call-site overrides. */
   visibleRadius?: number;
 }
 
@@ -74,16 +75,6 @@ interface Blade {
   heightScale: number;
   lengthScale: number;
   color: THREE.Color;
-}
-
-interface ChunkKey {
-  cx: number;
-  cz: number;
-  key: string;
-}
-
-function chunkKey(cx: number, cz: number): string {
-  return `${cx},${cz}`;
 }
 
 function collectBlades(
@@ -141,9 +132,9 @@ function collectBlades(
         const bMul = 0.7 + hash2(patch.seed + 47, base, 8) * 0.5;
         const color = new THREE.Color(rMul, gMul, bMul);
 
-        const cx = Math.floor(x / GRASS_CHUNK_SIZE);
-        const cz = Math.floor(z / GRASS_CHUNK_SIZE);
-        const key = chunkKey(cx, cz);
+        const cx = adtIndex(x);
+        const cz = adtIndex(z);
+        const key = adtKey(cx, cz);
         const blade: Blade = { x, y, z, yaw, widthScale, heightScale, lengthScale: patchLength, color };
         const list = chunks.get(key);
         if (list) list.push(blade);
@@ -200,20 +191,29 @@ export function buildGrassInstances(
   const chunkBlades = collectBlades(patches, exclusions, heightmap);
   const stream = !!options?.stream;
   const parent = options?.parent;
-  const visibleRadius = options?.visibleRadius ?? GRASS_STREAM_RADIUS;
+  const grassRing = ADT_GRASS_RING;
 
   const liveMeshes = new Map<string, THREE.InstancedMesh>();
-  const chunkCenters = new Map<string, ChunkKey & { x: number; z: number }>();
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minZ = Infinity;
+  let maxZ = -Infinity;
   for (const key of chunkBlades.keys()) {
-    const [cx, cz] = key.split(",").map(Number) as [number, number];
-    chunkCenters.set(key, {
-      cx,
-      cz,
-      key,
-      x: (cx + 0.5) * GRASS_CHUNK_SIZE,
-      z: (cz + 0.5) * GRASS_CHUNK_SIZE,
-    });
+    const [ixStr, izStr] = key.split(":");
+    const cx = Number(ixStr);
+    const cz = Number(izStr);
+    minX = Math.min(minX, cx * GRASS_CHUNK_SIZE);
+    maxX = Math.max(maxX, (cx + 1) * GRASS_CHUNK_SIZE);
+    minZ = Math.min(minZ, cz * GRASS_CHUNK_SIZE);
+    maxZ = Math.max(maxZ, (cz + 1) * GRASS_CHUNK_SIZE);
   }
+  if (!Number.isFinite(minX)) {
+    minX = -GRASS_CHUNK_SIZE;
+    maxX = GRASS_CHUNK_SIZE;
+    minZ = -GRASS_CHUNK_SIZE;
+    maxZ = GRASS_CHUNK_SIZE;
+  }
+  const grassBounds = { minX, maxX, minZ, maxZ };
 
   const ensureMesh = (key: string): THREE.InstancedMesh | null => {
     const existing = liveMeshes.get(key);
@@ -254,14 +254,24 @@ export function buildGrassInstances(
       lastPx = px;
       lastPz = pz;
 
-      const wanted = new Set<string>();
-      const margin = GRASS_CHUNK_SIZE * 0.71;
-      for (const meta of chunkCenters.values()) {
-        if (dist2D(px, pz, meta.x, meta.z) <= visibleRadius + margin) wanted.add(meta.key);
+      const wanted = new Set(adtRingKeysInBounds(px, pz, grassRing, grassBounds));
+      for (const key of wanted) {
+        if (chunkBlades.has(key)) ensureMesh(key);
       }
-      for (const key of wanted) ensureMesh(key);
       for (const key of [...liveMeshes.keys()]) {
         if (!wanted.has(key)) dropMesh(key);
+      }
+    },
+    warm(px: number, pz: number) {
+      if (!stream || !parent) {
+        // Eager mode already built everything in construct.
+        return;
+      }
+      lastPx = px;
+      lastPz = pz;
+      const wanted = new Set(adtRingKeysInBounds(px, pz, grassRing, grassBounds));
+      for (const key of wanted) {
+        if (chunkBlades.has(key)) ensureMesh(key);
       }
     },
     dispose() {

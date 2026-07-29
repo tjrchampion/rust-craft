@@ -4,7 +4,6 @@ import {
   terrainHeight,
   TICK_DT,
   WATER_LEVEL,
-  ZONE_SIZE,
   clamp,
   dist2D,
   hashString,
@@ -16,12 +15,10 @@ import {
   HOTBAR_SLOTS,
   EQUIP_SLOTS,
   generateVillages,
-  generateRegionTwoNodes,
-  VALLEY_START_Z,
-  REGION_TWO_MAX_Z,
-  REGION_TWO_GATE_X,
-  REGION_TWO_GATE_Z,
-  REGION_TWO_TRIGGER_RADIUS,
+  adtKey,
+  adtIndex,
+  adtRingKeys,
+  ADT_VILLAGE_RING,
   REVIVE_RANGE,
   DODGE_DISTANCE,
   DUNGEON_PORTAL_ACTIVATION_RADIUS,
@@ -51,7 +48,7 @@ import {
 } from "@rustcraft/shared";
 import { Connection } from "../net/connection";
 import { InputManager } from "../input/input";
-import { buildTerrain, buildWater, buildRegionTerrain, type WaterField } from "../render/terrain";
+import { buildTerrain, buildWater, type WaterField } from "../render/terrain";
 import { buildHorizonMountains } from "../render/horizon";
 import { buildClouds, type CloudField } from "../render/clouds";
 import { buildNameplate, buildHorse, buildRaft, type MountParts } from "../render/models";
@@ -125,6 +122,9 @@ export class Game {
   private regionNameMap = new Map<string, string>();
   /** True after tearDownOverworld() until rebuildOverworld() -- region/dungeon visits. */
   private overworldSuspended = false;
+  /** In-flight region interior load — preloadAndEnter awaits this so the
+   *  loading screen stays up until terrain + assets exist. */
+  private regionEnterPromise: Promise<void> | null = null;
 
   private connection = new Connection();
   private input: InputManager;
@@ -136,19 +136,8 @@ export class Game {
   private grass!: GrassField;
   private clouds!: CloudField;
   private water!: WaterField;
-  /** Villages stream in once the player nears their zone, rather than every
-   *  building loading at connect time; the GLTF cache makes re-entry free. */
-  private streamedVillages = new Set<string>();
-  private readonly STREAM_RADIUS = 190;
-  /** Ashenpeak (region 2) — built once, lazily, the first time the player
-   *  approaches the valley; stays resident for the rest of the session. */
-  private regionTwoBuilt = false;
-  private regionTwoNodes: NodeManager | null = null;
-  /** Snapshot of `welcome`'s depleted-node ids, kept around so the lazily
-   *  built region-2 NodeManager can honor any already-depleted nodes there
-   *  (e.g. a returning player who gathered one before its respawn timer
-   *  elapsed) instead of always starting "fresh." */
-  private depletedNodeIds: string[] = [];
+  /** Villages keyed by id → scene group; streamed by ADT tile ring. */
+  private streamedVillages = new Map<string, { group: THREE.Group; signs: THREE.Object3D[] }>();
   private mountMesh: MountParts | null = null;
   private currentMount: "horse" | "raft" | null = null;
 
@@ -295,9 +284,6 @@ export class Game {
 
     clearSettlementQueue();
     this.nodes?.disposeVisuals();
-    this.regionTwoNodes?.disposeVisuals();
-    this.regionTwoNodes = null;
-    this.regionTwoBuilt = false;
 
     this.grass?.dispose();
     if (this.overworldGroup.parent) this.scene.remove(this.overworldGroup);
@@ -413,7 +399,6 @@ export class Game {
         ui.selectedSlot = msg.selectedSlot;
         ui.timeOfDay = msg.timeOfDay;
         this.move = { x: msg.self.x, y: msg.self.y, z: msg.self.z, vy: msg.self.vy, grounded: msg.self.grounded };
-        this.depletedNodeIds = msg.depletedNodes;
         this.nodes = new NodeManager(this.scene, msg.depletedNodes);
         for (const structure of msg.structures) this.entities.addStructure(structure);
         for (const npc of msg.npcs) this.npcManager.applySnap(npc);
@@ -451,7 +436,6 @@ export class Game {
         break;
       case "nodeUpdate":
         this.nodes?.setDepleted(msg.nodeId, msg.depleted);
-        this.regionTwoNodes?.setDepleted(msg.nodeId, msg.depleted);
         break;
       case "structureAdd":
         this.entities.addStructure(msg.structure);
@@ -607,10 +591,33 @@ export class Game {
       await this.avatar.applyAppearance(this.selfGender, this.selfAppearance);
       await this.applyEquippedGearAsync(msg.inventory);
 
-      ui.loadingProgress = 100;
-      // Slight delay for smooth visual transition
-      await new Promise((resolve) => setTimeout(resolve, 300));
+      // Starting region (or reconnect into a region): keep the loading screen
+      // up until ADT terrain + foliage/props are actually in the scene.
+      if (ui.regionState?.regionId) {
+        const regionId = ui.regionState.regionId;
+        ui.loadingMessage = "Loading region…";
+        ui.loadingProgress = 96;
+        this.tearDownOverworld();
+        if (this.activeRegionId !== regionId) {
+          if (this.regionRenderer) {
+            this.regionRenderer.destroy();
+            this.regionRenderer = null;
+          }
+          if (this.activeRegionGroup) {
+            this.scene.remove(this.activeRegionGroup);
+            this.disposeHierarchy(this.activeRegionGroup);
+            this.activeRegionGroup = null;
+          }
+          this.activeRegionId = regionId;
+          this.regionEnterPromise = this.enterRegionInterior(regionId);
+        }
+        if (this.regionEnterPromise) await this.regionEnterPromise;
+      } else {
+        ui.loadingProgress = 100;
+        await new Promise((resolve) => setTimeout(resolve, 300));
+      }
 
+      ui.loadingProgress = 100;
       ui.loading = false;
       ui.connected = true;
     } catch (e) {
@@ -966,16 +973,11 @@ export class Game {
       if (actions.interactPressed) {
         if (this.interactNodeId) {
           this.avatar.play("gather");
-          // Gather feedback: node shake, chip particles, tool sound. The
-          // target node could belong to either the main map's manager or
-          // Ashenpeak's (once built) — whichever one actually has it.
-          if (!this.interactNodeId.startsWith("poi_")) {
-            const mgr = this.nodes?.nodes.has(this.interactNodeId) ? this.nodes : this.regionTwoNodes;
-            if (mgr) {
-              mgr.hitNode(this.interactNodeId);
-              const nt = mgr.nodes.get(this.interactNodeId)?.node.type;
-              sound.play(nt === "tree" ? "chop" : nt === "rock" ? "mine" : "pick");
-            }
+          // Gather feedback: node shake, chip particles, tool sound.
+          if (!this.interactNodeId.startsWith("poi_") && this.nodes) {
+            this.nodes.hitNode(this.interactNodeId);
+            const nt = this.nodes.nodes.get(this.interactNodeId)?.node.type;
+            sound.play(nt === "tree" ? "chop" : nt === "rock" ? "mine" : "pick");
           }
         }
         this.doInteract();
@@ -1027,14 +1029,12 @@ export class Game {
     this.updateCamera(rx, ry, rz);
     if (!this.insideDungeonPortal && !ui.regionState) {
       this.nodes?.update(rx, rz, now, dt);
-      this.regionTwoNodes?.update(rx, rz, now, dt);
       this.grass?.update(rx, rz, now);
       this.clouds?.update(dt);
       this.water?.update(dt);
       if (this.settlements) animateSettlements(this.settlements, now);
     } else {
       this.nodes?.clearScene();
-      this.regionTwoNodes?.clearScene();
     }
     this.entities.update(now, dt, this.camera);
     this.updateInteractPrompt();
@@ -1105,7 +1105,10 @@ export class Game {
           this.activeRegionGroup = null;
         }
         this.activeRegionId = regionId;
-        void this.enterRegionInterior(regionId);
+        this.regionEnterPromise = this.enterRegionInterior(regionId);
+        void this.regionEnterPromise.finally(() => {
+          if (this.activeRegionId === regionId) this.regionEnterPromise = null;
+        });
       }
       if (this.regionRenderer) {
         this.regionRenderer.update(dt, this.sun, x, z);
@@ -1162,32 +1165,31 @@ export class Game {
     }
 
     if (!this.insideDungeonPortal) {
+      // Overworld villages: stream by ADT tile ring (load + unload).
+      const wantedTiles = new Set(adtRingKeys(x, z, ADT_VILLAGE_RING));
       for (const village of generateVillages()) {
-        if (this.streamedVillages.has(village.id)) continue;
-        if (dist2D(x, z, village.x, village.z) < this.STREAM_RADIUS) {
-          this.streamedVillages.add(village.id);
-          const vSigns = buildVillage(this.scene, village, true);
-          for (const sign of vSigns) {
-            sign.visible = !this.insideDungeonPortal;
-          }
-          this.overworldSigns.push(...vSigns);
+        const tile = adtKey(adtIndex(village.x), adtIndex(village.z));
+        const wanted = wantedTiles.has(tile);
+        const existing = this.streamedVillages.get(village.id);
+        if (wanted && !existing) {
+          const group = new THREE.Group();
+          group.name = `village:${village.id}`;
+          this.overworldGroup.add(group);
+          const signs = buildVillage(group, village, true);
+          for (const sign of signs) sign.visible = true;
+          this.overworldSigns.push(...signs);
+          this.streamedVillages.set(village.id, { group, signs });
+        } else if (!wanted && existing) {
+          this.overworldGroup.remove(existing.group);
+          this.disposeHierarchy(existing.group);
+          const drop = new Set(existing.signs);
+          this.overworldSigns = this.overworldSigns.filter((s) => !drop.has(s));
+          this.streamedVillages.delete(village.id);
         }
       }
       // Drains a few of a freshly-streamed village's queued building/prop
       // placements per frame instead of all ~50-60 landing in the same one.
       flushSettlementQueue();
-
-      // Ashenpeak (region 2): nothing about it exists in the scene until the
-      // player is already well inside the valley approach — built once, then
-      // stays resident (its own NodeManager reuses the same VISIBLE_RADIUS
-      // windowing as the main map's, unaffected by this outer gate).
-      if (!this.regionTwoBuilt && dist2D(x, z, REGION_TWO_GATE_X, REGION_TWO_GATE_Z) < REGION_TWO_TRIGGER_RADIUS) {
-        this.regionTwoBuilt = true;
-        const centerZ = (VALLEY_START_Z + REGION_TWO_MAX_Z) / 2;
-        const sizeZ = REGION_TWO_MAX_Z - VALLEY_START_Z;
-        this.overworldGroup.add(buildRegionTerrain(0, centerZ, ZONE_SIZE, sizeZ));
-        this.regionTwoNodes = new NodeManager(this.scene, this.depletedNodeIds, generateRegionTwoNodes());
-      }
     }
   }
 
@@ -1251,16 +1253,14 @@ export class Game {
     this.tickRenderFrom.y = this.move.y;
     this.tickRenderFrom.z = this.move.z;
 
-    // Wait for every foliage/prop/building instance to actually be built
-    // (region.ready), then force their shaders/geometry onto the GPU now,
-    // while the loading screen is still up -- everything is eagerly
-    // instanced and already in the real scene at this point (see
-    // RegionInteriorRenderer's class doc comment), so a plain compile()
-    // call reaches it all directly; no separate transient warm-up pass
-    // needed. This avoids the first-use shader-compile stall landing on
-    // the first real rendered frame instead.
+    // Wait for every foliage/prop/building instance + ADT terrain warm
+    // (region.ready), then force shaders/geometry onto the GPU while the
+    // loading screen is still up.
     ui.loadingMessage = "Preparing region…";
     ui.loadingProgress = 98;
+    // Re-warm around the live player position (server may have placed them
+    // slightly off entryLocal).
+    this.regionRenderer.warmAround(this.move.x, this.move.z);
     await this.regionRenderer.ready;
     if (this.activeRegionId !== regionId) { ui.loading = false; return; }
     this.renderer.compile(this.scene, this.camera);
@@ -1268,6 +1268,7 @@ export class Game {
     // Done — dismiss loading screen.
     ui.loadingProgress = 100;
     ui.loading = false;
+    this.regionEnterPromise = null;
   }
 
   private readonly TARGET_RANGE = 60;
@@ -1577,10 +1578,7 @@ export class Game {
     }
     this.lootCorpseId = null;
 
-    const node =
-      this.nodes.findTarget(this.move.x, this.move.y, this.move.z, this.cameraYaw, GATHER_RANGE) ??
-      this.regionTwoNodes?.findTarget(this.move.x, this.move.y, this.move.z, this.cameraYaw, GATHER_RANGE) ??
-      null;
+    const node = this.nodes.findTarget(this.move.x, this.move.y, this.move.z, this.cameraYaw, GATHER_RANGE);
     if (node) {
       const def = nodeTypeDef(node.type);
       const verb = node.type === "tree" ? "Chop" : node.type === "rock" ? "Mine" : "Pick";

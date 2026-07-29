@@ -34,9 +34,8 @@ function buildMarkerSprite(glyph: string, color: string): THREE.Sprite {
 }
 
 /**
- * Static quest-giver NPCs. Positions are deterministic from shared worldgen
- * (rendered immediately, like villages), while the WoW-style "!"/"?" marker
- * above each head is server-authoritative per-player quest state.
+ * Static quest-giver NPC visuals for the overworld. Worldgen NPCs are retired
+ * (see generateNpcQuestGivers); this still applies marker snaps if any are sent.
  */
 export class NpcManager {
   private handles = new Map<string, NpcHandle>();

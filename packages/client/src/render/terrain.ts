@@ -1,10 +1,11 @@
 import * as THREE from "three";
 import {
   terrainHeight, terrainSlope, biomeAt, generatePaths, distPointToSegment, ZONE_SIZE, WATER_LEVEL,
+  adtKey, adtWorldBounds,
   sampleRegionHeight, regionSlopeAt, type RegionBlueprint, type RegionBiome, type RegionRoad,
 } from "@rustcraft/shared";
 
-const RESOLUTION = 200; // vertices per side
+const RESOLUTION = 200; // vertices per side (legacy monolithic meshes)
 const TERRAIN_TILING = 48; // texture repeats across the zone
 
 const GRASS_MEADOW = new THREE.Color(0x8aa04f);
@@ -94,10 +95,17 @@ export function applyGroundBlendShader(mat: THREE.MeshLambertMaterial): void {
   };
 }
 
-/** Shared body behind `buildTerrain()`/`buildRegionTerrain()` — a heightmapped,
- *  biome-textured plane centered at `(centerX, centerZ)`. */
-function buildTerrainMesh(centerX: number, centerZ: number, sizeX: number, sizeZ: number): THREE.Mesh {
-  const geo = new THREE.PlaneGeometry(sizeX, sizeZ, RESOLUTION, RESOLUTION);
+/** Shared body behind terrain builders — a heightmapped, biome-textured plane
+ *  centered at `(centerX, centerZ)`. Optional `sharedMat` avoids per-tile materials. */
+function buildTerrainMesh(
+  centerX: number,
+  centerZ: number,
+  sizeX: number,
+  sizeZ: number,
+  segments = RESOLUTION,
+  sharedMat?: THREE.MeshLambertMaterial,
+): THREE.Mesh {
+  const geo = new THREE.PlaneGeometry(sizeX, sizeZ, segments, segments);
   geo.rotateX(-Math.PI / 2);
   geo.translate(centerX, 0, centerZ);
 
@@ -199,24 +207,23 @@ function buildTerrainMesh(centerX: number, centerZ: number, sizeX: number, sizeZ
   geo.setAttribute("terrainUv", new THREE.BufferAttribute(terrainUv, 2));
   geo.computeVertexNormals();
 
-  const mat = new THREE.MeshLambertMaterial({ vertexColors: true });
-  applyGroundBlendShader(mat);
+  const mat = sharedMat ?? new THREE.MeshLambertMaterial({ vertexColors: true });
+  if (!sharedMat) applyGroundBlendShader(mat);
   const mesh = new THREE.Mesh(geo, mat);
   mesh.receiveShadow = true;
   return mesh;
 }
 
+/** Shared Lambert + ground-blend material for streamed region ADT tiles. */
+export function createAdtTerrainMaterial(): THREE.MeshLambertMaterial {
+  const mat = new THREE.MeshLambertMaterial({ vertexColors: true });
+  applyGroundBlendShader(mat);
+  return mat;
+}
+
 export function buildTerrain(): THREE.Mesh {
   const mesh = buildTerrainMesh(0, 0, ZONE_SIZE, ZONE_SIZE);
   mesh.name = "terrain";
-  return mesh;
-}
-
-/** Ashenpeak (region 2) + the valley connecting it — built lazily, once the
- *  player approaches, so it costs nothing until then. */
-export function buildRegionTerrain(centerX: number, centerZ: number, sizeX: number, sizeZ: number): THREE.Mesh {
-  const mesh = buildTerrainMesh(centerX, centerZ, sizeX, sizeZ);
-  mesh.name = "terrain-region-two";
   return mesh;
 }
 
@@ -403,6 +410,94 @@ export function buildRegionBlueprintTerrain(
   return mesh;
 }
 
+/**
+ * One ADT tile of a region heightmap. Vertices snap to the blueprint grid so
+ * neighboring tiles share edge heights. Returns null if the tile misses the region.
+ */
+export function buildRegionAdtTile(
+  blueprint: Pick<RegionBlueprint, "gridSize" | "pitch" | "heights" | "biome" | "roads" | "colorGrading" | "customTextures">,
+  ix: number,
+  iz: number,
+  material: THREE.MeshLambertMaterial,
+): THREE.Mesh | null {
+  const { gridSize, pitch } = blueprint;
+  const half = ((gridSize - 1) * pitch) / 2;
+  const span = half * 2;
+  const tile = adtWorldBounds(ix, iz);
+
+  const minX = Math.max(tile.minX, -half);
+  const maxX = Math.min(tile.maxX, half);
+  const minZ = Math.max(tile.minZ, -half);
+  const maxZ = Math.min(tile.maxZ, half);
+  if (minX >= maxX - 1e-6 || minZ >= maxZ - 1e-6) return null;
+
+  let gx0 = Math.floor((minX + half) / pitch);
+  let gx1 = Math.ceil((maxX + half) / pitch);
+  let gz0 = Math.floor((minZ + half) / pitch);
+  let gz1 = Math.ceil((maxZ + half) / pitch);
+  gx0 = clampNum(gx0, 0, gridSize - 1);
+  gx1 = clampNum(gx1, 0, gridSize - 1);
+  gz0 = clampNum(gz0, 0, gridSize - 1);
+  gz1 = clampNum(gz1, 0, gridSize - 1);
+  const segsX = gx1 - gx0;
+  const segsZ = gz1 - gz0;
+  if (segsX < 1 || segsZ < 1) return null;
+
+  const sizeX = segsX * pitch;
+  const sizeZ = segsZ * pitch;
+  const centerX = -half + gx0 * pitch + sizeX / 2;
+  const centerZ = -half + gz0 * pitch + sizeZ / 2;
+
+  const geo = new THREE.PlaneGeometry(sizeX, sizeZ, segsX, segsZ);
+  geo.rotateX(-Math.PI / 2);
+  geo.translate(centerX, 0, centerZ);
+
+  const pos = geo.attributes.position as THREE.BufferAttribute;
+  const terrainUv = (geo.attributes.uv as THREE.BufferAttribute).array as Float32Array;
+  const tints = new Float32Array(pos.count * 3);
+  const weightsA = new Float32Array(pos.count * 3);
+  const weightsB = new Float32Array(pos.count * 3);
+  const roads = blueprint.roads ?? [];
+  const groundTint = blueprint.colorGrading.groundTint;
+
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i);
+    const z = pos.getZ(i);
+    const y = sampleRegionHeight(blueprint, x, z);
+    pos.setY(i, y);
+
+    terrainUv[i * 2] = (x + half) / span;
+    terrainUv[i * 2 + 1] = (z + half) / span;
+
+    const slope = regionSlopeAt(blueprint, x, z);
+    const roadBlend = regionRoadBlendAt(roads, x, z);
+    const customTex = sampleRegionCustomTexture(blueprint, x, z);
+    const w = regionGroundWeights(blueprint.biome, y, slope, roadBlend, groundTint, customTex);
+    weightsA[i * 3] = w.wGrass;
+    weightsA[i * 3 + 1] = w.wRock;
+    weightsA[i * 3 + 2] = w.wSand;
+    weightsB[i * 3] = w.wSnow;
+    weightsB[i * 3 + 1] = w.wDirt;
+    weightsB[i * 3 + 2] = w.wCobble;
+    tints[i * 3] = w.tint.r;
+    tints[i * 3 + 1] = w.tint.g;
+    tints[i * 3 + 2] = w.tint.b;
+  }
+
+  geo.setAttribute("color", new THREE.BufferAttribute(tints, 3));
+  geo.setAttribute("weightsA", new THREE.BufferAttribute(weightsA, 3));
+  geo.setAttribute("weightsB", new THREE.BufferAttribute(weightsB, 3));
+  geo.setAttribute("terrainUv", new THREE.BufferAttribute(terrainUv, 2));
+  geo.computeVertexNormals();
+
+  const mesh = new THREE.Mesh(geo, material);
+  mesh.receiveShadow = true;
+  mesh.name = `region-adt:${adtKey(ix, iz)}`;
+  mesh.userData.adtIx = ix;
+  mesh.userData.adtIz = iz;
+  return mesh;
+}
+
 export interface WaterField {
   mesh: THREE.Mesh;
   update(dt: number): void;
@@ -532,4 +627,133 @@ export function buildRegionWaterMesh(
   return { mesh, updateGeometry, update };
 }
 
+/** Shared water material for region ADT water tiles. */
+export function createRegionWaterMaterial(): THREE.MeshLambertMaterial {
+  const normalMap = tiledTexture("/assets/textures/water/water_normal.jpg");
+  normalMap.repeat.set(16, 16);
+  const mat = new THREE.MeshLambertMaterial({
+    color: 0x3b9bc9,
+    transparent: true,
+    opacity: 0.78,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+    normalMap,
+    normalScale: new THREE.Vector2(0.4, 0.4),
+  });
+  mat.userData.waterNormalMap = normalMap;
+  return mat;
+}
+
+function waterSurfaceY(
+  hArr: ArrayLike<number>,
+  wArr: ArrayLike<number>,
+  gridSize: number,
+  gx: number,
+  gz: number,
+): number {
+  const idx = gz * gridSize + gx;
+  const h = hArr[idx] ?? 0;
+  const w = wArr[idx] ?? 0;
+
+  if (w > 0.005) {
+    let waterY = h + w;
+    let maxWallH = h;
+    if (gx > 0) maxWallH = Math.max(maxWallH, hArr[idx - 1] ?? 0);
+    if (gx < gridSize - 1) maxWallH = Math.max(maxWallH, hArr[idx + 1] ?? 0);
+    if (gz > 0) maxWallH = Math.max(maxWallH, hArr[idx - gridSize] ?? 0);
+    if (gz < gridSize - 1) maxWallH = Math.max(maxWallH, hArr[idx + gridSize] ?? 0);
+    if (maxWallH > waterY) waterY += Math.min(0.25, (maxWallH - waterY) * 0.22);
+    return waterY;
+  }
+
+  let hasWetNeighbor = false;
+  let neighborWaterY = h;
+  if (gx > 0 && (wArr[idx - 1] ?? 0) > 0.005) {
+    hasWetNeighbor = true;
+    neighborWaterY = (hArr[idx - 1] ?? 0) + (wArr[idx - 1] ?? 0);
+  }
+  if (gx < gridSize - 1 && (wArr[idx + 1] ?? 0) > 0.005) {
+    hasWetNeighbor = true;
+    neighborWaterY = (hArr[idx + 1] ?? 0) + (wArr[idx + 1] ?? 0);
+  }
+  if (gz > 0 && (wArr[idx - gridSize] ?? 0) > 0.005) {
+    hasWetNeighbor = true;
+    neighborWaterY = (hArr[idx - gridSize] ?? 0) + (wArr[idx - gridSize] ?? 0);
+  }
+  if (gz < gridSize - 1 && (wArr[idx + gridSize] ?? 0) > 0.005) {
+    hasWetNeighbor = true;
+    neighborWaterY = (hArr[idx + gridSize] ?? 0) + (wArr[idx + gridSize] ?? 0);
+  }
+  if (hasWetNeighbor) return Math.min(h, neighborWaterY);
+  return h - 2;
+}
+
+/**
+ * One ADT tile of region painted water. Returns null if the tile has no wet cells
+ * (and no shoreline) — keeps dry land free of water meshes.
+ */
+export function buildRegionAdtWaterTile(
+  blueprint: Pick<RegionBlueprint, "gridSize" | "pitch" | "heights"> & { waterHeights: number[] },
+  ix: number,
+  iz: number,
+  material: THREE.MeshLambertMaterial,
+): THREE.Mesh | null {
+  const { gridSize, pitch, heights, waterHeights } = blueprint;
+  const half = ((gridSize - 1) * pitch) / 2;
+  const tile = adtWorldBounds(ix, iz);
+
+  const minX = Math.max(tile.minX, -half);
+  const maxX = Math.min(tile.maxX, half);
+  const minZ = Math.max(tile.minZ, -half);
+  const maxZ = Math.min(tile.maxZ, half);
+  if (minX >= maxX - 1e-6 || minZ >= maxZ - 1e-6) return null;
+
+  let gx0 = clampNum(Math.floor((minX + half) / pitch), 0, gridSize - 1);
+  let gx1 = clampNum(Math.ceil((maxX + half) / pitch), 0, gridSize - 1);
+  let gz0 = clampNum(Math.floor((minZ + half) / pitch), 0, gridSize - 1);
+  let gz1 = clampNum(Math.ceil((maxZ + half) / pitch), 0, gridSize - 1);
+  const segsX = gx1 - gx0;
+  const segsZ = gz1 - gz0;
+  if (segsX < 1 || segsZ < 1) return null;
+
+  let anyWet = false;
+  for (let gz = gz0; gz <= gz1 && !anyWet; gz++) {
+    for (let gx = gx0; gx <= gx1; gx++) {
+      if ((waterHeights[gz * gridSize + gx] ?? 0) > 0.005) {
+        anyWet = true;
+        break;
+      }
+    }
+  }
+  if (!anyWet) return null;
+
+  const sizeX = segsX * pitch;
+  const sizeZ = segsZ * pitch;
+  const centerX = -half + gx0 * pitch + sizeX / 2;
+  const centerZ = -half + gz0 * pitch + sizeZ / 2;
+
+  const geo = new THREE.PlaneGeometry(sizeX, sizeZ, segsX, segsZ);
+  geo.rotateX(-Math.PI / 2);
+  geo.translate(centerX, 0, centerZ);
+
+  const pos = geo.attributes.position as THREE.BufferAttribute;
+  // PlaneGeometry verts are row-major matching segs; map back to grid indices.
+  for (let row = 0; row <= segsZ; row++) {
+    for (let col = 0; col <= segsX; col++) {
+      const vIdx = row * (segsX + 1) + col;
+      const gx = gx0 + col;
+      const gz = gz0 + row;
+      pos.setY(vIdx, waterSurfaceY(heights, waterHeights, gridSize, gx, gz));
+    }
+  }
+  pos.needsUpdate = true;
+  geo.computeVertexNormals();
+
+  const mesh = new THREE.Mesh(geo, material);
+  mesh.name = `region-water-adt:${adtKey(ix, iz)}`;
+  mesh.receiveShadow = true;
+  mesh.userData.adtIx = ix;
+  mesh.userData.adtIz = iz;
+  return mesh;
+}
 

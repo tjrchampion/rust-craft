@@ -26,7 +26,7 @@ import {
   type TerrainVolumeMaterial,
   sampleRegionWaterDepth,
   REGION_COLOR_PRESETS,
-  REGION_FOLIAGE,
+  REGION_TREE_BRUSH,
   REGION_ASSET_COLLISION_RADIUS,
   REGION_ASSET_COLLISION_HEIGHT,
   REGION_ASSET_CLIMBABLE,
@@ -108,6 +108,21 @@ const MARKER_COLORS: Record<EditorMarkerKind, number> = {
 
 const ARROW_PAN_STEP = 4;
 const ARROW_PAN_STEP_FAST = 16;
+const TRANSLATE_SNAP = 0.5; // meters
+const TRANSLATE_SNAP_FINE = 0.1;
+const ROTATE_SNAP = Math.PI / 12; // 15°
+const SCALE_SNAP = 0.1;
+const NUDGE_STEP = 0.5;
+const NUDGE_STEP_FINE = 0.1;
+
+/** Yaw around world +Y. Do not use Euler XYZ `.y` — world-space
+ *  TransformControls often decomposes to (-π, ε, -π) where `.y` is near 0
+ *  even though the object is rotated ~180°, so saves silently drop rotation. */
+const _yawForward = new THREE.Vector3();
+function yawFromQuaternion(q: THREE.Quaternion): number {
+  _yawForward.set(0, 0, 1).applyQuaternion(q);
+  return Math.atan2(_yawForward.x, _yawForward.z);
+}
 
 export interface EditorSelection {
   kind: "asset" | "marker" | "light" | "volume";
@@ -362,6 +377,7 @@ export class RegionEditorScene {
     private onChange?: () => void,
     private onPlaytestChange?: (active: boolean) => void,
     onMarquee?: (box: { startX: number; startY: number; endX: number; endY: number } | null) => void,
+    private onSnapChange?: (enabled: boolean) => void,
   ) {
     // Guard against two live instances ever listening on the same canvas at
     // once (e.g. a leftover instance from a Vite HMR reload that never got
@@ -410,6 +426,8 @@ export class RegionEditorScene {
 
     this.transform = new TransformControls(this.camera, canvas);
     this.transform.setMode("translate");
+    this.transform.setSpace("world");
+    this.applyTransformSnap(true);
     this.scene.add(this.transform.getHelper());
     this.transform.addEventListener("dragging-changed", (e) => {
       const isDragging = (e as unknown as { value: boolean }).value;
@@ -418,6 +436,7 @@ export class RegionEditorScene {
         this.dragStartPos.copy(this.selectionGroup.position);
         this.dragStartRot.copy(this.selectionGroup.rotation);
       } else {
+        this.bakeSelectionYaw();
         this.emitSelection();
         this.triggerChange();
       }
@@ -1230,7 +1249,7 @@ export class RegionEditorScene {
     if (now - this.lastPlaceTime < 240) return;
     this.lastPlaceTime = now;
 
-    const foliageList = REGION_FOLIAGE[this.meta.biome] ?? REGION_FOLIAGE.grassland;
+    const foliageList = REGION_TREE_BRUSH[this.meta.biome] ?? REGION_TREE_BRUSH.grassland;
     const treeCount = Math.max(1, Math.floor(this.brushStrength * 1.5));
 
     for (let i = 0; i < treeCount; i++) {
@@ -1608,8 +1627,74 @@ export class RegionEditorScene {
     this.orbit.update();
   }
 
+  private snapEnabled = true;
+
   setTransformMode(mode: EditorTransformMode): void {
     this.transform.setMode(mode);
+    // Blueprints only persist yaw — hide pitch/roll handles in rotate mode.
+    const yawOnly = mode === "rotate";
+    this.transform.showX = !yawOnly;
+    this.transform.showZ = !yawOnly;
+    this.transform.showY = true;
+    this.applyTransformSnap(this.snapEnabled);
+  }
+
+  setTransformSnap(enabled: boolean): void {
+    this.snapEnabled = enabled;
+    this.applyTransformSnap(enabled);
+    this.onSnapChange?.(enabled);
+  }
+
+  isTransformSnapEnabled(): boolean {
+    return this.snapEnabled;
+  }
+
+  private applyTransformSnap(enabled: boolean): void {
+    if (!enabled) {
+      this.transform.setTranslationSnap(null);
+      this.transform.setRotationSnap(null);
+      this.transform.setScaleSnap(null);
+      return;
+    }
+    this.transform.setTranslationSnap(TRANSLATE_SNAP);
+    this.transform.setRotationSnap(ROTATE_SNAP);
+    this.transform.setScaleSnap(SCALE_SNAP);
+  }
+
+  /** Drop the current selection so its bounding-box floor sits on the heightmap. */
+  dropSelectionToGround(): void {
+    if (this.selectedIds.size === 0) return;
+    this.selectionGroup.updateMatrixWorld(true);
+    const box = new THREE.Box3().setFromObject(this.selectionGroup);
+    if (box.isEmpty()) return;
+    const center = box.getCenter(new THREE.Vector3());
+    const groundY = this.heightAt(center.x, center.z);
+    const delta = groundY - box.min.y;
+    if (Math.abs(delta) < 1e-4) return;
+    this.selectionGroup.position.y += delta;
+    this.onTransformChange();
+  }
+
+  /** Nudge selection in camera-relative XZ (and Y with PageUp/PageDown). */
+  private nudgeSelection(dx: number, dy: number, dz: number, fine = false): void {
+    if (this.selectedIds.size === 0) return;
+    const forward = new THREE.Vector3();
+    this.camera.getWorldDirection(forward);
+    forward.y = 0;
+    if (forward.lengthSq() < 1e-6) forward.set(0, 0, -1);
+    else forward.normalize();
+    const right = new THREE.Vector3().crossVectors(forward, new THREE.Vector3(0, 1, 0)).normalize();
+    this.selectionGroup.position.addScaledVector(right, dx);
+    this.selectionGroup.position.y += dy;
+    this.selectionGroup.position.addScaledVector(forward, dz);
+    if (this.snapEnabled) {
+      const p = this.selectionGroup.position;
+      const snap = fine ? TRANSLATE_SNAP_FINE : TRANSLATE_SNAP;
+      p.x = Math.round(p.x / snap) * snap;
+      p.y = Math.round(p.y / snap) * snap;
+      p.z = Math.round(p.z / snap) * snap;
+    }
+    this.onTransformChange();
   }
 
   // ============================ playtest ============================
@@ -2851,6 +2936,18 @@ export class RegionEditorScene {
     }
     if (e.key === "ArrowUp" || e.key === "ArrowDown" || e.key === "ArrowLeft" || e.key === "ArrowRight") {
       e.preventDefault();
+      // With a selection: nudge objects (camera-relative). Alt = pan camera instead.
+      if (this.selectedIds.size > 0 && !e.altKey) {
+        const fine = e.shiftKey;
+        const step = fine ? NUDGE_STEP_FINE : NUDGE_STEP;
+        switch (e.key) {
+          case "ArrowUp": this.nudgeSelection(0, 0, step, fine); break;
+          case "ArrowDown": this.nudgeSelection(0, 0, -step, fine); break;
+          case "ArrowLeft": this.nudgeSelection(-step, 0, 0, fine); break;
+          case "ArrowRight": this.nudgeSelection(step, 0, 0, fine); break;
+        }
+        return;
+      }
       const step = e.shiftKey ? ARROW_PAN_STEP_FAST : ARROW_PAN_STEP;
       switch (e.key) {
         case "ArrowUp": this.panCamera(0, step); break;
@@ -2858,6 +2955,25 @@ export class RegionEditorScene {
         case "ArrowLeft": this.panCamera(-step, 0); break;
         case "ArrowRight": this.panCamera(step, 0); break;
       }
+      return;
+    }
+    if (e.key === "PageUp" || e.key === "PageDown") {
+      if (this.selectedIds.size === 0) return;
+      e.preventDefault();
+      const fine = e.shiftKey;
+      const step = fine ? NUDGE_STEP_FINE : NUDGE_STEP;
+      this.nudgeSelection(0, e.key === "PageUp" ? step : -step, 0, fine);
+      return;
+    }
+    if (e.key.toLowerCase() === "g" && this.selectedIds.size > 0) {
+      e.preventDefault();
+      this.dropSelectionToGround();
+      return;
+    }
+    if (e.key.toLowerCase() === "x" && this.selectedIds.size > 0 && !e.metaKey && !e.ctrlKey) {
+      // Toggle snap while editing (not Cut — we don't use Ctrl-less X for cut).
+      e.preventDefault();
+      this.setTransformSnap(!this.snapEnabled);
       return;
     }
     if (this.selectedIds.size === 0) return;
@@ -3441,6 +3557,27 @@ export class RegionEditorScene {
     this.emitSelection();
   }
 
+  /** Detach selection to world, rewrite each object's rotation as yaw-only
+   *  (matching what export persists), then re-parent under the gizmo group. */
+  private bakeSelectionYaw(): void {
+    if (this.selectedIds.size === 0) return;
+    const worldQuat = new THREE.Quaternion();
+    for (const obj of [...this.selectionGroup.children]) this.scene.attach(obj);
+    for (const id of this.selectedIds) {
+      const entry =
+        this.assets.get(id) ??
+        this.volumes.get(id) ??
+        this.markers.get(id) ??
+        (id === "entry" ? this.entryMarker : null);
+      if (!entry) continue;
+      entry.obj.getWorldQuaternion(worldQuat);
+      entry.obj.rotation.set(0, yawFromQuaternion(worldQuat), 0);
+      const v = this.volumes.get(id);
+      if (v) this.syncVolumeDataFromMesh(v);
+    }
+    this.updateSelectionGroup();
+  }
+
   private emitSelection(): void {
     if (this.selectedIds.size === 0) {
       this.onSelectionChange([]);
@@ -3449,13 +3586,11 @@ export class RegionEditorScene {
     const worldPos = new THREE.Vector3();
     const worldQuat = new THREE.Quaternion();
     const worldScale = new THREE.Vector3();
-    const euler = new THREE.Euler();
     const worldTransform = (obj: THREE.Object3D) => {
       obj.getWorldPosition(worldPos);
       obj.getWorldQuaternion(worldQuat);
       obj.getWorldScale(worldScale);
-      euler.setFromQuaternion(worldQuat);
-      return { x: worldPos.x, y: worldPos.y, z: worldPos.z, yaw: euler.y, scale: worldScale.x };
+      return { x: worldPos.x, y: worldPos.y, z: worldPos.z, yaw: yawFromQuaternion(worldQuat), scale: worldScale.x };
     };
 
     const selItems: EditorSelection[] = [];
@@ -3752,11 +3887,10 @@ export class RegionEditorScene {
       return;
     }
 
-    const euler = new THREE.Euler().setFromQuaternion(worldQuat);
     v.data.localX = worldPos.x;
     v.data.localY = worldPos.y;
     v.data.localZ = worldPos.z;
-    v.data.yaw = euler.y;
+    v.data.yaw = yawFromQuaternion(worldQuat);
     v.data.scaleX = worldScale.x;
     v.data.scaleY = worldScale.y;
     v.data.scaleZ = worldScale.z;
@@ -3971,13 +4105,11 @@ export class RegionEditorScene {
     const worldPos = new THREE.Vector3();
     const worldQuat = new THREE.Quaternion();
     const worldScale = new THREE.Vector3();
-    const euler = new THREE.Euler();
     const getTransform = (obj: THREE.Object3D) => {
       obj.getWorldPosition(worldPos);
       obj.getWorldQuaternion(worldQuat);
       obj.getWorldScale(worldScale);
-      euler.setFromQuaternion(worldQuat);
-      return { x: worldPos.x, y: worldPos.y, z: worldPos.z, yaw: euler.y, scale: worldScale.x };
+      return { x: worldPos.x, y: worldPos.y, z: worldPos.z, yaw: yawFromQuaternion(worldQuat), scale: worldScale.x };
     };
 
     const assets = [...this.assets.values()].map((a) => {

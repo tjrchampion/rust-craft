@@ -47,6 +47,7 @@
   let selection = $state<EditorSelection[]>([]);
   let marqueeBox = $state<{ startX: number; startY: number; endX: number; endY: number } | null>(null);
   let transformMode = $state<EditorTransformMode>("translate");
+  let transformSnap = $state(true);
   let sculptMode = $state<SculptMode>(null);
   let volumeStampShape = $state<TerrainVolumeShape | null>(null);
   let volumeSculptBrushActive = $state(false);
@@ -96,6 +97,9 @@
       },
       (box) => {
         marqueeBox = box;
+      },
+      (enabled) => {
+        transformSnap = enabled;
       },
     );
     const urlParams = new URLSearchParams(window.location.search);
@@ -432,6 +436,15 @@
     cancelArmed();
   }
 
+  function toggleSnap(): void {
+    transformSnap = !transformSnap;
+    scene?.setTransformSnap(transformSnap);
+  }
+
+  function dropToGround(): void {
+    scene?.dropSelectionToGround();
+  }
+
   function togglePlaytest(): void {
     if (!scene) return;
     cancelArmed();
@@ -720,6 +733,23 @@
           ⤢ Scale
         </button>
       </div>
+
+      <button
+        class="tool-chip"
+        class:active={transformSnap}
+        onclick={toggleSnap}
+        title="Snap to 0.5m / 15° (X)"
+      >
+        ⊞ Snap
+      </button>
+      <button
+        class="tool-chip"
+        onclick={dropToGround}
+        disabled={selection.length === 0}
+        title="Drop selection onto terrain (G)"
+      >
+        ⬇ Ground
+      </button>
 
       <div class="v-divider"></div>
 
@@ -1165,6 +1195,7 @@
         <label>X <input type="number" step="0.1" value={sel.x} onchange={(e) => applyPatch({ x: Number((e.target as HTMLInputElement).value) })} /></label>
         <label>Y <input type="number" step="0.1" value={sel.y} onchange={(e) => applyPatch({ y: Number((e.target as HTMLInputElement).value) })} /></label>
         <label>Z <input type="number" step="0.1" value={sel.z} onchange={(e) => applyPatch({ z: Number((e.target as HTMLInputElement).value) })} /></label>
+        <p class="hint">Arrows nudge · Shift = fine · G = ground · X = snap · Alt+Arrows = pan camera</p>
         {#if sel.kind === "asset" || sel.kind === "volume"}
           <label>Yaw <input type="number" step="0.01" value={sel.yaw} onchange={(e) => applyPatch({ yaw: Number((e.target as HTMLInputElement).value) })} /></label>
           <label>Scale <input type="number" step="0.05" value={sel.scale} onchange={(e) => applyPatch({ scale: Number((e.target as HTMLInputElement).value) })} /></label>
@@ -1428,6 +1459,29 @@
     background: #3a6ea8;
     color: #ffffff;
     box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+  }
+  .tool-chip {
+    background: #202531;
+    border: 1px solid #323a4d;
+    color: #cbd5e1;
+    border-radius: 6px;
+    padding: 5px 10px;
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 500;
+  }
+  .tool-chip:hover:not(:disabled) {
+    background: #2a3142;
+    color: #f1f5f9;
+  }
+  .tool-chip.active {
+    background: #3a6ea8;
+    border-color: #5c8fc9;
+    color: #fff;
+  }
+  .tool-chip:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
   }
   .v-divider {
     width: 1px;

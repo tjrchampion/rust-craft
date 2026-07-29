@@ -209,43 +209,17 @@ export function generateVillages(): VillageSpec[] {
 
 // ============================ NPCs ============================
 
-const NPC_NAMES = [
-  "Elder Maren",
-  "Quartermaster Bel",
-  "Warden Fitch",
-  "Old Rowan",
-  "Sister Alda",
-  "Forester Nym",
-  "Captain Oswin",
-  "Herbalist Ysolde",
-];
-
 let npcsCache: NpcSpec[] | null = null;
 
-/** One quest-giver NPC per village, standing near the central well. */
+/**
+ * Overworld village quest-givers — retired. Quests/NPCs live in authored
+ * region blueprints now. Kept as an empty generator so server/client call
+ * sites and debug APIs stay stable.
+ */
 export function generateNpcQuestGivers(): NpcSpec[] {
   if (npcsCache) return npcsCache;
-  const villages = generateVillages();
-  const npcs: NpcSpec[] = [];
-  villages.forEach((v, i) => {
-    const rng = mulberry32(hashString(v.id) ^ 0x51ed270b);
-    const angle = rng() * Math.PI * 2;
-    const dist = 4 + rng() * 2;
-    const x = v.x + Math.sin(angle) * dist;
-    const z = v.z + Math.cos(angle) * dist;
-    const y = terrainHeight(x, z);
-    npcs.push({
-      id: `npc_v${i}`,
-      villageIndex: i,
-      name: NPC_NAMES[i % NPC_NAMES.length]!,
-      x,
-      y,
-      z,
-      yaw: Math.atan2(v.x - x, v.z - z),
-    });
-  });
-  npcsCache = npcs;
-  return npcs;
+  npcsCache = [];
+  return npcsCache;
 }
 
 // ============================ paths ============================

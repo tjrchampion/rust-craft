@@ -10,7 +10,7 @@ import {
   TIER_NAMES,
   dungeonTierDef,
 } from "@rustcraft/shared";
-import { buildShrine, buildStump, buildCampfire, buildNameplate, buildRock } from "./models";
+import { buildShrine, buildStump, buildNameplate, buildRock } from "./models";
 import { createSharedGltfLoader } from "./sharedGltf";
 
 const loader = createSharedGltfLoader();
@@ -353,10 +353,8 @@ export function buildWorldStatic(scene: THREE.Object3D, withSigns = true): Settl
         signs.push(sign);
       }
     } else if (poi.type === "camp") {
-      const fireX = poi.x + 2;
-      const fire = buildCampfire();
-      fire.position.set(fireX, terrainHeight(fireX, poi.z), poi.z);
-      scene.add(fire);
+      // Decorative stumps only — worldgen campfires removed (player-placed
+      // campfires / region props remain the cooking & rest stations).
       for (let i = 0; i < 5; i++) {
         const stump = buildStump((i * 0.19 + 0.07) % 1);
         const a = i * 1.35;

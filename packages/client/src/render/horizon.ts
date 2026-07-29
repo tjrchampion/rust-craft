@@ -62,6 +62,9 @@ function mountainHeight(x: number, z: number, radialT: number): number {
  * playable zone — layered ridged noise for a jagged silhouette, textured
  * with the same rock/snow photo maps used for the ground, height-blended
  * and fog-faded for a proper sense of scale. Pure backdrop, never walkable.
+ *
+ * Intentionally NOT ADT-tiled: one static ring sized to ZONE_SIZE, torn down
+ * with the overworld. Region interiors use fog/sky color grading instead.
  */
 export function buildHorizonMountains(): THREE.Group {
   const group = new THREE.Group();
