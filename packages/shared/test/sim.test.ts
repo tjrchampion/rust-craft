@@ -116,4 +116,40 @@ describe("movement", () => {
     const horseDist = run("horse");
     expect(horseDist).toBeGreaterThan(sprintDist * 1.4);
   });
+
+  it("wades in shallow water and swims in deep water", () => {
+    // Flat 3x3 heightmap: center cell has painted depth.
+    const mkRegion = (depth: number) => {
+      const gridSize = 5;
+      const pitch = 4;
+      const heights = new Array(gridSize * gridSize).fill(0);
+      const waterHeights = new Array(gridSize * gridSize).fill(0);
+      waterHeights[12] = depth; // center
+      // Also fill neighbors so bilinear sample at 0,0 stays deep enough.
+      for (let i = 0; i < waterHeights.length; i++) waterHeights[i] = depth;
+      return { gridSize, pitch, heights, waterHeights };
+    };
+
+    const shallow = mkRegion(0.4);
+    let wade: MoveState = { x: 0, y: 0, z: 0, vy: 0, grounded: true };
+    const startX = wade.x;
+    for (let i = 0; i < 20; i++) {
+      wade = stepMovement(wade, { moveX: 1, moveZ: 0, jump: false, sprint: false, regionHeightmap: shallow }, TICK_DT);
+    }
+    // Shallow: still grounded on the floor, not locked to swim float height.
+    expect(wade.grounded).toBe(true);
+    expect(wade.y).toBeCloseTo(0, 5);
+    expect(wade.x - startX).toBeGreaterThan(2.5); // wade slower than walk but moving
+
+    const deep = mkRegion(1.5);
+    let swim: MoveState = { x: 0, y: 0, z: 0, vy: 0, grounded: true };
+    // Drop into the water column so body-in-water triggers.
+    swim.y = -0.5;
+    for (let i = 0; i < 10; i++) {
+      swim = stepMovement(swim, { moveX: 0, moveZ: 0, jump: false, sprint: false, regionHeightmap: deep }, TICK_DT);
+    }
+    expect(swim.grounded).toBe(false);
+    // Surface at 1.5, float at surface - 1.1 = 0.4
+    expect(swim.y).toBeCloseTo(0.4, 5);
+  });
 });

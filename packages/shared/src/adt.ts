@@ -20,6 +20,34 @@ export const ADT_GRASS_RING = 1;
 /** Overworld village stream ring (~ring 3 ≈ old 190 m radius). */
 export const ADT_VILLAGE_RING = 3;
 
+/**
+ * Meters from a viewer at a tile center to the outer edge of a Chebyshev ring.
+ * ring=2 → 160 m, ring=3 → 224 m. Used to keep fog / stream distances in lockstep.
+ */
+export function adtRingRadiusMeters(ring: number): number {
+  return (ring + 0.5) * ADT_SIZE;
+}
+
+/** Linear Fog near — light atmospheric fade, well inside village stream. */
+export const OVERWORLD_FOG_NEAR = adtRingRadiusMeters(ADT_RING) * 0.75; // ~120 m
+
+/** Linear Fog far — soft horizon; trees/villages are distance-culled separately. */
+export const OVERWORLD_FOG_FAR = adtRingRadiusMeters(ADT_VILLAGE_RING) * 1.4; // ~314 m
+
+/**
+ * Soft floor for region FogExp2 (~35% transmittance at the village ring).
+ * Foliage is distance-culled to the terrain ADT ring, so fog only needs a
+ * gentle horizon — not a hard wall at ~160 m.
+ */
+export const REGION_FOG_DENSITY_MIN = -Math.log(0.35) / adtRingRadiusMeters(ADT_VILLAGE_RING);
+
+export function clampRegionFogDensity(density: number): number {
+  return Math.max(density, REGION_FOG_DENSITY_MIN);
+}
+
+/** Region / overworld asset draw distance — matches terrain ADT ring edge. */
+export const TREE_VISIBLE_RADIUS = adtRingRadiusMeters(ADT_RING); // ~160 m
+
 export interface AdtAabb {
   minX: number;
   maxX: number;

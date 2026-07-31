@@ -6,11 +6,16 @@ import {
   WALK_SPEED,
   SPRINT_SPEED,
   SWIM_SPEED_MULT,
+  WADE_DEPTH,
+  WADE_SPEED_MULT,
+  SWIM_BODY_OFFSET,
+  SWIM_FLOAT_OFFSET,
   MOUNT_LAND_SPEED,
   RAFT_WATER_SPEED,
   RAFT_LAND_SPEED,
   JUMP_VELOCITY,
   GRAVITY,
+  MAX_STEP_DOWN,
   WATER_LEVEL,
   WORLD_MIN_X,
   WORLD_MAX_X,
@@ -49,6 +54,45 @@ export interface MoveInput {
   regionAssets?: RegionAssetCollider[];
 }
 
+/** Water surface Y and column depth at (x,z). Depth 0 means dry / bridged. */
+export function waterAt(
+  x: number,
+  z: number,
+  regionHeightmap?: MoveInput["regionHeightmap"],
+): { surface: number; depth: number } {
+  if (regionHeightmap) {
+    const depth = sampleRegionWaterDepth(regionHeightmap, x, z);
+    if (depth <= 0) return { surface: -Infinity, depth: 0 };
+    const ground = sampleRegionHeight(regionHeightmap, x, z);
+    return { surface: ground + depth, depth };
+  }
+  if (bridgeHeightAt(x, z) !== null) return { surface: -Infinity, depth: 0 };
+  const ground = terrainHeight(x, z);
+  const depth = Math.max(0, WATER_LEVEL - ground);
+  return depth > 0.01 ? { surface: WATER_LEVEL, depth } : { surface: -Infinity, depth: 0 };
+}
+
+/** True when the body is deep enough to swim (not just wade). */
+export function isSwimmingAt(x: number, y: number, z: number, regionHeightmap?: MoveInput["regionHeightmap"]): boolean {
+  const { surface, depth } = waterAt(x, z, regionHeightmap);
+  return surface > -Infinity && depth >= WADE_DEPTH && y < surface - SWIM_BODY_OFFSET;
+}
+
+/** Standing in shallow water / near the shoreline for drink prompts. */
+export function isNearWaterAt(x: number, y: number, z: number, regionHeightmap?: MoveInput["regionHeightmap"], proximity = 3): boolean {
+  const here = waterAt(x, z, regionHeightmap);
+  if (here.depth > 0.05 && y < here.surface + 0.5) return true;
+  for (const [dx, dz] of [
+    [proximity, 0],
+    [-proximity, 0],
+    [0, proximity],
+    [0, -proximity],
+  ] as const) {
+    if (waterAt(x + dx, z + dz, regionHeightmap).depth > 0.05) return true;
+  }
+  return false;
+}
+
 /**
  * Advance one movement step. Pure and deterministic — used verbatim for
  * client prediction and server authority so they can't disagree.
@@ -64,22 +108,20 @@ export function stepMovement(state: MoveState, input: MoveInput, dt: number): Mo
     mz /= mag;
   }
 
-  const regionWaterDepth = input.regionHeightmap ? sampleRegionWaterDepth(input.regionHeightmap, x, z) : 0;
-  const regionGround = input.regionHeightmap ? sampleRegionHeight(input.regionHeightmap, x, z) : null;
-  const regionWaterLevel = regionGround !== null && regionWaterDepth > 0 ? regionGround + regionWaterDepth : -Infinity;
-  const swimming = input.regionHeightmap
-    ? (regionWaterLevel > -Infinity && y < regionWaterLevel - 0.4)
-    : (y < WATER_LEVEL - 0.4);
+  const waterHere = waterAt(x, z, input.regionHeightmap);
+  const swimming = waterHere.surface > -Infinity && waterHere.depth >= WADE_DEPTH && y < waterHere.surface - SWIM_BODY_OFFSET;
+  const wading = !swimming && waterHere.depth > 0.05 && y < waterHere.surface - 0.05;
   const mount = input.mount ?? null;
+  const waterSpeedMult = swimming ? SWIM_SPEED_MULT : wading ? WADE_SPEED_MULT : 1;
   let speed: number;
   if (mount === "horse") {
-    // Gallops on land; wades slowly through deep water.
-    speed = swimming ? WALK_SPEED * SWIM_SPEED_MULT : MOUNT_LAND_SPEED;
+    // Gallops on land; wades/swims slowly through water.
+    speed = swimming || wading ? WALK_SPEED * waterSpeedMult : MOUNT_LAND_SPEED;
   } else if (mount === "raft") {
-    // Skims across water; drags on dry land.
-    speed = swimming ? RAFT_WATER_SPEED : RAFT_LAND_SPEED;
+    // Skims across any wet cell; drags on dry land.
+    speed = waterHere.depth > 0.05 && y < waterHere.surface + 0.35 ? RAFT_WATER_SPEED : RAFT_LAND_SPEED;
   } else {
-    speed = (input.sprint ? SPRINT_SPEED : WALK_SPEED) * (swimming ? SWIM_SPEED_MULT : 1);
+    speed = (input.sprint ? SPRINT_SPEED : WALK_SPEED) * waterSpeedMult;
   }
   let nextX = x + mx * speed * dt;
   let nextZ = z + mz * speed * dt;
@@ -122,20 +164,19 @@ export function stepMovement(state: MoveState, input: MoveInput, dt: number): Mo
   if (input.regionAssets) {
     for (const asset of input.regionAssets) {
       // Stair ramps are never fully blocked -- you walk up or down them.
-      // Only non-ramp assets can hard-block XZ movement.
-      if (!asset.stairRamp) {
-        if (asset.climbable && y >= asset.topY - 0.3) continue;
-        const dx = nextX - asset.x;
-        const dz = nextZ - asset.z;
-        if (dx * dx + dz * dz < asset.radius * asset.radius) {
-          const oldDx = state.x - asset.x;
-          const oldDz = state.z - asset.z;
-          const alreadyInside = oldDx * oldDx + oldDz * oldDz < asset.radius * asset.radius;
-          if (!alreadyInside) {
-            nextX = state.x;
-            nextZ = state.z;
-            break;
-          }
+      // Climbable floors/props never hard-block XZ either (upper-storey floor
+      // discs must not cage the room below). Only solid walls/trees block.
+      if (asset.stairRamp || asset.climbable) continue;
+      const dx = nextX - asset.x;
+      const dz = nextZ - asset.z;
+      if (dx * dx + dz * dz < asset.radius * asset.radius) {
+        const oldDx = state.x - asset.x;
+        const oldDz = state.z - asset.z;
+        const alreadyInside = oldDx * oldDx + oldDz * oldDz < asset.radius * asset.radius;
+        if (!alreadyInside) {
+          nextX = state.x;
+          nextZ = state.z;
+          break;
         }
       }
     }
@@ -170,26 +211,33 @@ export function stepMovement(state: MoveState, input: MoveInput, dt: number): Mo
         const proj = (dx * rdx + dz * rdz) / halfLength; // -1..+1 along ramp
         const t = Math.max(0, Math.min(1, (proj + 1) / 2));
         const rampY = asset.topY - rise + t * rise;
-        if (rampY > ground) ground = rampY;
-      } else if (asset.climbable && asset.topY > ground) {
+        // Only surfaces at/below the player — don't snap up to a floor above.
+        if (rampY <= y + 0.45 && rampY > ground) ground = rampY;
+      } else if (asset.climbable && asset.topY > ground && asset.topY <= y + 0.45) {
+        // Multi-storey floors: stand on the highest surface beneath/near feet,
+        // never pull the player up onto the storey above.
         ground = asset.topY;
       }
     }
   }
-  // A raft rides on the surface; a swimmer treads just below it.
-  const activeWaterLevel = input.regionHeightmap
-    ? regionWaterLevel
-    : bridgeHeightAt(x, z) !== null
-      ? -Infinity
-      : WATER_LEVEL;
-  const surfaceY = activeWaterLevel > -Infinity
-    ? (mount === "raft" ? activeWaterLevel - 0.1 : activeWaterLevel - 1.1)
-    : -Infinity;
-  const floatY = Math.max(ground, surfaceY);
+
+  const waterNext = waterAt(x, z, input.regionHeightmap);
+  const activeWaterLevel = waterNext.surface;
+  const waterColumn = waterNext.depth;
+  const swimmingNow =
+    activeWaterLevel > -Infinity && waterColumn >= WADE_DEPTH && y < activeWaterLevel - SWIM_BODY_OFFSET;
 
   let grounded = state.grounded;
-  if (swimming) {
+
+  // Raft rides the surface whenever the cell is wet.
+  if (mount === "raft" && activeWaterLevel > -Infinity && waterColumn > 0.05) {
     vy = 0;
+    y = Math.max(ground, activeWaterLevel - 0.1);
+    grounded = false;
+  } else if (swimmingNow) {
+    // Deep water: lock to tread height (or ground if the floor is higher).
+    vy = 0;
+    const floatY = Math.max(ground, activeWaterLevel - SWIM_FLOAT_OFFSET);
     y = Math.max(y, floatY);
     grounded = false;
     if (ground > y) y = ground; // walked up out of the water
@@ -198,18 +246,42 @@ export function stepMovement(state: MoveState, input: MoveInput, dt: number): Mo
       vy = JUMP_VELOCITY;
       grounded = false;
     }
-    vy -= GRAVITY * dt;
-    y += vy * dt;
-    if (y <= ground) {
-      y = ground;
-      vy = 0;
-      grounded = true;
+    if (grounded) {
+      // Stick to the heightfield after the XZ step. Gravity alone can't keep up
+      // with downhill sprint drops (~0.05 m/tick vs meters of slope), which left
+      // vy nonzero and flipped run/sprint into the jump anim every frame.
+      if (ground >= y - MAX_STEP_DOWN) {
+        y = ground;
+        vy = 0;
+        grounded = true;
+      } else {
+        grounded = false;
+        vy -= GRAVITY * dt;
+        y += vy * dt;
+        if (y <= ground) {
+          y = ground;
+          vy = 0;
+          grounded = true;
+        }
+      }
     } else {
-      grounded = false;
+      vy -= GRAVITY * dt;
+      y += vy * dt;
+      if (y <= ground) {
+        y = ground;
+        vy = 0;
+        grounded = true;
+      }
     }
-    // Entering water: settle to swim height.
-    if (y < activeWaterLevel - 1.1 && ground < activeWaterLevel - 1.1) {
-      y = activeWaterLevel - 1.1;
+    // Entering deep water: settle to swim height.
+    if (
+      mount !== "raft" &&
+      activeWaterLevel > -Infinity &&
+      waterColumn >= WADE_DEPTH &&
+      y < activeWaterLevel - SWIM_FLOAT_OFFSET &&
+      ground < activeWaterLevel - SWIM_FLOAT_OFFSET
+    ) {
+      y = activeWaterLevel - SWIM_FLOAT_OFFSET;
       vy = 0;
     }
   }

@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { type GLTF } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { createSharedGltfLoader } from "./sharedGltf";
+import { enableFogOnObject } from "./models";
 
 const loader = createSharedGltfLoader();
 
@@ -131,6 +132,7 @@ function normalize(gltf: GLTF, targetHeight: number): THREE.Group {
       o.receiveShadow = true;
     }
   });
+  enableFogOnObject(model);
   // Wrap so instances can be repositioned/rescaled independently of the
   // normalization transform baked into the inner model.
   const wrapper = new THREE.Group();

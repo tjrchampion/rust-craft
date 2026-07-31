@@ -6,8 +6,14 @@ import {
   type RegionBlueprint,
 } from "@rustcraft/shared";
 import { buildRegionAdtTile, createAdtTerrainMaterial } from "./terrain";
+import type { StreamBudget } from "./streamBudget";
 
-const BUILDS_PER_FRAME = 3;
+/** Hard cap when no time budget is supplied (warm / editor). */
+const BUILDS_PER_FRAME = 1;
+/** Stop spinning on skips (already-built / out of ring) within one drain. */
+const MAX_ATTEMPTS = 4;
+/** Defer GPU dispose so unloading a ring row doesn't hitch. */
+const DISPOSES_PER_FRAME = 1;
 
 /**
  * Streams 64 m ADT tiles of an editor region's heightmap around the player.
@@ -18,6 +24,7 @@ export class RegionAdtTerrainStreamer {
   private material: THREE.MeshLambertMaterial;
   private tiles = new Map<string, THREE.Mesh>();
   private pending: string[] = [];
+  private disposeQueue: THREE.BufferGeometry[] = [];
   private lastAnchorKey = "";
   private readonly half: number;
   private readonly bounds: { minX: number; maxX: number; minZ: number; maxZ: number };
@@ -46,7 +53,21 @@ export class RegionAdtTerrainStreamer {
     return adtRingKeysInBounds(x, z, this.ring, this.bounds);
   }
 
-  update(x: number, z: number): void {
+  private enqueueDispose(mesh: THREE.Mesh): void {
+    this.group.remove(mesh);
+    this.disposeQueue.push(mesh.geometry);
+  }
+
+  private flushDisposes(budget?: StreamBudget): void {
+    let n = 0;
+    while (n < DISPOSES_PER_FRAME && this.disposeQueue.length > 0) {
+      if (budget && !budget.ok) break;
+      this.disposeQueue.shift()!.dispose();
+      n++;
+    }
+  }
+
+  update(x: number, z: number, budget?: StreamBudget): void {
     const desired = this.desiredKeys(x, z);
     const desiredSet = new Set(desired);
     const anchor = desired[0] ?? "";
@@ -62,15 +83,22 @@ export class RegionAdtTerrainStreamer {
 
     for (const [key, mesh] of this.tiles) {
       if (desiredSet.has(key)) continue;
-      this.group.remove(mesh);
-      mesh.geometry.dispose();
+      this.enqueueDispose(mesh);
       this.tiles.delete(key);
     }
+    this.flushDisposes(budget);
 
     let built = 0;
-    while (built < BUILDS_PER_FRAME && this.pending.length > 0) {
+    let attempts = 0;
+    while (built < BUILDS_PER_FRAME && attempts < MAX_ATTEMPTS && this.pending.length > 0) {
+      if (budget && !budget.ok) break;
+      attempts++;
       const key = this.pending.shift()!;
       if (this.tiles.has(key) || !desiredSet.has(key)) continue;
+      if (budget && !budget.takeBuild()) {
+        this.pending.unshift(key);
+        break;
+      }
       const { ix, iz } = parseAdtKey(key);
       const mesh = buildRegionAdtTile(this.blueprint, ix, iz, this.material);
       if (!mesh) continue;
@@ -104,6 +132,8 @@ export class RegionAdtTerrainStreamer {
       this.group.remove(mesh);
       mesh.geometry.dispose();
     }
+    for (const geo of this.disposeQueue) geo.dispose();
+    this.disposeQueue = [];
     this.tiles.clear();
     this.pending = [];
     this.material.dispose();

@@ -325,6 +325,8 @@ export interface AnimSpec {
   dodgeBackward?: string[];
   dodgeLeft?: string[];
   dodgeRight?: string[];
+  /** Deep-water tread/swim. Falls back to walk when the clip is missing. */
+  swim?: string[];
 }
 
 export const PLAYER_ANIMS: AnimSpec = {
@@ -352,6 +354,9 @@ export const PLAYER_ANIMS: AnimSpec = {
   dodgeBackward: ["Dodge_Backward", "Roll"],
   dodgeLeft: ["Dodge_Left", "Roll"],
   dodgeRight: ["Dodge_Right", "Roll"],
+  // Prefer a real swim clip when present; otherwise Walk_Loop reads as a
+  // slow paddle better than a dry idle/jump pose.
+  swim: ["Swim_Loop", "Swimming", "Treading_Water", "Walk_Loop"],
 };
 
 export const WOLF_ANIMS: AnimSpec = {
@@ -373,6 +378,7 @@ const ANIM_FALLBACK: Partial<Record<LogicalAnim, LogicalAnim>> = {
   strafeRight: "walk",
   walkBack: "walk",
   jump: "idle",
+  swim: "walk",
 };
 
 /** Config for bone-parenting a weapon/armor prop -- shared shape used by
@@ -1228,6 +1234,9 @@ export function logicalFromState(
       return "attack";
     case "gather":
       return "gather";
+    case "swim":
+      if (speed > 0.35) return directionalMove(localMoveX, localMoveY, false);
+      return "swim";
     default:
       if (speed > runThreshold) return directionalMove(localMoveX, localMoveY, true);
       if (speed > 0.35) return directionalMove(localMoveX, localMoveY, false);

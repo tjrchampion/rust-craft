@@ -10,12 +10,10 @@ import * as THREE from "three";
  * to this project's vanilla Three.js pipeline -- the actual shader technique
  * has no React dependency to begin with: it's a THREE.MeshLambertMaterial
  * patched via onBeforeCompile, the exact same technique already used in
- * ./terrain.ts and ./horizon.ts. Rock-trampling and the ground/flower/pine
- * companion materials from the source project are intentionally not ported
- * (see packages/client/src/render/grassField.ts for scope notes); the rock
- * uniforms are kept (uRockCount defaults to 0, dormant) so the GLSL stays
- * identical to the source rather than diverging -- see the shared-program
- * warning below.
+ * ./terrain.ts and ./horizon.ts. Rock-trampling uniforms flatten/bend blades
+ * near actors (player position is pushed into uRocks each frame). Dirt-mask
+ * uniforms are kept (uDirtCoverage defaults to 0) so the GLSL stays identical
+ * rather than diverging -- see the shared-program warning below.
  *
  * IMPORTANT: every blade material must inject IDENTICAL GLSL and vary only
  * uniform *values*, never branch the injected GLSL string itself (e.g.
@@ -28,8 +26,7 @@ import * as THREE from "three";
  */
 
 /** Max rocks the blade shader can be trampled by. GLSL uniform arrays are
- *  fixed size, so this is a hard cap; uRockCount limits how many are read.
- *  Dormant for v1 (uRockCount stays 0) -- kept for future use. */
+ *  fixed size, so this is a hard cap; uRockCount limits how many are read. */
 export const MAX_ROCKS = 24;
 
 /** Shadow taps per blade, averaged for a soft penumbra instead of one hard
@@ -125,7 +122,7 @@ export interface GrassBladeUniforms {
   uDirtCut: THREE.IUniform<number>;
   uDirtBlend: THREE.IUniform<number>;
 
-  // Rock trampling -- dormant for v1 (uRockCount = 0).
+  // Rock trampling -- filled each frame from player / nearby actors.
   uRocks: THREE.IUniform<THREE.Vector4[]>;
   uRockCount: THREE.IUniform<number>;
   uRockRadiusMul: THREE.IUniform<number>;
@@ -182,10 +179,10 @@ export function createGrassBladeUniforms(colorOverride?: { bottom: string; top: 
 
     uRocks: { value: Array.from({ length: MAX_ROCKS }, () => new THREE.Vector4()) },
     uRockCount: { value: 0 },
-    uRockRadiusMul: { value: 1.0 },
-    uRockFalloff: { value: 0.35 },
-    uRockFlatten: { value: 0.85 },
-    uRockBend: { value: 0.25 },
+    uRockRadiusMul: { value: 1.15 },
+    uRockFalloff: { value: 0.55 },
+    uRockFlatten: { value: 0.92 },
+    uRockBend: { value: 0.45 },
 
     uSunDir: { value: new THREE.Vector3(0, 1, 0) },
     uSunColor: { value: new THREE.Color(1, 1, 1) },
@@ -315,8 +312,10 @@ const GRASS_BLADE_VERTEX = /* glsl */ `
   float second  = sin(dot(wPos.xz, uWindDir) * uWindFreq * 2.6 + uTime * uWindSpeed * 1.8 + 1.3) * 0.35;
   vec2  perp    = vec2(-uWindDir.y, uWindDir.x);
   float turb    = sin(dot(wPos.xz, perp) * uWindFreq * 1.9 + uTime * uWindSpeed * 0.7 + 2.6) * uWindTurb;
-  float swing   = (primary + second + turb) * uWindStrength * hMask;
-  float lean    = uWindLean * hMask;
+  // Slow gust envelope so fields breathe instead of waving at a fixed amplitude.
+  float gust    = 0.72 + 0.28 * sin(uTime * 0.35 + dot(wPos.xz, uWindDir) * 0.05);
+  float swing   = (primary + second + turb) * uWindStrength * hMask * gust;
+  float lean    = uWindLean * hMask * (0.85 + 0.15 * gust);
 
   mat3 instRot = mat3(
     normalize(vec3(instanceMatrix[0])),

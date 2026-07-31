@@ -1,5 +1,12 @@
 import * as THREE from "three";
-import { sampleRegionHeight, type RegionBlueprint, type RegionAsset } from "@rustcraft/shared";
+import {
+  sampleRegionHeight,
+  TREE_VISIBLE_RADIUS,
+  regionAllAssets,
+  type RegionBlueprint,
+  type RegionAsset,
+  type RegionFogVolume,
+} from "@rustcraft/shared";
 import { load, AnimatedModel, PLAYER_ANIMS } from "./gltf";
 import type { GLTF } from "three/examples/jsm/loaders/GLTFLoader.js";
 import * as SkeletonUtils from "three/examples/jsm/utils/SkeletonUtils.js";
@@ -9,6 +16,8 @@ import { RegionAdtWaterStreamer } from "./regionAdtWater";
 import { buildGrassInstances, type GrassField } from "./grassField";
 import { createTreeWindUniforms, applyTreeWindSway, applyRegionWind, type TreeWindUniforms } from "./windSway";
 import { createTerrainVolumeMesh } from "./terrainVolumes";
+import { createFogVolumeMesh, fogVolumeInfluence } from "./fogVolumes";
+import { StreamBudget, REGION_STREAM_BUDGET_MS } from "./streamBudget";
 import { game } from "../ui/gameState.svelte";
 import { getGame } from "../game/instance";
 import type { RegionNpc } from "@rustcraft/shared";
@@ -77,27 +86,15 @@ export async function preloadRegionAssets(
 /**
  * Renders a region's interior once a player has walked through its portal.
  *
- * Every prop/building/foliage placement is instanced and built once, eagerly,
- * at region entry -- there is deliberately no distance/frustum streaming
- * here. Earlier versions of this renderer streamed individual assets in and
- * out as the player moved, which meant a per-frame JS loop deciding what to
- * load/unload for up to several hundred assets; that loop was the source of
- * repeated stutter and a load/unload thrashing bug, not a fix for a real
- * performance problem. A region this size (typically a few hundred meters
- * across, on the order of a few hundred total assets) is well within what a
- * modern GPU renders for free once geometry is instanced and submitted --
- * WebGL's own hardware clipping discards off-screen triangles at effectively
- * zero cost, so there's no JS-side culling decision worth making at this
- * scale. Everything (foliage included) renders at full detail; a simplified
- * LOD variant of the foliage models exists (scripts/generate-foliage-lods.mjs)
- * if full detail ever proves too much for target hardware -- see buildFoliage.
+ * Props/buildings/foliage are instanced once at region entry. Each spatial
+ * chunk is distance-culled to the terrain ADT ring so distant assets aren't
+ * drawn past streamed ground.
  *
  * Unlike a dungeon, a region has real open sky and its own sculpted terrain
  * instead of a sealed void-floor/ceiling box. Terrain + painted grass stream
- * as 64 m ADT tiles around the player; foliage/props/buildings stay eagerly
- * instanced (see below). Color grading (sky/fog/ambient/sun) is applied by
- * Game.ts's updateDayNight. Mobs are NOT rendered here -- they flow through
- * the same generic MobSnap/entity pipeline.
+ * as 64 m ADT tiles around the player. Color grading (sky/fog/ambient/sun)
+ * is applied by Game.ts's updateDayNight. Mobs are NOT rendered here -- they
+ * flow through the same generic MobSnap/entity pipeline.
  */
 export class RegionInteriorRenderer {
   private group: THREE.Object3D;
@@ -109,12 +106,19 @@ export class RegionInteriorRenderer {
   /** Every InstancedMesh built by instanceModel (foliage + props/buildings),
    *  tracked flat for destroy() cleanup. */
   private instancedGroups: THREE.InstancedMesh[] = [];
+  /** Instanced asset chunks (foliage/props/buildings) for distance culling. */
+  private assetChunks: { x: number; z: number; meshes: THREE.InstancedMesh[] }[] = [];
   /** Painted grass patches, expanded once at construction -- see
    *  buildGrassPatches. Null if the blueprint has none. */
   private grassField: GrassField | null = null;
   /** Stamped 3D terrain volumes (boulder/block/etc.) from the volume sculpt
    *  brush. Shared geometries -- destroy() only removes meshes from the group. */
   private volumeMeshes: THREE.Mesh[] = [];
+  /** Local fog pockets from the editor — additive meshes + density influence. */
+  private fogMeshes: THREE.Mesh[] = [];
+  private fogVolumeData: RegionFogVolume[] = [];
+  /** Hand-placed assets + expanded procedural houses (for instancing/collision). */
+  private allAssets: RegionAsset[];
   /** Shared by every foliage material patched via applyTreeWindSway in
    *  instanceModel -- seeded from blueprint.wind at construction. */
   private treeWindUniforms: TreeWindUniforms = createTreeWindUniforms();
@@ -129,6 +133,7 @@ export class RegionInteriorRenderer {
     this.npcModels = [];
     this.group = group;
     this.blueprint = blueprint;
+    this.allAssets = regionAllAssets(blueprint);
 
     // Heightmap streams as 64 m ADT tiles around the player (not one full mesh).
     this.adtTerrain = new RegionAdtTerrainStreamer(this.group, blueprint);
@@ -140,6 +145,11 @@ export class RegionInteriorRenderer {
         pitch: blueprint.pitch,
         heights: blueprint.heights,
         waterHeights: blueprint.waterHeights,
+      });
+      this.adtWater.applyEnvironment({
+        skyColor: blueprint.colorGrading.skyColor,
+        fogColor: blueprint.colorGrading.fogColor,
+        groundTint: blueprint.colorGrading.groundTint,
       });
       this.adtWater.warm(blueprint.entryLocal.x, blueprint.entryLocal.z);
     }
@@ -255,9 +265,17 @@ export class RegionInteriorRenderer {
     }
 
     for (const l of blueprint.lights ?? []) {
-      const pointLight = new THREE.PointLight(l.color, l.intensity, l.distance, 1.5);
+      const pointLight = new THREE.PointLight(l.color, l.intensity, l.distance, l.decay ?? 1);
       pointLight.position.set(l.localX, l.localY, l.localZ);
       this.group.add(pointLight);
+    }
+
+    for (const fog of blueprint.fogVolumes ?? []) {
+      const data: RegionFogVolume = { ...fog };
+      const mesh = createFogVolumeMesh(data);
+      this.group.add(mesh);
+      this.fogMeshes.push(mesh);
+      this.fogVolumeData.push(data);
     }
   }
 
@@ -269,6 +287,37 @@ export class RegionInteriorRenderer {
 
   get colorGrading(): RegionBlueprint["colorGrading"] {
     return this.blueprint.colorGrading;
+  }
+
+  get fogVolumes(): readonly RegionFogVolume[] {
+    return this.fogVolumeData;
+  }
+
+  /** Strongest local fog-volume influence at a world point (0..~1). */
+  fogInfluenceAt(x: number, y: number, z: number): { weight: number; color: THREE.Color } {
+    let weight = 0;
+    const color = new THREE.Color(this.blueprint.colorGrading.fogColor);
+    const blend = new THREE.Color();
+    for (const vol of this.fogVolumeData) {
+      const w = fogVolumeInfluence(vol, x, y, z);
+      if (w <= 0) continue;
+      if (w > weight) {
+        weight = w;
+        blend.set(vol.color);
+      }
+    }
+    if (weight > 0) color.lerp(blend, Math.min(1, weight));
+    return { weight, color };
+  }
+
+  /** Keep painted water tinted to the region's sky/fog/ground grading. */
+  syncWaterEnvironment(): void {
+    const cg = this.blueprint.colorGrading;
+    this.adtWater?.applyEnvironment({
+      skyColor: cg.skyColor,
+      fogColor: cg.fogColor,
+      groundTint: cg.groundTint,
+    });
   }
 
   /** {gridSize,pitch,heights,waterHeights} for stepMovement's regionHeightmap input. */
@@ -285,9 +334,9 @@ export class RegionInteriorRenderer {
     return this.blueprint.entryLocal;
   }
 
-  /** Placed trees/rocks/buildings, for stepMovement's regionAssets collision input. */
-  get assets(): RegionBlueprint["assets"] {
-    return this.blueprint.assets;
+  /** Placed trees/rocks/buildings (+ expanded houses), for stepMovement collision. */
+  get assets(): RegionAsset[] {
+    return this.allAssets;
   }
 
   /** Stamped 3D terrain volumes for collision merge with assets. */
@@ -340,15 +389,12 @@ export class RegionInteriorRenderer {
     }
   }
 
-  /** Build every foliage placement as always-resident, per-species instanced
-   *  full-detail geometry -- see the class doc comment for why this isn't
-   *  streamed. Uses the same full-detail model as everything else; a
-   *  simplified LOD variant exists (scripts/generate-foliage-lods.mjs) if
-   *  full detail ever proves too much for target hardware. */
+  /** Build every foliage placement as per-species instanced geometry, then
+   *  distance-cull chunks to the terrain ADT ring in update(). */
   private async buildFoliage(): Promise<void> {
     const byModel = new Map<string, number[]>();
-    for (let i = 0; i < this.blueprint.assets.length; i++) {
-      const asset = this.blueprint.assets[i]!;
+    for (let i = 0; i < this.allAssets.length; i++) {
+      const asset = this.allAssets[i]!;
       if (asset.category !== "foliage") continue;
       const list = byModel.get(asset.model);
       if (list) list.push(i);
@@ -365,19 +411,17 @@ export class RegionInteriorRenderer {
           console.warn(`[regionInterior] failed to load foliage model '${model}' -- skipping ${indices.length} placement(s)`);
           return;
         }
-        this.instanceModel(gltf, indices, { castShadow: true, receiveShadow: false, applyWind: true });
+        this.instanceModel(gltf, indices, { castShadow: true, receiveShadow: false, applyWind: true, distanceCull: true });
       }),
     );
   }
 
-  /** Build every prop/building placement as always-resident, per-model
-   *  instanced geometry, using the full-detail model (no LOD variant exists
-   *  for these categories -- far fewer of them than foliage, so none is
-   *  needed at this region size). */
+  /** Build every prop/building placement as per-model instanced geometry,
+   *  distance-culled to the terrain ADT ring the same way as foliage. */
   private async buildPropsAndBuildings(): Promise<void> {
     const byModel = new Map<string, { category: RegionAsset["category"]; model: string; indices: number[] }>();
-    for (let i = 0; i < this.blueprint.assets.length; i++) {
-      const asset = this.blueprint.assets[i]!;
+    for (let i = 0; i < this.allAssets.length; i++) {
+      const asset = this.allAssets[i]!;
       if (asset.category === "foliage") continue;
       const key = `${asset.category}/${asset.model}`;
       const entry = byModel.get(key);
@@ -398,7 +442,7 @@ export class RegionInteriorRenderer {
         // Mirrors the old per-object placement rule: floor-type props never
         // cast (they'd shadow themselves against the ground right beneath them).
         const castShadow = category !== "prop" || !model.startsWith("floor");
-        this.instanceModel(gltf, indices, { castShadow, receiveShadow: true });
+        this.instanceModel(gltf, indices, { castShadow, receiveShadow: true, distanceCull: true });
       }),
     );
   }
@@ -415,10 +459,13 @@ export class RegionInteriorRenderer {
    *  spatial cell (see CHUNK_SIZE), covering every asset index passed in at
    *  its real authored position/rotation/scale (ground-snapped the same way
    *  the old per-object placement was, preserving any authored above-ground
-   *  offset). Everything is still eagerly resident -- chunking only affects
-   *  which InstancedMesh an instance's transform lives in, not whether it's
-   *  loaded, so there's no streaming/popping behavior here. */
-  private instanceModel(gltf: GLTF, indices: number[], opts: { castShadow: boolean; receiveShadow: boolean; applyWind?: boolean }): void {
+   *  offset). Pass `distanceCull` so far chunks can be hidden in update()
+   *  without load/unload thrashing. */
+  private instanceModel(
+    gltf: GLTF,
+    indices: number[],
+    opts: { castShadow: boolean; receiveShadow: boolean; applyWind?: boolean; distanceCull?: boolean },
+  ): void {
     const template = SkeletonUtils.clone(gltf.scene);
     template.updateMatrixWorld(true);
     const meshTemplates: THREE.Mesh[] = [];
@@ -426,6 +473,15 @@ export class RegionInteriorRenderer {
       if ((o as THREE.Mesh).isMesh) meshTemplates.push(o as THREE.Mesh);
     });
     if (meshTemplates.length === 0) return;
+
+    // GLTF materials often ship with fog disabled — turn it on so trees fade
+    // into the horizon fog instead of hard silhouettes.
+    for (const m of meshTemplates) {
+      const mats = Array.isArray(m.material) ? m.material : [m.material];
+      for (const mat of mats) {
+        if (mat && "fog" in mat) (mat as THREE.Material & { fog: boolean }).fog = true;
+      }
+    }
 
     // Patched once per mesh template (not per cell/instance below) since
     // every InstancedMesh built from this template shares the same material
@@ -445,7 +501,7 @@ export class RegionInteriorRenderer {
 
     const cells = new Map<string, number[]>();
     for (const i of indices) {
-      const asset = this.blueprint.assets[i]!;
+      const asset = this.allAssets[i]!;
       const cx = Math.floor(asset.localX / RegionInteriorRenderer.CHUNK_SIZE);
       const cz = Math.floor(asset.localZ / RegionInteriorRenderer.CHUNK_SIZE);
       const key = `${cx},${cz}`;
@@ -455,7 +511,8 @@ export class RegionInteriorRenderer {
     }
 
     const dummy = new THREE.Object3D();
-    for (const cellIndices of cells.values()) {
+    for (const [cellKey, cellIndices] of cells) {
+      const [cellCx, cellCz] = cellKey.split(",").map(Number) as [number, number];
       const instancedMeshes = meshTemplates.map((m) => {
         const im = new THREE.InstancedMesh(m.geometry, m.material, cellIndices.length);
         im.castShadow = opts.castShadow;
@@ -464,11 +521,18 @@ export class RegionInteriorRenderer {
       });
 
       for (let k = 0; k < cellIndices.length; k++) {
-        const asset = this.blueprint.assets[cellIndices[k]!]!;
+        const asset = this.allAssets[cellIndices[k]!]!;
         const scale = asset.scale ?? 1;
-        const groundY = sampleRegionHeight(this.blueprint, asset.localX, asset.localZ);
-        const storedOffset = asset.localY - groundY;
-        dummy.position.set(asset.localX, groundY + Math.max(0, storedOffset), asset.localZ);
+        // Houses bake absolute floor heights — don't re-snap modular pieces to
+        // terrain or upper storeys collapse onto the ground.
+        const y = asset.groupId?.startsWith("house_")
+          ? asset.localY
+          : (() => {
+              const groundY = sampleRegionHeight(this.blueprint, asset.localX, asset.localZ);
+              const storedOffset = asset.localY - groundY;
+              return groundY + Math.max(0, storedOffset);
+            })();
+        dummy.position.set(asset.localX, y, asset.localZ);
         dummy.rotation.set(0, asset.yaw, 0);
         dummy.scale.setScalar(scale);
         dummy.updateMatrix();
@@ -480,6 +544,13 @@ export class RegionInteriorRenderer {
         im.instanceMatrix.needsUpdate = true;
         this.group.add(im);
         this.instancedGroups.push(im);
+      }
+      if (opts.distanceCull) {
+        this.assetChunks.push({
+          x: (cellCx + 0.5) * RegionInteriorRenderer.CHUNK_SIZE,
+          z: (cellCz + 0.5) * RegionInteriorRenderer.CHUNK_SIZE,
+          meshes: instancedMeshes,
+        });
       }
     }
   }
@@ -498,18 +569,48 @@ export class RegionInteriorRenderer {
   }
 
   /** Per-frame NPC animation + escort-quest logic, plus the grass shader's
-   *  time/sun uniforms. No asset streaming here anymore -- see the class
-   *  doc comment. `sun` is optional so callers without a directional light
-   *  handy (there are none today, but keeps this defensive) just leave the
-   *  blade shader's sun uniforms at their static defaults. */
+   *  time/sun uniforms and asset distance culling. `sun` is optional so
+   *  callers without a directional light handy just leave the blade shader's
+   *  sun uniforms at their static defaults. */
   update(delta: number, sun?: THREE.DirectionalLight, viewerX = 0, viewerZ = 0): void {
-    if (this.grassField) this.grassField.update(viewerX, viewerZ);
-    this.adtTerrain.update(viewerX, viewerZ);
-    this.adtWater?.update(viewerX, viewerZ);
+    // One mesh build total across terrain/water/grass; leftover pending continues
+    // on later frames so a ring shift can't stall movement.
+    const budget = new StreamBudget(REGION_STREAM_BUDGET_MS, 1);
+    this.adtTerrain.update(viewerX, viewerZ, budget);
+    this.adtWater?.update(viewerX, viewerZ, budget);
+    if (this.grassField) this.grassField.update(viewerX, viewerZ, budget);
     this.adtWater?.updateScroll(delta);
+
+    // Hide instanced assets past the terrain ADT ring (plus a chunk
+    // half-diagonal so edge props don't pop when near a cell boundary).
+    const reach = TREE_VISIBLE_RADIUS + RegionInteriorRenderer.CHUNK_SIZE * 0.71;
+    const reach2 = reach * reach;
+    if (this.assetChunks.length > 0) {
+      for (const chunk of this.assetChunks) {
+        const dx = chunk.x - viewerX;
+        const dz = chunk.z - viewerZ;
+        const visible = dx * dx + dz * dz <= reach2;
+        for (const mesh of chunk.meshes) mesh.visible = visible;
+      }
+    }
+    for (const mesh of this.volumeMeshes) {
+      const dx = mesh.position.x - viewerX;
+      const dz = mesh.position.z - viewerZ;
+      mesh.visible = dx * dx + dz * dz <= reach2;
+    }
+    // Fog is fill-rate heavy — cull sooner than props (~90 m).
+    const fogReach2 = 90 * 90;
+    for (const mesh of this.fogMeshes) {
+      const dx = mesh.position.x - viewerX;
+      const dz = mesh.position.z - viewerZ;
+      mesh.visible = dx * dx + dz * dz <= fogReach2;
+    }
+
     if (!(delta > 0)) return;
 
     if (this.grassField) {
+      this.grassField.tickWind(delta);
+      this.grassField.setTramplers([{ x: viewerX, z: viewerZ, radius: 0.9 }]);
       this.grassField.uniforms.uTime.value += delta;
       if (sun) {
         this.grassField.uniforms.uSunDir.value.copy(sun.position).sub(sun.target.position).normalize();
@@ -656,11 +757,19 @@ export class RegionInteriorRenderer {
     this.adtWater = null;
     for (const im of this.instancedGroups) this.group.remove(im);
     this.instancedGroups = [];
+    this.assetChunks = [];
     for (const mesh of this.volumeMeshes) {
       this.group.remove(mesh);
       if (!mesh.userData.sharedGeometry) mesh.geometry.dispose();
     }
     this.volumeMeshes = [];
+    for (const mesh of this.fogMeshes) {
+      this.group.remove(mesh);
+      mesh.geometry.dispose();
+      (mesh.material as THREE.Material).dispose();
+    }
+    this.fogMeshes = [];
+    this.fogVolumeData = [];
     this.npcModels = [];
   }
 }

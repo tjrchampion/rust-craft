@@ -9,16 +9,30 @@ import { buildGltfTree } from "./natureAssets";
  * callers only rely on the group + named child conventions.
  */
 
+/** Force scene fog on every mesh material under `root`. GLTF authoring often
+ *  leaves `fog: false`; without this, trees/villages pop in past ADT-matched
+ *  fog as hard silhouettes. Sprites/nameplates are left alone. */
+export function enableFogOnObject(root: THREE.Object3D): void {
+  root.traverse((o) => {
+    const mesh = o as THREE.Mesh;
+    if (!mesh.isMesh || !mesh.material) return;
+    const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+    for (const mat of mats) {
+      if (mat && "fog" in mat) (mat as THREE.Material & { fog: boolean }).fog = true;
+    }
+  });
+}
+
 function lambert(color: number): THREE.MeshLambertMaterial {
-  return new THREE.MeshLambertMaterial({ color });
+  return new THREE.MeshLambertMaterial({ color, fog: true });
 }
 
 function barkMat(color: number): THREE.MeshLambertMaterial {
-  return new THREE.MeshLambertMaterial({ color, map: barkTexture() });
+  return new THREE.MeshLambertMaterial({ color, map: barkTexture(), fog: true });
 }
 
 function foliageMat(color: number): THREE.MeshLambertMaterial {
-  return new THREE.MeshLambertMaterial({ color, map: foliageTexture() });
+  return new THREE.MeshLambertMaterial({ color, map: foliageTexture(), fog: true });
 }
 
 function box(w: number, h: number, d: number, color: number): THREE.Mesh {

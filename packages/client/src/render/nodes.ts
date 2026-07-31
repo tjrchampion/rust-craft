@@ -1,10 +1,11 @@
 import * as THREE from "three";
-import { generateNodes, dist2D, type WorldNode } from "@rustcraft/shared";
-import { buildRock, buildOreRock, buildBerryBush, buildBiomeTree } from "./models";
+import { generateNodes, dist2D, TREE_VISIBLE_RADIUS, type WorldNode } from "@rustcraft/shared";
+import { buildRock, buildOreRock, buildBerryBush, buildBiomeTree, enableFogOnObject } from "./models";
 import { load } from "./gltf";
 import * as SkeletonUtils from "three/examples/jsm/utils/SkeletonUtils.js";
 
-const VISIBLE_RADIUS = 220; // only keep nearby node meshes in the scene
+/** Match terrain ADT ring — trees/rocks beyond this are culled, not fog-hidden. */
+const VISIBLE_RADIUS = TREE_VISIBLE_RADIUS;
 
 /** Tint (+ optional glow accent for the precious tiers) per ore node type. */
 const ORE_TINTS: Record<string, { tint: number; glow?: number }> = {
@@ -212,16 +213,21 @@ export class NodeManager {
             o.receiveShadow = true;
           }
         });
+        enableFogOnObject(clone);
         mesh.add(clone);
       });
     } else if (node.type === "tree") {
       mesh = buildBiomeTree(node.biome, node.variant);
+      enableFogOnObject(mesh);
     } else if (ore) {
       mesh = buildOreRock(node.variant, ore.tint, ore.glow);
+      enableFogOnObject(mesh);
     } else if (node.type === "rock") {
       mesh = buildRock(node.variant);
+      enableFogOnObject(mesh);
     } else {
       mesh = buildBerryBush(node.variant);
+      enableFogOnObject(mesh);
     }
     mesh.position.set(node.x, node.y, node.z);
     return mesh;

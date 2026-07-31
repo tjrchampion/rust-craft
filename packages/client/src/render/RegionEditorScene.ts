@@ -13,6 +13,9 @@ import {
   type RegionColorGrading,
   type RegionRoad,
   type RegionPointLight,
+  type RegionFogVolume,
+  type RegionFogShape,
+  type RegionHouse,
   type RegionNPC,
   type RegionQuest,
   type RegionWorldEvent,
@@ -36,6 +39,12 @@ import {
   SPRINT_SPEED,
   JUMP_VELOCITY,
   GRAVITY,
+  MAX_STEP_DOWN,
+  SWIM_SPEED_MULT,
+  WADE_DEPTH,
+  WADE_SPEED_MULT,
+  SWIM_BODY_OFFSET,
+  SWIM_FLOAT_OFFSET,
   regionMusicTrackUrl,
   hashString,
   terrainVolumeRadius,
@@ -45,11 +54,13 @@ import {
   strokePointTopY,
   carveBlocksSurface,
   type TerrainVolumeCarve,
+  clampRegionFogDensity,
+  REGION_FOG_DENSITY_MIN,
 } from "@rustcraft/shared";
-import { applyGroundBlendShader, regionGroundWeights, regionRoadBlendAt, buildRegionWaterMesh, type RegionWaterMeshField } from "./terrain";
-import { buildGrassInstances, type GrassField } from "./grassField";
-import { applyRegionWind } from "./windSway";
-import { generateHouseAssets, type HouseType } from "./houseGen";
+import { applyGroundBlendShader, regionGroundWeights, regionRoadBlendAt, buildRegionWaterMesh, applyWaterEnvironment, type RegionWaterMeshField } from "./terrain";
+import { buildGrassInstances, grassKeysOverlapping, type GrassField } from "./grassField";
+import { generateHouseAssets, resolveHouseType, expandHousesToAssets, type HouseType } from "./houseGen";
+import type { RegionAsset } from "@rustcraft/shared";
 import {
   createTerrainVolumeMesh,
   createTerrainVolumeGhost,
@@ -58,10 +69,7 @@ import {
   rebuildTerrainVolumeMesh,
   strokeSizeFromBrush,
 } from "./terrainVolumes";
-
-/** Matches grassField.ts's own BASE_GRASS_WIND_STRENGTH -- kept local since
- *  it's only needed here for the editor's live-preview uniform update. */
-const BASE_GRASS_WIND_STRENGTH = 0.3;
+import { createFogVolumeMesh, syncFogVolumeMesh } from "./fogVolumes";
 import { music } from "../game/music";
 
 export type EditorTransformMode = "translate" | "rotate" | "scale";
@@ -125,12 +133,14 @@ function yawFromQuaternion(q: THREE.Quaternion): number {
 }
 
 export interface EditorSelection {
-  kind: "asset" | "marker" | "light" | "volume";
+  kind: "asset" | "marker" | "light" | "volume" | "fog" | "house";
   id: string;
   model?: string;
   category?: RegionAssetCategory;
   markerKind?: EditorMarkerKind;
   name?: string;
+  /** Procedural house archetype (when kind === "house"). */
+  houseType?: string;
   radius?: number;
   targetRegionId?: string;
   targetLocalX?: number;
@@ -139,7 +149,15 @@ export interface EditorSelection {
   color?: string;
   intensity?: number;
   distance?: number;
-  /** Present when this asset is part of a generated house (or similar). */
+  decay?: number;
+  fogShape?: RegionFogShape;
+  fogDensity?: number;
+  fogOpacity?: number;
+  fogFeather?: number;
+  sizeX?: number;
+  sizeY?: number;
+  sizeZ?: number;
+  /** Present when this asset is part of a legacy multi-piece house group. */
   groupId?: string;
   volumeShape?: TerrainVolumeShape;
   volumeMaterial?: TerrainVolumeMaterial;
@@ -196,9 +214,22 @@ interface LightEntry {
   color: string;
   intensity: number;
   distance: number;
+  decay: number;
   obj: THREE.Group;
   light: THREE.PointLight;
   bulb: THREE.Sprite;
+}
+
+interface FogEntry {
+  id: string;
+  data: RegionFogVolume;
+  mesh: THREE.Mesh;
+}
+
+interface HouseEntry {
+  id: string;
+  data: RegionHouse;
+  group: THREE.Group;
 }
 
 const DEFAULT_GRID_SIZE = 64;
@@ -224,6 +255,7 @@ export class RegionEditorScene {
   private running = true;
 
   private ambientLight = new THREE.AmbientLight(0xffffff, 0.9);
+  private fillLight = new THREE.HemisphereLight(0xffffff, 0x3a4a2a, 0);
   private sunLight = new THREE.DirectionalLight(0xffffff, 1.0);
   private colorGrading: RegionColorGrading = { ...REGION_COLOR_PRESETS.grassland };
   private meta = { id: "", name: "New Region", biome: "grassland" as RegionBiome, portalWorldX: 0, portalWorldZ: 0, isStartingRegion: false, musicTrack: null as string | null };
@@ -238,11 +270,18 @@ export class RegionEditorScene {
   private volumes = new Map<string, VolumeEntry>();
   private markers = new Map<string, MarkerEntry>();
   private lights = new Map<string, LightEntry>();
+  private fogVolumes = new Map<string, FogEntry>();
+  /** Procedural houses — one Group each (not dozens of loose assets). */
+  private houses = new Map<string, HouseEntry>();
+  /** Expanded house pieces for playtest collision (rebuilt on house edits). */
+  private houseCollisionAssets: RegionAsset[] = [];
   private entryMarker: MarkerEntry | null = null;
 
   private armedModel: { model: string; category: RegionAssetCategory } | null = null;
   private armedMarkerKind: EditorMarkerKind | null = null;
   private armedLightColor: string | null = null;
+  private armedFogColor: string | null = null;
+  private armedFogShape: RegionFogShape = "sphere";
   /** House-placement tool armed -- next click generates a procedural house
    *  (see houseGen.ts's generateHouseAssets) centered on the clicked ground
    *  point, placed as ordinary building-category assets. Single-click only
@@ -296,11 +335,13 @@ export class RegionEditorScene {
   private grassColor: GrassColor = { bottom: "#4f7c13", top: "#79a01c" };
   private wind: RegionWind = { direction: 0, strength: 1 };
   private grassLength = 1;
-  /** Live preview of grassPatches -- rebuilt (not incrementally updated) on
-   *  mouseup after a grass-brush stroke, or on blueprint load. Null when
-   *  there are no patches. */
+  /** Live grass preview -- streamed ADT tiles around the camera, rebuilt
+   *  incrementally for brush-touched tiles on mouseup. */
   private grassField: GrassField | null = null;
+  private grassPreviewGroup = new THREE.Group();
   private grassPreviewDirty = false;
+  /** ADT keys dirtied by the current grass paint/erase stroke. */
+  private grassDirtyKeys = new Set<string>();
 
   private roads: RegionRoad[] = [];
   private roadPaintArmed = false;
@@ -395,9 +436,12 @@ export class RegionEditorScene {
     this.camera.position.set(60, 60, 60);
 
     this.scene.add(this.ambientLight);
+    this.scene.add(this.fillLight);
     this.sunLight.position.set(80, 100, 40);
     this.scene.add(this.sunLight);
-    this.scene.fog = new THREE.FogExp2(0xbcd9f0, 0.006);
+    this.scene.fog = new THREE.FogExp2(0xbcd9f0, REGION_FOG_DENSITY_MIN);
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 1;
 
     this.selectionBox = new SelectionBox(this.camera, this.scene);
 
@@ -413,6 +457,8 @@ export class RegionEditorScene {
     this.terrainMesh = this.buildTerrainGeometry();
     this.scene.add(this.terrainMesh);
     this.scene.add(this.selectionGroup);
+    this.grassPreviewGroup.name = "grass-preview";
+    this.scene.add(this.grassPreviewGroup);
     this.scene.add(this.waterParticlesGroup);
     this.scene.add(this.escortPathGroup);
     this.applyColorGrading(this.colorGrading);
@@ -836,6 +882,7 @@ export class RegionEditorScene {
       this.armedMarkerKind = null;
       this.armedHouse = false;
       this.armedLightColor = null;
+      this.armedFogColor = null;
       this.clearVolumeStamp();
       this.sculptMode = null;
       this.waterBrushMode = null;
@@ -885,6 +932,7 @@ export class RegionEditorScene {
       this.armedHouse = false;
       this.clearVolumeStamp();
       this.armedLightColor = null;
+      this.armedFogColor = null;
       this.texturePaintMode = null;
       this.waterBrushMode = null;
       this.randomTreeBrushActive = false;
@@ -916,6 +964,7 @@ export class RegionEditorScene {
     this.armedMarkerKind = null;
     this.armedHouse = false;
     this.armedLightColor = null;
+    this.armedFogColor = null;
     this.sculptMode = null;
     this.texturePaintMode = null;
     this.waterBrushMode = null;
@@ -1014,6 +1063,7 @@ export class RegionEditorScene {
     this.armedMarkerKind = null;
     this.armedHouse = false;
     this.clearVolumeStamp();
+    this.armedFogColor = null;
     this.armedLightColor = color;
     this.sculptMode = null;
     this.texturePaintMode = null;
@@ -1028,12 +1078,33 @@ export class RegionEditorScene {
     this.orbit.enablePan = false;
   }
 
-  public placeLight(x: number, y: number, z: number, color = "#ff9933", intensity = 2.5, distance = 25.0): string {
+  armFogPlacement(color = "#c8dce8", shape: RegionFogShape = "sphere"): void {
+    this.armedModel = null;
+    this.armedMarkerKind = null;
+    this.armedHouse = false;
+    this.clearVolumeStamp();
+    this.armedLightColor = null;
+    this.armedFogColor = color;
+    this.armedFogShape = shape;
+    this.sculptMode = null;
+    this.texturePaintMode = null;
+    this.waterBrushMode = null;
+    this.randomTreeBrushActive = false;
+    this.grassBrushActive = false;
+    this.grassEraseBrushActive = false;
+    this.eraseBrushActive = false;
+    this.roadPaintArmed = false;
+    this.transform.detach();
+    this.deselect();
+    this.orbit.enablePan = false;
+  }
+
+  public placeLight(x: number, y: number, z: number, color = "#ff9933", intensity = 8, distance = 80, decay = 1): string {
     const id = `light_${this.nextId++}`;
     const group = new THREE.Group();
     group.position.set(x, y + 1.5, z);
 
-    const pointLight = new THREE.PointLight(color, intensity, distance, 1.5);
+    const pointLight = new THREE.PointLight(color, intensity, distance, decay);
     group.add(pointLight);
 
     const bulb = new THREE.Sprite(new THREE.SpriteMaterial({
@@ -1050,9 +1121,42 @@ export class RegionEditorScene {
     group.userData.editorId = id;
     this.scene.add(group);
 
-    const entry: LightEntry = { id, color, intensity, distance, obj: group, light: pointLight, bulb };
+    const entry: LightEntry = { id, color, intensity, distance, decay, obj: group, light: pointLight, bulb };
     this.lights.set(id, entry);
     this.select("light", id, false);
+    this.triggerChange();
+    return id;
+  }
+
+  public placeFogVolume(
+    x: number,
+    y: number,
+    z: number,
+    color = "#c8dce8",
+    shape: RegionFogShape = "sphere",
+    size = 14,
+  ): string {
+    const id = `fog_${this.nextId++}`;
+    const data: RegionFogVolume = {
+      id,
+      localX: x,
+      localY: y + size * 0.35,
+      localZ: z,
+      shape,
+      sizeX: size,
+      sizeY: size * (shape === "box" ? 0.55 : 0.7),
+      sizeZ: size,
+      color,
+      density: 0.7,
+      opacity: 0.75,
+      feather: 0.65,
+    };
+    const mesh = createFogVolumeMesh(data);
+    mesh.userData.editorKind = "fog";
+    mesh.userData.editorId = id;
+    this.scene.add(mesh);
+    this.fogVolumes.set(id, { id, data, mesh });
+    this.select("fog", id, false);
     this.triggerChange();
     return id;
   }
@@ -1182,6 +1286,7 @@ export class RegionEditorScene {
       this.armedHouse = false;
       this.clearVolumeStamp();
       this.armedLightColor = null;
+      this.armedFogColor = null;
       this.sculptMode = null;
       this.waterBrushMode = null;
       this.texturePaintMode = null;
@@ -1238,7 +1343,7 @@ export class RegionEditorScene {
       const dz = p.localZ - hitZ;
       return dx * dx + dz * dz > this.brushRadius * this.brushRadius;
     });
-    if (this.grassPatches.length !== before) this.rebuildGrassPreview();
+    if (this.grassPatches.length !== before) this.rebuildGrassPreview(true);
 
     this.emitSelection();
     this.triggerChange();
@@ -1295,6 +1400,7 @@ export class RegionEditorScene {
       seed: hashString(id),
       lengthScale: this.grassLength,
     });
+    for (const key of grassKeysOverlapping(hitX, hitZ, this.brushRadius)) this.grassDirtyKeys.add(key);
     this.grassPreviewDirty = true;
   }
 
@@ -1315,31 +1421,43 @@ export class RegionEditorScene {
       strength: Math.min(1, Math.max(0.05, this.brushStrength / 3)),
       seed: hashString(id),
     });
+    for (const key of grassKeysOverlapping(hitX, hitZ, this.brushRadius)) this.grassDirtyKeys.add(key);
     this.grassPreviewDirty = true;
   }
 
-  /** Rebuilds the grass preview InstancedMeshes from this.grassPatches --
-   *  called on mouseup after a paint/erase stroke, and after loading a
-   *  blueprint. Not incremental: regenerates every patch's blades from
-   *  scratch, same buildGrassInstances the runtime renderer uses, so the
-   *  editor preview and the saved region always agree. */
-  private rebuildGrassPreview(): void {
-    if (this.grassField) {
-      for (const mesh of this.grassField.meshes) this.scene.remove(mesh);
-      this.grassField.dispose();
+  /** Rebuilds grass preview InstancedMeshes. Brush strokes only recollect the
+   *  ADT tiles they touched (CPU win); meshes for those tiles are built
+   *  eagerly so paint under the cursor always shows up. Runtime regions still
+   *  stream; the editor preview does not. */
+  private rebuildGrassPreview(forceFull = false): void {
+    const heightmap = { gridSize: this.gridSize, pitch: this.pitch, heights: this.heights };
+    if (this.grassPatches.length === 0) {
+      if (this.grassField) {
+        this.grassField.dispose();
+        this.grassField = null;
+      }
+      this.grassDirtyKeys.clear();
+      this.grassPreviewDirty = false;
+      return;
     }
-    this.grassField =
-      this.grassPatches.length > 0
-        ? buildGrassInstances(
-            this.grassPatches,
-            this.grassExclusions,
-            { gridSize: this.gridSize, pitch: this.pitch, heights: this.heights },
-            { color: this.grassColor, wind: this.wind },
-          )
-        : null;
-    if (this.grassField) {
-      for (const mesh of this.grassField.meshes) this.scene.add(mesh);
+
+    if (!this.grassField) {
+      // Eager (stream:false): every painted tile gets a mesh immediately.
+      // Streaming hid strokes that weren't near orbit.target.
+      this.grassField = buildGrassInstances(this.grassPatches, this.grassExclusions, heightmap, {
+        color: this.grassColor,
+        wind: this.wind,
+        stream: false,
+        parent: this.grassPreviewGroup,
+      });
+      this.grassDirtyKeys.clear();
+      this.grassPreviewDirty = false;
+      return;
     }
+
+    const onlyKeys = !forceFull && this.grassDirtyKeys.size > 0 ? [...this.grassDirtyKeys] : undefined;
+    this.grassField.rebuild(this.grassPatches, this.grassExclusions, heightmap, onlyKeys);
+    this.grassDirtyKeys.clear();
     this.grassPreviewDirty = false;
   }
 
@@ -1356,6 +1474,11 @@ export class RegionEditorScene {
     if (!this.waterMeshField) {
       this.waterMeshField = buildRegionWaterMesh(this.gridSize, this.pitch, this.heights, this.waterHeights);
       this.scene.add(this.waterMeshField.mesh);
+      applyWaterEnvironment(this.waterMeshField.mesh.material as THREE.MeshLambertMaterial, {
+        skyColor: this.colorGrading.skyColor,
+        fogColor: this.colorGrading.fogColor,
+        groundTint: this.colorGrading.groundTint,
+      });
     } else {
       this.waterMeshField.updateGeometry(this.heights, this.waterHeights, this.gridSize, this.pitch);
     }
@@ -1878,14 +2001,21 @@ export class RegionEditorScene {
     }
 
     const sprint = this.playtestKeys.has("shift");
-    const speed = sprint ? SPRINT_SPEED : WALK_SPEED;
+    const terrainY = this.heightAt(this.playtestPos.x, this.playtestPos.z);
+    const waterDepth = this.sampleWaterDepth(this.playtestPos.x, this.playtestPos.z);
+    const waterSurface = waterDepth > 0.05 ? terrainY + waterDepth : -Infinity;
+    const swimming =
+      waterSurface > -Infinity &&
+      waterDepth >= WADE_DEPTH &&
+      this.playtestPos.y < waterSurface - SWIM_BODY_OFFSET;
+    const wading =
+      !swimming && waterDepth > 0.05 && this.playtestPos.y < waterSurface - 0.05;
+    const waterMult = swimming ? SWIM_SPEED_MULT : wading ? WADE_SPEED_MULT : 1;
+    const speed = (sprint ? SPRINT_SPEED : WALK_SPEED) * waterMult;
     const oldGroundHeight = this.groundHeightAt(this.playtestPos.x, this.playtestPos.z);
     const nextX = this.playtestPos.x + moveX * speed * dt;
     const nextZ = this.playtestPos.z + moveZ * speed * dt;
     // Same per-step slope block shared stepMovement() applies for regions --
-    // a step that would change ground height by more than 2.5 units is
-    // rejected outright, which is what makes the boundary mountain ring (and
-    // any other steep terrain) an actual wall instead of just a tall prop.
     // a step that would change ground height by more than 2.5 units is
     // rejected outright, which is what makes the boundary mountain ring (and
     // any other steep terrain) an actual wall instead of just a tall prop.
@@ -1900,16 +2030,56 @@ export class RegionEditorScene {
       this.playtestPos.z = nextZ;
     }
 
-    // Gravity/jump, identical shape to shared stepMovement()'s grounded branch.
-    this.playtestVelocityY -= GRAVITY * dt;
-    this.playtestPos.y += this.playtestVelocityY * dt;
     const ground = this.groundHeightAt(this.playtestPos.x, this.playtestPos.z);
-    if (this.playtestPos.y <= ground) {
-      this.playtestPos.y = ground;
+    const nextTerrainY = this.heightAt(this.playtestPos.x, this.playtestPos.z);
+    const nextWaterDepth = this.sampleWaterDepth(this.playtestPos.x, this.playtestPos.z);
+    const nextSurface = nextWaterDepth > 0.05 ? nextTerrainY + nextWaterDepth : -Infinity;
+    const swimmingNow =
+      nextSurface > -Infinity &&
+      nextWaterDepth >= WADE_DEPTH &&
+      this.playtestPos.y < nextSurface - SWIM_BODY_OFFSET;
+
+    if (swimmingNow) {
       this.playtestVelocityY = 0;
-      this.playtestGrounded = true;
-    } else {
+      const floatY = Math.max(ground, nextSurface - SWIM_FLOAT_OFFSET);
+      this.playtestPos.y = Math.max(this.playtestPos.y, floatY);
       this.playtestGrounded = false;
+      if (ground > this.playtestPos.y) this.playtestPos.y = ground;
+    } else {
+      // Stick-to-ground + gravity, matching shared stepMovement().
+      if (this.playtestGrounded) {
+        if (ground >= this.playtestPos.y - MAX_STEP_DOWN) {
+          this.playtestPos.y = ground;
+          this.playtestVelocityY = 0;
+          this.playtestGrounded = true;
+        } else {
+          this.playtestGrounded = false;
+          this.playtestVelocityY -= GRAVITY * dt;
+          this.playtestPos.y += this.playtestVelocityY * dt;
+          if (this.playtestPos.y <= ground) {
+            this.playtestPos.y = ground;
+            this.playtestVelocityY = 0;
+            this.playtestGrounded = true;
+          }
+        }
+      } else {
+        this.playtestVelocityY -= GRAVITY * dt;
+        this.playtestPos.y += this.playtestVelocityY * dt;
+        if (this.playtestPos.y <= ground) {
+          this.playtestPos.y = ground;
+          this.playtestVelocityY = 0;
+          this.playtestGrounded = true;
+        }
+      }
+      if (
+        nextSurface > -Infinity &&
+        nextWaterDepth >= WADE_DEPTH &&
+        this.playtestPos.y < nextSurface - SWIM_FLOAT_OFFSET &&
+        ground < nextSurface - SWIM_FLOAT_OFFSET
+      ) {
+        this.playtestPos.y = nextSurface - SWIM_FLOAT_OFFSET;
+        this.playtestVelocityY = 0;
+      }
     }
 
     if (this.playtestAvatar) {
@@ -1924,7 +2094,8 @@ export class RegionEditorScene {
       // why directionalMove()/logicalFromState() need the raw input axes
       // (not the world-space move vector) to pick strafe/walk-back clips.
       this.playtestAvatar.group.rotation.y = this.cameraYaw;
-      const logical = logicalFromState(this.playtestGrounded ? "idle" : "jump", animSpeed, 3.5, moveXInput, moveYInput);
+      const serverAnim = swimmingNow ? "swim" : this.playtestGrounded ? "idle" : "jump";
+      const logical = logicalFromState(serverAnim, animSpeed, 3.5, moveXInput, moveYInput);
       this.playtestAvatar.play(logical);
       this.playtestAvatar.update(dt);
     }
@@ -1959,22 +2130,33 @@ export class RegionEditorScene {
    *  same "allow escape" rule as stepMovement's own regionAssets check.
    *  Stair ramp assets are never blocked so you can walk up them. */
   private collidesWithAsset(x: number, z: number, oldX: number, oldZ: number, playerY: number): boolean {
+    const blockAt = (ax: number, az: number, radius: number, climbable: boolean, stair: boolean): boolean => {
+      if (stair || climbable) return false;
+      if (radius <= 0) return false;
+      const dx = x - ax;
+      const dz = z - az;
+      if (dx * dx + dz * dz >= radius * radius) return false;
+      const oldDx = oldX - ax;
+      const oldDz = oldZ - az;
+      return oldDx * oldDx + oldDz * oldDz >= radius * radius;
+    };
+
     for (const a of this.assets.values()) {
       const ov = this.resolveCollisionForAsset(a);
-      if (!ov || ov.radius === 0) continue; // null = no collision; radius=0 = floor tile
-      if (ov.stairHalfLength !== undefined) continue; // ramps never hard-block
+      if (!ov) continue;
       const scale = a.obj.scale.x || 1;
-      if (ov.climbable && playerY >= a.obj.position.y + ov.height * scale - 0.3) {
-        continue;
+      if (blockAt(a.obj.position.x, a.obj.position.z, ov.radius * scale, ov.climbable, ov.stairHalfLength !== undefined)) {
+        return true;
       }
-      const radius = ov.radius * scale;
-      const dx = x - a.obj.position.x;
-      const dz = z - a.obj.position.z;
-      if (dx * dx + dz * dz < radius * radius) {
-        const oldDx = oldX - a.obj.position.x;
-        const oldDz = oldZ - a.obj.position.z;
-        const alreadyInside = oldDx * oldDx + oldDz * oldDz < radius * radius;
-        if (!alreadyInside) return true;
+    }
+    for (const piece of this.houseCollisionAssets) {
+      const ov = piece.model in ASSET_COLLISION_OVERRIDES
+        ? ASSET_COLLISION_OVERRIDES[piece.model]
+        : { radius: REGION_ASSET_COLLISION_RADIUS.building, height: REGION_ASSET_COLLISION_HEIGHT.building, climbable: false };
+      if (!ov) continue;
+      const scale = piece.scale ?? 1;
+      if (blockAt(piece.localX, piece.localZ, ov.radius * scale, ov.climbable, ov.stairHalfLength !== undefined)) {
+        return true;
       }
     }
     for (const v of this.volumes.values()) {
@@ -2018,35 +2200,49 @@ export class RegionEditorScene {
    *  its footprint -- mirrors shared stepMovement()'s ground computation
    *  so a player who's jumped onto a rock rests on top of it, and stairs
    *  are smoothly walkable rather than solid walls. */
-  private groundHeightAt(x: number, z: number): number {
+  private groundHeightAt(x: number, z: number, playerY = this.playtestPos.y): number {
     let ground = this.heightAt(x, z);
-    for (const a of this.assets.values()) {
-      const ov = this.resolveCollisionForAsset(a);
-      if (!ov || ov.radius === 0) continue;
-      const scale = a.obj.scale.x || 1;
-      const radius = ov.radius * scale;
-      const dx = x - a.obj.position.x;
-      const dz = z - a.obj.position.z;
-      if (dx * dx + dz * dz >= radius * radius) continue;
+    const maxSurface = playerY + 0.45;
 
+    const consider = (
+      ax: number,
+      az: number,
+      baseY: number,
+      yaw: number,
+      scale: number,
+      ov: { radius: number; height: number; climbable: boolean; stairHalfLength?: number },
+    ) => {
+      const radius = ov.radius * scale;
+      if (radius <= 0 && !ov.climbable) return;
+      const dx = x - ax;
+      const dz = z - az;
+      if (dx * dx + dz * dz >= Math.max(radius, 0.01) * Math.max(radius, 0.01)) return;
       if (ov.stairHalfLength !== undefined) {
-        // Compute ramp world direction from the asset's current yaw
-        const yaw = a.obj.rotation.y;
         const sin = Math.sin(yaw);
         const cos = Math.cos(yaw);
-        const rdx = -sin;
-        const rdz = -cos;
         const halfLength = ov.stairHalfLength * scale;
         const rise = ov.height * scale;
-        const proj = (dx * rdx + dz * rdz) / halfLength;
+        const proj = (dx * -sin + dz * -cos) / halfLength;
         const t = Math.max(0, Math.min(1, (proj + 1) / 2));
-        const topY = a.obj.position.y + rise;
-        const rampY = topY - rise + t * rise;
-        if (rampY > ground) ground = rampY;
+        const rampY = baseY + t * rise;
+        if (rampY <= maxSurface && rampY > ground) ground = rampY;
       } else if (ov.climbable) {
-        const topY = a.obj.position.y + ov.height * scale;
-        if (topY > ground) ground = topY;
+        const topY = baseY + ov.height * scale;
+        if (topY <= maxSurface && topY > ground) ground = topY;
       }
+    };
+
+    for (const a of this.assets.values()) {
+      const ov = this.resolveCollisionForAsset(a);
+      if (!ov) continue;
+      consider(a.obj.position.x, a.obj.position.z, a.obj.position.y, a.obj.rotation.y, a.obj.scale.x || 1, ov);
+    }
+    for (const piece of this.houseCollisionAssets) {
+      const ov = piece.model in ASSET_COLLISION_OVERRIDES
+        ? ASSET_COLLISION_OVERRIDES[piece.model]
+        : null;
+      if (!ov) continue;
+      consider(piece.localX, piece.localZ, piece.localY, piece.yaw, piece.scale ?? 1, ov);
     }
     for (const v of this.volumes.values()) {
       this.syncVolumeDataFromMesh(v);
@@ -2096,7 +2292,19 @@ export class RegionEditorScene {
     const pz = this.playtestPos.z;
     const cy = this.cameraYaw;
     const cp = this.cameraPitch;
-    const distance = RegionEditorScene.PLAYTEST_CAMERA_DISTANCE;
+    let distance = RegionEditorScene.PLAYTEST_CAMERA_DISTANCE;
+
+    // Pull camera in when the arm hits a solid wall (indoors / tight yards).
+    const headY = py + 1.5;
+    for (let t = 0.6; t < distance; t += 0.35) {
+      const sx = px - Math.sin(cy) * (t * Math.cos(cp));
+      const sy = headY - t * Math.sin(cp);
+      const sz = pz - Math.cos(cy) * (t * Math.cos(cp));
+      if (this.cameraBlockedAt(sx, sy, sz)) {
+        distance = Math.max(0.9, t - 0.25);
+        break;
+      }
+    }
 
     const targetX = px - Math.sin(cy) * (distance * Math.cos(cp));
     const targetZ = pz - Math.cos(cy) * (distance * Math.cos(cp));
@@ -2107,20 +2315,65 @@ export class RegionEditorScene {
     this.camera.lookAt(px, py + 1.5, pz);
   }
 
+  /** True when a camera sample point sits inside a solid (non-climbable) collider. */
+  private cameraBlockedAt(x: number, y: number, z: number): boolean {
+    const hit = (ax: number, az: number, baseY: number, radius: number, height: number, climbable: boolean) => {
+      if (climbable || radius <= 0) return false;
+      const dx = x - ax;
+      const dz = z - az;
+      if (dx * dx + dz * dz >= radius * radius) return false;
+      return y >= baseY - 0.2 && y <= baseY + height + 0.2;
+    };
+    for (const a of this.assets.values()) {
+      const ov = this.resolveCollisionForAsset(a);
+      if (!ov) continue;
+      const scale = a.obj.scale.x || 1;
+      if (hit(a.obj.position.x, a.obj.position.z, a.obj.position.y, ov.radius * scale, ov.height * scale, ov.climbable)) {
+        return true;
+      }
+    }
+    for (const piece of this.houseCollisionAssets) {
+      const ov = piece.model in ASSET_COLLISION_OVERRIDES ? ASSET_COLLISION_OVERRIDES[piece.model] : null;
+      if (!ov) continue;
+      const scale = piece.scale ?? 1;
+      if (hit(piece.localX, piece.localZ, piece.localY, ov.radius * scale, ov.height * scale, ov.climbable)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   // ============================ color grading ============================
 
   applyColorGrading(cg: RegionColorGrading): void {
     this.colorGrading = { ...cg };
     const sky = new THREE.Color(cg.skyColor);
     this.scene.background = sky;
-    this.scene.fog = new THREE.FogExp2(new THREE.Color(cg.fogColor).getHex(), cg.fogDensity);
+    this.scene.fog = new THREE.FogExp2(
+      new THREE.Color(cg.fogColor).getHex(),
+      clampRegionFogDensity(cg.fogDensity),
+    );
     this.ambientLight.color = new THREE.Color(cg.ambientColor);
     this.ambientLight.intensity = cg.ambientIntensity;
     this.sunLight.color = new THREE.Color(cg.sunColor);
     this.sunLight.intensity = cg.sunIntensity;
+    const fillColor = cg.fillColor ?? cg.ambientColor;
+    const fillIntensity = cg.fillIntensity ?? 0;
+    this.fillLight.color = new THREE.Color(cg.skyColor);
+    this.fillLight.groundColor = new THREE.Color(fillColor);
+    this.fillLight.intensity = fillIntensity;
+    this.renderer.toneMappingExposure = cg.exposure ?? 1;
     // groundTint feeds the terrain shader's tint, not a scene-level property
     // -- re-sync so a color-grading change previews on the ground live.
     this.syncTerrainMeshHeights();
+    const waterMat = this.waterMeshField?.mesh.material;
+    if (waterMat instanceof THREE.MeshLambertMaterial) {
+      applyWaterEnvironment(waterMat, {
+        skyColor: cg.skyColor,
+        fogColor: cg.fogColor,
+        groundTint: cg.groundTint,
+      });
+    }
     this.triggerChange();
   }
 
@@ -2167,7 +2420,7 @@ export class RegionEditorScene {
   applyWind(w: RegionWind): void {
     this.wind = { ...w };
     if (this.grassField) {
-      applyRegionWind(this.grassField.uniforms, this.wind, BASE_GRASS_WIND_STRENGTH);
+      this.grassField.applyWind(this.wind);
     }
     this.triggerChange();
   }
@@ -2231,6 +2484,7 @@ export class RegionEditorScene {
     this.armedHouse = false;
     this.clearVolumeStamp();
     this.armedLightColor = null;
+    this.armedFogColor = null;
     this.sculptMode = null;
     this.waterBrushMode = null;
     this.texturePaintMode = null;
@@ -2252,7 +2506,7 @@ export class RegionEditorScene {
     return (
       this.armedModel !== null ||
       this.armedMarkerKind !== null ||
-      this.armedLightColor !== null ||
+      this.armedLightColor !== null || this.armedFogColor !== null ||
       this.armedHouse ||
       this.volumeStampActive ||
       this.sculptMode !== null ||
@@ -2651,7 +2905,7 @@ export class RegionEditorScene {
       this.paintTextureAt(hit.x, hit.z, this.texturePaintMode);
       e.preventDefault();
       e.stopPropagation();
-    } else if (this.armedModel || this.armedMarkerKind || this.armedLightColor) {
+    } else if (this.armedModel || this.armedMarkerKind || this.armedLightColor || this.armedFogColor) {
       this.isDraggingToPlace = true;
       this.dragStart = { x: e.clientX, y: e.clientY };
       this.lastPlaceTime = performance.now();
@@ -2858,8 +3112,8 @@ export class RegionEditorScene {
       while (curr && !curr.userData.editorId) curr = curr.parent;
       if (!curr?.userData.editorId) continue;
       const id = curr.userData.editorId as string;
-      const kind = curr.userData.editorKind as "asset" | "marker" | "light" | "volume" | undefined;
-      if (kind === "asset" || kind === "marker" || kind === "light" || kind === "volume") {
+      const kind = curr.userData.editorKind as "asset" | "marker" | "light" | "volume" | "fog" | "house" | undefined;
+      if (kind === "asset" || kind === "marker" || kind === "light" || kind === "volume" || kind === "fog" || kind === "house") {
         for (const expanded of this.idsForSelection(kind, id)) idsToAdd.add(expanded);
       } else {
         idsToAdd.add(id);
@@ -2890,6 +3144,8 @@ export class RegionEditorScene {
       this.select("marker", id, false);
     } else if (this.armedLightColor) {
       this.placeLight(x, hit.y, z, this.armedLightColor);
+    } else if (this.armedFogColor) {
+      this.placeFogVolume(x, hit.y, z, this.armedFogColor, this.armedFogShape);
     }
   }
 
@@ -2900,6 +3156,8 @@ export class RegionEditorScene {
       ...[...this.volumes.values()].map((v) => v.obj),
       ...[...this.markers.values()].map((m) => m.obj),
       ...[...this.lights.values()].map((l) => l.obj),
+      ...[...this.fogVolumes.values()].map((f) => f.mesh),
+      ...[...this.houses.values()].map((h) => h.group),
     ];
     if (this.entryMarker) pickable.push(this.entryMarker.obj);
     const hits = this.raycaster.intersectObjects(pickable, true);
@@ -3061,6 +3319,31 @@ export class RegionEditorScene {
             targetRegionId: marker.targetRegionId,
           });
           newIds.push(newId);
+        } else {
+          const light = this.lights.get(id);
+          if (light) {
+            const t = light.obj.position;
+            const newId = this.placeLight(t.x + 4, t.y - 1.5, t.z, light.color, light.intensity, light.distance, light.decay);
+            newIds.push(newId);
+          } else {
+            const fog = this.fogVolumes.get(id);
+            if (fog) {
+              const d = fog.data;
+              const newId = this.placeFogVolume(d.localX + 4, d.localY, d.localZ, d.color, d.shape, d.sizeX);
+              const entry = this.fogVolumes.get(newId);
+              if (entry) {
+                entry.data = {
+                  ...d,
+                  id: newId,
+                  localX: d.localX + 4,
+                  localY: d.localY,
+                  localZ: d.localZ,
+                };
+                syncFogVolumeMesh(entry.mesh, entry.data);
+              }
+              newIds.push(newId);
+            }
+          }
         }
         }
       }
@@ -3099,35 +3382,63 @@ export class RegionEditorScene {
     return id;
   }
 
-  /** Generates one procedural house (see houseGen.ts) centered on the given
-   *  ground point and places every returned piece as an ordinary building
-   *  asset via placeAsset -- so a generated house is just a pile of normal,
-   *  individually selectable/movable/erasable assets afterward, same as
-   *  anything hand-placed from the palette. All pieces share one groupId so
-   *  clicking any one of them selects (and therefore moves) the whole house.
-   *  Each piece's `scale` is passed through as placeAsset's scaleOverride so
-   *  the "building"-category default-scale heuristic never kicks in on the
-   *  modular MV Wall_/Corner_/Door_/Roof_ pieces. */
-  private async placeHouseAt(x: number, y: number, z: number): Promise<void> {
-    const groupId = `house_${this.nextId++}`;
-    const pieces = generateHouseAssets(x, z, y, { type: this.armedHouseType, groupId });
-    const ids: string[] = [];
-    for (const piece of pieces) {
-      const id = await this.placeAsset(
-        piece.model,
-        piece.category,
-        piece.localX,
-        piece.localY,
-        piece.localZ,
-        piece.yaw,
-        piece.scale,
-        { groupId, skipSelect: true },
-      );
-      ids.push(id);
-    }
-    this.selectedIds = new Set(ids);
-    this.updateSelectionGroup();
+  /** Places one procedural house as a single selectable Group (not N assets). */
+  private async placeHouseAt(x: number, y: number, z: number, yaw = 0): Promise<string> {
+    const seed = (Math.random() * 0xffffffff) >>> 0;
+    const type = resolveHouseType(this.armedHouseType, seed);
+    const id = `house_${this.nextId++}`;
+    const data: RegionHouse = { id, type, seed, localX: x, localY: y, localZ: z, yaw, scale: 1 };
+    const group = await this.buildHouseGroup(data);
+    this.scene.add(group);
+    this.houses.set(id, { id, data, group });
+    this.rebuildHouseColliders();
+    this.select("house", id, false);
     this.triggerChange();
+    return id;
+  }
+
+  private async buildHouseGroup(data: RegionHouse): Promise<THREE.Group> {
+    const pieces = generateHouseAssets(0, 0, 0, {
+      type: data.type as HouseType,
+      seed: data.seed,
+      groupId: data.id,
+    });
+    const group = new THREE.Group();
+    group.position.set(data.localX, data.localY, data.localZ);
+    group.rotation.y = data.yaw;
+    group.scale.setScalar(data.scale ?? 1);
+    group.userData.editorKind = "house";
+    group.userData.editorId = data.id;
+    await Promise.all(
+      pieces.map(async (piece) => {
+        try {
+          const gltf = await load(`/assets/models/${ASSET_DIR[piece.category]}/${piece.model}`);
+          const obj = SkeletonUtils.clone(gltf.scene);
+          obj.position.set(piece.localX, piece.localY, piece.localZ);
+          obj.rotation.y = piece.yaw;
+          obj.scale.setScalar(piece.scale ?? 1);
+          obj.traverse((o) => {
+            if ((o as THREE.Mesh).isMesh) o.castShadow = true;
+          });
+          group.add(obj);
+        } catch (err) {
+          console.warn(`[regionEditor] house piece failed: ${piece.model}`, err);
+        }
+      }),
+    );
+    return group;
+  }
+
+  private rebuildHouseColliders(): void {
+    this.houseCollisionAssets = expandHousesToAssets([...this.houses.values()].map((h) => h.data));
+  }
+
+  private syncHouseDataFromGroup(h: HouseEntry): void {
+    h.data.localX = h.group.position.x;
+    h.data.localY = h.group.position.y;
+    h.data.localZ = h.group.position.z;
+    h.data.yaw = h.group.rotation.y;
+    h.data.scale = h.group.scale.x;
   }
 
   private buildVillageRing(radius: number, color = MARKER_COLORS.village): THREE.Mesh {
@@ -3415,41 +3726,36 @@ export class RegionEditorScene {
     this.scene.add(this.terrainMesh);
     this.syncWaterMesh();
 
-    // 2. Central landmark plaza (Well / Market)
+    // 2. Central landmark plaza (Well / Market) — solid KayKit props, not houses.
     const centerModel = Math.random() > 0.5 ? "building_well.gltf" : "building_market.gltf";
     void this.placeAsset(centerModel, "building", vx, centerH, vz, Math.random() * Math.PI * 2, 2.4);
 
-    // 3. Ring of 5-8 Medieval Houses facing central plaza (scaled up to full imposing house size)
-    const buildingModels = [
-      "building_home_A.gltf", "building_home_B.gltf", "building_tavern.gltf",
-      "building_blacksmith.gltf", "building_church.gltf", "building_windmill.gltf",
-      "building_lumbermill.gltf", "building_tower_A.gltf", "building_grain.gltf",
-    ];
+    // 3. Ring of procedural houses (each one RegionHouse / one Group).
     const clutterModels = [
       "barrel.gltf", "bucket_water.gltf", "crate_A_big.gltf", "crate_A_small.gltf",
       "crate_B_small.gltf", "fence_wood_straight.gltf", "fence_stone_straight.gltf",
     ];
+    const villageHouseTypes: HouseType[] = ["cottage", "townhouse", "workshop", "tavern", "storehouse", "villa", "manor"];
 
     const houseCount = 5 + Math.floor(Math.random() * 4);
     const roadPoints: { x: number; z: number }[] = [{ x: vx, z: vz }];
+    const prevArmed = this.armedHouseType;
 
     for (let b = 0; b < houseCount; b++) {
       const angle = (b / houseCount) * Math.PI * 2 + (Math.random() - 0.5) * 0.35;
-      const dist = 12 + Math.random() * 8;
+      const dist = 14 + Math.random() * 10;
       const bx = vx + Math.cos(angle) * dist;
       const bz = vz + Math.sin(angle) * dist;
-      const model = buildingModels[Math.floor(Math.random() * buildingModels.length)]!;
       const facingYaw = angle + Math.PI + (Math.random() - 0.5) * 0.2;
       const by = this.heightAt(bx, bz);
-
-      void this.placeAsset(model, "building", bx, by, bz, facingYaw, 3.8 + Math.random() * 0.6);
+      this.armedHouseType = villageHouseTypes[Math.floor(Math.random() * villageHouseTypes.length)]!;
+      void this.placeHouseAt(bx, by, bz, facingYaw);
       roadPoints.push({ x: bx, z: bz });
 
-      // Clutter & props around house
-      const clutterCount = 2 + Math.floor(Math.random() * 3);
+      const clutterCount = 1 + Math.floor(Math.random() * 2);
       for (let c = 0; c < clutterCount; c++) {
         const cAngle = facingYaw + (Math.random() - 0.5) * 1.5;
-        const cDist = 3.5 + Math.random() * 3;
+        const cDist = 5 + Math.random() * 3;
         const cx = bx + Math.cos(cAngle) * cDist;
         const cz = bz + Math.sin(cAngle) * cDist;
         const cy = this.heightAt(cx, cz);
@@ -3457,6 +3763,7 @@ export class RegionEditorScene {
         void this.placeAsset(cModel, "building", cx, cy, cz, Math.random() * Math.PI * 2, 1.4 + Math.random() * 0.3);
       }
     }
+    this.armedHouseType = prevArmed;
 
     // 4. Connect road path
     if (roadPoints.length >= 2) {
@@ -3469,7 +3776,7 @@ export class RegionEditorScene {
     this.triggerChange();
   }
 
-  private select(kind: "asset" | "marker" | "light" | "volume", id: string, additive: boolean): void {
+  private select(kind: "asset" | "marker" | "light" | "volume" | "fog" | "house", id: string, additive: boolean): void {
     const ids = this.idsForSelection(kind, id);
     if (!additive) this.selectedIds.clear();
     const allSelected = ids.length > 0 && ids.every((i) => this.selectedIds.has(i));
@@ -3485,7 +3792,7 @@ export class RegionEditorScene {
    *  carries a groupId -- so clicking any wall/roof/floor of a generated
    *  house selects (and therefore moves) every piece together. Markers and
    *  lights, and ungrouped hand-placed assets, stay single-id. */
-  private idsForSelection(kind: "asset" | "marker" | "light" | "volume", id: string): string[] {
+  private idsForSelection(kind: "asset" | "marker" | "light" | "volume" | "fog" | "house", id: string): string[] {
     if (kind === "asset") {
       const asset = this.assets.get(id);
       if (asset?.groupId) {
@@ -3512,6 +3819,18 @@ export class RegionEditorScene {
     const center = new THREE.Vector3();
     const objs: THREE.Object3D[] = [];
     for (const id of this.selectedIds) {
+      const house = this.houses.get(id);
+      if (house) {
+        objs.push(house.group);
+        center.add(house.group.position);
+        continue;
+      }
+      const fog = this.fogVolumes.get(id);
+      if (fog) {
+        objs.push(fog.mesh);
+        center.add(fog.mesh.position);
+        continue;
+      }
       const entry =
         this.assets.get(id) ??
         this.volumes.get(id) ??
@@ -3659,7 +3978,45 @@ export class RegionEditorScene {
       const l = this.lights.get(id);
       if (l) {
         const t = worldTransform(l.obj);
-        selItems.push({ kind: "light", id, color: l.color, intensity: l.intensity, distance: l.distance, x: t.x, y: t.y, z: t.z, yaw: 0, scale: 1 });
+        selItems.push({ kind: "light", id, color: l.color, intensity: l.intensity, distance: l.distance, decay: l.decay, x: t.x, y: t.y, z: t.z, yaw: 0, scale: 1 });
+        continue;
+      }
+      const f = this.fogVolumes.get(id);
+      if (f) {
+        const t = worldTransform(f.mesh);
+        selItems.push({
+          kind: "fog",
+          id,
+          color: f.data.color,
+          fogShape: f.data.shape,
+          fogDensity: f.data.density,
+          fogOpacity: f.data.opacity,
+          fogFeather: f.data.feather,
+          sizeX: f.data.sizeX,
+          sizeY: f.data.sizeY,
+          sizeZ: f.data.sizeZ,
+          x: t.x,
+          y: t.y,
+          z: t.z,
+          yaw: 0,
+          scale: 1,
+        });
+        continue;
+      }
+      const h = this.houses.get(id);
+      if (h) {
+        this.syncHouseDataFromGroup(h);
+        const t = worldTransform(h.group);
+        selItems.push({
+          kind: "house",
+          id,
+          houseType: h.data.type,
+          x: t.x,
+          y: t.y,
+          z: t.z,
+          yaw: t.yaw,
+          scale: t.scale,
+        });
       }
     }
     this.onSelectionChange(selItems);
@@ -3672,6 +4029,17 @@ export class RegionEditorScene {
     for (const id of this.selectedIds) {
       const v = this.volumes.get(id);
       if (v) this.syncVolumeDataFromMesh(v);
+      const f = this.fogVolumes.get(id);
+      if (f) {
+        f.data.localX = f.mesh.position.x;
+        f.data.localY = f.mesh.position.y;
+        f.data.localZ = f.mesh.position.z;
+      }
+      const h = this.houses.get(id);
+      if (h) {
+        this.syncHouseDataFromGroup(h);
+        this.rebuildHouseColliders();
+      }
     }
     this.triggerChange();
     this.emitSelection();
@@ -3693,6 +4061,14 @@ export class RegionEditorScene {
       color: string;
       intensity: number;
       distance: number;
+      decay: number;
+      fogShape: RegionFogShape;
+      fogDensity: number;
+      fogOpacity: number;
+      fogFeather: number;
+      sizeX: number;
+      sizeY: number;
+      sizeZ: number;
       frequencyMin: number;
       difficulty: number;
       lootAmount: number;
@@ -3781,6 +4157,37 @@ export class RegionEditorScene {
           l.distance = patch.distance;
           l.light.distance = patch.distance;
         }
+        if (patch.decay !== undefined) {
+          l.decay = patch.decay;
+          l.light.decay = patch.decay;
+        }
+        continue;
+      }
+      const f = this.fogVolumes.get(id);
+      if (f) {
+        if (patch.x !== undefined) { f.mesh.position.x = patch.x; f.data.localX = patch.x; }
+        if (patch.y !== undefined) { f.mesh.position.y = patch.y; f.data.localY = patch.y; }
+        if (patch.z !== undefined) { f.mesh.position.z = patch.z; f.data.localZ = patch.z; }
+        if (patch.color !== undefined) f.data.color = patch.color;
+        if (patch.fogShape !== undefined) f.data.shape = patch.fogShape;
+        if (patch.fogDensity !== undefined) f.data.density = patch.fogDensity;
+        if (patch.fogOpacity !== undefined) f.data.opacity = patch.fogOpacity;
+        if (patch.fogFeather !== undefined) f.data.feather = patch.fogFeather;
+        if (patch.sizeX !== undefined) f.data.sizeX = patch.sizeX;
+        if (patch.sizeY !== undefined) f.data.sizeY = patch.sizeY;
+        if (patch.sizeZ !== undefined) f.data.sizeZ = patch.sizeZ;
+        syncFogVolumeMesh(f.mesh, f.data);
+        continue;
+      }
+      const h = this.houses.get(id);
+      if (h) {
+        if (patch.x !== undefined) h.group.position.x = patch.x;
+        if (patch.y !== undefined) h.group.position.y = patch.y;
+        if (patch.z !== undefined) h.group.position.z = patch.z;
+        if (patch.yaw !== undefined) h.group.rotation.y = patch.yaw;
+        if (patch.scale !== undefined) h.group.scale.setScalar(patch.scale);
+        this.syncHouseDataFromGroup(h);
+        this.rebuildHouseColliders();
       }
     }
     this.updateSelectionGroup();
@@ -3826,8 +4233,24 @@ export class RegionEditorScene {
         this.scene.remove(l.obj);
         l.bulb.material.dispose();
         this.lights.delete(id);
+        continue;
+      }
+      const f = this.fogVolumes.get(id);
+      if (f) {
+        this.scene.remove(f.mesh);
+        f.mesh.geometry.dispose();
+        (f.mesh.material as THREE.Material).dispose();
+        this.fogVolumes.delete(id);
+        continue;
+      }
+      const h = this.houses.get(id);
+      if (h) {
+        this.scene.remove(h.group);
+        this.disposeObject(h.group);
+        this.houses.delete(id);
       }
     }
+    this.rebuildHouseColliders();
     this.selectedIds.clear();
     this.triggerChange();
     this.emitSelection();
@@ -3915,6 +4338,18 @@ export class RegionEditorScene {
       this.scene.remove(m.obj);
       this.disposeObject(m.obj);
     }
+    for (const f of this.fogVolumes.values()) {
+      this.scene.remove(f.mesh);
+      f.mesh.geometry.dispose();
+      (f.mesh.material as THREE.Material).dispose();
+    }
+    this.fogVolumes.clear();
+    for (const h of this.houses.values()) {
+      this.scene.remove(h.group);
+      this.disposeObject(h.group);
+    }
+    this.houses.clear();
+    this.houseCollisionAssets = [];
     for (const l of this.lights.values()) {
       this.scene.remove(l.obj);
       l.bulb.material.dispose();
@@ -3934,6 +4369,7 @@ export class RegionEditorScene {
     this.armedHouse = false;
     this.clearVolumeStamp();
     this.armedLightColor = null;
+    this.armedFogColor = null;
     this.texturePaintMode = null;
     this.waterBrushMode = null;
     this.customTextures = new Array(this.gridSize * this.gridSize).fill(0);
@@ -3947,10 +4383,11 @@ export class RegionEditorScene {
     this.paintingRoad = null;
     this.roads = [];
     if (this.grassField) {
-      for (const mesh of this.grassField.meshes) this.scene.remove(mesh);
       this.grassField.dispose();
       this.grassField = null;
     }
+    this.grassDirtyKeys.clear();
+    this.grassPreviewDirty = false;
     this.grassPatches = [];
     this.grassExclusions = [];
     this.grassColor = { bottom: "#4f7c13", top: "#79a01c" };
@@ -3980,7 +4417,7 @@ export class RegionEditorScene {
       this.grassExclusions = (bp.grassExclusions ?? []).map((ex) => ({ ...ex }));
       this.grassColor = bp.grassColor ? { ...bp.grassColor } : { bottom: "#4f7c13", top: "#79a01c" };
       this.wind = bp.wind ? { ...bp.wind } : { direction: 0, strength: 1 };
-      this.rebuildGrassPreview();
+      this.rebuildGrassPreview(true);
       this.scene.remove(this.terrainMesh);
       this.terrainMesh.geometry.dispose();
       this.terrainMesh = this.buildTerrainGeometry();
@@ -4043,8 +4480,26 @@ export class RegionEditorScene {
         }
       }
       for (const light of bp.lights ?? []) {
-        this.placeLight(light.localX, light.localY - 1.5, light.localZ, light.color, light.intensity, light.distance);
+        this.placeLight(light.localX, light.localY - 1.5, light.localZ, light.color, light.intensity, light.distance, light.decay ?? 1);
       }
+      for (const fog of bp.fogVolumes ?? []) {
+        const id = this.placeFogVolume(fog.localX, fog.localY, fog.localZ, fog.color, fog.shape, fog.sizeX);
+        const entry = this.fogVolumes.get(id);
+        if (entry) {
+          entry.data = { ...fog, id };
+          syncFogVolumeMesh(entry.mesh, entry.data);
+        }
+      }
+      for (const house of bp.houses ?? []) {
+        const id = house.id ?? `house_${this.nextId++}`;
+        const data: RegionHouse = { ...house, id };
+        const group = await this.buildHouseGroup(data);
+        this.scene.add(group);
+        this.houses.set(id, { id, data, group });
+        const match = /^house_(\d+)$/.exec(id);
+        if (match) this.nextId = Math.max(this.nextId, Number(match[1]) + 1);
+      }
+      this.rebuildHouseColliders();
       for (const npc of bp.npcs ?? []) {
         const id = this.placeMarkerAt("npc", npc.localX, this.heightAt(npc.localX, npc.localZ), npc.localZ);
         const m = this.markers.get(id);
@@ -4190,7 +4645,21 @@ export class RegionEditorScene {
       });
     const lights = [...this.lights.values()].map((l) => {
       const t = getTransform(l.obj);
-      return { id: l.id, localX: t.x, localY: t.y, localZ: t.z, color: l.color, intensity: l.intensity, distance: l.distance };
+      return { id: l.id, localX: t.x, localY: t.y, localZ: t.z, color: l.color, intensity: l.intensity, distance: l.distance, decay: l.decay };
+    });
+    const fogVolumes = [...this.fogVolumes.values()].map((f) => {
+      const t = getTransform(f.mesh);
+      return {
+        ...f.data,
+        id: f.id,
+        localX: t.x,
+        localY: t.y,
+        localZ: t.z,
+      };
+    });
+    const houses = [...this.houses.values()].map((h) => {
+      this.syncHouseDataFromGroup(h);
+      return { ...h.data };
     });
     const terrainVolumes = [...this.volumes.values()].map((v) => {
       this.syncVolumeDataFromMesh(v);
@@ -4212,6 +4681,7 @@ export class RegionEditorScene {
       waterHeights: this.waterHeights.some((w) => w > 0) ? [...this.waterHeights] : undefined,
       customTextures: this.customTextures.some((t) => t > 0) ? [...this.customTextures] : undefined,
       assets,
+      houses: houses.length > 0 ? houses : undefined,
       mobSpawns,
       villages,
       roads: this.roads.length > 0 ? this.roads : undefined,
@@ -4228,6 +4698,7 @@ export class RegionEditorScene {
       npcs: npcs.length > 0 ? npcs : undefined,
       worldEvents: worldEvents.length > 0 ? worldEvents : undefined,
       lights: lights.length > 0 ? lights : undefined,
+      fogVolumes: fogVolumes.length > 0 ? fogVolumes : undefined,
       terrainVolumes: terrainVolumes.length > 0 ? terrainVolumes : undefined,
       musicTrack: meta.musicTrack,
     };
@@ -4253,9 +4724,18 @@ export class RegionEditorScene {
     this.updateWaterParticles(dt);
     this.waterMeshField?.update(dt);
     if (this.grassField) {
+      const focus = this.playtestActive ? this.playtestPos : this.orbit.target;
+      this.grassField.update(focus.x, focus.z);
+      this.grassField.drain(2);
+      this.grassField.tickWind(dt);
       this.grassField.uniforms.uTime.value += dt;
       this.grassField.uniforms.uSunDir.value.copy(this.sunLight.position).sub(this.sunLight.target.position).normalize();
       this.grassField.uniforms.uSunColor.value.copy(this.sunLight.color).multiplyScalar(this.sunLight.intensity);
+      if (this.playtestActive) {
+        this.grassField.setTramplers([{ x: this.playtestPos.x, z: this.playtestPos.z, radius: 0.9 }]);
+      } else {
+        this.grassField.setTramplers([]);
+      }
     }
     this.renderer.render(this.scene, this.camera);
   };

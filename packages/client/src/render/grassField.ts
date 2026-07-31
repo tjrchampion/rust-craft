@@ -9,6 +9,8 @@ import {
   adtIndex,
   adtKey,
   adtRingKeysInBounds,
+  adtWorldBounds,
+  parseAdtKey,
   ADT_GRASS_RING,
   type GrassPatch,
   type GrassExclusion,
@@ -16,8 +18,15 @@ import {
   type RegionWind,
   type RegionBlueprint,
 } from "@rustcraft/shared";
-import { makeBladeGeometry, makeBladeMaterial, createGrassBladeUniforms, type GrassBladeUniforms } from "./grassBlade";
+import {
+  makeBladeGeometry,
+  makeBladeMaterial,
+  createGrassBladeUniforms,
+  MAX_ROCKS,
+  type GrassBladeUniforms,
+} from "./grassBlade";
 import { applyRegionWind } from "./windSway";
+import type { StreamBudget } from "./streamBudget";
 
 /** Matches grassBlade.ts's own uWindStrength default -- a RegionWind at
  *  strength 1 reproduces the pre-existing hardcoded sway amplitude. */
@@ -39,16 +48,44 @@ const GRASS_CHUNK_SIZE = ADT_SIZE;
 const BLADE_WIDTH = 0.06;
 const BLADE_HEIGHT = 0.28;
 
+/** Exclusion hash-grid cell size -- trades a bit of memory for skipping the
+ *  O(exclusions) scan on every candidate blade cell. */
+const EXCLUSION_CELL = 8;
+
 const BLADE_GEOMETRY = makeBladeGeometry();
+
+export interface GrassTrampler {
+  x: number;
+  z: number;
+  /** Influence radius in meters (player ~0.85). */
+  radius: number;
+}
 
 export interface GrassField {
   meshes: THREE.InstancedMesh[];
   uniforms: GrassBladeUniforms;
-  /** When streaming, call each frame with the viewer position. No-op for
-   *  eagerly-built editor previews. */
-  update(px: number, pz: number): void;
+  /** When streaming, call each frame with the viewer position. */
+  update(px: number, pz: number, budget?: StreamBudget): void;
   /** Sync-build the ADT grass ring (region entry / loading screen). */
   warm(px: number, pz: number): void;
+  /** Drive rock-trampling slots (player / mounts / nearby actors). */
+  setTramplers(tramplers: GrassTrampler[]): void;
+  /** Gust modulation on top of authored wind — call once per frame. */
+  tickWind(dt: number): void;
+  /** Re-apply authored region wind (updates gust baseline). */
+  applyWind(wind: RegionWind): void;
+  /**
+   * Re-expand blades and (re)build meshes. Pass `onlyKeys` to refresh just the
+   * ADT tiles a brush stroke touched — full rebuild when omitted.
+   */
+  rebuild(
+    patches: GrassPatch[],
+    exclusions: GrassExclusion[] | undefined,
+    heightmap: Pick<RegionBlueprint, "gridSize" | "pitch" | "heights">,
+    onlyKeys?: Iterable<string>,
+  ): void;
+  /** Build up to `budgetCount` pending streamed chunk meshes. Returns remaining. */
+  drain(budgetCount: number, timeBudget?: StreamBudget): number;
   dispose(): void;
 }
 
@@ -56,8 +93,8 @@ export interface GrassVisualOptions {
   color?: GrassColor;
   wind?: RegionWind;
   /**
-   * When true (runtime regions), only build InstancedMeshes for ADT tiles near
-   * the player. When false (editor preview), build every chunk immediately.
+   * When true, only build InstancedMeshes for ADT tiles near the viewer.
+   * Editor and runtime both benefit — editor used to eager-build everything.
    */
   stream?: boolean;
   /** Parent group to add/remove streamed chunk meshes. Required when stream. */
@@ -77,15 +114,82 @@ interface Blade {
   color: THREE.Color;
 }
 
+/** ADT keys whose tiles intersect a circle (brush stroke / patch footprint). */
+export function grassKeysOverlapping(x: number, z: number, radius: number): string[] {
+  const pad = Math.max(0, radius) + GRASS_BLADE_CELL;
+  const ix0 = adtIndex(x - pad);
+  const ix1 = adtIndex(x + pad);
+  const iz0 = adtIndex(z - pad);
+  const iz1 = adtIndex(z + pad);
+  const keys: string[] = [];
+  for (let iz = iz0; iz <= iz1; iz++) {
+    for (let ix = ix0; ix <= ix1; ix++) {
+      keys.push(adtKey(ix, iz));
+    }
+  }
+  return keys;
+}
+
+/** Spatial hash so each blade cell only tests nearby exclusions. */
+class ExclusionIndex {
+  private readonly cellSize: number;
+  private readonly cells = new Map<string, { ex: GrassExclusion; index: number }[]>();
+
+  constructor(exclusions: GrassExclusion[] | undefined, cellSize = EXCLUSION_CELL) {
+    this.cellSize = cellSize;
+    if (!exclusions || exclusions.length === 0) return;
+    for (let exi = 0; exi < exclusions.length; exi++) {
+      const ex = exclusions[exi]!;
+      if (ex.radius <= 0 || ex.strength <= 0) continue;
+      const ix0 = Math.floor((ex.localX - ex.radius) / cellSize);
+      const ix1 = Math.floor((ex.localX + ex.radius) / cellSize);
+      const iz0 = Math.floor((ex.localZ - ex.radius) / cellSize);
+      const iz1 = Math.floor((ex.localZ + ex.radius) / cellSize);
+      for (let iz = iz0; iz <= iz1; iz++) {
+        for (let ix = ix0; ix <= ix1; ix++) {
+          const key = `${ix}:${iz}`;
+          const list = this.cells.get(key);
+          const entry = { ex, index: exi };
+          if (list) list.push(entry);
+          else this.cells.set(key, [entry]);
+        }
+      }
+    }
+  }
+
+  /** True if this cell should be culled by an exclusion. */
+  rejects(x: number, z: number, base: number): boolean {
+    if (this.cells.size === 0) return false;
+    const ix = Math.floor(x / this.cellSize);
+    const iz = Math.floor(z / this.cellSize);
+    const list = this.cells.get(`${ix}:${iz}`);
+    if (!list) return false;
+    for (let i = 0; i < list.length; i++) {
+      const { ex, index } = list[i]!;
+      if (dist2D(x, z, ex.localX, ex.localZ) > ex.radius) continue;
+      if (ex.strength >= 1) return true;
+      if (hash2(ex.seed + 61, base, index) < ex.strength) return true;
+    }
+    return false;
+  }
+}
+
 function collectBlades(
   patches: GrassPatch[],
   exclusions: GrassExclusion[] | undefined,
   heightmap: Pick<RegionBlueprint, "gridSize" | "pitch" | "heights">,
+  onlyKeys?: Set<string>,
 ): Map<string, Blade[]> {
   const chunks = new Map<string, Blade[]>();
+  const exclusionIndex = new ExclusionIndex(exclusions);
 
   for (const patch of patches) {
     if (patch.radius <= 0 || patch.density <= 0) continue;
+    if (onlyKeys && onlyKeys.size > 0) {
+      const patchKeys = grassKeysOverlapping(patch.localX, patch.localZ, patch.radius);
+      if (!patchKeys.some((k) => onlyKeys.has(k))) continue;
+    }
+
     const patchLength = patch.lengthScale ?? 1;
     const cells = Math.max(1, Math.ceil((patch.radius * 2) / GRASS_BLADE_CELL));
     const originX = patch.localX - patch.radius;
@@ -98,16 +202,13 @@ function collectBlades(
         const jz = hash2(patch.seed + 13, base, 1);
         const x = originX + (ix + jx) * GRASS_BLADE_CELL;
         const z = originZ + (iz + jz) * GRASS_BLADE_CELL;
-        if (
-          exclusions &&
-          exclusions.some((ex, exi) => {
-            if (dist2D(x, z, ex.localX, ex.localZ) > ex.radius) return false;
-            if (ex.strength >= 1) return true;
-            return hash2(ex.seed + 61, base, exi) < ex.strength;
-          })
-        ) {
-          continue;
-        }
+
+        const cx = adtIndex(x);
+        const cz = adtIndex(z);
+        const key = adtKey(cx, cz);
+        if (onlyKeys && onlyKeys.size > 0 && !onlyKeys.has(key)) continue;
+
+        if (exclusionIndex.rejects(x, z, base)) continue;
 
         const distRatio = dist2D(x, z, patch.localX, patch.localZ) / patch.radius;
         if (distRatio > 1) continue;
@@ -132,9 +233,6 @@ function collectBlades(
         const bMul = 0.7 + hash2(patch.seed + 47, base, 8) * 0.5;
         const color = new THREE.Color(rMul, gMul, bMul);
 
-        const cx = adtIndex(x);
-        const cz = adtIndex(z);
-        const key = adtKey(cx, cz);
         const blade: Blade = { x, y, z, yaw, widthScale, heightScale, lengthScale: patchLength, color };
         const list = chunks.get(key);
         if (list) list.push(blade);
@@ -172,13 +270,42 @@ function buildChunkMesh(blades: Blade[], material: THREE.Material): THREE.Instan
   return mesh;
 }
 
+function refreshGrassBounds(chunkBlades: Map<string, Blade[]>): {
+  minX: number;
+  maxX: number;
+  minZ: number;
+  maxZ: number;
+} {
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minZ = Infinity;
+  let maxZ = -Infinity;
+  for (const key of chunkBlades.keys()) {
+    const { ix, iz } = parseAdtKey(key);
+    const b = adtWorldBounds(ix, iz);
+    minX = Math.min(minX, b.minX);
+    maxX = Math.max(maxX, b.maxX);
+    minZ = Math.min(minZ, b.minZ);
+    maxZ = Math.max(maxZ, b.maxZ);
+  }
+  if (!Number.isFinite(minX)) {
+    return {
+      minX: -GRASS_CHUNK_SIZE,
+      maxX: GRASS_CHUNK_SIZE,
+      minZ: -GRASS_CHUNK_SIZE,
+      maxZ: GRASS_CHUNK_SIZE,
+    };
+  }
+  return { minX, maxX, minZ, maxZ };
+}
+
 /** Expand a region's painted grass patches into wind-shaded blade instances,
  *  chunked spatially. Deterministic: the same patches + heightmap always
  *  produce byte-identical instance transforms (editor preview and runtime
  *  must agree).
  *
- *  Pass `stream: true` + `parent` for runtime regions so only nearby chunks
- *  keep GPU instance buffers; the editor keeps the default eager build. */
+ *  Pass `stream: true` + `parent` so only nearby chunks keep GPU buffers —
+ *  both runtime regions and the editor preview use this now. */
 export function buildGrassInstances(
   patches: GrassPatch[],
   exclusions: GrassExclusion[] | undefined,
@@ -186,7 +313,13 @@ export function buildGrassInstances(
   options?: GrassVisualOptions,
 ): GrassField {
   const uniforms = createGrassBladeUniforms(options?.color);
-  if (options?.wind) applyRegionWind(uniforms, options.wind, BASE_GRASS_WIND_STRENGTH);
+  let baseWindStrength = BASE_GRASS_WIND_STRENGTH;
+  let baseWindTurb = uniforms.uWindTurb.value;
+  if (options?.wind) {
+    applyRegionWind(uniforms, options.wind, BASE_GRASS_WIND_STRENGTH);
+    baseWindStrength = uniforms.uWindStrength.value;
+    baseWindTurb = uniforms.uWindTurb.value;
+  }
   const material = makeBladeMaterial(uniforms);
   const chunkBlades = collectBlades(patches, exclusions, heightmap);
   const stream = !!options?.stream;
@@ -194,26 +327,19 @@ export function buildGrassInstances(
   const grassRing = ADT_GRASS_RING;
 
   const liveMeshes = new Map<string, THREE.InstancedMesh>();
-  let minX = Infinity;
-  let maxX = -Infinity;
-  let minZ = Infinity;
-  let maxZ = -Infinity;
-  for (const key of chunkBlades.keys()) {
-    const [ixStr, izStr] = key.split(":");
-    const cx = Number(ixStr);
-    const cz = Number(izStr);
-    minX = Math.min(minX, cx * GRASS_CHUNK_SIZE);
-    maxX = Math.max(maxX, (cx + 1) * GRASS_CHUNK_SIZE);
-    minZ = Math.min(minZ, cz * GRASS_CHUNK_SIZE);
-    maxZ = Math.max(maxZ, (cz + 1) * GRASS_CHUNK_SIZE);
-  }
-  if (!Number.isFinite(minX)) {
-    minX = -GRASS_CHUNK_SIZE;
-    maxX = GRASS_CHUNK_SIZE;
-    minZ = -GRASS_CHUNK_SIZE;
-    maxZ = GRASS_CHUNK_SIZE;
-  }
-  const grassBounds = { minX, maxX, minZ, maxZ };
+  const pending = new Set<string>();
+  let grassBounds = refreshGrassBounds(chunkBlades);
+  let gustT = Math.random() * 10;
+  let lastPx = Number.NaN;
+  let lastPz = Number.NaN;
+
+  const dropMesh = (key: string): void => {
+    const mesh = liveMeshes.get(key);
+    if (!mesh) return;
+    parent?.remove(mesh);
+    mesh.dispose();
+    liveMeshes.delete(key);
+  };
 
   const ensureMesh = (key: string): THREE.InstancedMesh | null => {
     const existing = liveMeshes.get(key);
@@ -226,61 +352,131 @@ export function buildGrassInstances(
     return mesh;
   };
 
-  const dropMesh = (key: string): void => {
-    const mesh = liveMeshes.get(key);
-    if (!mesh) return;
-    parent?.remove(mesh);
-    // Dispose instance buffers only -- geometry is shared module-level.
-    mesh.dispose();
-    liveMeshes.delete(key);
-  };
-
   if (!stream) {
     for (const key of chunkBlades.keys()) ensureMesh(key);
   }
-
-  let lastPx = Number.NaN;
-  let lastPz = Number.NaN;
 
   const field: GrassField = {
     get meshes() {
       return [...liveMeshes.values()];
     },
     uniforms,
-    update(px: number, pz: number) {
+    update(px: number, pz: number, budget?: StreamBudget) {
       if (!stream || !parent) return;
-      // Skip tiny moves -- rebuild window every ~4m of travel.
-      if (Number.isFinite(lastPx) && dist2D(px, pz, lastPx, lastPz) < 4) return;
-      lastPx = px;
-      lastPz = pz;
-
-      const wanted = new Set(adtRingKeysInBounds(px, pz, grassRing, grassBounds));
-      for (const key of wanted) {
-        if (chunkBlades.has(key)) ensureMesh(key);
-      }
-      for (const key of [...liveMeshes.keys()]) {
-        if (!wanted.has(key)) dropMesh(key);
-      }
-    },
-    warm(px: number, pz: number) {
-      if (!stream || !parent) {
-        // Eager mode already built everything in construct.
+      if (Number.isFinite(lastPx) && dist2D(px, pz, lastPx, lastPz) < 4) {
+        // Still drain pending under the shared ADT time slice even when the
+        // viewer hasn't moved enough to refresh the wanted set.
+        field.drain(1, budget);
         return;
       }
       lastPx = px;
       lastPz = pz;
+
       const wanted = new Set(adtRingKeysInBounds(px, pz, grassRing, grassBounds));
+      for (const key of wanted) {
+        if (chunkBlades.has(key)) pending.add(key);
+      }
+      for (const key of [...liveMeshes.keys()]) {
+        if (!wanted.has(key)) dropMesh(key);
+      }
+      field.drain(2, budget);
+    },
+    warm(px: number, pz: number) {
+      if (!stream || !parent) return;
+      lastPx = px;
+      lastPz = pz;
+      const wanted = adtRingKeysInBounds(px, pz, grassRing, grassBounds);
       for (const key of wanted) {
         if (chunkBlades.has(key)) ensureMesh(key);
       }
+      pending.clear();
+    },
+    setTramplers(tramplers: GrassTrampler[]) {
+      const rocks = uniforms.uRocks.value;
+      const n = Math.min(MAX_ROCKS, tramplers.length);
+      for (let i = 0; i < n; i++) {
+        const t = tramplers[i]!;
+        rocks[i]!.set(t.x, 0, t.z, t.radius);
+      }
+      uniforms.uRockCount.value = n;
+    },
+    tickWind(dt: number) {
+      gustT += dt;
+      const swell = 0.72 + 0.28 * Math.sin(gustT * 0.55) + 0.12 * Math.sin(gustT * 1.7 + 0.8);
+      const turbPulse = 0.75 + 0.35 * Math.sin(gustT * 1.15 + 2.1);
+      uniforms.uWindStrength.value = baseWindStrength * swell;
+      uniforms.uWindTurb.value = baseWindTurb * turbPulse;
+    },
+    applyWind(wind: RegionWind) {
+      applyRegionWind(uniforms, wind, BASE_GRASS_WIND_STRENGTH);
+      baseWindStrength = uniforms.uWindStrength.value;
+      baseWindTurb = uniforms.uWindTurb.value;
+    },
+    rebuild(nextPatches, nextExclusions, nextHeightmap, onlyKeys) {
+      const keySet = onlyKeys ? new Set(onlyKeys) : undefined;
+      if (!keySet || keySet.size === 0) {
+        chunkBlades.clear();
+        const fresh = collectBlades(nextPatches, nextExclusions, nextHeightmap);
+        for (const [k, blades] of fresh) chunkBlades.set(k, blades);
+        grassBounds = refreshGrassBounds(chunkBlades);
+        for (const key of [...liveMeshes.keys()]) {
+          dropMesh(key);
+        }
+        pending.clear();
+        if (!stream) {
+          for (const key of chunkBlades.keys()) ensureMesh(key);
+        } else if (Number.isFinite(lastPx)) {
+          const wanted = adtRingKeysInBounds(lastPx, lastPz, grassRing, grassBounds);
+          for (const key of wanted) {
+            if (chunkBlades.has(key)) pending.add(key);
+          }
+          field.drain(6);
+        }
+        return;
+      }
+
+      for (const key of keySet) chunkBlades.delete(key);
+      const partial = collectBlades(nextPatches, nextExclusions, nextHeightmap, keySet);
+      for (const [k, blades] of partial) chunkBlades.set(k, blades);
+      grassBounds = refreshGrassBounds(chunkBlades);
+
+      for (const key of keySet) {
+        dropMesh(key);
+        if (!chunkBlades.has(key)) {
+          pending.delete(key);
+          continue;
+        }
+        // Always build tiles the caller just dirtied — gating on the stream
+        // window dropped editor brush strokes that weren't near lastPx.
+        if (stream) pending.add(key);
+        else ensureMesh(key);
+      }
+      if (stream) field.drain(Math.max(4, keySet.size));
+    },
+    drain(budgetCount: number, timeBudget?: StreamBudget) {
+      let built = 0;
+      for (const key of [...pending]) {
+        if (built >= budgetCount) break;
+        if (timeBudget && !timeBudget.ok) break;
+        if (!chunkBlades.has(key) || liveMeshes.has(key)) {
+          pending.delete(key);
+          continue;
+        }
+        if (timeBudget && !timeBudget.takeBuild()) break;
+        pending.delete(key);
+        ensureMesh(key);
+        built++;
+      }
+      return pending.size;
     },
     dispose() {
       for (const key of [...liveMeshes.keys()]) dropMesh(key);
+      pending.clear();
       material.dispose();
       chunkBlades.clear();
+      uniforms.uRockCount.value = 0;
     },
   };
 
-  // Caller seeds the first window (region entry / editor shows all via !stream).
   return field;
 }

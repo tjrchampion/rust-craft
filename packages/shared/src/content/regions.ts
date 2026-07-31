@@ -52,8 +52,25 @@ export interface RegionAsset {
   /** Optional editor grouping key -- assets that share a groupId (e.g. every
    *  piece of a procedurally-generated house) are selected/moved/deleted
    *  together when any one of them is clicked. Purely an authoring aid;
-   *  the runtime renderer ignores it. */
+   *  the runtime renderer ignores it. Legacy houses used this; new houses
+   *  are stored as RegionHouse and expanded at load time. */
   groupId?: string;
+}
+
+/** One procedural house — expands to modular wall/floor/roof pieces via
+ *  expandHouseToAssets() for rendering and collision. Keeps blueprints small
+ *  and lets the editor treat a house as a single movable asset. */
+export interface RegionHouse {
+  id?: string;
+  /** Concrete archetype from houseGen (not "random" after placement). */
+  type: string;
+  /** Deterministic seed for generateHouseAssets. */
+  seed: number;
+  localX: number;
+  localY: number;
+  localZ: number;
+  yaw: number;
+  scale?: number;
 }
 
 /** Shape stamped by the region editor's volume-sculpt brush -- real 3D
@@ -281,18 +298,18 @@ export const ASSET_COLLISION_OVERRIDES: Record<string, AssetCollisionOverride | 
   "medieval_village/Corner_Interior_Big.gltf": { radius: 0.11, height: 3.0, climbable: false },
   "medieval_village/Corner_Interior_Small.gltf": { radius: 0.07, height: 3.0, climbable: false },
   // Floors: walkable surfaces, no horizontal blocking
-  "medieval_village/Floor_Brick.gltf": { radius: 0, height: 0.02, climbable: true },
-  "medieval_village/Floor_RedBrick.gltf": { radius: 0, height: 0.02, climbable: true },
-  "medieval_village/Floor_UnevenBrick.gltf": { radius: 0, height: 0.02, climbable: true },
-  "medieval_village/Floor_WoodDark.gltf": { radius: 0, height: 0.02, climbable: true },
-  "medieval_village/Floor_WoodDark_Half1.gltf": { radius: 0, height: 0.02, climbable: true },
-  "medieval_village/Floor_WoodDark_Half2.gltf": { radius: 0, height: 0.02, climbable: true },
-  "medieval_village/Floor_WoodDark_Half3.gltf": { radius: 0, height: 0.02, climbable: true },
-  "medieval_village/Floor_WoodDark_OverhangCorner.gltf": { radius: 0, height: 0.02, climbable: true },
-  "medieval_village/Floor_WoodDark_OverhangCorner2.gltf": { radius: 0, height: 0.02, climbable: true },
-  "medieval_village/Floor_WoodLight.gltf": { radius: 0, height: 0.02, climbable: true },
-  "medieval_village/Floor_WoodLight_OverhangCorner.gltf": { radius: 0, height: 0.02, climbable: true },
-  "medieval_village/Floor_WoodLight_OverhangCorner2.gltf": { radius: 0, height: 0.02, climbable: true },
+  "medieval_village/Floor_Brick.gltf": { radius: 1.05, height: 0.02, climbable: true },
+  "medieval_village/Floor_RedBrick.gltf": { radius: 1.05, height: 0.02, climbable: true },
+  "medieval_village/Floor_UnevenBrick.gltf": { radius: 1.05, height: 0.02, climbable: true },
+  "medieval_village/Floor_WoodDark.gltf": { radius: 1.05, height: 0.02, climbable: true },
+  "medieval_village/Floor_WoodDark_Half1.gltf": { radius: 1.05, height: 0.02, climbable: true },
+  "medieval_village/Floor_WoodDark_Half2.gltf": { radius: 1.05, height: 0.02, climbable: true },
+  "medieval_village/Floor_WoodDark_Half3.gltf": { radius: 1.05, height: 0.02, climbable: true },
+  "medieval_village/Floor_WoodDark_OverhangCorner.gltf": { radius: 1.05, height: 0.02, climbable: true },
+  "medieval_village/Floor_WoodDark_OverhangCorner2.gltf": { radius: 1.05, height: 0.02, climbable: true },
+  "medieval_village/Floor_WoodLight.gltf": { radius: 1.05, height: 0.02, climbable: true },
+  "medieval_village/Floor_WoodLight_OverhangCorner.gltf": { radius: 1.05, height: 0.02, climbable: true },
+  "medieval_village/Floor_WoodLight_OverhangCorner2.gltf": { radius: 1.05, height: 0.02, climbable: true },
   "medieval_village/HoleCover_90Angle.gltf": { radius: 0, height: 0.21, climbable: true },
   "medieval_village/HoleCover_90Half.gltf": { radius: 0, height: 0.21, climbable: true },
   "medieval_village/HoleCover_90Stairs.gltf": { radius: 0, height: 0.21, climbable: true },
@@ -340,9 +357,9 @@ export const ASSET_COLLISION_OVERRIDES: Record<string, AssetCollisionOverride | 
   // Walls: thin slab collision matching actual panel depth
   "medieval_village/Wall_Arch.gltf": { radius: 0.125, height: 3.0, climbable: false },
   "medieval_village/Wall_BottomCover.gltf": { radius: 0.216, height: 0.237, climbable: false },
-  "medieval_village/Wall_Plaster_Door_Flat.gltf": { radius: 0.203, height: 3.123, climbable: false },
-  "medieval_village/Wall_Plaster_Door_Round.gltf": { radius: 0.203, height: 3.123, climbable: false },
-  "medieval_village/Wall_Plaster_Door_RoundInset.gltf": { radius: 0.546, height: 3.123, climbable: false },
+  "medieval_village/Wall_Plaster_Door_Flat.gltf": null,
+  "medieval_village/Wall_Plaster_Door_Round.gltf": null,
+  "medieval_village/Wall_Plaster_Door_RoundInset.gltf": null,
   "medieval_village/Wall_Plaster_Straight.gltf": { radius: 0.203, height: 3.125, climbable: false },
   "medieval_village/Wall_Plaster_Straight_Base.gltf": { radius: 0.203, height: 3.123, climbable: false },
   "medieval_village/Wall_Plaster_Straight_L.gltf": { radius: 0.203, height: 3.123, climbable: false },
@@ -352,8 +369,8 @@ export const ASSET_COLLISION_OVERRIDES: Record<string, AssetCollisionOverride | 
   "medieval_village/Wall_Plaster_Window_Wide_Flat2.gltf": { radius: 0.203, height: 3.146, climbable: false },
   "medieval_village/Wall_Plaster_Window_Wide_Round.gltf": { radius: 0.203, height: 3.123, climbable: false },
   "medieval_village/Wall_Plaster_WoodGrid.gltf": { radius: 0.203, height: 3.123, climbable: false },
-  "medieval_village/Wall_UnevenBrick_Door_Flat.gltf": { radius: 0.203, height: 3.123, climbable: false },
-  "medieval_village/Wall_UnevenBrick_Door_Round.gltf": { radius: 0.203, height: 3.123, climbable: false },
+  "medieval_village/Wall_UnevenBrick_Door_Flat.gltf": null,
+  "medieval_village/Wall_UnevenBrick_Door_Round.gltf": null,
   "medieval_village/Wall_UnevenBrick_Straight.gltf": { radius: 0.203, height: 3.123, climbable: false },
   "medieval_village/Wall_UnevenBrick_Window_Thin_Round.gltf": { radius: 0.203, height: 3.123, climbable: false },
   "medieval_village/Wall_UnevenBrick_Window_Wide_Flat.gltf": { radius: 0.203, height: 3.123, climbable: false },
@@ -523,6 +540,8 @@ export interface RegionAssetCollider {
   x: number;
   z: number;
   radius: number;
+  /** World Y of the asset base (placement localY). */
+  baseY: number;
   /** World Y of the surface a player standing on top of this asset rests
    *  at (base localY + its own climb height * scale). Only load-bearing
    *  when `climbable` is true. */
@@ -557,7 +576,9 @@ function resolveCollisionOverride(
  *  stepMovement() (and the region editor's own Playtest mode) check player
  *  movement against. Assets with null collision (purely visual decals) are
  *  omitted. Stair assets get a stairRamp descriptor for smooth ramp height
- *  interpolation (same mechanism as dungeon tile stairs). */
+ *  interpolation (same mechanism as dungeon tile stairs).
+ *  Pass house pieces via expandHousesToAssets(blueprint.houses) concatenated
+ *  into `assets` when the region uses RegionHouse rows. */
 export function regionAssetColliders(assets: RegionAsset[]): RegionAssetCollider[] {
   const out: RegionAssetCollider[] = [];
   for (const a of assets) {
@@ -570,6 +591,7 @@ export function regionAssetColliders(assets: RegionAsset[]): RegionAssetCollider
       x: a.localX,
       z: a.localZ,
       radius: ov.radius * scale,
+      baseY: a.localY,
       topY: a.localY + ov.height * scale,
       climbable: ov.climbable,
     };
@@ -655,6 +677,7 @@ export function regionVolumeColliders(volumes: RegionTerrainVolume[]): RegionAss
           x: p.x,
           z: p.z,
           radius: strokePointHalfWidth(v, p),
+          baseY: p.y,
           topY,
           climbable: true,
         });
@@ -691,6 +714,7 @@ export function regionVolumeColliders(volumes: RegionTerrainVolume[]): RegionAss
       x: v.localX,
       z: v.localZ,
       radius,
+      baseY: v.localY - v.scaleY,
       topY,
       climbable: true,
     };
@@ -704,6 +728,7 @@ export function regionVolumeColliders(volumes: RegionTerrainVolume[]): RegionAss
         rise: v.scaleY * 2,
       };
       // Ramp base sits at localY - scaleY; top at localY + scaleY.
+      collider.baseY = v.localY - v.scaleY;
       collider.topY = v.localY + v.scaleY;
     }
     out.push(collider);
@@ -740,6 +765,36 @@ export interface RegionColorGrading {
    *  saved before this existed still load, falling back to a per-biome
    *  default there rather than requiring a migration. */
   groundTint?: string;
+  /** Soft fill / bounce light color (hemisphere ground). Optional. */
+  fillColor?: string;
+  /** Soft fill intensity (0..4). Absent = 0 (no fill light). */
+  fillIntensity?: number;
+  /** Renderer exposure multiplier (0.4..2.5). Absent = 1. */
+  exposure?: number;
+}
+
+/** Placeable local fog pocket — independent of global FogExp2 color grading. */
+export type RegionFogShape = "sphere" | "box";
+
+export interface RegionFogVolume {
+  id?: string;
+  localX: number;
+  localY: number;
+  localZ: number;
+  shape: RegionFogShape;
+  /** Sphere radius, or box half-extent on X. */
+  sizeX: number;
+  /** Vertical half-extent (box) or sphere radius Y scale. */
+  sizeY: number;
+  /** Box half-extent Z / sphere radius Z scale. */
+  sizeZ: number;
+  color: string;
+  /** Visual density / thickness (0..1). */
+  density: number;
+  /** Mesh opacity multiplier (0..1). */
+  opacity: number;
+  /** Soft edge width (0 = hard, 1 = very soft). */
+  feather: number;
 }
 
 /** A hand-painted road: a polyline of local (x,z) points the terrain shader
@@ -829,7 +884,10 @@ export interface RegionPointLight {
   localZ: number;
   color: string;
   intensity: number;
+  /** Range in meters where the light falls to zero. */
   distance: number;
+  /** Physically-based decay exponent (Three.js default 2). Optional. */
+  decay?: number;
 }
 
 export interface RegionPortalLink {
@@ -929,6 +987,8 @@ export interface RegionBlueprint {
   /** Flattened gridSize*gridSize height values, row-major (index = gz*gridSize+gx). */
   heights: number[];
   assets: RegionAsset[];
+  /** Procedural houses (one row each). Expanded to modular pieces at runtime. */
+  houses?: RegionHouse[];
   mobSpawns: RegionMobSpawn[];
   villages: RegionVillage[];
   /** Optional -- absent on regions saved before roads existed; every reader
@@ -957,6 +1017,8 @@ export interface RegionBlueprint {
   customTextures?: number[];
   /** Optional -- authored point lights placed in the region. */
   lights?: RegionPointLight[];
+  /** Optional -- movable local fog volumes (mist pockets independent of global fog). */
+  fogVolumes?: RegionFogVolume[];
   /** Optional -- absent on regions saved before the grass-patch brush
    *  existed; every reader falls back to an empty array. */
   grassPatches?: GrassPatch[];
@@ -1261,6 +1323,7 @@ export function pickRegionMob(biome: RegionBiome, roll: number): string {
 }
 
 export const REGION_COLOR_PRESETS: Record<RegionBiome, RegionColorGrading> = {
+  // Soft atmospheric fog — foliage is distance-culled to the terrain ADT ring.
   grassland: { skyColor: "#8fc7ff", fogColor: "#bcd9f0", fogDensity: 0.006, ambientColor: "#ffffff", ambientIntensity: 0.9, sunColor: "#fff3d6", sunIntensity: 1.1, groundTint: "#8aa04f" },
   forest: { skyColor: "#6fa8d8", fogColor: "#9fc2a8", fogDensity: 0.01, ambientColor: "#dcefe0", ambientIntensity: 0.8, sunColor: "#fff0c8", sunIntensity: 0.95, groundTint: "#4d7a3a" },
   jungle: { skyColor: "#5c9bd1", fogColor: "#7fae7a", fogDensity: 0.014, ambientColor: "#c9f0c0", ambientIntensity: 0.85, sunColor: "#fff8d0", sunIntensity: 1.0, groundTint: "#3c6b2f" },

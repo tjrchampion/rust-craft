@@ -54,6 +54,9 @@ import {
   DUNGEON_WIPE_EJECT_MS,
   TIER_NAMES,
   stepMovement,
+  isSwimmingAt,
+  isNearWaterAt,
+  waterAt,
   dist2D,
   dist3D,
   clamp,
@@ -105,6 +108,7 @@ import {
   type RegionBlueprint,
   sampleRegionHeight,
   regionAssetColliders,
+  regionAllAssets,
   regionVolumeColliders,
   pickRegionMob,
   ClientMsg as ClientMsgSchema,
@@ -850,7 +854,9 @@ export class GameServer {
       this.sendSelf(player);
       return;
     }
-    const inWater = player.move.y < WATER_LEVEL + 0.3;
+    const region = this.regionBlueprintFor(player);
+    const { surface, depth } = waterAt(player.move.x, player.move.z, region ?? undefined);
+    const inWater = depth > 0.05 && player.move.y < surface + 0.35;
     if (inWater) {
       if (this.hasItem(player, "raft")) {
         player.mount = "raft";
@@ -2408,14 +2414,8 @@ export class GameServer {
 
   private handleDrink(player: PlayerState): void {
     if (player.dead) return;
-    // Near or in water: player position close to water level counts.
-    const nearWater =
-      player.move.y < WATER_LEVEL + 0.5 ||
-      terrainHeight(player.move.x + WATER_PROXIMITY, player.move.z) < WATER_LEVEL ||
-      terrainHeight(player.move.x - WATER_PROXIMITY, player.move.z) < WATER_LEVEL ||
-      terrainHeight(player.move.x, player.move.z + WATER_PROXIMITY) < WATER_LEVEL ||
-      terrainHeight(player.move.x, player.move.z - WATER_PROXIMITY) < WATER_LEVEL;
-    if (!nearWater) {
+    const region = this.regionBlueprintFor(player);
+    if (!isNearWaterAt(player.move.x, player.move.y, player.move.z, region ?? undefined, WATER_PROXIMITY)) {
       this.sendEvent(player, { t: "event", kind: "error", message: "No water nearby" });
       return;
     }
@@ -3096,7 +3096,7 @@ export class GameServer {
     const regionHeightmap = region;
     const regionAssets = region
       ? [
-          ...regionAssetColliders(region.assets),
+          ...regionAssetColliders(regionAllAssets(region)),
           ...regionVolumeColliders(region.terrainVolumes ?? []),
         ]
       : undefined;
@@ -4055,9 +4055,16 @@ export class GameServer {
     if (player.casting) return "cast";
     if (player.actionAnim) return player.actionAnim;
     if (player.move.vy !== 0) return "jump";
-    if (player.move.y < WATER_LEVEL - 0.4) return "swim";
+    const region = this.regionBlueprintFor(player);
+    if (isSwimmingAt(player.move.x, player.move.y, player.move.z, region ?? undefined)) return "swim";
     if (player.lastMoveMag > 0.1) return "run";
     return "idle";
+  }
+
+  private regionBlueprintFor(player: PlayerState): RegionBlueprint | null {
+    const regionId = this.regionIdFromInstance(player.instanceId);
+    if (!regionId) return null;
+    return this.regionBlueprints.get(regionId) ?? null;
   }
 
   private selfState(player: PlayerState): SelfState {

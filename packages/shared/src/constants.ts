@@ -28,11 +28,23 @@ export const REGION_TWO_TRIGGER_RADIUS = 200;
 export const WALK_SPEED = 4.6; // m/s
 export const SPRINT_SPEED = 6.8;
 export const SWIM_SPEED_MULT = 0.45;
+/** Water column depth below which you wade (walk) instead of swim. */
+export const WADE_DEPTH = 0.65;
+/** Speed multiplier while standing in shallow water. */
+export const WADE_SPEED_MULT = 0.72;
+/** Body counts as submerged when y < surface − this. */
+export const SWIM_BODY_OFFSET = 0.4;
+/** Swimmer treads this far below the surface. */
+export const SWIM_FLOAT_OFFSET = 1.1;
 export const MOUNT_LAND_SPEED = 11.5; // horse gallop
 export const RAFT_WATER_SPEED = 8.5; // raft across water
 export const RAFT_LAND_SPEED = 2.6; // raft dragged on land
 export const JUMP_VELOCITY = 7.5;
 export const GRAVITY = 22;
+/** Max downward height follow per tick while grounded. Larger drops start a real fall
+ *  (keeps run/sprint anims from flickering to jump on slopes). Must stay below the
+ *  region/dungeon cliff reject of 2.5 m. */
+export const MAX_STEP_DOWN = 1.25;
 
 // Vitals
 export const BASE_MAX_HP = 100;

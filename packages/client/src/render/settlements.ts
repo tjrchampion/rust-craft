@@ -10,7 +10,7 @@ import {
   TIER_NAMES,
   dungeonTierDef,
 } from "@rustcraft/shared";
-import { buildShrine, buildStump, buildNameplate, buildRock } from "./models";
+import { buildShrine, buildStump, buildNameplate, buildRock, enableFogOnObject } from "./models";
 import { createSharedGltfLoader } from "./sharedGltf";
 
 const loader = createSharedGltfLoader();
@@ -115,6 +115,7 @@ async function placeBuilding(
       model.traverse((o) => {
         if ((o as THREE.Mesh).isMesh) o.castShadow = true;
       });
+      enableFogOnObject(model);
       scene.add(model);
     };
     if (queued) pendingWork.push(finish);
@@ -153,6 +154,7 @@ async function placeProp(
       model.traverse((o) => {
         if ((o as THREE.Mesh).isMesh) o.castShadow = true;
       });
+      enableFogOnObject(model);
       scene.add(model);
     };
     if (queued) pendingWork.push(finish);
@@ -191,6 +193,7 @@ async function instanceProp(
       template.traverse((o) => {
         if ((o as THREE.Mesh).isMesh) meshes.push(o as THREE.Mesh);
       });
+      enableFogOnObject(template);
 
       const dummy = new THREE.Object3D();
       for (const mesh of meshes) {

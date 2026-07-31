@@ -2,7 +2,8 @@ import * as THREE from "three";
 import {
   terrainHeight, terrainSlope, biomeAt, generatePaths, distPointToSegment, ZONE_SIZE, WATER_LEVEL,
   adtKey, adtWorldBounds,
-  sampleRegionHeight, regionSlopeAt, type RegionBlueprint, type RegionBiome, type RegionRoad,
+  sampleRegionHeight, regionSlopeAt,
+  type RegionBlueprint, type RegionBiome, type RegionRoad,
 } from "@rustcraft/shared";
 
 const RESOLUTION = 200; // vertices per side (legacy monolithic meshes)
@@ -328,6 +329,29 @@ function clampNum(v: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, v));
 }
 
+/**
+ * Inclusive grid vertex span for one ADT tile. Uses floor on both edges so
+ * adjacent tiles share only the boundary vertex line (no overlapping quads).
+ * `maxW` is the exclusive world max from adtWorldBounds (or the clipped
+ * region edge).
+ */
+function adtGridSpan(
+  minW: number,
+  maxW: number,
+  half: number,
+  pitch: number,
+  gridSize: number,
+): { g0: number; g1: number } | null {
+  let g0 = Math.floor((minW + half) / pitch + 1e-9);
+  let g1 = Math.floor((maxW + half) / pitch + 1e-9);
+  // Region edge: include the final heightmap vertex.
+  if (maxW >= half - 1e-6) g1 = gridSize - 1;
+  g0 = clampNum(g0, 0, gridSize - 1);
+  g1 = clampNum(g1, 0, gridSize - 1);
+  if (g1 <= g0) return null;
+  return { g0, g1 };
+}
+
 /** Distance-based dirt blend (0-1) for a point near any painted road --
  *  mirrors the open world's path-blend shape (full dirt within the road's
  *  own width, fading out over an extra ~1.5 units) but reads from the
@@ -431,14 +455,13 @@ export function buildRegionAdtTile(
   const maxZ = Math.min(tile.maxZ, half);
   if (minX >= maxX - 1e-6 || minZ >= maxZ - 1e-6) return null;
 
-  let gx0 = Math.floor((minX + half) / pitch);
-  let gx1 = Math.ceil((maxX + half) / pitch);
-  let gz0 = Math.floor((minZ + half) / pitch);
-  let gz1 = Math.ceil((maxZ + half) / pitch);
-  gx0 = clampNum(gx0, 0, gridSize - 1);
-  gx1 = clampNum(gx1, 0, gridSize - 1);
-  gz0 = clampNum(gz0, 0, gridSize - 1);
-  gz1 = clampNum(gz1, 0, gridSize - 1);
+  const spanX = adtGridSpan(minX, maxX, half, pitch, gridSize);
+  const spanZ = adtGridSpan(minZ, maxZ, half, pitch, gridSize);
+  if (!spanX || !spanZ) return null;
+  const gx0 = spanX.g0;
+  const gx1 = spanX.g1;
+  const gz0 = spanZ.g0;
+  const gz1 = spanZ.g1;
   const segsX = gx1 - gx0;
   const segsZ = gz1 - gz0;
   if (segsX < 1 || segsZ < 1) return null;
@@ -457,38 +480,67 @@ export function buildRegionAdtTile(
   const tints = new Float32Array(pos.count * 3);
   const weightsA = new Float32Array(pos.count * 3);
   const weightsB = new Float32Array(pos.count * 3);
+  const normals = new Float32Array(pos.count * 3);
   const roads = blueprint.roads ?? [];
   const groundTint = blueprint.colorGrading.groundTint;
+  const cols = segsX + 1;
+  const rows = segsZ + 1;
 
+  // Pass 1 — heights + UVs only (one height sample per vert).
   for (let i = 0; i < pos.count; i++) {
     const x = pos.getX(i);
     const z = pos.getZ(i);
-    const y = sampleRegionHeight(blueprint, x, z);
-    pos.setY(i, y);
-
+    pos.setY(i, sampleRegionHeight(blueprint, x, z));
     terrainUv[i * 2] = (x + half) / span;
     terrainUv[i * 2 + 1] = (z + half) / span;
+  }
 
-    const slope = regionSlopeAt(blueprint, x, z);
-    const roadBlend = regionRoadBlendAt(roads, x, z);
-    const customTex = sampleRegionCustomTexture(blueprint, x, z);
-    const w = regionGroundWeights(blueprint.biome, y, slope, roadBlend, groundTint, customTex);
-    weightsA[i * 3] = w.wGrass;
-    weightsA[i * 3 + 1] = w.wRock;
-    weightsA[i * 3 + 2] = w.wSand;
-    weightsB[i * 3] = w.wSnow;
-    weightsB[i * 3 + 1] = w.wDirt;
-    weightsB[i * 3 + 2] = w.wCobble;
-    tints[i * 3] = w.tint.r;
-    tints[i * 3 + 1] = w.tint.g;
-    tints[i * 3 + 2] = w.tint.b;
+  // Pass 2 — normals/slope from neighboring grid Y (avoids regionSlopeAt's
+  // 4 extra samples + Three's face-walk computeVertexNormals).
+  for (let row = 0; row < rows; row++) {
+    for (let col = 0; col < cols; col++) {
+      const i = row * cols + col;
+      const x = pos.getX(i);
+      const y = pos.getY(i);
+      const z = pos.getZ(i);
+      const iL = row * cols + Math.max(0, col - 1);
+      const iR = row * cols + Math.min(cols - 1, col + 1);
+      const iD = Math.max(0, row - 1) * cols + col;
+      const iU = Math.min(rows - 1, row + 1) * cols + col;
+      const xSpan = col === 0 || col === cols - 1 ? pitch : 2 * pitch;
+      const zSpan = row === 0 || row === rows - 1 ? pitch : 2 * pitch;
+      const dHx = (pos.getY(iR) - pos.getY(iL)) / xSpan;
+      const dHz = (pos.getY(iU) - pos.getY(iD)) / zSpan;
+      // Normal ≈ normalize(-dHx, 1, -dHz)
+      let nx = -dHx;
+      let ny = 1;
+      let nz = -dHz;
+      const len = Math.hypot(nx, ny, nz) || 1;
+      normals[i * 3] = nx / len;
+      normals[i * 3 + 1] = ny / len;
+      normals[i * 3 + 2] = nz / len;
+
+      const slope = Math.hypot(dHx, dHz);
+      const roadBlend = regionRoadBlendAt(roads, x, z);
+      const customTex = sampleRegionCustomTexture(blueprint, x, z);
+      const w = regionGroundWeights(blueprint.biome, y, slope, roadBlend, groundTint, customTex);
+      weightsA[i * 3] = w.wGrass;
+      weightsA[i * 3 + 1] = w.wRock;
+      weightsA[i * 3 + 2] = w.wSand;
+      weightsB[i * 3] = w.wSnow;
+      weightsB[i * 3 + 1] = w.wDirt;
+      weightsB[i * 3 + 2] = w.wCobble;
+      tints[i * 3] = w.tint.r;
+      tints[i * 3 + 1] = w.tint.g;
+      tints[i * 3 + 2] = w.tint.b;
+    }
   }
 
   geo.setAttribute("color", new THREE.BufferAttribute(tints, 3));
   geo.setAttribute("weightsA", new THREE.BufferAttribute(weightsA, 3));
   geo.setAttribute("weightsB", new THREE.BufferAttribute(weightsB, 3));
   geo.setAttribute("terrainUv", new THREE.BufferAttribute(terrainUv, 2));
-  geo.computeVertexNormals();
+  geo.setAttribute("normal", new THREE.BufferAttribute(normals, 3));
 
   const mesh = new THREE.Mesh(geo, material);
   mesh.receiveShadow = true;
@@ -501,6 +553,26 @@ export function buildRegionAdtTile(
 export interface WaterField {
   mesh: THREE.Mesh;
   update(dt: number): void;
+}
+
+export interface WaterEnvColors {
+  skyColor: THREE.ColorRepresentation;
+  fogColor: THREE.ColorRepresentation;
+  groundTint?: THREE.ColorRepresentation;
+}
+
+/** Light atmosphere tint kept for Game/editor callers; base look matches original water. */
+export function applyWaterEnvironment(mat: THREE.MeshLambertMaterial, env: WaterEnvColors): void {
+  const sky = new THREE.Color(env.skyColor);
+  const fog = new THREE.Color(env.fogColor);
+  const water = new THREE.Color(0x3b9bc9);
+  water.lerp(fog, 0.25);
+  water.lerp(sky, 0.12);
+  mat.color.copy(water);
+}
+
+export function applyWaterClarityShader(_mat: THREE.MeshLambertMaterial): void {
+  // Original water had no clarity shader pass.
 }
 
 export function buildWater(): WaterField {
@@ -708,10 +780,13 @@ export function buildRegionAdtWaterTile(
   const maxZ = Math.min(tile.maxZ, half);
   if (minX >= maxX - 1e-6 || minZ >= maxZ - 1e-6) return null;
 
-  let gx0 = clampNum(Math.floor((minX + half) / pitch), 0, gridSize - 1);
-  let gx1 = clampNum(Math.ceil((maxX + half) / pitch), 0, gridSize - 1);
-  let gz0 = clampNum(Math.floor((minZ + half) / pitch), 0, gridSize - 1);
-  let gz1 = clampNum(Math.ceil((maxZ + half) / pitch), 0, gridSize - 1);
+  const spanX = adtGridSpan(minX, maxX, half, pitch, gridSize);
+  const spanZ = adtGridSpan(minZ, maxZ, half, pitch, gridSize);
+  if (!spanX || !spanZ) return null;
+  const gx0 = spanX.g0;
+  const gx1 = spanX.g1;
+  const gz0 = spanZ.g0;
+  const gz1 = spanZ.g1;
   const segsX = gx1 - gx0;
   const segsZ = gz1 - gz0;
   if (segsX < 1 || segsZ < 1) return null;
@@ -756,4 +831,3 @@ export function buildRegionAdtWaterTile(
   mesh.userData.adtIz = iz;
   return mesh;
 }
-

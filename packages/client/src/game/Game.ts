@@ -1,6 +1,8 @@
 import * as THREE from "three";
 import {
   stepMovement,
+  isSwimmingAt,
+  isNearWaterAt,
   terrainHeight,
   TICK_DT,
   WATER_LEVEL,
@@ -19,6 +21,9 @@ import {
   adtIndex,
   adtRingKeys,
   ADT_VILLAGE_RING,
+  OVERWORLD_FOG_NEAR,
+  OVERWORLD_FOG_FAR,
+  clampRegionFogDensity,
   REVIVE_RANGE,
   DODGE_DISTANCE,
   DUNGEON_PORTAL_ACTIVATION_RADIUS,
@@ -48,7 +53,7 @@ import {
 } from "@rustcraft/shared";
 import { Connection } from "../net/connection";
 import { InputManager } from "../input/input";
-import { buildTerrain, buildWater, type WaterField } from "../render/terrain";
+import { buildTerrain, buildWater, applyWaterEnvironment, type WaterField } from "../render/terrain";
 import { buildHorizonMountains } from "../render/horizon";
 import { buildClouds, type CloudField } from "../render/clouds";
 import { buildNameplate, buildHorse, buildRaft, type MountParts } from "../render/models";
@@ -102,6 +107,8 @@ export class Game {
   private camera: THREE.PerspectiveCamera;
   private sun: THREE.DirectionalLight;
   private ambient: THREE.AmbientLight;
+  /** Soft sky/ground bounce — driven by region color grading fillIntensity. */
+  private fillLight = new THREE.HemisphereLight(0xffffff, 0x3a4a2a, 0);
   /** Set while standing inside a dungeon's enclosed room -- drives the
    *  day/night override in updateDayNight (fixed themed lighting instead
    *  of the outdoor sky/sun). */
@@ -138,6 +145,9 @@ export class Game {
   private water!: WaterField;
   /** Villages keyed by id → scene group; streamed by ADT tile ring. */
   private streamedVillages = new Map<string, { group: THREE.Group; signs: THREE.Object3D[] }>();
+  /** Latest viewer pose for deferred ADT/village streaming (runs after paint). */
+  private streamArgs: { x: number; z: number; dt: number } | null = null;
+  private streamTimer = 0;
   private mountMesh: MountParts | null = null;
   private currentMount: "horse" | "raft" | null = null;
 
@@ -201,9 +211,12 @@ export class Game {
     this.renderer.setSize(window.innerWidth, window.innerHeight);
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 1;
 
     this.camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.1, 900);
-    this.scene.fog = new THREE.Fog(0x87b5d9, 120, 620);
+    // Fog far matches village/tree ADT stream edge so content fades before unload.
+    this.scene.fog = new THREE.Fog(0x87b5d9, OVERWORLD_FOG_NEAR, OVERWORLD_FOG_FAR);
     this.scene.background = new THREE.Color(0x87b5d9);
 
     this.sun = new THREE.DirectionalLight(0xfff4e0, 2.4);
@@ -219,7 +232,7 @@ export class Game {
     this.sun.shadow.bias = -0.0015;
     this.scene.add(this.sun.target);
     this.ambient = new THREE.AmbientLight(0x8899bb, 0.75);
-    this.scene.add(this.sun, this.ambient);
+    this.scene.add(this.sun, this.ambient, this.fillLight);
 
     this.scene.add(this.overworldGroup);
     this.buildOverworldContents();
@@ -1039,9 +1052,19 @@ export class Game {
     this.entities.update(now, dt, this.camera);
     this.updateInteractPrompt();
     this.updateDayNight(rx, rz);
-    this.updateZoneAndStreaming(rx, rz, dt);
 
     this.renderer.render(this.scene, this.camera);
+    // Yield to the browser so this frame can paint before ADT/village work.
+    // setTimeout(0) runs after paint; rAF-sync streaming blocked compositing.
+    this.streamArgs = { x: rx, z: rz, dt };
+    if (!this.streamTimer) {
+      this.streamTimer = window.setTimeout(() => {
+        this.streamTimer = 0;
+        if (this.disposed) return;
+        const args = this.streamArgs;
+        if (args) this.updateZoneAndStreaming(args.x, args.z, args.dt);
+      }, 0);
+    }
   };
 
   /** Add/remove the mount mesh under the rider when the mount state changes. */
@@ -1189,7 +1212,7 @@ export class Game {
       }
       // Drains a few of a freshly-streamed village's queued building/prop
       // placements per frame instead of all ~50-60 landing in the same one.
-      flushSettlementQueue();
+      flushSettlementQueue(2);
     }
   }
 
@@ -1453,10 +1476,12 @@ export class Game {
     this.lastAnimSpeed += (inputMag - this.lastAnimSpeed) * Math.min(1, dt * 10);
 
     // Priority mirrors the server's own playerAnim(): dead > sit > block >
-    // jump > cast > idle. vy is only ever nonzero mid-jump/fall -- swimming
-    // pins it to exactly 0 even though `grounded` is also false there, so
-    // checking vy (not grounded) keeps the jump pose from showing while
-    // treading water.
+    // jump > cast > swim > idle. vy is only ever nonzero mid-jump/fall --
+    // swimming pins it to exactly 0 even though `grounded` is also false
+    // there, so checking vy (not grounded) keeps the jump pose from showing
+    // while treading water.
+    const regionHm = this.regionRenderer?.heightmap;
+    const swimming = isSwimmingAt(this.move.x, this.move.y, this.move.z, regionHm);
     const serverAnim = ui.self?.dead
       ? "dead"
       : ui.self?.sitting
@@ -1467,7 +1492,9 @@ export class Game {
             ? "jump"
             : ui.self?.castingSpell
               ? "cast"
-              : "idle";
+              : swimming
+                ? "swim"
+                : "idle";
     const speed = this.lastAnimSpeed * (actions.sprint ? 6.8 : 4.6);
     const logical = logicalFromState(serverAnim, speed, 3.5, actions.moveX, actions.moveY);
     this.avatar.setLocomotionSpeed(speed, 3.5);
@@ -1481,9 +1508,11 @@ export class Game {
     this.avatar.update(dt);
 
     // Footsteps: same clip bank for walk/sprint; only cadence (+ slight rate) changes.
+    // Skip while swimming — feet aren't contacting ground.
     const isLoco =
       !ui.self?.dead &&
       !ui.self?.sitting &&
+      !swimming &&
       this.move.grounded &&
       this.move.vy === 0 &&
       this.lastAnimSpeed > 0.18 &&
@@ -1521,18 +1550,43 @@ export class Game {
     const cp = this.cameraPitch;
 
     let distance = CAMERA_DISTANCE;
+
+    // Inside regions: pull the camera in when the arm hits solid walls so
+    // interiors / upstairs rooms stay usable instead of clipping through.
+    if (this.regionRenderer) {
+      const colliders = regionAssetColliders(this.regionRenderer.assets);
+      const headY = py + 1.5;
+      for (let t = 0.6; t < distance; t += 0.35) {
+        const sx = px - Math.sin(cy) * (t * Math.cos(cp));
+        const sy = headY - t * Math.sin(cp);
+        const sz = pz - Math.cos(cy) * (t * Math.cos(cp));
+        let blocked = false;
+        for (const c of colliders) {
+          if (c.climbable || c.radius <= 0) continue;
+          const dx = sx - c.x;
+          const dz = sz - c.z;
+          if (dx * dx + dz * dz >= c.radius * c.radius) continue;
+          if (sy >= c.baseY - 0.2 && sy <= c.topY + 0.3) {
+            blocked = true;
+            break;
+          }
+        }
+        if (blocked) {
+          distance = Math.max(0.9, t - 0.25);
+          break;
+        }
+      }
+    }
+
     let targetX = px - Math.sin(cy) * (distance * Math.cos(cp));
     let targetZ = pz - Math.cos(cy) * (distance * Math.cos(cp));
-
-    // Removed the floor-bound distance snapping loop as it causes the camera to lock 
-    // inside the player's head when rotating near walls or narrow corridors.
-
     let targetY = py + CAMERA_HEIGHT - distance * Math.sin(cp);
 
     if (this.regionRenderer) {
       const h = this.regionRenderer.heightAt(px, pz);
+      const wd = sampleRegionWaterDepth(this.regionRenderer.heightmap, px, pz);
       targetY = Math.min(targetY, py + 2.7);
-      targetY = Math.max(targetY, h + 0.6);
+      targetY = Math.max(targetY, h + 0.6, h + wd + 0.4);
     } else if (this.insideDungeonPortal) {
       const h = dungeonFloorHeightAt(px, pz);
       if (h !== null) {
@@ -1692,18 +1746,8 @@ export class Game {
   private nearCampfire = false;
 
   private nearWater(): boolean {
-    if (this.activeRegionId || this.dungeonRenderer) return false;
-    const { x, y, z } = this.move;
-    if (y < WATER_LEVEL + 0.5) return true;
-    for (const [dx, dz] of [
-      [3, 0],
-      [-3, 0],
-      [0, 3],
-      [0, -3],
-    ] as const) {
-      if (terrainHeight(x + dx, z + dz) < WATER_LEVEL) return true;
-    }
-    return false;
+    if (this.dungeonRenderer) return false;
+    return isNearWaterAt(this.move.x, this.move.y, this.move.z, this.regionRenderer?.heightmap);
   }
 
   private doInteract(): void {
@@ -1748,20 +1792,36 @@ export class Game {
       this.sun.color.set(cg.sunColor);
       this.ambient.intensity = cg.ambientIntensity;
       this.ambient.color.set(cg.ambientColor);
+      this.fillLight.color.set(cg.skyColor);
+      this.fillLight.groundColor.set(cg.fillColor ?? cg.ambientColor);
+      this.fillLight.intensity = cg.fillIntensity ?? 0;
+      this.renderer.toneMappingExposure = cg.exposure ?? 1;
       (this.scene.background as THREE.Color).set(cg.skyColor);
+      const fogLocal = this.regionRenderer.fogInfluenceAt(
+        this.camera.position.x,
+        this.camera.position.y,
+        this.camera.position.z,
+      );
+      const baseDensity = clampRegionFogDensity(cg.fogDensity);
+      // Local fog volumes add visual density when the camera is inside them.
+      const density = Math.min(0.12, baseDensity + fogLocal.weight * 0.04);
       if (this.scene.fog instanceof THREE.FogExp2) {
-        this.scene.fog.color.set(cg.fogColor);
-        this.scene.fog.density = cg.fogDensity;
+        this.scene.fog.color.copy(fogLocal.color);
+        this.scene.fog.density = density;
       } else {
-        this.scene.fog = new THREE.FogExp2(new THREE.Color(cg.fogColor).getHex(), cg.fogDensity);
+        this.scene.fog = new THREE.FogExp2(fogLocal.color.getHex(), density);
       }
+      this.regionRenderer.syncWaterEnvironment();
       return;
     }
+    // Leave region fill / exposure so overworld day-night stays consistent.
+    this.fillLight.intensity = 0;
+    this.renderer.toneMappingExposure = 1;
     // A region visit may have swapped scene.fog to a FogExp2 above --
     // restore the linear Fog the rest of this function assumes before
     // falling through to the dungeon/outdoor branches.
     if (!(this.scene.fog instanceof THREE.Fog)) {
-      this.scene.fog = new THREE.Fog(0x87b5d9, 120, 620);
+      this.scene.fog = new THREE.Fog(0x87b5d9, OVERWORLD_FOG_NEAR, OVERWORLD_FOG_FAR);
     }
     if (this.insideDungeonPortal) {
       // Sealed chamber -- fixed themed torchlight regardless of the
@@ -1781,8 +1841,8 @@ export class Game {
       return;
     }
     if (this.scene.fog instanceof THREE.Fog) {
-      this.scene.fog.near = 120;
-      this.scene.fog.far = 620;
+      this.scene.fog.near = OVERWORLD_FOG_NEAR;
+      this.scene.fog.far = OVERWORLD_FOG_FAR;
     }
     this.ambient.color.set(0x8899bb);
 
@@ -1803,6 +1863,13 @@ export class Game {
     (this.scene.background as THREE.Color).copy(sky);
     this.scene.fog!.color.copy(sky);
     this.clouds.setDayness(dayness);
+    if (this.water?.mesh.material instanceof THREE.MeshLambertMaterial) {
+      applyWaterEnvironment(this.water.mesh.material, {
+        skyColor: sky,
+        fogColor: sky,
+        groundTint: 0x8aa04f,
+      });
+    }
   }
 
   // ============ hooks for HUD ============
@@ -1935,6 +2002,11 @@ export class Game {
   dispose(): void {
     this.disposed = true;
     this.running = false;
+    if (this.streamTimer) {
+      clearTimeout(this.streamTimer);
+      this.streamTimer = 0;
+    }
+    this.streamArgs = null;
     if (this.mountMesh) {
       this.scene.remove(this.mountMesh.group);
       this.mountMesh = null;

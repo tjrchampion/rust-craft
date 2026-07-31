@@ -5,9 +5,12 @@ import {
   parseAdtKey,
   type RegionBlueprint,
 } from "@rustcraft/shared";
-import { buildRegionAdtWaterTile, createRegionWaterMaterial } from "./terrain";
+import { buildRegionAdtWaterTile, createRegionWaterMaterial, applyWaterEnvironment } from "./terrain";
+import type { StreamBudget } from "./streamBudget";
 
-const BUILDS_PER_FRAME = 3;
+const BUILDS_PER_FRAME = 1;
+const MAX_ATTEMPTS = 4;
+const DISPOSES_PER_FRAME = 1;
 
 type WaterBlueprint = Pick<RegionBlueprint, "gridSize" | "pitch" | "heights"> & {
   waterHeights: number[];
@@ -24,6 +27,7 @@ export class RegionAdtWaterStreamer {
   /** Tiles known to have no water — skip rebuild attempts. */
   private dryTiles = new Set<string>();
   private pending: string[] = [];
+  private disposeQueue: THREE.BufferGeometry[] = [];
   private lastAnchorKey = "";
   private readonly bounds: { minX: number; maxX: number; minZ: number; maxZ: number };
   private scrollT = 0;
@@ -44,31 +48,54 @@ export class RegionAdtWaterStreamer {
     return adtRingKeysInBounds(x, z, this.ring, this.bounds);
   }
 
-  update(x: number, z: number): void {
+  private enqueueDispose(mesh: THREE.Mesh): void {
+    this.group.remove(mesh);
+    this.disposeQueue.push(mesh.geometry);
+  }
+
+  private flushDisposes(budget?: StreamBudget): void {
+    let n = 0;
+    while (n < DISPOSES_PER_FRAME && this.disposeQueue.length > 0) {
+      if (budget && !budget.ok) break;
+      this.disposeQueue.shift()!.dispose();
+      n++;
+    }
+  }
+
+  update(x: number, z: number, budget?: StreamBudget): void {
     const desired = this.desiredKeys(x, z);
     const desiredSet = new Set(desired);
     const anchor = desired[0] ?? "";
 
     if (anchor !== this.lastAnchorKey) {
       this.lastAnchorKey = anchor;
-      this.pending = desired.filter((k) => !this.tiles.has(k));
+      this.pending = desired.filter((k) => !this.tiles.has(k) && !this.dryTiles.has(k));
     } else {
       for (const k of desired) {
-        if (!this.tiles.has(k) && !this.pending.includes(k)) this.pending.push(k);
+        if (!this.tiles.has(k) && !this.dryTiles.has(k) && !this.pending.includes(k)) {
+          this.pending.push(k);
+        }
       }
     }
 
     for (const [key, mesh] of this.tiles) {
       if (desiredSet.has(key)) continue;
-      this.group.remove(mesh);
-      mesh.geometry.dispose();
+      this.enqueueDispose(mesh);
       this.tiles.delete(key);
     }
+    this.flushDisposes(budget);
 
     let built = 0;
-    while (built < BUILDS_PER_FRAME && this.pending.length > 0) {
+    let attempts = 0;
+    while (built < BUILDS_PER_FRAME && attempts < MAX_ATTEMPTS && this.pending.length > 0) {
+      if (budget && !budget.ok) break;
+      attempts++;
       const key = this.pending.shift()!;
       if (this.tiles.has(key) || this.dryTiles.has(key) || !desiredSet.has(key)) continue;
+      if (budget && !budget.takeBuild()) {
+        this.pending.unshift(key);
+        break;
+      }
       const { ix, iz } = parseAdtKey(key);
       const mesh = buildRegionAdtWaterTile(this.blueprint, ix, iz, this.material);
       if (!mesh) {
@@ -99,6 +126,15 @@ export class RegionAdtWaterStreamer {
     this.lastAnchorKey = keys[0] ?? "";
   }
 
+  /** Apply region sky/fog/ground tint to the shared water material. */
+  applyEnvironment(env: {
+    skyColor: string;
+    fogColor: string;
+    groundTint?: string;
+  }): void {
+    applyWaterEnvironment(this.material, env);
+  }
+
   /** Scroll the shared normal map. */
   updateScroll(dt: number): void {
     this.scrollT += dt;
@@ -115,6 +151,8 @@ export class RegionAdtWaterStreamer {
       this.group.remove(mesh);
       mesh.geometry.dispose();
     }
+    for (const geo of this.disposeQueue) geo.dispose();
+    this.disposeQueue = [];
     this.tiles.clear();
     this.dryTiles.clear();
     this.pending = [];

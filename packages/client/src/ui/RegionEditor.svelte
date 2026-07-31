@@ -6,6 +6,7 @@
     REGION_BIOME_LABELS,
     REGION_COLOR_PRESETS,
     REGION_MUSIC_TRACKS,
+    REGION_FOG_DENSITY_MIN,
     generateRandomRegionBlueprint,
     MOBS,
     type RegionBiome,
@@ -71,9 +72,9 @@
   let wind = $state<{ direction: number; strength: number }>({ direction: 0, strength: 1 });
   let showColorPanel = $state(false);
   let status = $state<string | null>(null);
-  let activeDropdown = $state<"sculpt" | "water" | "textures" | "lights" | "markers" | "env" | "file" | null>(null);
+  let activeDropdown = $state<"sculpt" | "water" | "textures" | "lights" | "fog" | "markers" | "env" | "file" | null>(null);
 
-  function toggleDropdown(name: "sculpt" | "water" | "textures" | "lights" | "markers" | "env" | "file"): void {
+  function toggleDropdown(name: "sculpt" | "water" | "textures" | "lights" | "fog" | "markers" | "env" | "file"): void {
     activeDropdown = activeDropdown === name ? null : name;
   }
 
@@ -187,6 +188,7 @@
     eraseBrushActive = false;
     texturePaintMode = null;
     armedLightColor = null;
+    armedFogColor = null;
     volumeSculptBrushActive = false;
     volumeStampShape = volumeStampShape === shape ? null : shape;
     if (volumeStampShape) scene?.armVolumeStamp(volumeStampShape, volumeMaterial, "place");
@@ -207,6 +209,7 @@
     eraseBrushActive = false;
     texturePaintMode = null;
     armedLightColor = null;
+    armedFogColor = null;
     const next = !volumeSculptBrushActive;
     volumeSculptBrushActive = next;
     volumeStampShape = next ? (volumeStampShape ?? "boulder") : null;
@@ -306,6 +309,7 @@
     eraseBrushActive = false;
     texturePaintMode = null;
     armedLightColor = null;
+    armedFogColor = null;
     // Re-clicking the same type disarms; picking a different type switches.
     if (houseToolActive && houseType === type) {
       houseToolActive = false;
@@ -362,6 +366,7 @@
     grassEraseBrushActive = false;
     texturePaintMode = null;
     armedLightColor = null;
+    armedFogColor = null;
     houseToolActive = false;
     eraseBrushActive = !eraseBrushActive;
     scene?.setEraseBrush(eraseBrushActive);
@@ -369,6 +374,8 @@
 
   let texturePaintMode = $state<number | null>(null);
   let armedLightColor = $state<string | null>(null);
+  let armedFogColor = $state<string | null>(null);
+  let armedFogShape = $state<"sphere" | "box">("sphere");
 
   function pickTexture(mode: number | null): void {
     armedModel = null;
@@ -383,6 +390,7 @@
     grassEraseBrushActive = false;
     eraseBrushActive = false;
     armedLightColor = null;
+    armedFogColor = null;
     houseToolActive = false;
     texturePaintMode = texturePaintMode === mode ? null : mode;
     scene?.setTexturePaintMode(texturePaintMode);
@@ -402,8 +410,31 @@
     eraseBrushActive = false;
     texturePaintMode = null;
     houseToolActive = false;
+    armedFogColor = null;
     armedLightColor = armedLightColor === color ? null : color;
     if (armedLightColor) scene?.armLightPlacement(armedLightColor);
+    else scene?.disarm();
+  }
+
+  function pickFogTool(color: string, shape: "sphere" | "box" = "sphere"): void {
+    armedModel = null;
+    armedMarker = null;
+    sculptMode = null;
+    volumeStampShape = null;
+    volumeSculptBrushActive = false;
+    waterBrushMode = null;
+    roadPaintActive = false;
+    randomTreeBrushActive = false;
+    grassBrushActive = false;
+    grassEraseBrushActive = false;
+    eraseBrushActive = false;
+    texturePaintMode = null;
+    houseToolActive = false;
+    armedLightColor = null;
+    const same = armedFogColor === color && armedFogShape === shape;
+    armedFogColor = same ? null : color;
+    armedFogShape = shape;
+    if (armedFogColor) scene?.armFogPlacement(armedFogColor, armedFogShape);
     else scene?.disarm();
   }
 
@@ -421,6 +452,7 @@
     eraseBrushActive = false;
     texturePaintMode = null;
     armedLightColor = null;
+    armedFogColor = null;
     houseToolActive = false;
     scene?.setRandomTreeBrush(false);
     scene?.setGrassBrush(false);
@@ -871,6 +903,32 @@
         {/if}
       </div>
 
+      <!-- Fog Volumes -->
+      <div class="dropdown-wrapper">
+        <button class="dropdown-trigger" class:active={armedFogColor !== null} onclick={() => toggleDropdown("fog")}>
+          🌫️ Fog Volumes <span class="caret">▾</span>
+        </button>
+        {#if activeDropdown === "fog"}
+          <div class="dropdown-menu">
+            <button class:active={armedFogColor === "#c8dce8" && armedFogShape === "sphere"} onclick={() => { pickFogTool("#c8dce8", "sphere"); activeDropdown = null; }}>
+              ⚪ Mist Sphere
+            </button>
+            <button class:active={armedFogColor === "#c8dce8" && armedFogShape === "box"} onclick={() => { pickFogTool("#c8dce8", "box"); activeDropdown = null; }}>
+              ▢ Mist Box
+            </button>
+            <button class:active={armedFogColor === "#9bb8a0" && armedFogShape === "sphere"} onclick={() => { pickFogTool("#9bb8a0", "sphere"); activeDropdown = null; }}>
+              🌿 Swamp Haze
+            </button>
+            <button class:active={armedFogColor === "#d4a878" && armedFogShape === "sphere"} onclick={() => { pickFogTool("#d4a878", "sphere"); activeDropdown = null; }}>
+              🏜️ Dust Cloud
+            </button>
+            <button class:active={armedFogColor === "#b090e0" && armedFogShape === "sphere"} onclick={() => { pickFogTool("#b090e0", "sphere"); activeDropdown = null; }}>
+              🔮 Arcane Fog
+            </button>
+          </div>
+        {/if}
+      </div>
+
       <!-- Roads & Spawns Dropdown Menu -->
       <div class="dropdown-wrapper">
         <button class="dropdown-trigger" class:active={roadPaintActive || armedMarker !== null || randomTreeBrushActive || grassBrushActive || grassEraseBrushActive || eraseBrushActive || houseToolActive} onclick={() => toggleDropdown("markers")}>
@@ -1028,7 +1086,7 @@
   </div>
 
   <!-- Active Context Sub-Bar (only shown when a sculpt, water, texture, light, tree, or road tool is active) -->
-  {#if sculptMode || volumeSculptBrushActive || volumeStampShape || waterBrushMode || texturePaintMode !== null || armedLightColor !== null || randomTreeBrushActive || grassBrushActive || grassEraseBrushActive || eraseBrushActive || roadPaintActive}
+  {#if sculptMode || volumeSculptBrushActive || volumeStampShape || waterBrushMode || texturePaintMode !== null || armedLightColor !== null || armedFogColor !== null || randomTreeBrushActive || grassBrushActive || grassEraseBrushActive || eraseBrushActive || roadPaintActive}
     <div class="context-bar">
       <span class="context-title">
         {#if volumeSculptBrushActive}
@@ -1048,6 +1106,8 @@
           🎨 Texture Paint: <strong>{["AUTO", "GRASS", "DIRT", "COBBLESTONE", "SNOW", "ROCK", "SAND"][texturePaintMode]}</strong>
         {:else if armedLightColor !== null}
           💡 Light Placement: <strong>PLACE LIGHT SOURCE</strong>
+        {:else if armedFogColor !== null}
+          🌫️ Fog Placement: <strong>{armedFogShape === "box" ? "MIST BOX" : "MIST SPHERE"}</strong>
         {:else if randomTreeBrushActive}
           🌲 Nature Mode: <strong>RANDOM TREE BRUSH</strong>
         {:else if grassBrushActive}
@@ -1165,7 +1225,7 @@
         <label>Sky <input type="color" bind:value={colorGrading.skyColor} oninput={applyColorGrading} /></label>
         <label>Fog <input type="color" bind:value={colorGrading.fogColor} oninput={applyColorGrading} /></label>
         <label>Fog Density
-          <input type="range" min="0" max="0.05" step="0.001" bind:value={colorGrading.fogDensity} oninput={applyColorGrading} />
+          <input type="range" min={REGION_FOG_DENSITY_MIN} max="0.05" step="0.001" bind:value={colorGrading.fogDensity} oninput={applyColorGrading} />
         </label>
         <label>Ground
           <input
@@ -1179,11 +1239,47 @@
         </label>
         <label>Ambient <input type="color" bind:value={colorGrading.ambientColor} oninput={applyColorGrading} /></label>
         <label>Ambient Intensity
-          <input type="range" min="0" max="2" step="0.05" bind:value={colorGrading.ambientIntensity} oninput={applyColorGrading} />
+          <input type="range" min="0" max="3" step="0.05" bind:value={colorGrading.ambientIntensity} oninput={applyColorGrading} />
+        </label>
+        <label>Fill / Bounce
+          <input
+            type="color"
+            value={colorGrading.fillColor ?? colorGrading.ambientColor}
+            oninput={(e) => {
+              colorGrading.fillColor = (e.target as HTMLInputElement).value;
+              applyColorGrading();
+            }}
+          />
+        </label>
+        <label>Fill Intensity
+          <input
+            type="range"
+            min="0"
+            max="4"
+            step="0.05"
+            value={colorGrading.fillIntensity ?? 0}
+            oninput={(e) => {
+              colorGrading.fillIntensity = Number((e.target as HTMLInputElement).value);
+              applyColorGrading();
+            }}
+          />
         </label>
         <label>Sun <input type="color" bind:value={colorGrading.sunColor} oninput={applyColorGrading} /></label>
         <label>Sun Intensity
-          <input type="range" min="0" max="2" step="0.05" bind:value={colorGrading.sunIntensity} oninput={applyColorGrading} />
+          <input type="range" min="0" max="4" step="0.05" bind:value={colorGrading.sunIntensity} oninput={applyColorGrading} />
+        </label>
+        <label>Exposure
+          <input
+            type="range"
+            min="0.4"
+            max="2.5"
+            step="0.05"
+            value={colorGrading.exposure ?? 1}
+            oninput={(e) => {
+              colorGrading.exposure = Number((e.target as HTMLInputElement).value);
+              applyColorGrading();
+            }}
+          />
         </label>
       </div>
     {/if}
@@ -1191,24 +1287,62 @@
     {#if selection.length === 1}
       {@const sel = selection[0]!}
       <div class="properties">
-        <h3>{sel.kind === "asset" ? sel.model?.replace(/\.(gltf|glb)$/, "") : sel.kind === "light" ? "Point Light Source" : sel.kind === "volume" ? `${sel.volumeShape ?? "volume"} (${sel.volumeMaterial ?? "rock"})` : sel.markerKind}</h3>
+        <h3>{sel.kind === "asset" ? sel.model?.replace(/\.(gltf|glb)$/, "") : sel.kind === "house" ? `House (${sel.houseType ?? "cottage"})` : sel.kind === "light" ? "Point Light Source" : sel.kind === "fog" ? "Fog Volume" : sel.kind === "volume" ? `${sel.volumeShape ?? "volume"} (${sel.volumeMaterial ?? "rock"})` : sel.markerKind}</h3>
         <label>X <input type="number" step="0.1" value={sel.x} onchange={(e) => applyPatch({ x: Number((e.target as HTMLInputElement).value) })} /></label>
         <label>Y <input type="number" step="0.1" value={sel.y} onchange={(e) => applyPatch({ y: Number((e.target as HTMLInputElement).value) })} /></label>
         <label>Z <input type="number" step="0.1" value={sel.z} onchange={(e) => applyPatch({ z: Number((e.target as HTMLInputElement).value) })} /></label>
         <p class="hint">Arrows nudge · Shift = fine · G = ground · X = snap · Alt+Arrows = pan camera</p>
-        {#if sel.kind === "asset" || sel.kind === "volume"}
+        {#if sel.kind === "asset" || sel.kind === "volume" || sel.kind === "house"}
           <label>Yaw <input type="number" step="0.01" value={sel.yaw} onchange={(e) => applyPatch({ yaw: Number((e.target as HTMLInputElement).value) })} /></label>
           <label>Scale <input type="number" step="0.05" value={sel.scale} onchange={(e) => applyPatch({ scale: Number((e.target as HTMLInputElement).value) })} /></label>
+          {#if sel.kind === "house"}
+            <p class="hint">One house asset — walls/floors/roof move together. Walkable in playtest.</p>
+          {/if}
         {:else if sel.kind === "light"}
           <label>Color <input type="color" value={sel.color ?? "#ff9933"} onchange={(e) => applyPatch({ color: (e.target as HTMLInputElement).value })} /></label>
           <label>Intensity
-            <input type="range" min="0.2" max="10" step="0.2" value={sel.intensity ?? 2.5} oninput={(e) => applyPatch({ intensity: Number((e.target as HTMLInputElement).value) })} />
-            <span>{sel.intensity ?? 2.5}x</span>
+            <input type="range" min="0.2" max="40" step="0.2" value={sel.intensity ?? 8} oninput={(e) => applyPatch({ intensity: Number((e.target as HTMLInputElement).value) })} />
+            <span>{sel.intensity ?? 8}</span>
           </label>
           <label>Distance
-            <input type="range" min="5" max="60" step="1" value={sel.distance ?? 25} oninput={(e) => applyPatch({ distance: Number((e.target as HTMLInputElement).value) })} />
-            <span>{sel.distance ?? 25}m</span>
+            <input type="range" min="5" max="250" step="5" value={sel.distance ?? 80} oninput={(e) => applyPatch({ distance: Number((e.target as HTMLInputElement).value) })} />
+            <span>{sel.distance ?? 80}m</span>
           </label>
+          <label>Decay
+            <input type="range" min="0.5" max="2" step="0.1" value={sel.decay ?? 1} oninput={(e) => applyPatch({ decay: Number((e.target as HTMLInputElement).value) })} />
+            <span>{(sel.decay ?? 1).toFixed(1)}</span>
+          </label>
+          <p class="hint">Lower decay = light carries farther. Distance is the hard cutoff.</p>
+        {:else if sel.kind === "fog"}
+          <label>Color <input type="color" value={sel.color ?? "#c8dce8"} onchange={(e) => applyPatch({ color: (e.target as HTMLInputElement).value })} /></label>
+          <label>Shape
+            <select value={sel.fogShape ?? "sphere"} onchange={(e) => applyPatch({ fogShape: (e.target as HTMLSelectElement).value as "sphere" | "box" })}>
+              <option value="sphere">Sphere</option>
+              <option value="box">Box</option>
+            </select>
+          </label>
+          <label>Size X
+            <input type="range" min="2" max="80" step="1" value={sel.sizeX ?? 14} oninput={(e) => applyPatch({ sizeX: Number((e.target as HTMLInputElement).value) })} />
+            <span>{sel.sizeX ?? 14}m</span>
+          </label>
+          <label>Size Y
+            <input type="range" min="2" max="80" step="1" value={sel.sizeY ?? 10} oninput={(e) => applyPatch({ sizeY: Number((e.target as HTMLInputElement).value) })} />
+            <span>{sel.sizeY ?? 10}m</span>
+          </label>
+          <label>Size Z
+            <input type="range" min="2" max="80" step="1" value={sel.sizeZ ?? 14} oninput={(e) => applyPatch({ sizeZ: Number((e.target as HTMLInputElement).value) })} />
+            <span>{sel.sizeZ ?? 14}m</span>
+          </label>
+          <label>Density
+            <input type="range" min="0.05" max="1" step="0.05" value={sel.fogDensity ?? 0.55} oninput={(e) => applyPatch({ fogDensity: Number((e.target as HTMLInputElement).value) })} />
+          </label>
+          <label>Opacity
+            <input type="range" min="0.05" max="1" step="0.05" value={sel.fogOpacity ?? 0.5} oninput={(e) => applyPatch({ fogOpacity: Number((e.target as HTMLInputElement).value) })} />
+          </label>
+          <label>Feather
+            <input type="range" min="0" max="1" step="0.05" value={sel.fogFeather ?? 0.7} oninput={(e) => applyPatch({ fogFeather: Number((e.target as HTMLInputElement).value) })} />
+          </label>
+          <p class="hint">Delete removes the volume. Move with the gizmo like any other asset.</p>
         {/if}
         {#if sel.markerKind === "village"}
           <label>Name <input type="text" value={sel.name} onchange={(e) => applyPatch({ name: (e.target as HTMLInputElement).value })} /></label>
