@@ -141,15 +141,35 @@ describe("movement", () => {
     expect(wade.y).toBeCloseTo(0, 5);
     expect(wade.x - startX).toBeGreaterThan(2.5); // wade slower than walk but moving
 
+    // Mid depth (knee/waist): still wade — must not trigger swim anim/physics.
+    const mid = mkRegion(0.95);
+    let midWade: MoveState = { x: 0, y: 0, z: 0, vy: 0, grounded: true };
+    for (let i = 0; i < 20; i++) {
+      midWade = stepMovement(midWade, { moveX: 1, moveZ: 0, jump: false, sprint: false, regionHeightmap: mid }, TICK_DT);
+    }
+    expect(midWade.grounded).toBe(true);
+    expect(midWade.y).toBeCloseTo(0, 5);
+
     const deep = mkRegion(1.5);
     let swim: MoveState = { x: 0, y: 0, z: 0, vy: 0, grounded: true };
     // Drop into the water column so body-in-water triggers.
     swim.y = -0.5;
-    for (let i = 0; i < 10; i++) {
+    for (let i = 0; i < 40; i++) {
       swim = stepMovement(swim, { moveX: 0, moveZ: 0, jump: false, sprint: false, regionHeightmap: deep }, TICK_DT);
     }
     expect(swim.grounded).toBe(false);
-    // Surface at 1.5, float at surface - 1.1 = 0.4
-    expect(swim.y).toBeCloseTo(0.4, 5);
+    // Surface at 1.5, float at surface - SWIM_FLOAT_OFFSET (0.18)
+    expect(swim.y).toBeCloseTo(1.32, 5);
+
+    // Aim camera down past the swim deadzone → sink below tread height.
+    let dive = { ...swim };
+    for (let i = 0; i < 20; i++) {
+      dive = stepMovement(
+        dive,
+        { moveX: 0, moveZ: 0, jump: false, sprint: false, lookPitch: -1.1, regionHeightmap: deep },
+        TICK_DT,
+      );
+    }
+    expect(dive.y).toBeLessThan(swim.y - 0.3);
   });
 });

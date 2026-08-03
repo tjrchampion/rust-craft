@@ -18,6 +18,7 @@
   import MiniMap from "./MiniMap.svelte";
   import WorldMap from "./WorldMap.svelte";
   import LootModal from "./LootModal.svelte";
+  import MenuShortcuts from "./MenuShortcuts.svelte";
 
   const interactKey = $derived(promptLabel("Ⓧ", "E"));
 
@@ -60,6 +61,13 @@
 </script>
 
 <div class="hud">
+  {#if game.underwater && !game.self?.dead}
+    <div
+      class="underwater-tint"
+      class:low-air={(game.self?.oxygen ?? 100) < 25}
+      aria-hidden="true"
+    ></div>
+  {/if}
   {#if game.loading && !game.disconnected}
     <div class="loading-overlay">
       <div class="loading-content">
@@ -150,6 +158,7 @@
     <Party />
     <TargetFrame />
     <MiniMap />
+    <MenuShortcuts />
     <QuestTracker />
     <WorldEventBanner />
     <ZoneBanner />
@@ -174,6 +183,28 @@
     pointer-events: none;
     color: #e8f0fa;
     font-family: system-ui, sans-serif;
+  }
+  .underwater-tint {
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    background:
+      radial-gradient(ellipse at 50% 40%, rgba(20, 70, 120, 0.18) 0%, rgba(8, 40, 80, 0.55) 70%, rgba(4, 20, 45, 0.72) 100%),
+      linear-gradient(180deg, rgba(30, 110, 170, 0.22), rgba(10, 50, 100, 0.45));
+    box-shadow: inset 0 0 120px rgba(0, 40, 80, 0.55);
+    mix-blend-mode: multiply;
+    transition: background 0.25s ease, opacity 0.25s ease;
+  }
+  .underwater-tint.low-air {
+    background:
+      radial-gradient(ellipse at 50% 40%, rgba(60, 40, 80, 0.25) 0%, rgba(20, 30, 70, 0.6) 70%, rgba(10, 10, 30, 0.78) 100%),
+      linear-gradient(180deg, rgba(40, 80, 140, 0.3), rgba(40, 20, 50, 0.5));
+    animation: drown-pulse 1.1s ease-in-out infinite;
+  }
+  @keyframes drown-pulse {
+    50% {
+      opacity: 0.82;
+    }
   }
   .center-note {
     position: absolute;
@@ -385,6 +416,7 @@
     pointer-events: none;
     text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
     letter-spacing: 0.5px;
+    z-index: 4;
   }
   .loading-overlay {
     position: absolute;

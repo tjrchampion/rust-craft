@@ -1,4 +1,5 @@
-import type { CharacterAppearance } from "@rustcraft/shared";
+import type { CharacterAppearance, AccountSettings, GraphicsSettings } from "@rustcraft/shared";
+import { game as gameUi } from "./gameState.svelte";
 
 export type Screen = "loading" | "login" | "charselect" | "ingame" | "dungeoneditor" | "regioneditor";
 
@@ -8,7 +9,7 @@ export interface CharacterSummary extends CharacterAppearance {
   level: number;
   classId: string;
   /** Currently equipped item id per gear slot (weapon/head/chest/arms/legs/
-   *  feet), keyed by GearSlot name -- so the character-select preview can
+   *  feet/shoulders/neck), keyed by GearSlot name -- so the character-select preview can
    *  show what this specific character actually has on. */
   equip?: Partial<Record<string, string>>;
 }
@@ -20,7 +21,12 @@ export interface Realm {
 }
 
 export interface MeResponse {
-  account: { id: string; displayName: string | null; provider: string } | null;
+  account: {
+    id: string;
+    displayName: string | null;
+    provider: string;
+    settings?: AccountSettings;
+  } | null;
   characters: CharacterSummary[];
   providers: { discord: boolean; google: boolean; dev: boolean; password: boolean };
 }
@@ -33,6 +39,7 @@ class AppState {
   activeCharacter = $state<CharacterSummary | null>(null);
   error = $state<string | null>(null);
   realm = $state<Realm>(LOCAL_REALM);
+  private graphicsSaveBound = false;
 
   private setScreen(s: Screen) {
     this.screen = s;
@@ -49,6 +56,28 @@ class AppState {
     }
     const proto = location.protocol === "https:" ? "wss" : "ws";
     return `${proto}://${location.host}/ws`;
+  }
+
+  private bindGraphicsSave(): void {
+    if (this.graphicsSaveBound || typeof window === "undefined") return;
+    this.graphicsSaveBound = true;
+    window.addEventListener("rc:graphics-save", ((e: CustomEvent<GraphicsSettings>) => {
+      void this.saveGraphicsSettings(e.detail);
+    }) as EventListener);
+  }
+
+  async saveGraphicsSettings(graphics: GraphicsSettings): Promise<void> {
+    if (!this.me?.account) return;
+    try {
+      await fetch(this.apiUrl("/api/me/settings"), {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ graphics }),
+      });
+    } catch {
+      /* offline / transient — localStorage still has the prefs */
+    }
   }
 
   /** Dev-only entry point for the dungeon editor (packages/client/src/ui/
@@ -68,9 +97,13 @@ class AppState {
   }
 
   async refresh() {
+    this.bindGraphicsSave();
     try {
       const res = await fetch(this.apiUrl("/api/me"), { credentials: "include" });
       this.me = (await res.json()) as MeResponse;
+      if (this.me.account?.settings) {
+        gameUi.hydrateAccountSettings(this.me.account.settings);
+      }
       this.setScreen(this.me.account ? "charselect" : "login");
       this.error = null;
     } catch {

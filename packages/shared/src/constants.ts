@@ -28,14 +28,37 @@ export const REGION_TWO_TRIGGER_RADIUS = 200;
 export const WALK_SPEED = 4.6; // m/s
 export const SPRINT_SPEED = 6.8;
 export const SWIM_SPEED_MULT = 0.45;
-/** Water column depth below which you wade (walk) instead of swim. */
-export const WADE_DEPTH = 0.65;
+/**
+ * Min water-column depth before swim physics/anims kick in. Shallower water
+ * keeps you grounded so you walk/wade with head & shoulders above the line.
+ * (~chest-deep on the Universal ~1.7m rig.)
+ */
+export const WADE_DEPTH = 1.28;
 /** Speed multiplier while standing in shallow water. */
 export const WADE_SPEED_MULT = 0.72;
-/** Body counts as submerged when y < surface − this. */
-export const SWIM_BODY_OFFSET = 0.4;
-/** Swimmer treads this far below the surface. */
-export const SWIM_FLOAT_OFFSET = 1.1;
+/**
+ * Still in swim mode while the root is below surface − this. Must stay
+ * *smaller* than SWIM_FLOAT_OFFSET so surface tread doesn't fall out of swim
+ * and snap back to the lakebed.
+ */
+export const SWIM_BODY_OFFSET = 0.05;
+/**
+ * Surface tread: feet this far below the waterline. Kept small so the swim
+ * idle still reads as head/shoulders clear (wading silhouette).
+ */
+export const SWIM_FLOAT_OFFSET = 0.18;
+/** Vertical swim speed (m/s) while ascending/diving. */
+export const SWIM_VERTICAL_SPEED = 3.6;
+/** Eye height used to decide if the head is underwater. */
+export const PLAYER_EYE_HEIGHT = 1.55;
+/** Breath meter while submerged (drains to 0, then drowning damage). */
+export const MAX_OXYGEN = 100;
+/** ~45s of breath at full lungs. */
+export const OXYGEN_DRAIN_PER_S = MAX_OXYGEN / 45;
+/** Quick recovery once the head breaks the surface. */
+export const OXYGEN_REGEN_PER_S = 28;
+/** HP/s while oxygen is empty and still underwater. */
+export const DROWN_DPS = 8;
 export const MOUNT_LAND_SPEED = 11.5; // horse gallop
 export const RAFT_WATER_SPEED = 8.5; // raft across water
 export const RAFT_LAND_SPEED = 2.6; // raft dragged on land

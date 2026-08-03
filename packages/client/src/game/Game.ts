@@ -2,7 +2,9 @@ import * as THREE from "three";
 import {
   stepMovement,
   isSwimmingAt,
+  isUnderwaterAt,
   isNearWaterAt,
+  waterAt,
   terrainHeight,
   TICK_DT,
   WATER_LEVEL,
@@ -21,11 +23,16 @@ import {
   adtIndex,
   adtRingKeys,
   ADT_VILLAGE_RING,
-  OVERWORLD_FOG_NEAR,
-  OVERWORLD_FOG_FAR,
   clampRegionFogDensity,
+  clampGraphicsSettings,
+  effectivePixelRatio,
+  cameraFarForStreamRing,
+  overworldFogForRing,
+  type GraphicsSettings,
+  REGION_COLOR_PRESETS,
   REVIVE_RANGE,
   DODGE_DISTANCE,
+  SWIM_FLOAT_OFFSET,
   DUNGEON_PORTAL_ACTIVATION_RADIUS,
   dungeonTierDef,
   dungeonPortalAt,
@@ -37,6 +44,9 @@ import {
   WORLD_MIN_Z,
   WORLD_MAX_Z,
   sampleRegionWaterDepth,
+  ensureRegionWorldOrigins,
+  regionLocalToWorld,
+  worldToRegionLocal,
   type MoveState,
   type ServerMsg,
   type SelfState,
@@ -49,7 +59,11 @@ import {
   type CharacterAppearance,
   regionAssetColliders,
   regionVolumeColliders,
+  regionBarrierColliders,
+  pointInColliderXZ,
   regionMusicTrackUrl,
+  worldNodesFromRegion,
+  type WorldNode,
 } from "@rustcraft/shared";
 import { Connection } from "../net/connection";
 import { InputManager } from "../input/input";
@@ -72,7 +86,17 @@ import {
   type SettlementHandles,
 } from "../render/settlements";
 import { DUNGEON_THEME_COLORS, DungeonInteriorRenderer } from "../render/dungeonInterior";
-import { RegionInteriorRenderer, preloadRegionAssets } from "../render/regionInterior";
+import { RegionInteriorRenderer } from "../render/regionInterior";
+import { RegionContinent } from "../render/regionContinent";
+import {
+  atmosphereFromGrading,
+  cloneAtmosphere,
+  lerpAtmosphere,
+  sampleBlendedAtmosphere,
+  REGION_ATMOSPHERE_LERP_RATE,
+  type AtmosphereSample,
+} from "../render/regionAtmosphere";
+import { SkyDome } from "../render/skyDome";
 import { buildShrine } from "../render/models";
 import { NpcManager } from "../render/npcs";
 import { sound, resolveFootSurface } from "./sound";
@@ -80,11 +104,21 @@ import { music } from "./music";
 import { game as ui, type CharacterTab } from "../ui/gameState.svelte";
 import { app } from "../ui/appState.svelte";
 
-const CAMERA_DISTANCE = 6.5;
+/** Default orbit arm — also the farthest zoom-out. */
+const CAMERA_DISTANCE_DEFAULT = 6.5;
+const CAMERA_DISTANCE_MIN = 2.4;
+const CAMERA_DISTANCE_MAX = CAMERA_DISTANCE_DEFAULT;
+/** One scroll / trackpad tick. Keep small so a single gesture is subtle. */
+const CAMERA_ZOOM_STEP = 0.35;
 const CAMERA_HEIGHT = 2.2;
 const GATHER_RANGE = 4.0;
+/** How often the interact-prompt label (and its underlying node/corpse/dead-
+ *  player scans) is recomputed. It's a UI string, not a physics check, so it
+ *  doesn't need 60Hz precision -- ~8Hz is imperceptibly different to a player
+ *  but cuts several full linear scans down to a fraction of their frame cost. */
+const INTERACT_PROMPT_INTERVAL_MS = 120;
 /** Left-to-right tab order for gamepad LB/RB cycling in the character screen. */
-const TAB_ORDER: CharacterTab[] = ["inventory", "quests", "spellbook", "craft", "party", "system"];
+const TAB_ORDER: CharacterTab[] = ["inventory", "quests", "achievements", "spellbook", "craft", "party", "system"];
 
 interface PendingInput {
   seq: number;
@@ -92,12 +126,16 @@ interface PendingInput {
   moveZ: number;
   jump: boolean;
   sprint: boolean;
+  crouch: boolean;
   block: boolean;
+  lookPitch: number;
   mount: "horse" | "raft" | null;
   revivingId: string | null;
   inDungeon?: boolean;
   regionHeightmap?: Pick<RegionBlueprint, "gridSize" | "pitch" | "heights">;
   regionAssets?: RegionAssetCollider[];
+  groundAt?: (x: number, z: number) => number;
+  waterDepthAt?: (x: number, z: number) => number;
 }
 
 export class Game {
@@ -117,12 +155,19 @@ export class Game {
   private activeDungeonPortalId: string | null = null;
   private dungeonRenderer: DungeonInteriorRenderer | null = null;
   /** Mirrors the dungeon fields above, but gated purely on ui.regionState
-   *  (server-authoritative) rather than a coordinate check -- a region's
-   *  local coordinates aren't tied to any real overworld position the way a
-   *  dungeon arena's reserved rectangle is. */
-  private activeRegionGroup: THREE.Group | null = null;
+   *  (server-authoritative). Outdoor regions share one continent streamer so
+   *  walking a seam does not tear down / reload. */
   private activeRegionId: string | null = null;
+  /** Primary (ownership) region renderer — fog/music/UI; may differ from
+   *  other mounted neighbor layers on the continent. */
   private regionRenderer: RegionInteriorRenderer | null = null;
+  private continent: RegionContinent | null = null;
+  /** Camera-centric layered skydome (gradient + clouds + stars + fog skirt). */
+  private skyDome = new SkyDome();
+  /** Spatially blended region grading, eased frame-to-frame across seams. */
+  private atmosphereDisplay: AtmosphereSample | null = null;
+  /** Layout stubs (origins + span) for streaming; full BPs live in cache. */
+  private regionCatalog: RegionBlueprint[] = [];
   private regionBlueprintCache = new Map<string, RegionBlueprint>();
   private regionPortals: { id: string; name: string; x: number; z: number }[] = [];
   /** id → display name for all known regions, populated at load time. */
@@ -132,6 +177,16 @@ export class Game {
   /** In-flight region interior load — preloadAndEnter awaits this so the
    *  loading screen stays up until terrain + assets exist. */
   private regionEnterPromise: Promise<void> | null = null;
+  /** Throttle continent mount/unmount sync (world meters + time). */
+  private continentSyncAt = { x: Number.NaN, z: Number.NaN, t: 0 };
+  /** Throttle updateInteractPrompt -- it's a UI-only label so it doesn't need
+   *  the several full linear scans (nodes/corpses/dead players) it does at
+   *  60Hz; ms timestamp of the last recompute. */
+  private interactPromptAt = -Infinity;
+  /** Depleted gather-node ids from welcome / nodeUpdate. */
+  private depletedNodeIds = new Set<string>();
+  /** Last mounted-region signature used for authored gather-node sync. */
+  private regionNodesSyncKey = "";
 
   private connection = new Connection();
   private input: InputManager;
@@ -151,6 +206,8 @@ export class Game {
   private mountMesh: MountParts | null = null;
   private currentMount: "horse" | "raft" | null = null;
 
+  /** Orbit arm length; scroll wheel adjusts while pointer-locked. */
+  private cameraDistance = CAMERA_DISTANCE_DEFAULT;
   private selfId = "";
   private selfClassId = "warrior";
   private selfGender: CharacterGender = "male";
@@ -164,6 +221,7 @@ export class Game {
   };
   private equippedWeaponDef: ItemDef | null = null;
   private avatar: AnimatedModel;
+  private selfNameplate: THREE.Sprite;
   private move: MoveState = { x: 0, y: 4, z: 0, vy: 0, grounded: true };
   /** Decaying render offset that absorbs reconcile corrections smoothly. */
   private posError = new THREE.Vector3();
@@ -179,6 +237,8 @@ export class Game {
   private tickRenderFrom = { x: 0, y: 4, z: 0 };
   private cameraYaw = 0;
   private cameraPitch = -0.35;
+  /** Smoothed body pitch while swimming — driven by camera look angle. */
+  private swimBodyPitch = 0;
   private inputSeq = 0;
   private pending: PendingInput[] = [];
   /** A locally-predicted dodge displacement not yet reflected in the
@@ -199,6 +259,12 @@ export class Game {
   private lastAnimSpeed = 0;
   private footstepAccum = 0;
   private unsubscribe: (() => void) | null = null;
+  /** Live graphics prefs (mirrored from ui.graphics; applied to renderer/stream). */
+  private graphics: GraphicsSettings = clampGraphicsSettings(undefined);
+  /** Fog density multiplier from graphics settings (region FogExp2 path). */
+  private fogScale = 1;
+  /** AA flag used when the WebGL context was created — change needs re-enter world. */
+  private antialiasActive = true;
 
   constructor(
     canvas: HTMLCanvasElement,
@@ -206,46 +272,63 @@ export class Game {
     characterName: string,
     private wsAddress: string,
   ) {
-    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    this.graphics = clampGraphicsSettings(ui.graphics);
+    this.fogScale = this.graphics.fogScale;
+    this.antialiasActive = this.graphics.antialias;
+
+    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: this.antialiasActive });
+    this.renderer.setPixelRatio(effectivePixelRatio(this.graphics, window.devicePixelRatio));
     this.renderer.setSize(window.innerWidth, window.innerHeight);
-    this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.renderer.shadowMap.enabled = this.graphics.shadowsEnabled;
+    // Soft PCF over a huge ortho frustum + dense foliage was a major GPU cost.
+    this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1;
 
-    this.camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.1, 900);
+    this.camera = new THREE.PerspectiveCamera(
+      70,
+      window.innerWidth / window.innerHeight,
+      0.1,
+      cameraFarForStreamRing(this.graphics.streamRing),
+    );
     // Fog far matches village/tree ADT stream edge so content fades before unload.
-    this.scene.fog = new THREE.Fog(0x87b5d9, OVERWORLD_FOG_NEAR, OVERWORLD_FOG_FAR);
-    this.scene.background = new THREE.Color(0x87b5d9);
+    const fog0 = overworldFogForRing(this.graphics.streamRing);
+    this.scene.fog = new THREE.Fog(0x87b5d9, fog0.near, fog0.far);
+    // Near-black clear so the skydome (not a flat Color) is the visible sky.
+    this.scene.background = new THREE.Color(0x02040a);
+    this.scene.add(this.skyDome.group);
 
     this.sun = new THREE.DirectionalLight(0xfff4e0, 2.4);
     this.sun.position.set(80, 120, 40);
-    this.sun.castShadow = true;
-    this.sun.shadow.mapSize.set(2048, 2048);
-    this.sun.shadow.camera.left = -70;
-    this.sun.shadow.camera.right = 70;
-    this.sun.shadow.camera.top = 70;
-    this.sun.shadow.camera.bottom = -70;
+    this.sun.castShadow = this.graphics.shadowsEnabled;
+    this.sun.shadow.mapSize.set(this.graphics.shadowMapSize, this.graphics.shadowMapSize);
+    this.sun.shadow.camera.left = -40;
+    this.sun.shadow.camera.right = 40;
+    this.sun.shadow.camera.top = 40;
+    this.sun.shadow.camera.bottom = -40;
     this.sun.shadow.camera.near = 1;
-    this.sun.shadow.camera.far = 320;
+    this.sun.shadow.camera.far = 240;
     this.sun.shadow.bias = -0.0015;
     this.scene.add(this.sun.target);
     this.ambient = new THREE.AmbientLight(0x8899bb, 0.75);
     this.scene.add(this.sun, this.ambient, this.fillLight);
 
-    this.scene.add(this.overworldGroup);
-    this.buildOverworldContents();
-    void this.loadRegionPortals();
+    // Regions-only: no procedural overworld map. Catalog + name map still load
+    // so the continent streamer can mount neighboring regions.
+    this.overworldSuspended = true;
+    void this.loadRegionCatalog();
     this.npcManager = new NpcManager(this.scene);
 
     this.avatar = new AnimatedModel(PLAYER_ANIMS);
-    const plate = buildNameplate(characterName, "#ffe9a8");
-    plate.position.y = 2.35;
-    this.avatar.group.add(plate);
+    this.selfNameplate = buildNameplate(characterName, "#ffe9a8");
+    this.selfNameplate.position.y = 2.35;
+    this.selfNameplate.visible = ui.showPlayerNameplates;
+    this.avatar.group.add(this.selfNameplate);
     this.scene.add(this.avatar.group);
 
     this.entities = new EntityManager(this.scene);
+    this.entities.showPlayerNameplates = ui.showPlayerNameplates;
+    this.entities.showMobNameplates = ui.showMobNameplates;
     this.entities.prewarmVfx(this.renderer, this.camera);
     this.input = new InputManager(canvas);
 
@@ -273,104 +356,165 @@ export class Game {
     };
   }
 
-  /** Terrain, water, sky props, POIs, ambient grass — rebuilt after a region/dungeon visit. */
-  private buildOverworldContents(): void {
-    this.overworldGroup.add(buildTerrain());
-    this.water = buildWater();
-    this.overworldGroup.add(this.water.mesh);
-    this.overworldGroup.add(buildHorizonMountains());
-    this.clouds = buildClouds();
-    this.overworldGroup.add(this.clouds.group);
-    this.settlements = buildWorldStatic(this.overworldGroup, true);
-    this.grass = new GrassField(this.overworldGroup);
-    this.overworldSuspended = false;
-  }
-
-  /**
-   * Free overworld GPU content while inside a region/dungeon so we don't keep
-   * two full worlds resident. Templates stay in GLTF/texture caches for a
-   * fast rebuild on exit.
-   */
+  /** No-op: overworld map removed — gameplay is continent regions only. */
   private tearDownOverworld(): void {
-    if (this.overworldSuspended) return;
     this.overworldSuspended = true;
-
-    clearSettlementQueue();
-    this.nodes?.disposeVisuals();
-
-    this.grass?.dispose();
     if (this.overworldGroup.parent) this.scene.remove(this.overworldGroup);
-
-    this.overworldGroup.traverse((o) => {
-      const im = o as THREE.InstancedMesh;
-      if (im.isInstancedMesh) {
-        im.dispose();
-        return;
-      }
-      const mesh = o as THREE.Mesh;
-      if (!mesh.isMesh || mesh.userData.fromGltf) return;
-      mesh.geometry?.dispose();
-      const mats = Array.isArray(mesh.material) ? mesh.material : mesh.material ? [mesh.material] : [];
-      for (const mat of mats) mat.dispose();
-    });
     this.overworldGroup.clear();
     this.overworldSigns = [];
     this.streamedVillages.clear();
   }
 
   private rebuildOverworld(): void {
-    if (!this.overworldSuspended) {
-      this.overworldGroup.visible = true;
-      if (!this.overworldGroup.parent) this.scene.add(this.overworldGroup);
-      return;
-    }
-    this.buildOverworldContents();
-    this.scene.add(this.overworldGroup);
-    this.overworldGroup.visible = true;
-    void this.loadRegionPortals();
+    // Overworld map removed — never recreate it.
+    this.tearDownOverworld();
   }
 
-  /** Fetches every saved region's portal placement and drops a visible
-   *  portal prop + nameplate at each one in the open world -- regions are
-   *  freely creatable from the editor, so unlike dungeon portals (baked
-   *  into generatePois()'s deterministic seed) this list can only come from
-   *  the server. A region left at (0,0) is an editor-only draft that hasn't
-   *  been placed in the world yet (see RegionBlueprint.portalWorldX/Z) and
-   *  is skipped. */
-  private async loadRegionPortals(): Promise<void> {
+  /** Loads region layout stubs + names for continent streaming (no overworld props). */
+  private async loadRegionCatalog(): Promise<void> {
     try {
       const res = await fetch(app.apiUrl("/api/regions"), { credentials: "include" });
       if (!res.ok) return;
       const data = (await res.json()) as {
-        regions: { id: string; name: string; portalWorldX: number; portalWorldZ: number }[];
+        regions: {
+          id: string;
+          name: string;
+          biome: RegionBlueprint["biome"];
+          portalWorldX: number;
+          portalWorldZ: number;
+          gridSize: number;
+          pitch: number;
+          worldOriginX: number;
+          worldOriginZ: number;
+          colorGrading?: RegionBlueprint["colorGrading"];
+        }[];
       };
-      // Build full name lookup for all regions (used in portal prompts)
       for (const r of data.regions) this.regionNameMap.set(r.id, r.name);
+      this.regionCatalog = data.regions.map((r) => ({
+        id: r.id,
+        name: r.name,
+        biome: r.biome,
+        gridSize: r.gridSize,
+        pitch: r.pitch,
+        heights: [],
+        assets: [],
+        mobSpawns: [],
+        villages: [],
+        colorGrading: r.colorGrading ?? {
+          sunColor: "#ffffff",
+          sunIntensity: 1,
+          ambientColor: "#ffffff",
+          ambientIntensity: 0.5,
+          skyColor: "#87b5d9",
+          fogColor: "#87b5d9",
+          fogDensity: 0.01,
+          groundTint: "#6b8f4e",
+        },
+        entryLocal: { x: 0, z: 0 },
+        portalWorldX: r.portalWorldX,
+        portalWorldZ: r.portalWorldZ,
+        worldOriginX: r.worldOriginX,
+        worldOriginZ: r.worldOriginZ,
+      }));
+      ensureRegionWorldOrigins(this.regionCatalog);
       this.regionPortals = data.regions
         .filter((r) => r.portalWorldX !== 0 || r.portalWorldZ !== 0)
         .map((r) => ({ id: r.id, name: r.name, x: r.portalWorldX, z: r.portalWorldZ }));
-      if (this.overworldSuspended) return;
-      for (const portal of this.regionPortals) {
-        const y = terrainHeight(portal.x, portal.z);
-        const prop = buildShrine();
-        const crystal = prop.getObjectByName("crystal") as THREE.Mesh | undefined;
-        if (crystal) {
-          crystal.material = new THREE.MeshBasicMaterial({
-            color: 0x5ce88c, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending,
-          });
-        }
-        prop.position.set(portal.x, y, portal.z);
-        this.overworldGroup.add(prop);
-        const sign = buildNameplate(portal.name, "#5ce88c");
-        sign.scale.set(3.2, 0.9, 1);
-        sign.position.set(portal.x, y + 3.5, portal.z);
-        this.overworldGroup.add(sign);
-        this.overworldSigns.push(sign);
-      }
     } catch {
-      // Portal props are a convenience -- a failed fetch just means no
-      // visible region portals this session, not a hard error.
+      // Catalog is required for streaming; a failed fetch just delays mounts.
     }
+  }
+
+  private continentCatalog(): RegionBlueprint[] {
+    return this.regionCatalog.map((stub) => this.regionBlueprintCache.get(stub.id) ?? stub);
+  }
+
+  /** Keep NodeManager in sync with mounted continent region.resourceNodes. */
+  private syncAuthoredRegionNodes(force = false): void {
+    if (!this.nodes || !this.continent) return;
+    const layers = this.continent.mountedBlueprints();
+    const key = layers
+      .map((bp) => {
+        const nodes = (bp.resourceNodes ?? [])
+          .map((n) => `${n.id ?? ""}:${n.type}:${n.model ?? ""}:${n.localX.toFixed(2)},${n.localZ.toFixed(2)}`)
+          .join(";");
+        return `${bp.id}@${bp.worldOriginX ?? 0},${bp.worldOriginZ ?? 0}:${nodes}`;
+      })
+      .sort()
+      .join("|");
+    if (!force && key === this.regionNodesSyncKey) return;
+    this.regionNodesSyncKey = key;
+    const list: WorldNode[] = layers.flatMap((bp) => worldNodesFromRegion(bp));
+    this.nodes.removeRegionResourceNodes();
+    this.nodes.addDynamicNodes(list);
+    for (const node of list) {
+      if (this.depletedNodeIds.has(node.id)) this.nodes.setDepleted(node.id, true);
+    }
+  }
+
+  private ensureContinent(): RegionContinent {
+    if (!this.continent) {
+      this.continent = new RegionContinent(
+        this.scene,
+        async (id) => {
+          // Prefer a network fetch so editor saves (barriers/clouds/etc.) reach
+          // the live continent without requiring a full page reload.
+          try {
+            const res = await fetch(app.apiUrl(`/api/regions/${id}`), { credentials: "include" });
+            if (res.ok) {
+              const data = (await res.json()) as { blueprint: RegionBlueprint };
+              this.regionBlueprintCache.set(id, data.blueprint);
+              this.continent?.updateLayerBlueprint(data.blueprint);
+              this.regionNodesSyncKey = "";
+              return data.blueprint;
+            }
+          } catch {
+            /* fall through to cache */
+          }
+          const cached = this.regionBlueprintCache.get(id);
+          if (cached?.heights?.length) return cached;
+          throw new Error(`Failed to fetch region ${id}`);
+        },
+        this.regionNameMap,
+      );
+      this.continent.setGraphicsOptions({
+        streamRing: this.graphics.streamRing,
+        grassDrawDistance: this.graphics.grassDrawDistance,
+      });
+    }
+    this.continent.setNameMap(this.regionNameMap);
+    return this.continent;
+  }
+
+  private continentGroundAt = (x: number, z: number): number => {
+    if (!this.continent) return 0;
+    return this.continent.groundAt(x, z, this.continentCatalog());
+  };
+
+  private continentWaterDepthAt = (x: number, z: number): number => {
+    if (!this.continent) return 0;
+    return this.continent.waterDepthAt(x, z, this.continentCatalog());
+  };
+
+  /** Bind primary renderer/music to the ownership region (no tear-down). */
+  private bindPrimaryRegion(regionId: string): void {
+    const layer = this.continent?.getLayer(regionId) ?? null;
+    const prevId = this.activeRegionId;
+    this.activeRegionId = regionId;
+    this.regionRenderer = layer?.renderer ?? null;
+    this.entities.heightSampler = (x, z) => this.continentGroundAt(x, z);
+    if (this.regionRenderer && (prevId === null || prevId !== regionId)) {
+      music.play(regionMusicTrackUrl(this.regionRenderer.musicTrack), 3000);
+    }
+  }
+
+  private destroyContinent(): void {
+    this.continent?.destroy();
+    this.continent = null;
+    this.regionRenderer = null;
+    this.activeRegionId = null;
+    this.entities.heightSampler = undefined;
+    music.stop();
   }
 
   private async connect(characterId: string): Promise<void> {
@@ -405,6 +549,8 @@ export class Game {
           eyeColor: msg.eyeColor,
           outfitHue: msg.outfitHue,
         };
+        ui.gender = this.selfGender;
+        ui.appearance = this.selfAppearance;
         ui.serverTimeOffset = msg.serverTime - Date.now();
         ui.self = msg.self;
         ui.inventory = msg.inventory;
@@ -412,11 +558,15 @@ export class Game {
         ui.selectedSlot = msg.selectedSlot;
         ui.timeOfDay = msg.timeOfDay;
         this.move = { x: msg.self.x, y: msg.self.y, z: msg.self.z, vy: msg.self.vy, grounded: msg.self.grounded };
-        this.nodes = new NodeManager(this.scene, msg.depletedNodes);
+        this.depletedNodeIds = new Set(msg.depletedNodes);
+        // Continent gatherables come from authored region.resourceNodes — not procedural overworld scatter.
+        this.nodes = new NodeManager(this.scene, msg.depletedNodes, []);
+        this.regionNodesSyncKey = "";
         for (const structure of msg.structures) this.entities.addStructure(structure);
         for (const npc of msg.npcs) this.npcManager.applySnap(npc);
         ui.questMarkers = this.npcManager.questMarkers();
         ui.questLog = msg.questLog;
+        ui.achievements = msg.achievements ?? [];
         void this.preloadAndEnter(msg);
         break;
       }
@@ -448,6 +598,8 @@ export class Game {
         this.applyEquippedGear(msg.items);
         break;
       case "nodeUpdate":
+        if (msg.depleted) this.depletedNodeIds.add(msg.nodeId);
+        else this.depletedNodeIds.delete(msg.nodeId);
         this.nodes?.setDepleted(msg.nodeId, msg.depleted);
         break;
       case "structureAdd":
@@ -486,6 +638,15 @@ export class Game {
       case "questLog":
         ui.questLog = msg.quests;
         break;
+      case "achievements":
+        ui.achievements = msg.achievements;
+        break;
+      case "achievementUnlocked": {
+        ui.toast(`Achievement: ${msg.name} (+${msg.xp} XP)`);
+        ui.addCombat(`Achievement unlocked: ${msg.name}`);
+        sound.play("levelup");
+        break;
+      }
       case "questComplete":
         ui.toast(`Quest complete: ${msg.questName} (+${msg.xp} XP)`);
         ui.addCombat(`Completed "${msg.questName}" — +${msg.xp} XP`);
@@ -540,7 +701,9 @@ export class Game {
         const wasInRegion = ui.regionState !== null;
         if (msg.inRegion && msg.regionId) {
           ui.regionState = { regionId: msg.regionId, regionName: msg.regionName ?? "" };
-          if (!wasInRegion || this.activeRegionId !== msg.regionId) {
+          // Hard UI reset only when first entering the continent — seamless
+          // zone ownership changes keep targeting/inventory intact.
+          if (!wasInRegion) {
             this.interactNodeId = null;
             this.reviveTargetId = null;
             this.entities.setTarget(null);
@@ -548,6 +711,8 @@ export class Game {
             ui.worldMapOpen = false;
             if (ui.questOffer) this.closeQuestDialog();
             this.posError.set(0, 0, 0);
+          } else if (this.activeRegionId !== msg.regionId) {
+            this.bindPrimaryRegion(msg.regionId);
           }
         } else {
           ui.regionState = null;
@@ -583,47 +748,26 @@ export class Game {
 
   private async preloadAndEnter(msg: Extract<ServerMsg, { t: "welcome" }>): Promise<void> {
     try {
-      ui.loadingMessage = "Loading character models...";
-      ui.loadingProgress = 35;
-      const { preloadCharacterAssets } = await import("../render/gltf");
-      await preloadCharacterAssets();
-
-      ui.loadingMessage = "Loading terrain assets...";
-      ui.loadingProgress = 65;
-      const { natureAssetsLoaded } = await import("../render/natureAssets");
-      await natureAssetsLoaded;
-
-      ui.loadingMessage = "Loading town assets...";
-      ui.loadingProgress = 85;
-      const { preloadSettlements } = await import("../render/settlements");
-      await preloadSettlements();
-
-      ui.loadingMessage = "Entering world...";
-      ui.loadingProgress = 95;
+      // Region blueprints already preload their own foliage/buildings via
+      // preloadRegionAssets. Skip global nature+settlement catalog warm —
+      // those were multi‑100 MB and mostly unused on the continent path.
+      ui.loadingMessage = "Loading character...";
+      ui.loadingProgress = 40;
+      // UAL clips bind inside loadFrom; don't also await preloadCharacterAssets
+      // (that eagerly fetched both genders, all hair, skeletons, weapon props).
       await this.avatar.loadFrom(playerModelUrl(this.selfGender), 1.8);
       await this.avatar.applyAppearance(this.selfGender, this.selfAppearance);
+      ui.loadingProgress = 70;
       await this.applyEquippedGearAsync(msg.inventory);
 
-      // Starting region (or reconnect into a region): keep the loading screen
-      // up until ADT terrain + foliage/props are actually in the scene.
-      if (ui.regionState?.regionId) {
-        const regionId = ui.regionState.regionId;
+      // Mount the region the server put us in (starting town for new chars,
+      // otherwise the region containing the restored logout pose).
+      const regionId = ui.regionState?.regionId;
+      if (regionId) {
         ui.loadingMessage = "Loading region…";
-        ui.loadingProgress = 96;
+        ui.loadingProgress = 85;
         this.tearDownOverworld();
-        if (this.activeRegionId !== regionId) {
-          if (this.regionRenderer) {
-            this.regionRenderer.destroy();
-            this.regionRenderer = null;
-          }
-          if (this.activeRegionGroup) {
-            this.scene.remove(this.activeRegionGroup);
-            this.disposeHierarchy(this.activeRegionGroup);
-            this.activeRegionGroup = null;
-          }
-          this.activeRegionId = regionId;
-          this.regionEnterPromise = this.enterRegionInterior(regionId);
-        }
+        this.regionEnterPromise = this.enterRegionInterior(regionId);
         if (this.regionEnterPromise) await this.regionEnterPromise;
       } else {
         ui.loadingProgress = 100;
@@ -703,9 +847,13 @@ export class Game {
         }
         break;
       case "death":
-        ui.toast("You died");
-        ui.addCombat("You died");
-        sound.play("death", { classId: this.selfClassId });
+        // Mob kills broadcast "death" with targetId = mob id to everyone nearby.
+        // Player death is sent only to the victim and usually has no targetId.
+        if (!msg.targetId || msg.targetId === this.selfId) {
+          ui.toast("You died");
+          ui.addCombat("You died");
+          sound.play("death", { classId: this.selfClassId });
+        }
         break;
       case "revive":
         if (msg.targetId === this.selfId) {
@@ -756,13 +904,13 @@ export class Game {
     const hasBakedIn = heldDef && heldDef.weaponModel && heldDef.weaponModel.some(nodeName => allKnown.includes(nodeName));
     if (hasBakedIn) {
       this.avatar.setWeapon(heldDef!.weaponModel!, allKnown);
-      void this.avatar.setWeaponProp(null);
+      await this.avatar.setWeaponProp(null);
     } else if (heldDef && heldDef.weaponProp) {
       this.avatar.setWeapon([], allKnown);
-      void this.avatar.setWeaponProp(heldDef.weaponProp);
+      await this.avatar.setWeaponProp(heldDef.weaponProp);
     } else {
       this.avatar.setWeapon([], allKnown);
-      void this.avatar.setWeaponProp(null);
+      await this.avatar.setWeaponProp(null);
     }
     // Cast/attack animation overrides stay tied to the *equipped* weapon
     // (e.g. Firebolt's staff-channel pose), independent of whatever tool is
@@ -829,9 +977,32 @@ export class Game {
     const drift = dist2D(serverState.x, serverState.z, this.move.x, this.move.z);
     
     // Replay pending inputs from the server state; adopt result if we drifted.
+    // Use live colliders/ground (not the snapshot from input time) so barriers
+    // that finished loading still block during reconcile.
+    const inContinent = this.continent !== null && ui.regionState !== null;
+    const liveAssets = inContinent
+      ? this.continent!.collidersWorld()
+      : this.regionRenderer
+        ? [
+            ...regionAssetColliders(this.regionRenderer.assets),
+            ...regionVolumeColliders(this.regionRenderer.terrainVolumes ?? []),
+            ...regionBarrierColliders(this.regionRenderer.blueprint.barrierVolumes),
+          ]
+        : undefined;
+    const liveGround = inContinent ? this.continentGroundAt : undefined;
+    const liveWater = inContinent ? this.continentWaterDepthAt : undefined;
     let replayed = serverState;
     for (const p of this.pending) {
-      replayed = stepMovement(replayed, p, TICK_DT);
+      replayed = stepMovement(
+        replayed,
+        {
+          ...p,
+          regionAssets: liveAssets ?? p.regionAssets,
+          groundAt: liveGround ?? p.groundAt,
+          waterDepthAt: liveWater ?? p.waterDepthAt,
+        },
+        TICK_DT,
+      );
     }
     
     const replayDrift = dist2D(replayed.x, replayed.z, this.move.x, this.move.z) + Math.abs(replayed.y - this.move.y);
@@ -876,19 +1047,23 @@ export class Game {
 
     // Camera orbit
     this.cameraYaw += actions.lookX;
-    this.cameraPitch = clamp(this.cameraPitch + actions.lookY, -1.2, 0.5);
+    // Allow steeper look-down so swim aiming can point into the water.
+    this.cameraPitch = clamp(this.cameraPitch + actions.lookY, -1.45, 0.55);
     ui.compassYaw = this.cameraYaw;
 
     const dead = ui.self?.dead ?? false;
 
-    // Character screen toggle -- Tab/I/K/J/O (and gamepad Start) each open the
-    // same full-page panel directly on their own tab, or close it if it's
+    // Character screen toggle -- Tab/I/L/K/J/U/O (and gamepad Start) each open
+    // the same full-page panel directly on their own tab, or close it if it's
     // already open showing that tab. One shared panel, not separate modals.
-    if (actions.inventoryPressed && !dead) this.toggleTab("inventory");
-    if (actions.spellbookPressed && !dead) this.toggleTab("spellbook");
-    if (actions.craftingPressed && !dead) this.toggleTab("craft");
-    if (actions.systemPressed && !dead) this.toggleTab("system");
-    if (actions.systemMenuPressed && !dead) this.toggleTab("system");
+    if (actions.inventoryPressed && !dead) this.toggleCharacterTab("inventory");
+    if (actions.questsPressed && !dead) this.toggleCharacterTab("quests");
+    if (actions.achievementsPressed && !dead) this.toggleCharacterTab("achievements");
+    if (actions.spellbookPressed && !dead) this.toggleCharacterTab("spellbook");
+    if (actions.craftingPressed && !dead) this.toggleCharacterTab("craft");
+    if (actions.partyPressed && !dead) this.toggleCharacterTab("party");
+    if (actions.systemPressed && !dead) this.toggleCharacterTab("system");
+    if (actions.systemMenuPressed && !dead) this.toggleCharacterTab("system");
 
     // LB/RB cycle between tabs while the character screen is open -- the
     // same two bumpers that chord-select action-bar slots during gameplay,
@@ -967,6 +1142,15 @@ export class Game {
     // Targeting: click-to-target, Shift snap/cycle.
     if (!dead) this.handleTargeting(actions);
 
+    if (actions.zoomDelta !== 0) {
+      // One input tick → one small step (max zoom-out is the default arm).
+      this.cameraDistance = clamp(
+        this.cameraDistance + Math.sign(actions.zoomDelta) * CAMERA_ZOOM_STEP,
+        CAMERA_DISTANCE_MIN,
+        CAMERA_DISTANCE_MAX,
+      );
+    }
+
     // UI toggles handled by HUD; here: hotbar + world actions
     if (!dead) {
       if (actions.hotbarSlot !== null) this.useHotbarSlot(actions.hotbarSlot);
@@ -1033,25 +1217,26 @@ export class Game {
     this.syncMount();
     const riderLift = this.mountMesh?.riderY ?? 0;
     this.avatar.group.position.set(rx, ry + riderLift, rz);
+    // YXZ: yaw to face camera, then pitch for swim aim (look down → nose down).
+    this.avatar.group.rotation.order = "YXZ";
     this.avatar.group.rotation.y = this.cameraYaw;
+    this.avatar.group.rotation.x = this.swimBodyPitch;
+    this.avatar.group.rotation.z = 0;
     if (this.mountMesh) {
       this.mountMesh.group.position.set(rx, ry, rz);
       this.mountMesh.group.rotation.y = this.cameraYaw;
     }
     this.animateSelf(dt, actions);
     this.updateCamera(rx, ry, rz);
-    if (!this.insideDungeonPortal && !ui.regionState) {
-      this.nodes?.update(rx, rz, now, dt);
-      this.grass?.update(rx, rz, now);
-      this.clouds?.update(dt);
-      this.water?.update(dt);
-      if (this.settlements) animateSettlements(this.settlements, now);
-    } else {
-      this.nodes?.clearScene();
-    }
+    this.syncAuthoredRegionNodes();
+    this.nodes?.update(rx, rz, now, dt);
     this.entities.update(now, dt, this.camera);
-    this.updateInteractPrompt();
-    this.updateDayNight(rx, rz);
+    if (now - this.interactPromptAt >= INTERACT_PROMPT_INTERVAL_MS) {
+      this.interactPromptAt = now;
+      this.updateInteractPrompt();
+    }
+    this.updateDayNight(rx, rz, dt);
+    this.skyDome.update(dt, this.camera);
 
     this.renderer.render(this.scene, this.camera);
     // Yield to the browser so this frame can paint before ADT/village work.
@@ -1084,85 +1269,21 @@ export class Game {
   }
 
   private updateZoneAndStreaming(x: number, z: number, dt = 0.016): void {
-    const inRegion = ui.regionState !== null;
-    // A region's local coordinates aren't tied to any real overworld
-    // position (unlike a dungeon arena, which reserves a real rectangle),
-    // so this is gated purely on the server-authoritative regionState flag
-    // instead of a coordinate check -- and a region visit always takes
-    // precedence over the (impossible, but just in case) dungeon flag.
-    this.insideDungeonPortal = !inRegion && ui.dungeonState ? dungeonPortalAt(x, z) : null;
+    // Dungeons take priority while the server says we're in one; otherwise
+    // the continent streamer owns the scene (no procedural overworld).
+    const inDungeon = ui.dungeonState !== null;
+    this.insideDungeonPortal = inDungeon ? dungeonPortalAt(x, z) : null;
 
-    const zone = inRegion
-      ? { id: `region_${ui.regionState!.regionId}`, name: ui.regionState!.regionName, subtitle: "" }
-      : zoneAt(x, z, !!this.insideDungeonPortal);
-    ui.enterZone(zone.id, zone.name, zone.subtitle);
-
-    const showSigns = !this.insideDungeonPortal && !inRegion;
-    for (const sign of this.overworldSigns) {
-      if (sign.visible !== showSigns) {
-        sign.visible = showSigns;
+    if (inDungeon && ui.dungeonState) {
+      const zone = zoneAt(x, z, true);
+      ui.enterZone(zone.id, zone.name, zone.subtitle);
+      if (this.activeDungeonPortalId !== (this.insideDungeonPortal?.id ?? this.activeDungeonPortalId)) {
+        // Keep existing dungeon group if portal id unknown; layout from state.
       }
-    }
-
-    if (inRegion) {
-      this.tearDownOverworld();
-      if (this.dungeonRenderer) {
-        this.dungeonRenderer.destroy();
-        this.dungeonRenderer = null;
-      }
-      if (this.activeDungeonGroup) {
-        this.scene.remove(this.activeDungeonGroup);
-        this.disposeHierarchy(this.activeDungeonGroup);
-        this.activeDungeonGroup = null;
-        this.activeDungeonPortalId = null;
-      }
-      const regionId = ui.regionState!.regionId;
-      if (this.activeRegionId !== regionId) {
-        if (this.regionRenderer) {
-          this.regionRenderer.destroy();
-          this.regionRenderer = null;
-        }
-        if (this.activeRegionGroup) {
-          this.scene.remove(this.activeRegionGroup);
-          this.disposeHierarchy(this.activeRegionGroup);
-          this.activeRegionGroup = null;
-        }
-        this.activeRegionId = regionId;
-        this.regionEnterPromise = this.enterRegionInterior(regionId);
-        void this.regionEnterPromise.finally(() => {
-          if (this.activeRegionId === regionId) this.regionEnterPromise = null;
-        });
-      }
-      if (this.regionRenderer) {
-        this.regionRenderer.update(dt, this.sun, x, z);
-      }
-      return;
-    }
-
-    if (this.regionRenderer) {
-      this.regionRenderer.destroy();
-      this.regionRenderer = null;
-      this.entities.heightSampler = undefined;
-      music.stop();
-    }
-    if (this.activeRegionGroup) {
-      this.scene.remove(this.activeRegionGroup);
-      this.disposeHierarchy(this.activeRegionGroup);
-      this.activeRegionGroup = null;
-      this.activeRegionId = null;
-    }
-
-    if (this.insideDungeonPortal) {
-      this.tearDownOverworld();
-      if (this.activeDungeonPortalId !== this.insideDungeonPortal.id) {
-        if (this.dungeonRenderer) {
-          this.dungeonRenderer.destroy();
-          this.dungeonRenderer = null;
-        }
+      if (ui.dungeonState && !this.dungeonRenderer && this.insideDungeonPortal) {
         if (this.activeDungeonGroup) {
           this.scene.remove(this.activeDungeonGroup);
           this.disposeHierarchy(this.activeDungeonGroup);
-          this.activeDungeonGroup = null;
         }
         this.activeDungeonPortalId = this.insideDungeonPortal.id;
         this.activeDungeonGroup = new THREE.Group();
@@ -1170,128 +1291,114 @@ export class Game {
         this.dungeonRenderer = new DungeonInteriorRenderer(this.activeDungeonGroup, layout);
         this.scene.add(this.activeDungeonGroup);
       }
-      if (this.dungeonRenderer) {
-        this.dungeonRenderer.update(x, z);
-      }
-    } else {
-      this.rebuildOverworld();
-      if (this.dungeonRenderer) {
-        this.dungeonRenderer.destroy();
-        this.dungeonRenderer = null;
-      }
-      if (this.activeDungeonGroup) {
-        this.scene.remove(this.activeDungeonGroup);
-        this.disposeHierarchy(this.activeDungeonGroup);
-        this.activeDungeonGroup = null;
-        this.activeDungeonPortalId = null;
-      }
+      if (this.dungeonRenderer) this.dungeonRenderer.update(x, z);
+      return;
     }
 
-    if (!this.insideDungeonPortal) {
-      // Overworld villages: stream by ADT tile ring (load + unload).
-      const wantedTiles = new Set(adtRingKeys(x, z, ADT_VILLAGE_RING));
-      for (const village of generateVillages()) {
-        const tile = adtKey(adtIndex(village.x), adtIndex(village.z));
-        const wanted = wantedTiles.has(tile);
-        const existing = this.streamedVillages.get(village.id);
-        if (wanted && !existing) {
-          const group = new THREE.Group();
-          group.name = `village:${village.id}`;
-          this.overworldGroup.add(group);
-          const signs = buildVillage(group, village, true);
-          for (const sign of signs) sign.visible = true;
-          this.overworldSigns.push(...signs);
-          this.streamedVillages.set(village.id, { group, signs });
-        } else if (!wanted && existing) {
-          this.overworldGroup.remove(existing.group);
-          this.disposeHierarchy(existing.group);
-          const drop = new Set(existing.signs);
-          this.overworldSigns = this.overworldSigns.filter((s) => !drop.has(s));
-          this.streamedVillages.delete(village.id);
-        }
-      }
-      // Drains a few of a freshly-streamed village's queued building/prop
-      // placements per frame instead of all ~50-60 landing in the same one.
-      flushSettlementQueue(2);
+    // Left dungeon — tear down interior mesh if still present.
+    if (this.dungeonRenderer) {
+      this.dungeonRenderer.destroy();
+      this.dungeonRenderer = null;
     }
+    if (this.activeDungeonGroup) {
+      this.scene.remove(this.activeDungeonGroup);
+      this.disposeHierarchy(this.activeDungeonGroup);
+      this.activeDungeonGroup = null;
+      this.activeDungeonPortalId = null;
+    }
+
+    const regionId = ui.regionState?.regionId ?? this.activeRegionId ?? this.regionCatalog[0]?.id;
+    if (!regionId) return;
+
+    ui.enterZone(
+      `region_${regionId}`,
+      ui.regionState?.regionName ?? this.regionNameMap.get(regionId) ?? "Region",
+      "",
+    );
+
+    if (!this.continent || !this.continent.getLayer(regionId)) {
+      if (!this.regionEnterPromise) {
+        this.regionEnterPromise = this.enterRegionInterior(regionId);
+        void this.regionEnterPromise.finally(() => {
+          if (this.activeRegionId === regionId) this.regionEnterPromise = null;
+        });
+      }
+    } else if (this.activeRegionId !== regionId) {
+      this.bindPrimaryRegion(regionId);
+    }
+
+    if (this.continent && !this.regionEnterPromise) {
+      const now = performance.now();
+      const moved =
+        !Number.isFinite(this.continentSyncAt.x) ||
+        Math.hypot(x - this.continentSyncAt.x, z - this.continentSyncAt.z) > 24;
+      if (moved || now - this.continentSyncAt.t > 1500) {
+        this.continentSyncAt = { x, z, t: now };
+        void this.continent.syncAround(x, z, this.continentCatalog(), { urgentId: regionId });
+      }
+    }
+    this.continent?.update(dt, this.sun, x, z, this.camera);
   }
 
-  /** Fetches (and caches) a region's full blueprint and builds its interior
-   *  renderer -- unlike a dungeon layout (a pure client-side function call),
-   *  a region's content is author-created data that only the server knows
-   *  about, so this always needs an HTTP round-trip the first time. */
+  /** Mount the continent streamer around the player. Neighbor regions stay
+   *  resident across seams — only the first entry (or a far teleport) shows
+   *  a loading screen. */
   private async enterRegionInterior(regionId: string): Promise<void> {
-    let blueprint = this.regionBlueprintCache.get(regionId);
-    if (!blueprint) {
-      // Show a loading screen while we fetch the blueprint over the network.
+    const alreadyMounted = !!this.continent?.getLayer(regionId);
+    const showLoading = !alreadyMounted;
+    if (showLoading) {
       ui.loading = true;
       ui.loadingMessage = "Loading region…";
       ui.loadingProgress = 10;
-      try {
-        const res = await fetch(app.apiUrl(`/api/regions/${regionId}`), { credentials: "include" });
-        if (!res.ok) { ui.loading = false; return; }
-        const data = (await res.json()) as { blueprint: RegionBlueprint };
-        blueprint = data.blueprint;
-        this.regionBlueprintCache.set(regionId, blueprint);
-        ui.loadingProgress = 20;
-      } catch {
-        ui.loading = false;
+    }
+
+    try {
+      if (this.regionCatalog.length === 0) await this.loadRegionCatalog();
+      const continent = this.ensureContinent();
+
+      if (showLoading) {
+        ui.loadingProgress = 30;
+        ui.loadingMessage = "Loading region…";
+      }
+
+      await continent.syncAround(this.move.x, this.move.z, this.continentCatalog(), {
+        urgentId: regionId,
+      });
+
+      // Left the continent while loading.
+      if (!ui.regionState?.regionId) {
+        if (showLoading) ui.loading = false;
         return;
       }
+
+      this.bindPrimaryRegion(ui.regionState.regionId);
+      const layer = continent.getLayer(regionId);
+      if (layer) {
+        const local = worldToRegionLocal(layer.blueprint, this.move.x, this.move.z);
+        layer.renderer.warmAround(local.x, local.z);
+      }
+
+      this.move.y = this.continentGroundAt(this.move.x, this.move.z) + 0.05;
+      this.move.vy = 0;
+      this.move.grounded = true;
+      this.posError.set(0, 0, 0);
+      this.tickRenderFrom.x = this.move.x;
+      this.tickRenderFrom.y = this.move.y;
+      this.tickRenderFrom.z = this.move.z;
+
+      if (showLoading) {
+        ui.loadingMessage = "Preparing region…";
+        ui.loadingProgress = 98;
+        this.renderer.compile(this.scene, this.camera);
+        ui.loadingProgress = 100;
+        ui.loading = false;
+      }
+    } catch (e) {
+      console.error("[Game] Continent enter failed", e);
+      if (showLoading) ui.loading = false;
+    } finally {
+      this.regionEnterPromise = null;
     }
-    // The player may have already left (or switched to a different region)
-    // while this fetch was in flight -- don't build a stale interior.
-    if (this.activeRegionId !== regionId) { ui.loading = false; return; }
-
-    // Preload all unique GLB models with genuine per-file progress (20 → 95%).
-    // Already-cached models resolve instantly so revisiting a region is fast.
-    if (!ui.loading) {
-      // Blueprint was cached -- still show a brief loading screen for the assets.
-      ui.loading = true;
-      ui.loadingMessage = "Loading region…";
-      ui.loadingProgress = 20;
-    }
-    await preloadRegionAssets(blueprint, (loaded, total) => {
-      if (total === 0) return;
-      // Map loaded/total into the 20 → 95 range.
-      ui.loadingProgress = 20 + Math.round((loaded / total) * 75);
-      ui.loadingMessage = `Loading region… (${loaded}/${total})`;
-    });
-    // Guard again in case the player left while models were downloading.
-    if (this.activeRegionId !== regionId) { ui.loading = false; return; }
-
-    ui.loadingProgress = 95;
-    this.activeRegionGroup = new THREE.Group();
-    this.regionRenderer = new RegionInteriorRenderer(this.activeRegionGroup, blueprint, this.regionNameMap);
-    this.entities.heightSampler = (x, z) => this.regionRenderer?.heightAt(x, z) ?? 0;
-    this.scene.add(this.activeRegionGroup);
-    music.play(regionMusicTrackUrl(this.regionRenderer.musicTrack), 3000);
-
-    // Immediately snap move height to exact region ground height and clear position error
-    this.move.y = this.regionRenderer.heightAt(this.move.x, this.move.z) + 0.05;
-    this.move.vy = 0;
-    this.move.grounded = true;
-    this.posError.set(0, 0, 0);
-    this.tickRenderFrom.x = this.move.x;
-    this.tickRenderFrom.y = this.move.y;
-    this.tickRenderFrom.z = this.move.z;
-
-    // Wait for every foliage/prop/building instance + ADT terrain warm
-    // (region.ready), then force shaders/geometry onto the GPU while the
-    // loading screen is still up.
-    ui.loadingMessage = "Preparing region…";
-    ui.loadingProgress = 98;
-    // Re-warm around the live player position (server may have placed them
-    // slightly off entryLocal).
-    this.regionRenderer.warmAround(this.move.x, this.move.z);
-    await this.regionRenderer.ready;
-    if (this.activeRegionId !== regionId) { ui.loading = false; return; }
-    this.renderer.compile(this.scene, this.camera);
-
-    // Done — dismiss loading screen.
-    ui.loadingProgress = 100;
-    ui.loading = false;
-    this.regionEnterPromise = null;
   }
 
   private readonly TARGET_RANGE = 60;
@@ -1343,9 +1450,18 @@ export class Game {
     // Send an immediate facing input so the server updates yaw before it
     // resolves the attack/cast message that follows this frame.
     const seq = ++this.inputSeq;
-    const input = { moveX: 0, moveZ: 0, jump: false, sprint: false, block: false, revivingId: null };
+    const input = {
+      moveX: 0,
+      moveZ: 0,
+      jump: false,
+      sprint: false,
+      crouch: false,
+      block: false,
+      lookPitch: this.cameraPitch,
+      revivingId: null,
+    };
     this.pending.push({ seq, ...input, mount: ui.self?.mount ?? null });
-    this.connection.send({ t: "input", seq, ...input, yaw });
+    this.connection.send({ t: "input", seq, ...input, yaw, pitch: this.cameraPitch });
   }
 
   private stepLocal(actions: ReturnType<InputManager["sample"]>): void {
@@ -1366,28 +1482,61 @@ export class Game {
       moveZ,
       jump: this.jumpQueued,
       sprint: actions.sprint,
+      crouch: actions.crouch,
       block: actions.block,
+      lookPitch: this.cameraPitch,
       revivingId: actions.interactHeld ? this.reviveTargetId : null,
     };
     this.jumpQueued = false;
     const mount = ui.self?.mount ?? null;
 
     const inDungeon = ui.dungeonState !== null;
-    const regionHeightmap = this.regionRenderer?.heightmap;
-    const regionAssets = this.regionRenderer
-      ? [
-          ...regionAssetColliders(this.regionRenderer.assets),
-          ...regionVolumeColliders(this.regionRenderer.terrainVolumes ?? []),
-        ]
-      : undefined;
+    const inContinent = this.continent !== null && ui.regionState !== null;
+    const groundAt = inContinent ? this.continentGroundAt : undefined;
+    const waterDepthAt = inContinent ? this.continentWaterDepthAt : undefined;
+    const regionHeightmap = !inContinent ? this.regionRenderer?.heightmap : undefined;
+    const regionAssets = inContinent
+      ? this.continent!.collidersWorld()
+      : this.regionRenderer
+        ? [
+            ...regionAssetColliders(this.regionRenderer.assets),
+            ...regionVolumeColliders(this.regionRenderer.terrainVolumes ?? []),
+            ...regionBarrierColliders(this.regionRenderer.blueprint.barrierVolumes),
+          ]
+        : undefined;
     const seq = ++this.inputSeq;
-    this.pending.push({ seq, ...input, mount, inDungeon, regionHeightmap, regionAssets });
+    this.pending.push({
+      seq,
+      ...input,
+      mount,
+      inDungeon,
+      regionHeightmap,
+      regionAssets,
+      groundAt,
+      waterDepthAt,
+    });
     if (this.pending.length > 120) this.pending.shift();
 
     // Predict with the mount so speed matches the server; the wire message
     // omits mount (server is authoritative on mount state).
-    this.move = stepMovement(this.move, { ...input, mount, inDungeon, regionHeightmap, regionAssets }, TICK_DT);
-    this.connection.send({ t: "input", seq, ...input, yaw: this.cameraYaw });
+    this.move = stepMovement(
+      this.move,
+      { ...input, mount, inDungeon, regionHeightmap, regionAssets, groundAt, waterDepthAt },
+      TICK_DT,
+    );
+    this.connection.send({
+      t: "input",
+      seq,
+      moveX: input.moveX,
+      moveZ: input.moveZ,
+      jump: input.jump,
+      sprint: input.sprint,
+      crouch: input.crouch,
+      block: input.block,
+      revivingId: input.revivingId,
+      yaw: this.cameraYaw,
+      pitch: this.cameraPitch,
+    });
   }
 
 
@@ -1426,19 +1575,22 @@ export class Game {
     const oldX = this.move.x;
     const oldY = this.move.y; // Store old Y for smoothing
     const oldZ = this.move.z;
-    
+
     // Calculate raw target
     const rawTx = oldX + nx * DODGE_DISTANCE;
     const rawTz = oldZ + nz * DODGE_DISTANCE;
 
-    // Clamp target locally to match server world bounds so we don't 
-    // predict dodging out of bounds and snap back.
-    const tx = clamp(rawTx, WORLD_MIN_X, WORLD_MAX_X);
-    const tz = clamp(rawTz, WORLD_MIN_Z, WORLD_MAX_Z);
+    // Continent play is outside the legacy overworld AABB — do not clamp to
+    // WORLD_* (that was yanking dodges to x=±300 / another region).
+    const inContinent = this.continent !== null && ui.regionState !== null;
+    const tx = inContinent ? rawTx : clamp(rawTx, WORLD_MIN_X, WORLD_MAX_X);
+    const tz = inContinent ? rawTz : clamp(rawTz, WORLD_MIN_Z, WORLD_MAX_Z);
 
     this.move.x = tx;
     this.move.z = tz;
-    this.move.y = Math.max(oldY, terrainHeight(tx, tz));
+    this.move.y = inContinent
+      ? this.continentGroundAt(tx, tz)
+      : Math.max(oldY, terrainHeight(tx, tz));
 
     // `this.move` (used for hit-detection/server-sync) jumps straight to the
     // target, but ease the *render* across the burst instead of a hard cut.
@@ -1480,8 +1632,15 @@ export class Game {
     // swimming pins it to exactly 0 even though `grounded` is also false
     // there, so checking vy (not grounded) keeps the jump pose from showing
     // while treading water.
-    const regionHm = this.regionRenderer?.heightmap;
-    const swimming = isSwimmingAt(this.move.x, this.move.y, this.move.z, regionHm);
+    const regionHm = this.continent ? undefined : this.regionRenderer?.heightmap;
+    const groundAt = this.continent ? this.continentGroundAt : undefined;
+    const waterDepthAt = this.continent ? this.continentWaterDepthAt : undefined;
+    const swimming = isSwimmingAt(this.move.x, this.move.y, this.move.z, regionHm, groundAt, waterDepthAt);
+    const underwater = isUnderwaterAt(this.move.x, this.move.y, this.move.z, regionHm, groundAt, waterDepthAt);
+    const waterHere = waterAt(this.move.x, this.move.z, regionHm, groundAt, waterDepthAt);
+    const camUnder =
+      swimming && waterHere.depth > 0 && this.camera.position.y < waterHere.surface - 0.05;
+    ui.underwater = !ui.self?.dead && (underwater || camUnder);
     const serverAnim = ui.self?.dead
       ? "dead"
       : ui.self?.sitting
@@ -1496,7 +1655,31 @@ export class Game {
                 ? "swim"
                 : "idle";
     const speed = this.lastAnimSpeed * (actions.sprint ? 6.8 : 4.6);
-    const logical = logicalFromState(serverAnim, speed, 3.5, actions.moveX, actions.moveY);
+    // Body pitch follows the camera while swimming (continuous, not binary
+    // up/down clips). Neutral at the default orbit pitch; look down → dive.
+    const SWIM_NEUTRAL_CAM = -0.35;
+    const pitchTarget = swimming
+      ? clamp(-(this.cameraPitch - SWIM_NEUTRAL_CAM) * 1.15, -1.05, 1.2)
+      : 0;
+    this.swimBodyPitch += (pitchTarget - this.swimBodyPitch) * Math.min(1, dt * 9);
+    if (Math.abs(this.swimBodyPitch) < 0.001) this.swimBodyPitch = 0;
+
+    // Stroke intensity only — angle comes from swimBodyPitch above.
+    let swimVert = 0;
+    if (swimming && waterHere.depth > 0) {
+      const floatY = waterHere.surface - SWIM_FLOAT_OFFSET;
+      const belowTread = this.move.y < floatY - 0.12;
+      if ((actions.jump || this.cameraPitch > 0.08) && belowTread) swimVert = 1;
+      else if (actions.crouch || this.cameraPitch < -0.42) swimVert = -1;
+    }
+    const logical = logicalFromState(
+      serverAnim,
+      swimming && swimVert !== 0 ? Math.max(speed, 2) : speed,
+      3.5,
+      actions.moveX,
+      actions.moveY,
+      swimVert,
+    );
     this.avatar.setLocomotionSpeed(speed, 3.5);
     const overrides =
       logical === "cast"
@@ -1522,8 +1705,9 @@ export class Game {
       this.footstepAccum += dt * (0.65 + this.lastAnimSpeed);
       if (this.footstepAccum >= stepEvery) {
         this.footstepAccum = 0;
-        const regionWater =
-          this.regionRenderer != null
+        const regionWater = this.continent
+          ? this.continentWaterDepthAt(this.move.x, this.move.z)
+          : this.regionRenderer != null
             ? sampleRegionWaterDepth(this.regionRenderer.heightmap, this.move.x, this.move.z)
             : 0;
         const surface = resolveFootSurface({
@@ -1549,12 +1733,18 @@ export class Game {
     const cy = this.cameraYaw;
     const cp = this.cameraPitch;
 
-    let distance = CAMERA_DISTANCE;
+    let distance = this.cameraDistance;
 
     // Inside regions: pull the camera in when the arm hits solid walls so
     // interiors / upstairs rooms stay usable instead of clipping through.
-    if (this.regionRenderer) {
-      const colliders = regionAssetColliders(this.regionRenderer.assets);
+    if (this.continent || this.regionRenderer) {
+      const colliders = this.continent
+        ? this.continent.collidersWorld()
+        : [
+            ...regionAssetColliders(this.regionRenderer!.assets),
+            ...regionVolumeColliders(this.regionRenderer!.terrainVolumes ?? []),
+            ...regionBarrierColliders(this.regionRenderer!.blueprint.barrierVolumes),
+          ];
       const headY = py + 1.5;
       for (let t = 0.6; t < distance; t += 0.35) {
         const sx = px - Math.sin(cy) * (t * Math.cos(cp));
@@ -1562,10 +1752,16 @@ export class Game {
         const sz = pz - Math.cos(cy) * (t * Math.cos(cp));
         let blocked = false;
         for (const c of colliders) {
-          if (c.climbable || c.radius <= 0) continue;
-          const dx = sx - c.x;
-          const dz = sz - c.z;
-          if (dx * dx + dz * dz >= c.radius * c.radius) continue;
+          // Invisible barriers use a huge circumradius for player OBB tests —
+          // never treat them as camera blockers (they'd pin the arm at ~1m).
+          if (c.climbable || c.solid || c.radius <= 0) continue;
+          if (c.halfX !== undefined && c.halfZ !== undefined) {
+            if (!pointInColliderXZ(sx, sz, c, 0.15)) continue;
+          } else {
+            const dx = sx - c.x;
+            const dz = sz - c.z;
+            if (dx * dx + dz * dz >= c.radius * c.radius) continue;
+          }
           if (sy >= c.baseY - 0.2 && sy <= c.topY + 0.3) {
             blocked = true;
             break;
@@ -1580,13 +1776,32 @@ export class Game {
 
     let targetX = px - Math.sin(cy) * (distance * Math.cos(cp));
     let targetZ = pz - Math.cos(cy) * (distance * Math.cos(cp));
+    // Standard orbit: look down (negative pitch) raises the camera and aims
+    // into the water — same as land. Do not invert Y while swimming.
     let targetY = py + CAMERA_HEIGHT - distance * Math.sin(cp);
 
-    if (this.regionRenderer) {
-      const h = this.regionRenderer.heightAt(px, pz);
-      const wd = sampleRegionWaterDepth(this.regionRenderer.heightmap, px, pz);
+    const regionHm = this.continent ? undefined : this.regionRenderer?.heightmap;
+    const groundAt = this.continent ? this.continentGroundAt : undefined;
+    const waterDepthAt = this.continent ? this.continentWaterDepthAt : undefined;
+    const swimming = isSwimmingAt(px, py, pz, regionHm, groundAt, waterDepthAt);
+    const underwater = isUnderwaterAt(px, py, pz, regionHm, groundAt, waterDepthAt);
+
+    if (this.continent || this.regionRenderer) {
+      const h = this.continent
+        ? this.continentGroundAt(px, pz)
+        : this.regionRenderer!.heightAt(px, pz);
+      const wd = this.continent
+        ? this.continentWaterDepthAt(px, pz)
+        : sampleRegionWaterDepth(this.regionRenderer!.heightmap, px, pz);
       targetY = Math.min(targetY, py + 2.7);
-      targetY = Math.max(targetY, h + 0.6, h + wd + 0.4);
+      // Stay above terrain, but do not clamp to the water surface while
+      // swimming/diving — otherwise the camera can never go underwater.
+      const floorY = h + 0.45;
+      if (swimming || underwater) {
+        targetY = Math.max(targetY, floorY);
+      } else {
+        targetY = Math.max(targetY, floorY, h + wd + 0.35);
+      }
     } else if (this.insideDungeonPortal) {
       const h = dungeonFloorHeightAt(px, pz);
       if (h !== null) {
@@ -1595,7 +1810,11 @@ export class Game {
       }
     } else {
       const ground = terrainHeight(targetX, targetZ);
-      targetY = Math.max(targetY, ground + 0.6, WATER_LEVEL + 0.4);
+      if (swimming || underwater) {
+        targetY = Math.max(targetY, ground + 0.45);
+      } else {
+        targetY = Math.max(targetY, ground + 0.6, WATER_LEVEL + 0.4);
+      }
     }
 
     this.camera.position.set(targetX, targetY, targetZ);
@@ -1648,15 +1867,6 @@ export class Game {
       return;
     }
     this.interactNodeId = null;
-    // Exit region portal nearby?
-    if (this.regionRenderer) {
-      const entry = this.regionRenderer.entryLocal;
-      if (dist2D(this.move.x, this.move.z, entry.x, entry.z) < 4.5) {
-        ui.interactLabel = `Leave ${this.regionRenderer.regionName}`;
-        this.interactNodeId = "poi_region_exit";
-        return;
-      }
-    }
     // Exit dungeon portal nearby?
     if (this.insideDungeonPortal) {
       const layout = generateDungeonLayout(this.insideDungeonPortal.id);
@@ -1697,7 +1907,8 @@ export class Game {
       const activeBp = this.regionRenderer.blueprint;
       if (activeBp?.portals) {
         for (const portalLink of activeBp.portals) {
-          if (dist2D(this.move.x, this.move.z, portalLink.localX, portalLink.localZ) <= 6.0) {
+          const linkW = regionLocalToWorld(activeBp, portalLink.localX, portalLink.localZ);
+          if (dist2D(this.move.x, this.move.z, linkW.x, linkW.z) <= 6.0) {
             const destName = this.regionNameMap.get(portalLink.targetRegionId) || portalLink.name || "Region Portal";
             ui.interactLabel = `Travel to ${destName}`;
             this.interactNodeId = `poi_region_link_${portalLink.id}`;
@@ -1707,25 +1918,12 @@ export class Game {
       }
       if (activeBp?.npcs) {
         for (const rNpc of activeBp.npcs) {
-          if (dist2D(this.move.x, this.move.z, rNpc.localX, rNpc.localZ) <= 6.0) {
+          const npcW = regionLocalToWorld(activeBp, rNpc.localX, rNpc.localZ);
+          if (dist2D(this.move.x, this.move.z, npcW.x, npcW.z) <= 6.0) {
             ui.interactLabel = `Talk to ${rNpc.name}`;
             this.interactNodeId = `rnpc_${rNpc.id}`;
             return;
           }
-        }
-      }
-      if (activeBp && dist2D(this.move.x, this.move.z, activeBp.entryLocal.x, activeBp.entryLocal.z) <= 6.0) {
-        ui.interactLabel = "Return to World";
-        this.interactNodeId = "poi_region_exit";
-        return;
-      }
-    } else {
-      // Overworld region portal nearby?
-      for (const portal of this.regionPortals) {
-        if (dist2D(this.move.x, this.move.z, portal.x, portal.z) < DUNGEON_PORTAL_ACTIVATION_RADIUS) {
-          ui.interactLabel = `Enter ${portal.name}`;
-          this.interactNodeId = `poi_region_${portal.id}`;
-          return;
         }
       }
     }
@@ -1747,6 +1945,17 @@ export class Game {
 
   private nearWater(): boolean {
     if (this.dungeonRenderer) return false;
+    if (this.continent) {
+      return isNearWaterAt(
+        this.move.x,
+        this.move.y,
+        this.move.z,
+        undefined,
+        3,
+        this.continentGroundAt,
+        this.continentWaterDepthAt,
+      );
+    }
     return isNearWaterAt(this.move.x, this.move.y, this.move.z, this.regionRenderer?.heightmap);
   }
 
@@ -1779,41 +1988,99 @@ export class Game {
     }
   }
 
-  private updateDayNight(px: number, pz: number): void {
+  private updateDayNight(px: number, pz: number, dt = 1 / 60): void {
+    const tod = ui.timeOfDay;
+    this.skyDome.setTimeOfDay(tod);
+    this.skyDome.group.visible = !this.insideDungeonPortal;
+
     if (this.regionRenderer) {
-      // Fixed color grading from the region's own blueprint, same idea as
-      // the dungeon's fixed torchlight override below -- no outdoor
-      // day/night cycling while inside. Uses an exponential fog (matching
-      // the region editor's own preview) rather than the linear THREE.Fog
-      // the open world/dungeons use, so this swaps the fog instance out
-      // and back rather than mutating one in place.
-      const cg = this.regionRenderer.colorGrading;
-      this.sun.intensity = cg.sunIntensity;
-      this.sun.color.set(cg.sunColor);
-      this.ambient.intensity = cg.ambientIntensity;
-      this.ambient.color.set(cg.ambientColor);
-      this.fillLight.color.set(cg.skyColor);
-      this.fillLight.groundColor.set(cg.fillColor ?? cg.ambientColor);
-      this.fillLight.intensity = cg.fillIntensity ?? 0;
-      this.renderer.toneMappingExposure = cg.exposure ?? 1;
-      (this.scene.background as THREE.Color).set(cg.skyColor);
-      const fogLocal = this.regionRenderer.fogInfluenceAt(
-        this.camera.position.x,
-        this.camera.position.y,
-        this.camera.position.z,
+      // Region grading spatially blends near seams; TOD timeline drives the
+      // layered skydome + sun elevation (WoW-style LightData).
+      const sources = this.continent
+        ? this.continentCatalog().filter((bp) => !!bp.colorGrading && bp.gridSize >= 2 && bp.pitch > 0)
+        : [this.regionRenderer.blueprint];
+      const target =
+        sampleBlendedAtmosphere(sources, px, pz, undefined, tod) ??
+        atmosphereFromGrading(this.regionRenderer.colorGrading, tod);
+      if (!this.atmosphereDisplay) {
+        this.atmosphereDisplay = cloneAtmosphere(target);
+      } else {
+        const k = 1 - Math.exp(-dt * REGION_ATMOSPHERE_LERP_RATE);
+        this.atmosphereDisplay = lerpAtmosphere(this.atmosphereDisplay, target, k);
+      }
+      const a = this.atmosphereDisplay;
+      this.sun.intensity = a.sunIntensity;
+      this.sun.color.copy(a.sunColor);
+      this.ambient.intensity = a.ambientIntensity;
+      this.ambient.color.copy(a.ambientColor);
+      this.fillLight.color.copy(a.skyMidColor);
+      this.fillLight.groundColor.copy(a.fillColor);
+      this.fillLight.intensity = a.fillIntensity;
+      this.renderer.toneMappingExposure = a.exposure;
+      (this.scene.background as THREE.Color).set(0x02040a);
+
+      // Key light follows timeline elevation, but stays a soft fill after
+      // sundown so meshes don't flip to a harsh under-lit night angle.
+      const elevRad = (a.layers.sunElevation * Math.PI) / 180;
+      const az = tod * Math.PI * 2;
+      const dist = 120;
+      const elevY = Math.sin(Math.max(elevRad, 0.12)) * dist;
+      this.sun.position.set(
+        px + Math.cos(az) * dist * Math.cos(Math.max(elevRad, 0)),
+        Math.max(28, elevY),
+        pz + Math.sin(az) * dist * Math.cos(Math.max(elevRad, 0)) * 0.35 + 40,
       );
-      const baseDensity = clampRegionFogDensity(cg.fogDensity);
-      // Local fog volumes add visual density when the camera is inside them.
-      const density = Math.min(0.12, baseDensity + fogLocal.weight * 0.04);
+      this.sun.target.position.set(px, 0, pz);
+
+      this.skyDome.setAtmosphere(a);
+
+      let fogWeight = 0;
+      let fogColor = a.fogColor.clone();
+      const camY = this.camera.position.y;
+      const camX = this.camera.position.x;
+      const camZ = this.camera.position.z;
+      if (this.continent) {
+        this.continent.forEachLayer((layer) => {
+          const local = worldToRegionLocal(layer.blueprint, camX, camZ);
+          const sample = layer.renderer.fogInfluenceAt(local.x, camY, local.z, a.fogColor);
+          if (sample.weight > fogWeight) {
+            fogWeight = sample.weight;
+            fogColor = sample.color;
+          }
+        });
+      } else {
+        const fogLocalPos = worldToRegionLocal(this.regionRenderer.blueprint, camX, camZ);
+        const fogLocal = this.regionRenderer.fogInfluenceAt(
+          fogLocalPos.x,
+          camY,
+          fogLocalPos.z,
+          a.fogColor,
+        );
+        fogWeight = fogLocal.weight;
+        fogColor = fogLocal.color;
+      }
+      const baseDensity = clampRegionFogDensity(a.fogDensity);
+      const density = Math.min(0.12, (baseDensity + fogWeight * 0.04) * this.fogScale);
       if (this.scene.fog instanceof THREE.FogExp2) {
-        this.scene.fog.color.copy(fogLocal.color);
+        this.scene.fog.color.copy(fogColor);
         this.scene.fog.density = density;
       } else {
-        this.scene.fog = new THREE.FogExp2(fogLocal.color.getHex(), density);
+        this.scene.fog = new THREE.FogExp2(fogColor.getHex(), density);
       }
-      this.regionRenderer.syncWaterEnvironment();
+
+      const waterEnv = {
+        skyColor: a.skyMidColor,
+        fogColor: a.fogColor,
+        groundTint: a.groundTint,
+      };
+      if (this.continent) {
+        this.continent.forEachLayer((layer) => layer.renderer.syncWaterEnvironment(waterEnv));
+      } else {
+        this.regionRenderer.syncWaterEnvironment(waterEnv);
+      }
       return;
     }
+    this.atmosphereDisplay = null;
     // Leave region fill / exposure so overworld day-night stays consistent.
     this.fillLight.intensity = 0;
     this.renderer.toneMappingExposure = 1;
@@ -1821,7 +2088,8 @@ export class Game {
     // restore the linear Fog the rest of this function assumes before
     // falling through to the dungeon/outdoor branches.
     if (!(this.scene.fog instanceof THREE.Fog)) {
-      this.scene.fog = new THREE.Fog(0x87b5d9, OVERWORLD_FOG_NEAR, OVERWORLD_FOG_FAR);
+      const fog = overworldFogForRing(this.graphics.streamRing);
+      this.scene.fog = new THREE.Fog(0x87b5d9, fog.near, fog.far);
     }
     if (this.insideDungeonPortal) {
       // Sealed chamber -- fixed themed torchlight regardless of the
@@ -1841,40 +2109,42 @@ export class Game {
       return;
     }
     if (this.scene.fog instanceof THREE.Fog) {
-      this.scene.fog.near = OVERWORLD_FOG_NEAR;
-      this.scene.fog.far = OVERWORLD_FOG_FAR;
+      const fog = overworldFogForRing(this.graphics.streamRing);
+      this.scene.fog.near = fog.near;
+      this.scene.fog.far = fog.far;
     }
     this.ambient.color.set(0x8899bb);
 
-    const t = ui.timeOfDay; // 0..1, 0.5 = midnight-ish; 0.25 = noon-ish given +0.3 offset
+    const t = tod;
     const angle = t * Math.PI * 2;
     const elevation = Math.sin(angle);
-    // The sun's shadow frustum is a modest, high-res box that follows the
-    // player, rather than one huge low-res box covering the whole zone.
     this.sun.position.set(px + Math.cos(angle) * 120, Math.max(20, elevation * 140), pz + 40);
     this.sun.target.position.set(px, 0, pz);
     const dayness = clamp(elevation * 1.6 + 0.25, 0.04, 1);
     this.sun.intensity = 2.4 * dayness;
     this.ambient.intensity = 0.2 + 0.6 * dayness;
 
-    const day = new THREE.Color(0x87b5d9);
-    const night = new THREE.Color(0x0b1226);
-    const sky = night.clone().lerp(day, dayness);
-    (this.scene.background as THREE.Color).copy(sky);
-    this.scene.fog!.color.copy(sky);
-    this.clouds.setDayness(dayness);
+    // Fallback outdoor path: sunny timeline when no region is mounted.
+    const outdoor = atmosphereFromGrading(
+      { ...REGION_COLOR_PRESETS.grassland, skyPreset: "sunny" },
+      tod,
+    );
+    this.skyDome.setAtmosphere(outdoor);
+    (this.scene.background as THREE.Color).set(0x02040a);
+    this.scene.fog!.color.copy(outdoor.fogColor);
+    this.clouds?.setDayness?.(dayness);
     if (this.water?.mesh.material instanceof THREE.MeshLambertMaterial) {
       applyWaterEnvironment(this.water.mesh.material, {
-        skyColor: sky,
-        fogColor: sky,
-        groundTint: 0x8aa04f,
+        skyColor: outdoor.skyMidColor,
+        fogColor: outdoor.fogColor,
+        groundTint: outdoor.groundTint,
       });
     }
   }
 
   // ============ hooks for HUD ============
 
-  sendChat(text: string, channel: "realm" | "party" = "realm"): void {
+  sendChat(text: string, channel: "realm" | "region" | "party" = "realm"): void {
     this.connection.send({ t: "chat", channel, text });
   }
 
@@ -1884,6 +2154,50 @@ export class Game {
 
   sendPvp(enabled: boolean): void {
     this.connection.send({ t: "pvp", enabled });
+  }
+
+  /** Push Display → nameplate toggles to the local plate + remote entities. */
+  syncNameplateVisibility(): void {
+    this.selfNameplate.visible = ui.showPlayerNameplates;
+    this.entities.showPlayerNameplates = ui.showPlayerNameplates;
+    this.entities.showMobNameplates = ui.showMobNameplates;
+    this.entities.syncNameplateVisibility();
+  }
+
+  /**
+   * Apply graphics prefs live (resolution, shadows, stream/grass distance, fog).
+   * Antialiasing only takes effect when the WebGL context is created (enter world).
+   */
+  applyGraphicsSettings(partial?: Partial<GraphicsSettings>): void {
+    const next = clampGraphicsSettings({ ...this.graphics, ...(partial ?? {}), ...ui.graphics });
+    this.graphics = next;
+    this.fogScale = next.fogScale;
+
+    this.renderer.setPixelRatio(effectivePixelRatio(next, window.devicePixelRatio));
+    this.renderer.shadowMap.enabled = next.shadowsEnabled;
+    this.sun.castShadow = next.shadowsEnabled;
+    if (
+      this.sun.shadow.mapSize.x !== next.shadowMapSize ||
+      this.sun.shadow.mapSize.y !== next.shadowMapSize
+    ) {
+      this.sun.shadow.mapSize.set(next.shadowMapSize, next.shadowMapSize);
+      this.sun.shadow.map?.dispose();
+      this.sun.shadow.map = null;
+    }
+
+    this.camera.far = cameraFarForStreamRing(next.streamRing);
+    this.camera.updateProjectionMatrix();
+
+    const streamOpts = {
+      streamRing: next.streamRing,
+      grassDrawDistance: next.grassDrawDistance,
+    };
+    this.continent?.setGraphicsOptions(streamOpts);
+    this.regionRenderer?.applyGraphicsSettings(streamOpts);
+
+    if (partial?.antialias !== undefined && next.antialias !== this.antialiasActive) {
+      ui.toast("Antialiasing applies next time you enter the world");
+    }
   }
 
   sendQuestAction(action: "accept" | "decline" | "turnin", questId: string): void {
@@ -1956,8 +2270,8 @@ export class Game {
 
   /** Open the character screen directly on `tab`, or close it if it's
    *  already open showing that same tab -- shared by every key/button that
-   *  jumps to a specific tab (Tab/I, K, J, O, gamepad Start). */
-  private toggleTab(tab: CharacterTab): void {
+   *  jumps to a specific tab (Tab/I, L, K, J, U, O, gamepad Start). */
+  toggleCharacterTab(tab: CharacterTab): void {
     if (ui.inventoryOpen) {
       if (ui.activeTab === tab || tab === "inventory") {
         ui.inventoryOpen = false;
@@ -1983,6 +2297,7 @@ export class Game {
   private onResize = (): void => {
     this.camera.aspect = window.innerWidth / window.innerHeight;
     this.camera.updateProjectionMatrix();
+    this.renderer.setPixelRatio(effectivePixelRatio(this.graphics, window.devicePixelRatio));
     this.renderer.setSize(window.innerWidth, window.innerHeight);
   };
 
@@ -2007,6 +2322,9 @@ export class Game {
       this.streamTimer = 0;
     }
     this.streamArgs = null;
+    this.destroyContinent();
+    this.skyDome.dispose();
+    this.scene.remove(this.skyDome.group);
     if (this.mountMesh) {
       this.scene.remove(this.mountMesh.group);
       this.mountMesh = null;

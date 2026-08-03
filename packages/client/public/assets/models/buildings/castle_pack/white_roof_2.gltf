@@ -1,0 +1,327 @@
+{
+  "asset": {
+    "generator": "Khronos glTF Blender I/O v5.2.39",
+    "version": "2.0"
+  },
+  "scene": 0,
+  "scenes": [
+    {
+      "name": "Scene",
+      "nodes": [
+        0
+      ]
+    }
+  ],
+  "nodes": [
+    {
+      "mesh": 0,
+      "name": "White Wall Roof Large Addon",
+      "rotation": [
+        0.7071068286895752,
+        0,
+        0,
+        0.7071068286895752
+      ],
+      "scale": [
+        0.009999999776482582,
+        0.009999999776482582,
+        0.009999999776482582
+      ],
+      "translation": [
+        0.0141754150390625,
+        0.3123374581336975,
+        -0.07981109619140625
+      ]
+    }
+  ],
+  "materials": [
+    {
+      "doubleSided": true,
+      "name": "Weathered Wood",
+      "pbrMetallicRoughness": {
+        "baseColorTexture": {
+          "index": 0
+        },
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.75
+      }
+    },
+    {
+      "doubleSided": true,
+      "name": "Roof Circle",
+      "normalTexture": {
+        "index": 2
+      },
+      "pbrMetallicRoughness": {
+        "baseColorTexture": {
+          "index": 1
+        },
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.75
+      }
+    },
+    {
+      "doubleSided": true,
+      "name": "Plastered Wall",
+      "pbrMetallicRoughness": {
+        "baseColorTexture": {
+          "index": 3
+        },
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.75
+      }
+    }
+  ],
+  "meshes": [
+    {
+      "name": "Cube.070",
+      "primitives": [
+        {
+          "attributes": {
+            "POSITION": 0,
+            "NORMAL": 1,
+            "TEXCOORD_0": 2
+          },
+          "indices": 3,
+          "material": 0
+        },
+        {
+          "attributes": {
+            "POSITION": 4,
+            "NORMAL": 5,
+            "TEXCOORD_0": 6
+          },
+          "indices": 7,
+          "material": 1
+        },
+        {
+          "attributes": {
+            "POSITION": 8,
+            "NORMAL": 9,
+            "TEXCOORD_0": 10
+          },
+          "indices": 11,
+          "material": 2
+        }
+      ]
+    }
+  ],
+  "textures": [
+    {
+      "source": 0
+    },
+    {
+      "source": 1
+    },
+    {
+      "source": 2
+    },
+    {
+      "source": 3
+    }
+  ],
+  "images": [
+    {
+      "uri": "textures/wood_weather_color.png"
+    },
+    {
+      "uri": "textures/roof_round_color.png"
+    },
+    {
+      "uri": "textures/roof_round_normal.png"
+    },
+    {
+      "uri": "textures/plaster_color.png"
+    }
+  ],
+  "accessors": [
+    {
+      "bufferView": 0,
+      "componentType": 5126,
+      "count": 1127,
+      "max": [
+        265.7484436035156,
+        256.16375732421875,
+        31.233728408813477
+      ],
+      "min": [
+        -268.5826416015625,
+        -240.20156860351562,
+        -253.33543395996094
+      ],
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 1,
+      "componentType": 5126,
+      "count": 1127,
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 2,
+      "componentType": 5126,
+      "count": 1127,
+      "type": "VEC2"
+    },
+    {
+      "bufferView": 3,
+      "componentType": 5123,
+      "count": 1848,
+      "type": "SCALAR"
+    },
+    {
+      "bufferView": 4,
+      "componentType": 5126,
+      "count": 3240,
+      "max": [
+        253.53575134277344,
+        205.68203735351562,
+        12.686824798583984
+      ],
+      "min": [
+        -253.48570251464844,
+        -235.0714874267578,
+        -227.18124389648438
+      ],
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 5,
+      "componentType": 5126,
+      "count": 3240,
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 6,
+      "componentType": 5126,
+      "count": 3240,
+      "type": "VEC2"
+    },
+    {
+      "bufferView": 7,
+      "componentType": 5123,
+      "count": 4836,
+      "type": "SCALAR"
+    },
+    {
+      "bufferView": 8,
+      "componentType": 5126,
+      "count": 18,
+      "max": [
+        234.77392578125,
+        238.67510986328125,
+        0
+      ],
+      "min": [
+        -234.77139282226562,
+        -238.6751708984375,
+        -228.45150756835938
+      ],
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 9,
+      "componentType": 5126,
+      "count": 18,
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 10,
+      "componentType": 5126,
+      "count": 18,
+      "type": "VEC2"
+    },
+    {
+      "bufferView": 11,
+      "componentType": 5123,
+      "count": 24,
+      "type": "SCALAR"
+    }
+  ],
+  "bufferViews": [
+    {
+      "buffer": 0,
+      "byteLength": 13524,
+      "byteOffset": 0,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 13524,
+      "byteOffset": 13524,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 9016,
+      "byteOffset": 27048,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 3696,
+      "byteOffset": 36064,
+      "target": 34963
+    },
+    {
+      "buffer": 0,
+      "byteLength": 38880,
+      "byteOffset": 39760,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 38880,
+      "byteOffset": 78640,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 25920,
+      "byteOffset": 117520,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 9672,
+      "byteOffset": 143440,
+      "target": 34963
+    },
+    {
+      "buffer": 0,
+      "byteLength": 216,
+      "byteOffset": 153112,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 216,
+      "byteOffset": 153328,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 144,
+      "byteOffset": 153544,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 48,
+      "byteOffset": 153688,
+      "target": 34963
+    }
+  ],
+  "samplers": [
+    {
+      "magFilter": 9729,
+      "minFilter": 9987
+    }
+  ],
+  "buffers": [
+    {
+      "byteLength": 153736,
+      "uri": "white_roof_2.bin"
+    }
+  ]
+}

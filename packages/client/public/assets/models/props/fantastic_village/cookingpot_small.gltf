@@ -1,0 +1,365 @@
+{
+  "asset": {
+    "generator": "Khronos glTF Blender I/O v5.2.39",
+    "version": "2.0"
+  },
+  "extensionsUsed": [
+    "KHR_materials_specular"
+  ],
+  "scene": 0,
+  "scenes": [
+    {
+      "name": "Scene",
+      "nodes": [
+        1
+      ]
+    }
+  ],
+  "nodes": [
+    {
+      "mesh": 0,
+      "name": "SM_PROP_cookingpot_small_handle",
+      "translation": [
+        0.006593823432922363,
+        0.34299150109291077,
+        0.004553560167551041
+      ]
+    },
+    {
+      "children": [
+        0
+      ],
+      "mesh": 1,
+      "name": "SM_PROP_cookingpot_small",
+      "translation": [
+        -0.000784754753112793,
+        0.006143391598016024,
+        0.00455358624458313
+      ]
+    }
+  ],
+  "materials": [
+    {
+      "doubleSided": true,
+      "extensions": {
+        "KHR_materials_specular": {
+          "specularFactor": 0.6299212574958801
+        }
+      },
+      "name": "M_metal_01",
+      "normalTexture": {
+        "index": 1
+      },
+      "pbrMetallicRoughness": {
+        "baseColorTexture": {
+          "index": 0
+        },
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.8
+      },
+      "alphaMode": "OPAQUE"
+    },
+    {
+      "doubleSided": true,
+      "name": "M_food",
+      "pbrMetallicRoughness": {
+        "baseColorTexture": {
+          "index": 2
+        },
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.8
+      },
+      "alphaMode": "OPAQUE"
+    }
+  ],
+  "meshes": [
+    {
+      "name": "Mesh.2360",
+      "primitives": [
+        {
+          "attributes": {
+            "POSITION": 0,
+            "NORMAL": 1,
+            "TEXCOORD_0": 2,
+            "TEXCOORD_1": 3
+          },
+          "indices": 4,
+          "material": 0
+        }
+      ]
+    },
+    {
+      "name": "Mesh.2331",
+      "primitives": [
+        {
+          "attributes": {
+            "POSITION": 5,
+            "NORMAL": 6,
+            "TEXCOORD_0": 7,
+            "TEXCOORD_1": 8
+          },
+          "indices": 9,
+          "material": 0
+        },
+        {
+          "attributes": {
+            "POSITION": 10,
+            "NORMAL": 11,
+            "TEXCOORD_0": 12,
+            "TEXCOORD_1": 13
+          },
+          "indices": 14,
+          "material": 1
+        }
+      ]
+    }
+  ],
+  "textures": [
+    {
+      "source": 0
+    },
+    {
+      "source": 1
+    },
+    {
+      "source": 2
+    }
+  ],
+  "images": [
+    {
+      "uri": "textures/T_metal_01_BC.png"
+    },
+    {
+      "uri": "textures/T_metal_01_N.png"
+    },
+    {
+      "uri": "textures/T_food.png"
+    }
+  ],
+  "accessors": [
+    {
+      "bufferView": 0,
+      "componentType": 5126,
+      "count": 294,
+      "max": [
+        0.05418020114302635,
+        0.25543758273124695,
+        0.2559826672077179
+      ],
+      "min": [
+        -0.05496969074010849,
+        -0.056205637753009796,
+        -0.27030596137046814
+      ],
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 1,
+      "componentType": 5126,
+      "count": 294,
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 2,
+      "componentType": 5126,
+      "count": 294,
+      "type": "VEC2"
+    },
+    {
+      "bufferView": 3,
+      "componentType": 5126,
+      "count": 294,
+      "type": "VEC2"
+    },
+    {
+      "bufferView": 4,
+      "componentType": 5123,
+      "count": 1248,
+      "type": "SCALAR"
+    },
+    {
+      "bufferView": 5,
+      "componentType": 5126,
+      "count": 377,
+      "max": [
+        0.2896265387535095,
+        0.36542776226997375,
+        0.3101424276828766
+      ],
+      "min": [
+        -0.28805702924728394,
+        -0.006143391598016024,
+        -0.31924960017204285
+      ],
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 6,
+      "componentType": 5126,
+      "count": 377,
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 7,
+      "componentType": 5126,
+      "count": 377,
+      "type": "VEC2"
+    },
+    {
+      "bufferView": 8,
+      "componentType": 5126,
+      "count": 377,
+      "type": "VEC2"
+    },
+    {
+      "bufferView": 9,
+      "componentType": 5123,
+      "count": 1296,
+      "type": "SCALAR"
+    },
+    {
+      "bufferView": 10,
+      "componentType": 5126,
+      "count": 16,
+      "max": [
+        0.20631228387355804,
+        0.24155770242214203,
+        0.19111061096191406
+      ],
+      "min": [
+        -0.19961506128311157,
+        0.21893350780010223,
+        -0.21186532080173492
+      ],
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 11,
+      "componentType": 5126,
+      "count": 16,
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 12,
+      "componentType": 5126,
+      "count": 16,
+      "type": "VEC2"
+    },
+    {
+      "bufferView": 13,
+      "componentType": 5126,
+      "count": 16,
+      "type": "VEC2"
+    },
+    {
+      "bufferView": 14,
+      "componentType": 5123,
+      "count": 42,
+      "type": "SCALAR"
+    }
+  ],
+  "bufferViews": [
+    {
+      "buffer": 0,
+      "byteLength": 3528,
+      "byteOffset": 0,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 3528,
+      "byteOffset": 3528,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 2352,
+      "byteOffset": 7056,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 2352,
+      "byteOffset": 9408,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 2496,
+      "byteOffset": 11760,
+      "target": 34963
+    },
+    {
+      "buffer": 0,
+      "byteLength": 4524,
+      "byteOffset": 14256,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 4524,
+      "byteOffset": 18780,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 3016,
+      "byteOffset": 23304,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 3016,
+      "byteOffset": 26320,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 2592,
+      "byteOffset": 29336,
+      "target": 34963
+    },
+    {
+      "buffer": 0,
+      "byteLength": 192,
+      "byteOffset": 31928,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 192,
+      "byteOffset": 32120,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 128,
+      "byteOffset": 32312,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 128,
+      "byteOffset": 32440,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 84,
+      "byteOffset": 32568,
+      "target": 34963
+    }
+  ],
+  "samplers": [
+    {
+      "magFilter": 9729,
+      "minFilter": 9987
+    }
+  ],
+  "buffers": [
+    {
+      "byteLength": 32652,
+      "uri": "cookingpot_small.bin"
+    }
+  ]
+}

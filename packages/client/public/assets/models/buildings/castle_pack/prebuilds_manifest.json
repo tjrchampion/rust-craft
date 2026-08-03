@@ -1,0 +1,354 @@
+{
+  "prebuild_blacksmith": {
+    "file": "prebuild_blacksmith.gltf",
+    "source": "Blacksmith.prefab",
+    "meshCount": 23,
+    "height": 13.3474,
+    "footprint": [
+      6.4495,
+      7.3191
+    ],
+    "size": [
+      6.4495,
+      7.3191,
+      13.3474
+    ],
+    "bytes": 1323120
+  },
+  "prebuild_castle_entrance": {
+    "file": "prebuild_castle_entrance.gltf",
+    "source": "Castle Entrance.prefab",
+    "meshCount": 13,
+    "height": 23.6548,
+    "footprint": [
+      9.3043,
+      9.6036
+    ],
+    "size": [
+      9.3043,
+      9.6036,
+      23.6548
+    ],
+    "bytes": 2456104
+  },
+  "prebuild_cottage": {
+    "file": "prebuild_cottage.gltf",
+    "source": "Cottage.prefab",
+    "meshCount": 19,
+    "height": 13.3474,
+    "footprint": [
+      10.1819,
+      12.3461
+    ],
+    "size": [
+      10.1819,
+      12.3461,
+      13.3474
+    ],
+    "bytes": 888748
+  },
+  "prebuild_docks": {
+    "file": "prebuild_docks.gltf",
+    "source": "Docks.prefab",
+    "meshCount": 16,
+    "height": 5.9154,
+    "footprint": [
+      14.2141,
+      29.1823
+    ],
+    "size": [
+      14.2141,
+      29.1823,
+      5.9154
+    ],
+    "bytes": 1158668
+  },
+  "prebuild_fishing_house": {
+    "file": "prebuild_fishing_house.gltf",
+    "source": "Fishing House.prefab",
+    "meshCount": 27,
+    "height": 8.7934,
+    "footprint": [
+      11.6823,
+      13.7595
+    ],
+    "size": [
+      11.6823,
+      13.7595,
+      8.7934
+    ],
+    "bytes": 1110421
+  },
+  "prebuild_garrison": {
+    "file": "prebuild_garrison.gltf",
+    "source": "Garrison.prefab",
+    "meshCount": 37,
+    "height": 27.3366,
+    "footprint": [
+      6.8436,
+      16.5565
+    ],
+    "size": [
+      6.8436,
+      16.5565,
+      27.3366
+    ],
+    "bytes": 2743203
+  },
+  "prebuild_inn": {
+    "file": "prebuild_inn.gltf",
+    "source": "Inn.prefab",
+    "meshCount": 43,
+    "height": 19.5198,
+    "footprint": [
+      12.7609,
+      13.0902
+    ],
+    "size": [
+      12.7609,
+      13.0902,
+      19.5198
+    ],
+    "bytes": 2283880
+  },
+  "prebuild_large_plaster_home": {
+    "file": "prebuild_large_plaster_home.gltf",
+    "source": "Large Plaster Home.prefab",
+    "meshCount": 13,
+    "height": 6.2529,
+    "footprint": [
+      9.9296,
+      10.3215
+    ],
+    "size": [
+      9.9296,
+      10.3215,
+      6.2529
+    ],
+    "bytes": 760958
+  },
+  "prebuild_large_wooden_home": {
+    "file": "prebuild_large_wooden_home.gltf",
+    "source": "Large Wooden Home.prefab",
+    "meshCount": 32,
+    "height": 8.266,
+    "footprint": [
+      10.7932,
+      8.4729
+    ],
+    "size": [
+      10.7932,
+      8.4729,
+      8.266
+    ],
+    "bytes": 849108
+  },
+  "prebuild_manor": {
+    "file": "prebuild_manor.gltf",
+    "source": "Manor.prefab",
+    "meshCount": 21,
+    "height": 20.9983,
+    "footprint": [
+      16.0716,
+      12.2304
+    ],
+    "size": [
+      16.0716,
+      12.2304,
+      20.9983
+    ],
+    "bytes": 2081614
+  },
+  "prebuild_pavilion": {
+    "file": "prebuild_pavilion.gltf",
+    "source": "Pavilion.prefab",
+    "meshCount": 12,
+    "height": 4.3705,
+    "footprint": [
+      5.1094,
+      8.832
+    ],
+    "size": [
+      5.1094,
+      8.832,
+      4.3705
+    ],
+    "bytes": 186460
+  },
+  "prebuild_round_tower_interior": {
+    "file": "prebuild_round_tower_interior.gltf",
+    "source": "Round Tower Interior.prefab",
+    "meshCount": 4,
+    "height": 18.2828,
+    "footprint": [
+      6.4554,
+      6.4554
+    ],
+    "size": [
+      6.4554,
+      6.4554,
+      18.2828
+    ],
+    "bytes": 512077
+  },
+  "prebuild_round_tower_tall": {
+    "file": "prebuild_round_tower_tall.gltf",
+    "source": "Round Tower Tall.prefab",
+    "meshCount": 4,
+    "height": 28.3329,
+    "footprint": [
+      7.8651,
+      7.8643
+    ],
+    "size": [
+      7.8651,
+      7.8643,
+      28.3329
+    ],
+    "bytes": 652394
+  },
+  "prebuild_round_tower": {
+    "file": "prebuild_round_tower.gltf",
+    "source": "Round Tower.prefab",
+    "meshCount": 4,
+    "height": 18.2828,
+    "footprint": [
+      6.4554,
+      6.4554
+    ],
+    "size": [
+      6.4554,
+      6.4554,
+      18.2828
+    ],
+    "bytes": 506392
+  },
+  "prebuild_small_plaster_home": {
+    "file": "prebuild_small_plaster_home.gltf",
+    "source": "Small Plaster Home.prefab",
+    "meshCount": 9,
+    "height": 6.2497,
+    "footprint": [
+      5.3575,
+      5.182
+    ],
+    "size": [
+      5.3575,
+      5.182,
+      6.2497
+    ],
+    "bytes": 456622
+  },
+  "prebuild_square_tower_interior": {
+    "file": "prebuild_square_tower_interior.gltf",
+    "source": "Square Tower Interior.prefab",
+    "meshCount": 15,
+    "height": 24.5548,
+    "footprint": [
+      7.3632,
+      7.3632
+    ],
+    "size": [
+      7.3632,
+      7.3632,
+      24.5548
+    ],
+    "bytes": 1741594
+  },
+  "prebuild_square_tower": {
+    "file": "prebuild_square_tower.gltf",
+    "source": "Square Tower.prefab",
+    "meshCount": 10,
+    "height": 24.5548,
+    "footprint": [
+      7.3632,
+      7.3632
+    ],
+    "size": [
+      7.3632,
+      7.3632,
+      24.5548
+    ],
+    "bytes": 1191667
+  },
+  "prebuild_stables": {
+    "file": "prebuild_stables.gltf",
+    "source": "Stables.prefab",
+    "meshCount": 14,
+    "height": 4.6955,
+    "footprint": [
+      8.6458,
+      5.1094
+    ],
+    "size": [
+      8.6458,
+      5.1094,
+      4.6955
+    ],
+    "bytes": 232002
+  },
+  "prebuild_warf": {
+    "file": "prebuild_warf.gltf",
+    "source": "Warf.prefab",
+    "meshCount": 15,
+    "height": 5.3454,
+    "footprint": [
+      21.573,
+      24.6052
+    ],
+    "size": [
+      21.573,
+      24.6052,
+      5.3454
+    ],
+    "bytes": 1084033
+  },
+  "prebuild_watchpost": {
+    "file": "prebuild_watchpost.gltf",
+    "source": "Watchpost.prefab",
+    "meshCount": 32,
+    "height": 20.0506,
+    "footprint": [
+      18.43,
+      10.3841
+    ],
+    "size": [
+      18.43,
+      10.3841,
+      20.0506
+    ],
+    "bytes": 3810255
+  },
+  "prebuild_wood_shack_2": {
+    "file": "prebuild_wood_shack_2.gltf",
+    "source": "Wood Shack 2.prefab",
+    "meshCount": 8,
+    "height": 11.3581,
+    "footprint": [
+      13.1189,
+      7.6776
+    ],
+    "size": [
+      13.1189,
+      7.6776,
+      11.3581
+    ],
+    "bytes": 171928
+  },
+  "prebuild_wood_shack": {
+    "file": "prebuild_wood_shack.gltf",
+    "source": "Wood Shack.prefab",
+    "meshCount": 8,
+    "height": 11.3581,
+    "footprint": [
+      12.8463,
+      7.8897
+    ],
+    "size": [
+      12.8463,
+      7.8897,
+      11.3581
+    ],
+    "bytes": 172017
+  }
+}

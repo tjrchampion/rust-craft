@@ -1,0 +1,202 @@
+{
+  "asset": {
+    "generator": "Khronos glTF Blender I/O v5.2.39",
+    "version": "2.0"
+  },
+  "extensionsUsed": [
+    "KHR_materials_specular"
+  ],
+  "scene": 0,
+  "scenes": [
+    {
+      "name": "Scene",
+      "nodes": [
+        0
+      ]
+    }
+  ],
+  "nodes": [
+    {
+      "mesh": 0,
+      "name": "SM_Bridge",
+      "translation": [
+        0,
+        -0.596698522567749,
+        -0.007562875747680664
+      ]
+    }
+  ],
+  "materials": [
+    {
+      "doubleSided": true,
+      "extensions": {
+        "KHR_materials_specular": {
+          "specularColorFactor": [
+            2.0,
+            2.0,
+            2.0
+          ]
+        }
+      },
+      "name": "M_Atlas",
+      "normalTexture": {
+        "index": 1
+      },
+      "pbrMetallicRoughness": {
+        "baseColorTexture": {
+          "index": 0
+        },
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.85
+      },
+      "alphaMode": "OPAQUE"
+    }
+  ],
+  "meshes": [
+    {
+      "name": "SM_Bridge",
+      "primitives": [
+        {
+          "attributes": {
+            "POSITION": 0,
+            "NORMAL": 1,
+            "TEXCOORD_0": 2,
+            "TEXCOORD_1": 3,
+            "COLOR_0": 4,
+            "COLOR_1": 5
+          },
+          "indices": 6,
+          "material": 0
+        }
+      ]
+    }
+  ],
+  "textures": [
+    {
+      "source": 0
+    },
+    {
+      "source": 1
+    }
+  ],
+  "images": [
+    {
+      "uri": "textures/T_Atlas_01.png"
+    },
+    {
+      "uri": "textures/T_BasePolygon_N.png"
+    }
+  ],
+  "accessors": [
+    {
+      "bufferView": 0,
+      "componentType": 5126,
+      "count": 6455,
+      "max": [
+        1.1251150369644165,
+        2.4117720127105713,
+        5.276190757751465
+      ],
+      "min": [
+        -1.1251113414764404,
+        0.596698522567749,
+        -5.2610650062561035
+      ],
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 1,
+      "componentType": 5126,
+      "count": 6455,
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 2,
+      "componentType": 5126,
+      "count": 6455,
+      "type": "VEC2"
+    },
+    {
+      "bufferView": 3,
+      "componentType": 5126,
+      "count": 6455,
+      "type": "VEC2"
+    },
+    {
+      "bufferView": 4,
+      "componentType": 5121,
+      "count": 6455,
+      "normalized": true,
+      "type": "VEC4"
+    },
+    {
+      "bufferView": 5,
+      "componentType": 5123,
+      "count": 6455,
+      "normalized": true,
+      "type": "VEC4"
+    },
+    {
+      "bufferView": 6,
+      "componentType": 5123,
+      "count": 9447,
+      "type": "SCALAR"
+    }
+  ],
+  "bufferViews": [
+    {
+      "buffer": 0,
+      "byteLength": 77460,
+      "byteOffset": 0,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 77460,
+      "byteOffset": 77460,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 51640,
+      "byteOffset": 154920,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 51640,
+      "byteOffset": 206560,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 25820,
+      "byteOffset": 258200,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 51640,
+      "byteOffset": 284020,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 18894,
+      "byteOffset": 335660,
+      "target": 34963
+    }
+  ],
+  "samplers": [
+    {
+      "magFilter": 9729,
+      "minFilter": 9987
+    }
+  ],
+  "buffers": [
+    {
+      "byteLength": 354556,
+      "uri": "bridge.bin"
+    }
+  ]
+}

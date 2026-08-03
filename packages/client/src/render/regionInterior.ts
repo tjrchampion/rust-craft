@@ -1,11 +1,20 @@
 import * as THREE from "three";
 import {
   sampleRegionHeight,
-  TREE_VISIBLE_RADIUS,
+  ADT_RING,
+  adtIndex,
+  adtRingRadiusMeters,
   regionAllAssets,
+  resolveRegionAssetLight,
+  regionAssetScale,
+  hashString,
+  isRockLikeAssetModel,
+  mergeQuickGrassSettings,
+  grassDetailDistance,
   type RegionBlueprint,
   type RegionAsset,
   type RegionFogVolume,
+  type RegionNPC,
 } from "@rustcraft/shared";
 import { load, AnimatedModel, PLAYER_ANIMS } from "./gltf";
 import type { GLTF } from "three/examples/jsm/loaders/GLTFLoader.js";
@@ -13,14 +22,15 @@ import * as SkeletonUtils from "three/examples/jsm/utils/SkeletonUtils.js";
 import { buildShrine, buildNameplate, buildHealthNameplate } from "./models";
 import { RegionAdtTerrainStreamer } from "./regionAdtTerrain";
 import { RegionAdtWaterStreamer } from "./regionAdtWater";
-import { buildGrassInstances, type GrassField } from "./grassField";
+import { createQuickGrassField, type QuickGrassField } from "./quickGrass/field";
 import { createTreeWindUniforms, applyTreeWindSway, applyRegionWind, type TreeWindUniforms } from "./windSway";
 import { createTerrainVolumeMesh } from "./terrainVolumes";
 import { createFogVolumeMesh, fogVolumeInfluence } from "./fogVolumes";
+import { createRegionCloudRuntime, type RegionCloudRuntime } from "./regionClouds";
+import { buildRegionHorizon } from "./regionHorizon";
 import { StreamBudget, REGION_STREAM_BUDGET_MS } from "./streamBudget";
 import { game } from "../ui/gameState.svelte";
 import { getGame } from "../game/instance";
-import type { RegionNpc } from "@rustcraft/shared";
 
 /** Base tree canopy sway amplitude (meters) at RegionWind strength 1 --
  *  chosen smaller than grass's own base since tree branches are much larger
@@ -30,7 +40,7 @@ const BASE_TREE_WIND_STRENGTH = 0.15;
 interface RegionNpcInstance {
   group: THREE.Group;
   animModel: AnimatedModel;
-  data: RegionNpc;
+  data: RegionNPC;
   initialX: number;
   initialY: number;
   initialZ: number;
@@ -87,8 +97,8 @@ export async function preloadRegionAssets(
  * Renders a region's interior once a player has walked through its portal.
  *
  * Props/buildings/foliage are instanced once at region entry. Each spatial
- * chunk is distance-culled to the terrain ADT ring so distant assets aren't
- * drawn past streamed ground.
+ * chunk is shown only when its ADT terrain tile is resident (same Chebyshev
+ * ring as streamed ground), so foliage never draws as floating over void.
  *
  * Unlike a dungeon, a region has real open sky and its own sculpted terrain
  * instead of a sealed void-floor/ceiling box. Terrain + painted grass stream
@@ -108,20 +118,31 @@ export class RegionInteriorRenderer {
   private instancedGroups: THREE.InstancedMesh[] = [];
   /** Instanced asset chunks (foliage/props/buildings) for distance culling. */
   private assetChunks: { x: number; z: number; meshes: THREE.InstancedMesh[] }[] = [];
-  /** Painted grass patches, expanded once at construction -- see
-   *  buildGrassPatches. Null if the blueprint has none. */
-  private grassField: GrassField | null = null;
+  /** Painted grass via Quick Grass (see quickGrass/). Null if none. */
+  private grassField: QuickGrassField | null = null;
+  /** Scratch camera used when callers don't pass one (distance-only stream). */
+  private grassCam = new THREE.PerspectiveCamera(55, 1, 0.1, 2000);
+  /** Scratch for local→world viewer conversion (continent region origins). */
+  private grassWorldScratch = new THREE.Vector3();
   /** Stamped 3D terrain volumes (boulder/block/etc.) from the volume sculpt
    *  brush. Shared geometries -- destroy() only removes meshes from the group. */
   private volumeMeshes: THREE.Mesh[] = [];
   /** Local fog pockets from the editor — additive meshes + density influence. */
   private fogMeshes: THREE.Mesh[] = [];
   private fogVolumeData: RegionFogVolume[] = [];
+  /** Authored drifting cloud puffs. */
+  private cloudRuntime: RegionCloudRuntime | null = null;
+  /** Optional distant mountain ring from colorGrading.horizonEnabled. */
+  private horizonGroup: THREE.Group | null = null;
   /** Hand-placed assets + expanded procedural houses (for instancing/collision). */
   private allAssets: RegionAsset[];
   /** Shared by every foliage material patched via applyTreeWindSway in
    *  instanceModel -- seeded from blueprint.wind at construction. */
   private treeWindUniforms: TreeWindUniforms = createTreeWindUniforms();
+  /** Live graphics stream ring (defaults to ADT_RING; updated from Game). */
+  private streamRing = ADT_RING;
+  /** Optional grass draw-distance override from graphics settings. */
+  private grassDrawDistanceOverride: number | null = null;
 
   /** Resolves once every foliage/prop/building placement has been built and
    *  added to the scene -- callers (Game.ts) await this before dismissing
@@ -270,12 +291,55 @@ export class RegionInteriorRenderer {
       this.group.add(pointLight);
     }
 
+    // Prop-attached lights (lanterns etc.) — separate from InstancedMesh so
+    // each placement can have its own color/intensity without breaking batching.
+    for (const asset of this.allAssets) {
+      const resolved = resolveRegionAssetLight(asset);
+      if (!resolved) continue;
+      // Use authored localY (same as editor) — do not re-snap to heightmap.
+      const y = asset.localY;
+      const pointLight = new THREE.PointLight(
+        resolved.color,
+        resolved.intensity,
+        resolved.distance,
+        resolved.decay,
+      );
+      // Rotate local bulb offset by asset yaw (matches editor child transform).
+      const cy = Math.cos(asset.yaw);
+      const sy = Math.sin(asset.yaw);
+      const ox = resolved.offsetX;
+      const oz = resolved.offsetZ;
+      pointLight.position.set(
+        asset.localX + ox * cy + oz * sy,
+        y + resolved.offsetY,
+        asset.localZ - ox * sy + oz * cy,
+      );
+      this.group.add(pointLight);
+    }
+
     for (const fog of blueprint.fogVolumes ?? []) {
       const data: RegionFogVolume = { ...fog };
       const mesh = createFogVolumeMesh(data);
       this.group.add(mesh);
       this.fogMeshes.push(mesh);
       this.fogVolumeData.push(data);
+    }
+
+    if (blueprint.clouds?.length) {
+      this.cloudRuntime = createRegionCloudRuntime(this.group, blueprint.clouds);
+    }
+
+    if (blueprint.colorGrading.horizonEnabled) {
+      const halfSpan = ((blueprint.gridSize - 1) * blueprint.pitch) / 2;
+      const cg = blueprint.colorGrading;
+      this.horizonGroup = buildRegionHorizon({
+        innerRadius: cg.horizonInnerRadius ?? halfSpan * 0.85,
+        outerRadius: cg.horizonOuterRadius ?? halfSpan * 1.35,
+        peakScale: cg.horizonPeakScale ?? 1,
+        tint: cg.horizonTint ?? "#8d97a8",
+        seed: hashString(blueprint.id || blueprint.name),
+      });
+      this.group.add(this.horizonGroup);
     }
   }
 
@@ -289,14 +353,24 @@ export class RegionInteriorRenderer {
     return this.blueprint.colorGrading;
   }
 
+  /** Hot-swap blueprint data after an editor save (atmosphere / fog / wind). */
+  replaceBlueprint(bp: RegionBlueprint): void {
+    this.blueprint = bp;
+  }
+
   get fogVolumes(): readonly RegionFogVolume[] {
     return this.fogVolumeData;
   }
 
-  /** Strongest local fog-volume influence at a world point (0..~1). */
-  fogInfluenceAt(x: number, y: number, z: number): { weight: number; color: THREE.Color } {
+  /** Strongest local fog-volume influence at a local point (0..~1). */
+  fogInfluenceAt(
+    x: number,
+    y: number,
+    z: number,
+    baseFogColor?: THREE.ColorRepresentation,
+  ): { weight: number; color: THREE.Color } {
     let weight = 0;
-    const color = new THREE.Color(this.blueprint.colorGrading.fogColor);
+    const color = new THREE.Color(baseFogColor ?? this.blueprint.colorGrading.fogColor);
     const blend = new THREE.Color();
     for (const vol of this.fogVolumeData) {
       const w = fogVolumeInfluence(vol, x, y, z);
@@ -310,8 +384,16 @@ export class RegionInteriorRenderer {
     return { weight, color };
   }
 
-  /** Keep painted water tinted to the region's sky/fog/ground grading. */
-  syncWaterEnvironment(): void {
+  /** Keep painted water tinted to sky/fog/ground grading (optional override for seam blends). */
+  syncWaterEnvironment(env?: {
+    skyColor: THREE.ColorRepresentation;
+    fogColor: THREE.ColorRepresentation;
+    groundTint?: THREE.ColorRepresentation;
+  }): void {
+    if (env) {
+      this.adtWater?.applyEnvironment(env);
+      return;
+    }
     const cg = this.blueprint.colorGrading;
     this.adtWater?.applyEnvironment({
       skyColor: cg.skyColor,
@@ -348,33 +430,61 @@ export class RegionInteriorRenderer {
     return this.blueprint.musicTrack ?? null;
   }
 
-  /** Sync-build ADT terrain + water + grass around a viewer position (loading screen). */
+  /** Sync-build ADT terrain + water around a viewer position (loading screen).
+   *  Do NOT restream Quick Grass here — continent.syncAround calls this on a
+   *  ~1.5 s timer, and a scratch camera was stomping the real-camera patch
+   *  set (visible as a full-field flicker every couple of seconds). */
   warmAround(x: number, z: number): void {
     this.adtTerrain.warm(x, z);
     this.adtWater?.warm(x, z);
-    this.grassField?.warm(x, z);
   }
 
   get regionName(): string {
     return this.blueprint.name;
   }
 
-  /** Expand this region's painted grass patches (see GrassPatch) into
-   *  wind-shaded blade InstancedMeshes -- synchronous, no GLTF load, so this
-   *  doesn't need to participate in `ready` the way the async foliage/prop
-   *  builds do. */
+  /** Build Quick Grass from painted coverage + region heightmap. */
   private buildGrassPatches(): void {
     const patches = this.blueprint.grassPatches;
     if (!patches || patches.length === 0) return;
-    this.grassField = buildGrassInstances(patches, this.blueprint.grassExclusions, this.blueprint, {
-      color: this.blueprint.grassColor,
-      wind: this.blueprint.wind,
-      stream: true,
-      parent: this.group,
+    const settings = mergeQuickGrassSettings(this.blueprint.grassSettings, {
+      grassColor: this.blueprint.grassColor,
+      grassSway: this.blueprint.grassSway,
     });
-    // Build the ADT grass ring around entry before the loading screen drops.
+    this.grassField = createQuickGrassField(this.group, settings);
+    this.grassField.setHeightmap({
+      gridSize: this.blueprint.gridSize,
+      pitch: this.blueprint.pitch,
+      heights: this.blueprint.heights,
+    });
+    this.grassField.setCoverage(patches, this.blueprint.grassExclusions);
+    if (this.grassDrawDistanceOverride != null) {
+      const draw = this.grassDrawDistanceOverride;
+      this.grassField.setSettings({
+        drawDistance: draw,
+        detailDistance: grassDetailDistance(draw),
+      });
+    }
     const entry = this.blueprint.entryLocal;
-    this.grassField.warm(entry.x, entry.z);
+    this.warmAround(entry.x, entry.z);
+  }
+
+  /** Apply live graphics knobs (stream ring + grass draw distance). */
+  applyGraphicsSettings(opts: { streamRing?: number; grassDrawDistance?: number }): void {
+    if (opts.streamRing !== undefined) {
+      this.streamRing = Math.max(1, Math.min(6, Math.round(opts.streamRing)));
+      this.adtTerrain.setRing(this.streamRing);
+      this.adtWater?.setRing(this.streamRing);
+    }
+    if (opts.grassDrawDistance !== undefined) {
+      this.grassDrawDistanceOverride = opts.grassDrawDistance;
+      if (this.grassField) {
+        this.grassField.setSettings({
+          drawDistance: opts.grassDrawDistance,
+          detailDistance: grassDetailDistance(opts.grassDrawDistance),
+        });
+      }
+    }
   }
 
   /** Add freeform sculpted terrain volumes (boulder/block/pillar/spike/ramp).
@@ -411,7 +521,14 @@ export class RegionInteriorRenderer {
           console.warn(`[regionInterior] failed to load foliage model '${model}' -- skipping ${indices.length} placement(s)`);
           return;
         }
-        this.instanceModel(gltf, indices, { castShadow: true, receiveShadow: false, applyWind: true, distanceCull: true });
+        // Rocks are foliage for placement, but must stay rigid — tree wind
+        // sway looks wrong on stone and fought the solid collision silhouette.
+        this.instanceModel(gltf, indices, {
+          castShadow: true,
+          receiveShadow: false,
+          applyWind: !isRockLikeAssetModel(model),
+          distanceCull: true,
+        });
       }),
     );
   }
@@ -457,10 +574,9 @@ export class RegionInteriorRenderer {
 
   /** Shared instancing helper: one InstancedMesh per submesh/material per
    *  spatial cell (see CHUNK_SIZE), covering every asset index passed in at
-   *  its real authored position/rotation/scale (ground-snapped the same way
-   *  the old per-object placement was, preserving any authored above-ground
-   *  offset). Pass `distanceCull` so far chunks can be hidden in update()
-   *  without load/unload thrashing. */
+   *  its authored position/rotation/scale (same localY as the region editor —
+   *  no heightmap re-snap). Pass `distanceCull` so far chunks can be hidden
+   *  in update() without load/unload thrashing. */
   private instanceModel(
     gltf: GLTF,
     indices: number[],
@@ -522,19 +638,12 @@ export class RegionInteriorRenderer {
 
       for (let k = 0; k < cellIndices.length; k++) {
         const asset = this.allAssets[cellIndices[k]!]!;
-        const scale = asset.scale ?? 1;
-        // Houses bake absolute floor heights — don't re-snap modular pieces to
-        // terrain or upper storeys collapse onto the ground.
-        const y = asset.groupId?.startsWith("house_")
-          ? asset.localY
-          : (() => {
-              const groundY = sampleRegionHeight(this.blueprint, asset.localX, asset.localZ);
-              const storedOffset = asset.localY - groundY;
-              return groundY + Math.max(0, storedOffset);
-            })();
-        dummy.position.set(asset.localX, y, asset.localZ);
+        const axes = regionAssetScale(asset);
+        // Authored localY matches the editor — do not re-snap to sampleRegionHeight
+        // (bilinear vs editor mesh/raycast disagreed and shifted props slightly).
+        dummy.position.set(asset.localX, asset.localY, asset.localZ);
         dummy.rotation.set(0, asset.yaw, 0);
-        dummy.scale.setScalar(scale);
+        dummy.scale.set(axes.x, axes.y, axes.z);
         dummy.updateMatrix();
         for (let mi = 0; mi < instancedMeshes.length; mi++) {
           instancedMeshes[mi]!.setMatrixAt(k, dummy.matrix.clone().multiply(localMatrices[mi]!));
@@ -572,31 +681,38 @@ export class RegionInteriorRenderer {
    *  time/sun uniforms and asset distance culling. `sun` is optional so
    *  callers without a directional light handy just leave the blade shader's
    *  sun uniforms at their static defaults. */
-  update(delta: number, sun?: THREE.DirectionalLight, viewerX = 0, viewerZ = 0): void {
-    // One mesh build total across terrain/water/grass; leftover pending continues
-    // on later frames so a ring shift can't stall movement.
-    const budget = new StreamBudget(REGION_STREAM_BUDGET_MS, 1);
+  update(
+    delta: number,
+    sun?: THREE.DirectionalLight,
+    viewerX = 0,
+    viewerZ = 0,
+    camera?: THREE.Camera,
+  ): void {
+    // One heavy build preferred; urgent underfoot tiles may still force a
+    // second via streamer logic when the player is about to walk onto void.
+    const budget = new StreamBudget(REGION_STREAM_BUDGET_MS, 2);
     this.adtTerrain.update(viewerX, viewerZ, budget);
     this.adtWater?.update(viewerX, viewerZ, budget);
-    if (this.grassField) this.grassField.update(viewerX, viewerZ, budget);
     this.adtWater?.updateScroll(delta);
 
-    // Hide instanced assets past the terrain ADT ring (plus a chunk
-    // half-diagonal so edge props don't pop when near a cell boundary).
-    const reach = TREE_VISIBLE_RADIUS + RegionInteriorRenderer.CHUNK_SIZE * 0.71;
-    const reach2 = reach * reach;
+    // Keep foliage/props inside the same Chebyshev ADT ring as streamed
+    // terrain, and only show a chunk once its ground tile exists — otherwise
+    // trees draw past / ahead of the heightmap mesh and look like they float.
+    const ix0 = adtIndex(viewerX);
+    const iz0 = adtIndex(viewerZ);
     if (this.assetChunks.length > 0) {
       for (const chunk of this.assetChunks) {
-        const dx = chunk.x - viewerX;
-        const dz = chunk.z - viewerZ;
-        const visible = dx * dx + dz * dz <= reach2;
+        const d = Math.max(Math.abs(adtIndex(chunk.x) - ix0), Math.abs(adtIndex(chunk.z) - iz0));
+        const visible = d <= this.streamRing && this.adtTerrain.hasTileAt(chunk.x, chunk.z);
         for (const mesh of chunk.meshes) mesh.visible = visible;
       }
     }
     for (const mesh of this.volumeMeshes) {
-      const dx = mesh.position.x - viewerX;
-      const dz = mesh.position.z - viewerZ;
-      mesh.visible = dx * dx + dz * dz <= reach2;
+      const d = Math.max(
+        Math.abs(adtIndex(mesh.position.x) - ix0),
+        Math.abs(adtIndex(mesh.position.z) - iz0),
+      );
+      mesh.visible = d <= this.streamRing && this.adtTerrain.hasTileAt(mesh.position.x, mesh.position.z);
     }
     // Fog is fill-rate heavy — cull sooner than props (~90 m).
     const fogReach2 = 90 * 90;
@@ -609,17 +725,58 @@ export class RegionInteriorRenderer {
     if (!(delta > 0)) return;
 
     if (this.grassField) {
-      this.grassField.tickWind(delta);
-      this.grassField.setTramplers([{ x: viewerX, z: viewerZ, radius: 0.9 }]);
-      this.grassField.uniforms.uTime.value += delta;
-      if (sun) {
-        this.grassField.uniforms.uSunDir.value.copy(sun.position).sub(sun.target.position).normalize();
-        this.grassField.uniforms.uSunColor.value.copy(sun.color).multiplyScalar(sun.intensity);
+      const half =
+        ((this.blueprint.gridSize - 1) * this.blueprint.pitch) / 2 +
+        adtRingRadiusMeters(Math.max(1, this.streamRing - 1));
+      const inFootprint = Math.abs(viewerX) <= half && Math.abs(viewerZ) <= half;
+      if (inFootprint) {
+        // Blade push samples world XZ (modelMatrix); convert local viewer → world.
+        this.group.getWorldPosition(this.grassWorldScratch);
+        this.grassField.setPlayer(
+          this.grassWorldScratch.x + viewerX,
+          this.grassWorldScratch.y,
+          this.grassWorldScratch.z + viewerZ,
+        );
+        if (sun) {
+          const dir = new THREE.Vector3()
+            .copy(sun.position)
+            .sub(sun.target.position)
+            .normalize();
+          this.grassField.setSunFromLight(dir, sun.color, sun.intensity);
+        }
+        if (camera) {
+          this.grassField.update(camera, delta);
+        } else {
+          this.grassCam.position.set(
+            this.grassWorldScratch.x + viewerX,
+            this.grassWorldScratch.y + 12,
+            this.grassWorldScratch.z + viewerZ,
+          );
+          this.grassCam.updateMatrixWorld();
+          this.grassField.update(this.grassCam, delta);
+        }
       }
     }
     this.treeWindUniforms.uTime.value += delta;
 
+    this.cloudRuntime?.update(delta, this.blueprint.wind);
+
+    // Village quest-givers standing idle far from the player don't need a
+    // per-frame animation-mixer update (the expensive part of this loop --
+    // skinning/bone-matrix work) -- only skip it for NPCs that aren't
+    // currently escorting, since an escorting NPC follows the player and can
+    // wander arbitrarily far from its authored spot. A quest can only go
+    // "active" in the first place by talking to its giver, which requires
+    // being near it, so gating the escort-start check behind this same
+    // distance cull doesn't change when escorts actually begin.
+    const npcAnimReach2 = 70 * 70;
     for (const inst of this.npcInstances) {
+      const isEscorting = !!inst.escortState && !inst.escortState.completed;
+      if (!isEscorting) {
+        const dx = inst.group.position.x - viewerX;
+        const dz = inst.group.position.z - viewerZ;
+        if (dx * dx + dz * dz > npcAnimReach2) continue;
+      }
       inst.animModel.update(delta);
 
       // Check if there is an active escort quest for this NPC in game.questLog
@@ -755,7 +912,11 @@ export class RegionInteriorRenderer {
     this.adtTerrain.dispose();
     this.adtWater?.dispose();
     this.adtWater = null;
-    for (const im of this.instancedGroups) this.group.remove(im);
+    for (const im of this.instancedGroups) {
+      this.group.remove(im);
+      im.geometry?.dispose();
+      // Materials are shared with the GLTF cache — don't dispose them.
+    }
     this.instancedGroups = [];
     this.assetChunks = [];
     for (const mesh of this.volumeMeshes) {
@@ -770,6 +931,24 @@ export class RegionInteriorRenderer {
     }
     this.fogMeshes = [];
     this.fogVolumeData = [];
+    this.cloudRuntime?.dispose();
+    this.cloudRuntime = null;
+    if (this.horizonGroup) {
+      this.group.remove(this.horizonGroup);
+      this.horizonGroup.traverse((o) => {
+        const mesh = o as THREE.Mesh;
+        if (mesh.isMesh) {
+          mesh.geometry?.dispose();
+          (mesh.material as THREE.Material)?.dispose?.();
+        }
+      });
+      this.horizonGroup = null;
+    }
+    for (const model of this.npcModels) {
+      model.group.parent?.remove(model.group);
+      model.dispose();
+    }
     this.npcModels = [];
+    this.npcInstances = [];
   }
 }

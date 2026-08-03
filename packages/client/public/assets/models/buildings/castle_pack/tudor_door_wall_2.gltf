@@ -1,0 +1,234 @@
+{
+  "asset": {
+    "generator": "Khronos glTF Blender I/O v5.2.39",
+    "version": "2.0"
+  },
+  "scene": 0,
+  "scenes": [
+    {
+      "name": "Scene",
+      "nodes": [
+        0
+      ]
+    }
+  ],
+  "nodes": [
+    {
+      "mesh": 0,
+      "name": "White Wall Door 4m 1beam",
+      "rotation": [
+        0.7071068286895752,
+        0,
+        0,
+        0.7071068286895752
+      ],
+      "scale": [
+        0.009999999776482582,
+        0.009999999776482582,
+        0.009999999776482582
+      ],
+      "translation": [
+        -0.002471923828125,
+        0.0015379339456558228,
+        -0.002680063247680664
+      ]
+    }
+  ],
+  "materials": [
+    {
+      "doubleSided": true,
+      "name": "Weathered Wood",
+      "pbrMetallicRoughness": {
+        "baseColorTexture": {
+          "index": 0
+        },
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.75
+      }
+    },
+    {
+      "doubleSided": true,
+      "name": "Plastered Wall",
+      "pbrMetallicRoughness": {
+        "baseColorTexture": {
+          "index": 1
+        },
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.75
+      }
+    }
+  ],
+  "meshes": [
+    {
+      "name": "Cube.025",
+      "primitives": [
+        {
+          "attributes": {
+            "POSITION": 0,
+            "NORMAL": 1,
+            "TEXCOORD_0": 2
+          },
+          "indices": 3,
+          "material": 0
+        },
+        {
+          "attributes": {
+            "POSITION": 4,
+            "NORMAL": 5,
+            "TEXCOORD_0": 6
+          },
+          "indices": 7,
+          "material": 1
+        }
+      ]
+    }
+  ],
+  "textures": [
+    {
+      "source": 0
+    },
+    {
+      "source": 1
+    }
+  ],
+  "images": [
+    {
+      "uri": "textures/wood_weather_color.png"
+    },
+    {
+      "uri": "textures/plaster_color.png"
+    }
+  ],
+  "accessors": [
+    {
+      "bufferView": 0,
+      "componentType": 5126,
+      "count": 2653,
+      "max": [
+        244.61648559570312,
+        16.41352081298828,
+        0.1537919044494629
+      ],
+      "min": [
+        -244.1202392578125,
+        -15.877509117126465,
+        -242.04766845703125
+      ],
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 1,
+      "componentType": 5126,
+      "count": 2653,
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 2,
+      "componentType": 5126,
+      "count": 2653,
+      "type": "VEC2"
+    },
+    {
+      "bufferView": 3,
+      "componentType": 5123,
+      "count": 4161,
+      "type": "SCALAR"
+    },
+    {
+      "bufferView": 4,
+      "componentType": 5126,
+      "count": 131,
+      "max": [
+        200.2481231689453,
+        10.271382331848145,
+        -0.16913414001464844
+      ],
+      "min": [
+        -199.75186157226562,
+        -9.728598594665527,
+        -202.28004455566406
+      ],
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 5,
+      "componentType": 5126,
+      "count": 131,
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 6,
+      "componentType": 5126,
+      "count": 131,
+      "type": "VEC2"
+    },
+    {
+      "bufferView": 7,
+      "componentType": 5123,
+      "count": 195,
+      "type": "SCALAR"
+    }
+  ],
+  "bufferViews": [
+    {
+      "buffer": 0,
+      "byteLength": 31836,
+      "byteOffset": 0,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 31836,
+      "byteOffset": 31836,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 21224,
+      "byteOffset": 63672,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 8322,
+      "byteOffset": 84896,
+      "target": 34963
+    },
+    {
+      "buffer": 0,
+      "byteLength": 1572,
+      "byteOffset": 93220,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 1572,
+      "byteOffset": 94792,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 1048,
+      "byteOffset": 96364,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 390,
+      "byteOffset": 97412,
+      "target": 34963
+    }
+  ],
+  "samplers": [
+    {
+      "magFilter": 9729,
+      "minFilter": 9987
+    }
+  ],
+  "buffers": [
+    {
+      "byteLength": 97804,
+      "uri": "tudor_door_wall_2.bin"
+    }
+  ]
+}

@@ -1,0 +1,1090 @@
+{
+  "building/bridge": {
+    "file": "bridge.gltf",
+    "category": "building",
+    "source": "SM_Bridge.fbx",
+    "meshCount": 1,
+    "height": 1.8151,
+    "footprint": [
+      2.2502,
+      10.5373
+    ],
+    "size": [
+      2.2502,
+      10.5373,
+      1.8151
+    ],
+    "bytes": 358041
+  },
+  "foliage/bush_01": {
+    "file": "bush_01.gltf",
+    "category": "foliage",
+    "source": "SM_Bush_01.fbx",
+    "meshCount": 1,
+    "height": 1.4148,
+    "footprint": [
+      1.8174,
+      1.5592
+    ],
+    "size": [
+      1.8174,
+      1.5592,
+      1.4148
+    ],
+    "bytes": 319772
+  },
+  "foliage/bush_05": {
+    "file": "bush_05.gltf",
+    "category": "foliage",
+    "source": "SM_Bush_05.fbx",
+    "meshCount": 1,
+    "height": 2.0554,
+    "footprint": [
+      2.4144,
+      2.4362
+    ],
+    "size": [
+      2.4144,
+      2.4362,
+      2.0554
+    ],
+    "bytes": 25160
+  },
+  "prop/campfire": {
+    "file": "campfire.gltf",
+    "category": "prop",
+    "source": "SM_Campfire.fbx",
+    "meshCount": 1,
+    "height": 0.7981,
+    "footprint": [
+      1.2478,
+      1.2592
+    ],
+    "size": [
+      1.2478,
+      1.2592,
+      0.7981
+    ],
+    "bytes": 106456
+  },
+  "foliage/cobweb_02": {
+    "file": "cobweb_02.gltf",
+    "category": "foliage",
+    "source": "SM_Cobweb_02.fbx",
+    "meshCount": 1,
+    "height": 2.0007,
+    "footprint": [
+      2.0007,
+      0.2097
+    ],
+    "size": [
+      2.0007,
+      0.2097,
+      2.0007
+    ],
+    "bytes": 2853
+  },
+  "foliage/cobweb_03": {
+    "file": "cobweb_03.gltf",
+    "category": "foliage",
+    "source": "SM_Cobweb_03.fbx",
+    "meshCount": 1,
+    "height": 2.0008,
+    "footprint": [
+      2.0008,
+      0.2138
+    ],
+    "size": [
+      2.0008,
+      0.2138,
+      2.0008
+    ],
+    "bytes": 2879
+  },
+  "foliage/fallentree_02": {
+    "file": "fallentree_02.gltf",
+    "category": "foliage",
+    "source": "SM_FallenTree_02.fbx",
+    "meshCount": 1,
+    "height": 1.3343,
+    "footprint": [
+      1.1781,
+      3.7933
+    ],
+    "size": [
+      1.1781,
+      3.7933,
+      1.3343
+    ],
+    "bytes": 70260
+  },
+  "foliage/fallentree_04": {
+    "file": "fallentree_04.gltf",
+    "category": "foliage",
+    "source": "SM_FallenTree_04.fbx",
+    "meshCount": 1,
+    "height": 1.3343,
+    "footprint": [
+      1.2148,
+      3.7933
+    ],
+    "size": [
+      1.2148,
+      3.7933,
+      1.3343
+    ],
+    "bytes": 72665
+  },
+  "prop/fence_01_a": {
+    "file": "fence_01_a.gltf",
+    "category": "prop",
+    "source": "SM_Fence_01_A.fbx",
+    "meshCount": 1,
+    "height": 1.2019,
+    "footprint": [
+      3.1322,
+      0.2073
+    ],
+    "size": [
+      3.1322,
+      0.2073,
+      1.2019
+    ],
+    "bytes": 39260
+  },
+  "prop/fence_01_a_nopost": {
+    "file": "fence_01_a_nopost.gltf",
+    "category": "prop",
+    "source": "SM_Fence_01_A_NoPost.fbx",
+    "meshCount": 1,
+    "height": 1.1932,
+    "footprint": [
+      3.0687,
+      0.2064
+    ],
+    "size": [
+      3.0687,
+      0.2064,
+      1.1932
+    ],
+    "bytes": 27126
+  },
+  "foliage/fir_02": {
+    "file": "fir_02.gltf",
+    "category": "foliage",
+    "source": "SM_Fir_02.fbx",
+    "meshCount": 1,
+    "height": 5.7975,
+    "footprint": [
+      3.414,
+      3.3315
+    ],
+    "size": [
+      3.414,
+      3.3315,
+      5.7975
+    ],
+    "bytes": 63444
+  },
+  "foliage/flower_01": {
+    "file": "flower_01.gltf",
+    "category": "foliage",
+    "source": "SM_Flower_01.fbx",
+    "meshCount": 1,
+    "height": 0.3956,
+    "footprint": [
+      0.2916,
+      0.293
+    ],
+    "size": [
+      0.2916,
+      0.293,
+      0.3956
+    ],
+    "bytes": 259071
+  },
+  "foliage/flower_02": {
+    "file": "flower_02.gltf",
+    "category": "foliage",
+    "source": "SM_Flower_02.fbx",
+    "meshCount": 1,
+    "height": 0.403,
+    "footprint": [
+      0.2719,
+      0.3178
+    ],
+    "size": [
+      0.2719,
+      0.3178,
+      0.403
+    ],
+    "bytes": 245217
+  },
+  "foliage/foliage_03": {
+    "file": "foliage_03.gltf",
+    "category": "foliage",
+    "source": "SM_Foliage_03.fbx",
+    "meshCount": 1,
+    "height": 0.378,
+    "footprint": [
+      0.3897,
+      0.3605
+    ],
+    "size": [
+      0.3897,
+      0.3605,
+      0.378
+    ],
+    "bytes": 211844
+  },
+  "foliage/foliage_04": {
+    "file": "foliage_04.gltf",
+    "category": "foliage",
+    "source": "SM_Foliage_04.fbx",
+    "meshCount": 1,
+    "height": 1.2571,
+    "footprint": [
+      0.6651,
+      0.1103
+    ],
+    "size": [
+      0.6651,
+      0.1103,
+      1.2571
+    ],
+    "bytes": 124660
+  },
+  "foliage/foliagebush_01": {
+    "file": "foliagebush_01.gltf",
+    "category": "foliage",
+    "source": "SM_FoliageBush_01.fbx",
+    "meshCount": 1,
+    "height": 1.4148,
+    "footprint": [
+      1.8174,
+      1.5592
+    ],
+    "size": [
+      1.8174,
+      1.5592,
+      1.4148
+    ],
+    "bytes": 318781
+  },
+  "prop/fox_01": {
+    "file": "fox_01.gltf",
+    "category": "prop",
+    "source": "SM_Fox_01.fbx",
+    "meshCount": 1,
+    "height": 0.5918,
+    "footprint": [
+      0.2221,
+      1.0874
+    ],
+    "size": [
+      0.2221,
+      1.0874,
+      0.5918
+    ],
+    "bytes": 75115
+  },
+  "foliage/grass_01": {
+    "file": "grass_01.gltf",
+    "category": "foliage",
+    "source": "SM_Grass_01.fbx",
+    "meshCount": 1,
+    "height": 0.5428,
+    "footprint": [
+      0.5373,
+      0.3663
+    ],
+    "size": [
+      0.5373,
+      0.3663,
+      0.5428
+    ],
+    "bytes": 37541
+  },
+  "foliage/grass_02": {
+    "file": "grass_02.gltf",
+    "category": "foliage",
+    "source": "SM_Grass_02.fbx",
+    "meshCount": 1,
+    "height": 0.7139,
+    "footprint": [
+      0.7648,
+      0.7197
+    ],
+    "size": [
+      0.7648,
+      0.7197,
+      0.7139
+    ],
+    "bytes": 35049
+  },
+  "foliage/grass_03": {
+    "file": "grass_03.gltf",
+    "category": "foliage",
+    "source": "SM_Grass_03.fbx",
+    "meshCount": 1,
+    "height": 0.5428,
+    "footprint": [
+      0.5373,
+      0.3663
+    ],
+    "size": [
+      0.5373,
+      0.3663,
+      0.5428
+    ],
+    "bytes": 34690
+  },
+  "foliage/grass_04": {
+    "file": "grass_04.gltf",
+    "category": "foliage",
+    "source": "SM_Grass_04.fbx",
+    "meshCount": 1,
+    "height": 0.7139,
+    "footprint": [
+      0.7648,
+      0.7197
+    ],
+    "size": [
+      0.7648,
+      0.7197,
+      0.7139
+    ],
+    "bytes": 35057
+  },
+  "building/mountain_01": {
+    "file": "mountain_01.gltf",
+    "category": "building",
+    "source": "SM_Mountain_01.fbx",
+    "meshCount": 1,
+    "height": 21.5717,
+    "footprint": [
+      50.0011,
+      50.0016
+    ],
+    "size": [
+      50.0011,
+      50.0016,
+      21.5717
+    ],
+    "bytes": 199281
+  },
+  "foliage/mushroom_01": {
+    "file": "mushroom_01.gltf",
+    "category": "foliage",
+    "source": "SM_Mushroom_01.fbx",
+    "meshCount": 1,
+    "height": 0.2621,
+    "footprint": [
+      0.213,
+      0.2159
+    ],
+    "size": [
+      0.213,
+      0.2159,
+      0.2621
+    ],
+    "bytes": 32523
+  },
+  "foliage/mushroom_03": {
+    "file": "mushroom_03.gltf",
+    "category": "foliage",
+    "source": "SM_Mushroom_03.fbx",
+    "meshCount": 1,
+    "height": 0.2394,
+    "footprint": [
+      0.2573,
+      0.2688
+    ],
+    "size": [
+      0.2573,
+      0.2688,
+      0.2394
+    ],
+    "bytes": 40007
+  },
+  "foliage/mushroom_05": {
+    "file": "mushroom_05.gltf",
+    "category": "foliage",
+    "source": "SM_Mushroom_05.fbx",
+    "meshCount": 1,
+    "height": 0.2896,
+    "footprint": [
+      0.2293,
+      0.2355
+    ],
+    "size": [
+      0.2293,
+      0.2355,
+      0.2896
+    ],
+    "bytes": 27684
+  },
+  "foliage/pebble_02": {
+    "file": "pebble_02.gltf",
+    "category": "foliage",
+    "source": "SM_Pebble_02.fbx",
+    "meshCount": 1,
+    "height": 0.1331,
+    "footprint": [
+      0.2742,
+      0.3433
+    ],
+    "size": [
+      0.2742,
+      0.3433,
+      0.1331
+    ],
+    "bytes": 10178
+  },
+  "building/platform_01": {
+    "file": "platform_01.gltf",
+    "category": "building",
+    "source": "SM_Platform_01.fbx",
+    "meshCount": 1,
+    "height": 2.7133,
+    "footprint": [
+      6.4914,
+      4.6916
+    ],
+    "size": [
+      6.4914,
+      4.6916,
+      2.7133
+    ],
+    "bytes": 28000
+  },
+  "building/platform_02": {
+    "file": "platform_02.gltf",
+    "category": "building",
+    "source": "SM_Platform_02.fbx",
+    "meshCount": 1,
+    "height": 1.9189,
+    "footprint": [
+      4.9825,
+      4.8239
+    ],
+    "size": [
+      4.9825,
+      4.8239,
+      1.9189
+    ],
+    "bytes": 36587
+  },
+  "building/platform_03": {
+    "file": "platform_03.gltf",
+    "category": "building",
+    "source": "SM_Platform_03.fbx",
+    "meshCount": 1,
+    "height": 1.8249,
+    "footprint": [
+      6.7271,
+      5.2924
+    ],
+    "size": [
+      6.7271,
+      5.2924,
+      1.8249
+    ],
+    "bytes": 68743
+  },
+  "foliage/rock_02": {
+    "file": "rock_02.gltf",
+    "category": "foliage",
+    "source": "SM_Rock_02.fbx",
+    "meshCount": 1,
+    "height": 1.8261,
+    "footprint": [
+      2.6912,
+      3.8663
+    ],
+    "size": [
+      2.6912,
+      3.8663,
+      1.8261
+    ],
+    "bytes": 15339
+  },
+  "foliage/rock_07": {
+    "file": "rock_07.gltf",
+    "category": "foliage",
+    "source": "SM_Rock_07.fbx",
+    "meshCount": 1,
+    "height": 2.0674,
+    "footprint": [
+      4.555,
+      4.7789
+    ],
+    "size": [
+      4.555,
+      4.7789,
+      2.0674
+    ],
+    "bytes": 15355
+  },
+  "foliage/rock_08": {
+    "file": "rock_08.gltf",
+    "category": "foliage",
+    "source": "SM_Rock_08.fbx",
+    "meshCount": 1,
+    "height": 0.8638,
+    "footprint": [
+      1.3662,
+      1.0214
+    ],
+    "size": [
+      1.3662,
+      1.0214,
+      0.8638
+    ],
+    "bytes": 19082
+  },
+  "foliage/rock_10": {
+    "file": "rock_10.gltf",
+    "category": "foliage",
+    "source": "SM_Rock_10.fbx",
+    "meshCount": 1,
+    "height": 4.9069,
+    "footprint": [
+      4.9939,
+      4.5364
+    ],
+    "size": [
+      4.9939,
+      4.5364,
+      4.9069
+    ],
+    "bytes": 15357
+  },
+  "foliage/rock_11": {
+    "file": "rock_11.gltf",
+    "category": "foliage",
+    "source": "SM_Rock_11.fbx",
+    "meshCount": 1,
+    "height": 1.0917,
+    "footprint": [
+      1.9961,
+      1.5304
+    ],
+    "size": [
+      1.9961,
+      1.5304,
+      1.0917
+    ],
+    "bytes": 55817
+  },
+  "foliage/rock_11_fbx_001": {
+    "file": "rock_11_fbx_001.gltf",
+    "category": "foliage",
+    "source": "SM_Rock_11.fbx.001.fbx",
+    "meshCount": 1,
+    "height": 3.9818,
+    "footprint": [
+      6.9993,
+      5.4513
+    ],
+    "size": [
+      6.9993,
+      5.4513,
+      3.9818
+    ],
+    "bytes": 8764
+  },
+  "foliage/rock_13": {
+    "file": "rock_13.gltf",
+    "category": "foliage",
+    "source": "SM_Rock_13.fbx",
+    "meshCount": 1,
+    "height": 9.4295,
+    "footprint": [
+      14.7505,
+      14.3905
+    ],
+    "size": [
+      14.7505,
+      14.3905,
+      9.4295
+    ],
+    "bytes": 18202
+  },
+  "foliage/rock_15": {
+    "file": "rock_15.gltf",
+    "category": "foliage",
+    "source": "SM_Rock_15.fbx",
+    "meshCount": 1,
+    "height": 13.0826,
+    "footprint": [
+      15.9681,
+      16.2979
+    ],
+    "size": [
+      15.9681,
+      16.2979,
+      13.0826
+    ],
+    "bytes": 15664
+  },
+  "foliage/rock_18": {
+    "file": "rock_18.gltf",
+    "category": "foliage",
+    "source": "SM_Rock_18.fbx",
+    "meshCount": 1,
+    "height": 1.1644,
+    "footprint": [
+      1.6747,
+      1.8986
+    ],
+    "size": [
+      1.6747,
+      1.8986,
+      1.1644
+    ],
+    "bytes": 76517
+  },
+  "building/rockwall_02": {
+    "file": "rockwall_02.gltf",
+    "category": "building",
+    "source": "SM_RockWall_02.fbx",
+    "meshCount": 1,
+    "height": 9.5797,
+    "footprint": [
+      11.4868,
+      6.0746
+    ],
+    "size": [
+      11.4868,
+      6.0746,
+      9.5797
+    ],
+    "bytes": 151166
+  },
+  "building/rockwall_03": {
+    "file": "rockwall_03.gltf",
+    "category": "building",
+    "source": "SM_RockWall_03.fbx",
+    "meshCount": 1,
+    "height": 9.6897,
+    "footprint": [
+      11.2777,
+      5.8314
+    ],
+    "size": [
+      11.2777,
+      5.8314,
+      9.6897
+    ],
+    "bytes": 144694
+  },
+  "foliage/root_01": {
+    "file": "root_01.gltf",
+    "category": "foliage",
+    "source": "SM_Root_01.fbx",
+    "meshCount": 1,
+    "height": 1.2702,
+    "footprint": [
+      1.4741,
+      0.6331
+    ],
+    "size": [
+      1.4741,
+      0.6331,
+      1.2702
+    ],
+    "bytes": 64297
+  },
+  "prop/rune_01": {
+    "file": "rune_01.gltf",
+    "category": "prop",
+    "source": "SM_Rune_01.fbx",
+    "meshCount": 1,
+    "height": 0.8916,
+    "footprint": [
+      0.7018,
+      0.5365
+    ],
+    "size": [
+      0.7018,
+      0.5365,
+      0.8916
+    ],
+    "bytes": 124682
+  },
+  "prop/rune_03": {
+    "file": "rune_03.gltf",
+    "category": "prop",
+    "source": "SM_Rune_03.fbx",
+    "meshCount": 1,
+    "height": 0.9084,
+    "footprint": [
+      0.6708,
+      0.5763
+    ],
+    "size": [
+      0.6708,
+      0.5763,
+      0.9084
+    ],
+    "bytes": 63852
+  },
+  "prop/runestone_02": {
+    "file": "runestone_02.gltf",
+    "category": "prop",
+    "source": "SM_RuneStone_02.fbx",
+    "meshCount": 1,
+    "height": 2.3481,
+    "footprint": [
+      1.8137,
+      1.759
+    ],
+    "size": [
+      1.8137,
+      1.759,
+      2.3481
+    ],
+    "bytes": 45699
+  },
+  "prop/runestone_06": {
+    "file": "runestone_06.gltf",
+    "category": "prop",
+    "source": "SM_RuneStone_06.fbx",
+    "meshCount": 1,
+    "height": 4.2144,
+    "footprint": [
+      1.3108,
+      1.3095
+    ],
+    "size": [
+      1.3108,
+      1.3095,
+      4.2144
+    ],
+    "bytes": 48493
+  },
+  "prop/sign_01": {
+    "file": "sign_01.gltf",
+    "category": "prop",
+    "source": "SM_Sign_01.fbx",
+    "meshCount": 1,
+    "height": 0.9412,
+    "footprint": [
+      0.943,
+      0.1535
+    ],
+    "size": [
+      0.943,
+      0.1535,
+      0.9412
+    ],
+    "bytes": 16328
+  },
+  "prop/signpost_02": {
+    "file": "signpost_02.gltf",
+    "category": "prop",
+    "source": "SM_SignPost_02.fbx",
+    "meshCount": 1,
+    "height": 2.5,
+    "footprint": [
+      1.136,
+      0.2456
+    ],
+    "size": [
+      1.136,
+      0.2456,
+      2.5
+    ],
+    "bytes": 21560
+  },
+  "prop/spider_01": {
+    "file": "spider_01.gltf",
+    "category": "prop",
+    "source": "SM_Spider_01.fbx",
+    "meshCount": 1,
+    "height": 0.8183,
+    "footprint": [
+      1.5428,
+      1.5782
+    ],
+    "size": [
+      1.5428,
+      1.5782,
+      0.8183
+    ],
+    "bytes": 168042
+  },
+  "prop/spikes_01": {
+    "file": "spikes_01.gltf",
+    "category": "prop",
+    "source": "SM_Spikes_01.fbx",
+    "meshCount": 1,
+    "height": 0.9926,
+    "footprint": [
+      0.7464,
+      0.8118
+    ],
+    "size": [
+      0.7464,
+      0.8118,
+      0.9926
+    ],
+    "bytes": 20355
+  },
+  "building/stonewall_01": {
+    "file": "stonewall_01.gltf",
+    "category": "building",
+    "source": "SM_StoneWall_01.fbx",
+    "meshCount": 1,
+    "height": 1.0232,
+    "footprint": [
+      3.3429,
+      0.4373
+    ],
+    "size": [
+      3.3429,
+      0.4373,
+      1.0232
+    ],
+    "bytes": 220233
+  },
+  "building/stonewall_01_angle90": {
+    "file": "stonewall_01_angle90.gltf",
+    "category": "building",
+    "source": "SM_StoneWall_01_Angle90.fbx",
+    "meshCount": 1,
+    "height": 1.0232,
+    "footprint": [
+      2.1625,
+      2.0737
+    ],
+    "size": [
+      2.1625,
+      2.0737,
+      1.0232
+    ],
+    "bytes": 220257
+  },
+  "building/stonewall_04": {
+    "file": "stonewall_04.gltf",
+    "category": "building",
+    "source": "SM_StoneWall_04.fbx",
+    "meshCount": 1,
+    "height": 1.0192,
+    "footprint": [
+      1.4819,
+      0.4264
+    ],
+    "size": [
+      1.4819,
+      0.4264,
+      1.0192
+    ],
+    "bytes": 80211
+  },
+  "foliage/stump_01": {
+    "file": "stump_01.gltf",
+    "category": "foliage",
+    "source": "SM_Stump_01.fbx",
+    "meshCount": 1,
+    "height": 0.7769,
+    "footprint": [
+      1.2388,
+      1.3945
+    ],
+    "size": [
+      1.2388,
+      1.3945,
+      0.7769
+    ],
+    "bytes": 53146
+  },
+  "building/terrainedge_02": {
+    "file": "terrainedge_02.gltf",
+    "category": "building",
+    "source": "SM_TerrainEdge_02.fbx",
+    "meshCount": 1,
+    "height": 3.6791,
+    "footprint": [
+      8.2896,
+      5.47
+    ],
+    "size": [
+      8.2896,
+      5.47,
+      3.6791
+    ],
+    "bytes": 21373
+  },
+  "foliage/thorn_03_b": {
+    "file": "thorn_03_b.gltf",
+    "category": "foliage",
+    "source": "SM_Thorn_03_B.fbx",
+    "meshCount": 1,
+    "height": 1.3094,
+    "footprint": [
+      2.8137,
+      0.916
+    ],
+    "size": [
+      2.8137,
+      0.916,
+      1.3094
+    ],
+    "bytes": 38173
+  },
+  "foliage/thorn_04_b": {
+    "file": "thorn_04_b.gltf",
+    "category": "foliage",
+    "source": "SM_Thorn_04_B.fbx",
+    "meshCount": 1,
+    "height": 1.2289,
+    "footprint": [
+      3.0426,
+      1.0204
+    ],
+    "size": [
+      3.0426,
+      1.0204,
+      1.2289
+    ],
+    "bytes": 42379
+  },
+  "foliage/thorn_06": {
+    "file": "thorn_06.gltf",
+    "category": "foliage",
+    "source": "SM_Thorn_06.fbx",
+    "meshCount": 1,
+    "height": 1.1605,
+    "footprint": [
+      1.7361,
+      1.2878
+    ],
+    "size": [
+      1.7361,
+      1.2878,
+      1.1605
+    ],
+    "bytes": 25480
+  },
+  "foliage/thorn_09": {
+    "file": "thorn_09.gltf",
+    "category": "foliage",
+    "source": "SM_Thorn_09.fbx",
+    "meshCount": 1,
+    "height": 2.5009,
+    "footprint": [
+      2.5826,
+      1.049
+    ],
+    "size": [
+      2.5826,
+      1.049,
+      2.5009
+    ],
+    "bytes": 159254
+  },
+  "foliage/tree_01": {
+    "file": "tree_01.gltf",
+    "category": "foliage",
+    "source": "SM_Tree_01.fbx",
+    "meshCount": 1,
+    "height": 7.6242,
+    "footprint": [
+      4.3793,
+      3.8705
+    ],
+    "size": [
+      4.3793,
+      3.8705,
+      7.6242
+    ],
+    "bytes": 259541
+  },
+  "foliage/tree_02": {
+    "file": "tree_02.gltf",
+    "category": "foliage",
+    "source": "SM_Tree_02.fbx",
+    "meshCount": 1,
+    "height": 7.7737,
+    "footprint": [
+      5.9288,
+      5.6318
+    ],
+    "size": [
+      5.9288,
+      5.6318,
+      7.7737
+    ],
+    "bytes": 591850
+  },
+  "foliage/tree_06": {
+    "file": "tree_06.gltf",
+    "category": "foliage",
+    "source": "SM_Tree_06.fbx",
+    "meshCount": 1,
+    "height": 6.918,
+    "footprint": [
+      2.2835,
+      1.7799
+    ],
+    "size": [
+      2.2835,
+      1.7799,
+      6.918
+    ],
+    "bytes": 32322
+  },
+  "foliage/tree_07": {
+    "file": "tree_07.gltf",
+    "category": "foliage",
+    "source": "SM_Tree_07.fbx",
+    "meshCount": 1,
+    "height": 7.66,
+    "footprint": [
+      3.96,
+      2.7109
+    ],
+    "size": [
+      3.96,
+      2.7109,
+      7.66
+    ],
+    "bytes": 42043
+  },
+  "foliage/tree_willow": {
+    "file": "tree_willow.gltf",
+    "category": "foliage",
+    "source": "SM_Tree_Willow.fbx",
+    "meshCount": 1,
+    "height": 9.398,
+    "footprint": [
+      7.225,
+      6.0454
+    ],
+    "size": [
+      7.225,
+      6.0454,
+      9.398
+    ],
+    "bytes": 303003
+  },
+  "prop/wolf_01": {
+    "file": "wolf_01.gltf",
+    "category": "prop",
+    "source": "SM_Wolf_01.fbx",
+    "meshCount": 1,
+    "height": 1.1803,
+    "footprint": [
+      0.512,
+      2.4838
+    ],
+    "size": [
+      0.512,
+      2.4838,
+      1.1803
+    ],
+    "bytes": 135242
+  }
+}

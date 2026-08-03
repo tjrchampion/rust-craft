@@ -1,0 +1,370 @@
+{
+  "asset": {
+    "generator": "Khronos glTF Blender I/O v5.2.39",
+    "version": "2.0"
+  },
+  "extensionsUsed": [
+    "KHR_materials_specular"
+  ],
+  "scene": 0,
+  "scenes": [
+    {
+      "name": "Scene",
+      "nodes": [
+        1
+      ]
+    }
+  ],
+  "nodes": [
+    {
+      "mesh": 0,
+      "name": "SM_PROP_outhouse_door",
+      "translation": [
+        0.423335999250412,
+        0.4360259473323822,
+        0.3561532199382782
+      ]
+    },
+    {
+      "children": [
+        0
+      ],
+      "mesh": 1,
+      "name": "SM_PROP_outhouse",
+      "translation": [
+        0.03234097361564636,
+        0.013656157068908215,
+        0.005700826644897461
+      ]
+    }
+  ],
+  "materials": [
+    {
+      "doubleSided": true,
+      "extensions": {
+        "KHR_materials_specular": {
+          "specularFactor": 0
+        }
+      },
+      "name": "M_wood_planks_06",
+      "pbrMetallicRoughness": {
+        "baseColorTexture": {
+          "index": 0
+        },
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.8
+      },
+      "alphaMode": "OPAQUE"
+    },
+    {
+      "doubleSided": true,
+      "extensions": {
+        "KHR_materials_specular": {
+          "specularFactor": 0.6299212574958801
+        }
+      },
+      "name": "M_metal_01",
+      "normalTexture": {
+        "index": 2
+      },
+      "pbrMetallicRoughness": {
+        "baseColorTexture": {
+          "index": 1
+        },
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.8
+      },
+      "alphaMode": "OPAQUE"
+    }
+  ],
+  "meshes": [
+    {
+      "name": "Mesh.2243",
+      "primitives": [
+        {
+          "attributes": {
+            "POSITION": 0,
+            "NORMAL": 1,
+            "TEXCOORD_0": 2,
+            "TEXCOORD_1": 3
+          },
+          "indices": 4,
+          "material": 0
+        },
+        {
+          "attributes": {
+            "POSITION": 5,
+            "NORMAL": 6,
+            "TEXCOORD_0": 7,
+            "TEXCOORD_1": 8
+          },
+          "indices": 9,
+          "material": 1
+        }
+      ]
+    },
+    {
+      "name": "Mesh.550",
+      "primitives": [
+        {
+          "attributes": {
+            "POSITION": 10,
+            "NORMAL": 11,
+            "TEXCOORD_0": 12,
+            "TEXCOORD_1": 13
+          },
+          "indices": 14,
+          "material": 0
+        }
+      ]
+    }
+  ],
+  "textures": [
+    {
+      "source": 0
+    },
+    {
+      "source": 1
+    },
+    {
+      "source": 2
+    }
+  ],
+  "images": [
+    {
+      "uri": "textures/T_wood_planks_06_BC.png"
+    },
+    {
+      "uri": "textures/T_metal_01_BC.png"
+    },
+    {
+      "uri": "textures/T_metal_01_N.png"
+    }
+  ],
+  "accessors": [
+    {
+      "bufferView": 0,
+      "componentType": 5126,
+      "count": 114,
+      "max": [
+        0.053889788687229156,
+        1.5809468030929565,
+        0.05951773375272751
+      ],
+      "min": [
+        -0.8146167397499084,
+        -0.3837381899356842,
+        -0.10437166690826416
+      ],
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 1,
+      "componentType": 5126,
+      "count": 114,
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 2,
+      "componentType": 5126,
+      "count": 114,
+      "type": "VEC2"
+    },
+    {
+      "bufferView": 3,
+      "componentType": 5126,
+      "count": 114,
+      "type": "VEC2"
+    },
+    {
+      "bufferView": 4,
+      "componentType": 5123,
+      "count": 216,
+      "type": "SCALAR"
+    },
+    {
+      "bufferView": 5,
+      "componentType": 5126,
+      "count": 140,
+      "max": [
+        0.0789903774857521,
+        1.4869829416275024,
+        0.15851181745529175
+      ],
+      "min": [
+        -0.7470600605010986,
+        -0.22858619689941406,
+        -0.03826967626810074
+      ],
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 6,
+      "componentType": 5126,
+      "count": 140,
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 7,
+      "componentType": 5126,
+      "count": 140,
+      "type": "VEC2"
+    },
+    {
+      "bufferView": 8,
+      "componentType": 5126,
+      "count": 140,
+      "type": "VEC2"
+    },
+    {
+      "bufferView": 9,
+      "componentType": 5123,
+      "count": 318,
+      "type": "SCALAR"
+    },
+    {
+      "bufferView": 10,
+      "componentType": 5126,
+      "count": 462,
+      "max": [
+        0.9218214750289917,
+        2.711026191711426,
+        0.8289355635643005
+      ],
+      "min": [
+        -0.9865034222602844,
+        -0.013656157068908215,
+        -0.8403372168540955
+      ],
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 11,
+      "componentType": 5126,
+      "count": 462,
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 12,
+      "componentType": 5126,
+      "count": 462,
+      "type": "VEC2"
+    },
+    {
+      "bufferView": 13,
+      "componentType": 5126,
+      "count": 462,
+      "type": "VEC2"
+    },
+    {
+      "bufferView": 14,
+      "componentType": 5123,
+      "count": 1098,
+      "type": "SCALAR"
+    }
+  ],
+  "bufferViews": [
+    {
+      "buffer": 0,
+      "byteLength": 1368,
+      "byteOffset": 0,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 1368,
+      "byteOffset": 1368,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 912,
+      "byteOffset": 2736,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 912,
+      "byteOffset": 3648,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 432,
+      "byteOffset": 4560,
+      "target": 34963
+    },
+    {
+      "buffer": 0,
+      "byteLength": 1680,
+      "byteOffset": 4992,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 1680,
+      "byteOffset": 6672,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 1120,
+      "byteOffset": 8352,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 1120,
+      "byteOffset": 9472,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 636,
+      "byteOffset": 10592,
+      "target": 34963
+    },
+    {
+      "buffer": 0,
+      "byteLength": 5544,
+      "byteOffset": 11228,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 5544,
+      "byteOffset": 16772,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 3696,
+      "byteOffset": 22316,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 3696,
+      "byteOffset": 26012,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 2196,
+      "byteOffset": 29708,
+      "target": 34963
+    }
+  ],
+  "samplers": [
+    {
+      "magFilter": 9729,
+      "minFilter": 9987
+    }
+  ],
+  "buffers": [
+    {
+      "byteLength": 31904,
+      "uri": "outhouse.bin"
+    }
+  ]
+}

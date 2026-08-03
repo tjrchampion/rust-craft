@@ -21,7 +21,7 @@ export interface NodeTypeDef {
 export const NODE_TYPES: Record<string, NodeTypeDef> = {
   tree: {
     id: "tree",
-    name: "Pine Tree",
+    name: "Tree",
     nodeClass: "wood",
     hits: 12,
     yieldItem: "wood",
@@ -127,4 +127,22 @@ export function nodeTypeDef(id: string): NodeTypeDef {
   const def = NODE_TYPES[id];
   if (!def) throw new Error(`Unknown node type: ${id}`);
   return def;
+}
+
+/** Gatherables placeable in the region editor (excludes dungeon instance chests). */
+export const PLACEABLE_REGION_NODE_TYPES = [
+  "tree",
+  "rock",
+  "berry_bush",
+  "copper_vein",
+  "tin_vein",
+  "iron_deposit",
+  "mithril_deposit",
+  "thorium_vein",
+] as const;
+
+export type PlaceableRegionNodeType = (typeof PLACEABLE_REGION_NODE_TYPES)[number];
+
+export function isPlaceableRegionNodeType(id: string): id is PlaceableRegionNodeType {
+  return (PLACEABLE_REGION_NODE_TYPES as readonly string[]).includes(id);
 }

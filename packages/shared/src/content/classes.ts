@@ -20,6 +20,9 @@ export interface ClassTemplate {
   startingGear: { slot: GearSlot; itemId: string }[];
 }
 
+/** New characters spawn unclothed — armor is found/crafted in-world.
+ *  Classes only start with a weapon so combat is immediately playable. */
+
 export const CLASSES: Record<ClassId, ClassTemplate> = {
   warrior: {
     id: "warrior",
@@ -28,10 +31,7 @@ export const CLASSES: Record<ClassId, ClassTemplate> = {
     resourceLabel: "Stamina",
     baseStats: { power: 8, armor: 10, agility: 4, vitality: 8 },
     startingSpells: ["rend", "charge", "heal", "whirlwind", "execute", "shield_wall"],
-    startingGear: [
-      { slot: "weapon", itemId: "iron_sword" },
-      { slot: "chest", itemId: "leather_armor" },
-    ],
+    startingGear: [{ slot: "weapon", itemId: "iron_sword" }],
   },
   mage: {
     id: "mage",
@@ -40,10 +40,7 @@ export const CLASSES: Record<ClassId, ClassTemplate> = {
     resourceLabel: "Mana",
     baseStats: { power: 10, armor: 2, agility: 3, vitality: 4 },
     startingSpells: ["firebolt", "frostbolt", "heal", "flame_nova", "arcane_blast", "blizzard"],
-    startingGear: [
-      { slot: "weapon", itemId: "apprentice_staff" },
-      { slot: "chest", itemId: "cloth_robe" },
-    ],
+    startingGear: [{ slot: "weapon", itemId: "apprentice_staff" }],
   },
   rogue: {
     id: "rogue",
@@ -52,10 +49,7 @@ export const CLASSES: Record<ClassId, ClassTemplate> = {
     resourceLabel: "Energy",
     baseStats: { power: 7, armor: 4, agility: 10, vitality: 5 },
     startingSpells: ["backstab", "poison_strike", "heal", "fan_of_knives", "eviscerate", "garrote"],
-    startingGear: [
-      { slot: "weapon", itemId: "twin_daggers" },
-      { slot: "chest", itemId: "leather_armor" },
-    ],
+    startingGear: [{ slot: "weapon", itemId: "twin_daggers" }],
   },
   cleric: {
     id: "cleric",
@@ -64,10 +58,7 @@ export const CLASSES: Record<ClassId, ClassTemplate> = {
     resourceLabel: "Mana",
     baseStats: { power: 8, armor: 5, agility: 3, vitality: 6 },
     startingSpells: ["heal", "smite", "circle_of_healing", "holy_fire", "renew"],
-    startingGear: [
-      { slot: "weapon", itemId: "blessed_mace" },
-      { slot: "chest", itemId: "cloth_robe" },
-    ],
+    startingGear: [{ slot: "weapon", itemId: "blessed_mace" }],
   },
   ranger: {
     id: "ranger",
@@ -76,10 +67,7 @@ export const CLASSES: Record<ClassId, ClassTemplate> = {
     resourceLabel: "Focus",
     baseStats: { power: 9, armor: 3, agility: 9, vitality: 5 },
     startingSpells: ["quick_shot", "piercing_shot", "heal", "volley", "aimed_shot", "serpent_sting", "beast_mastery"],
-    startingGear: [
-      { slot: "weapon", itemId: "hunting_bow" },
-      { slot: "chest", itemId: "leather_armor" },
-    ],
+    startingGear: [{ slot: "weapon", itemId: "hunting_bow" }],
   },
   druid: {
     id: "druid",
@@ -88,10 +76,7 @@ export const CLASSES: Record<ClassId, ClassTemplate> = {
     resourceLabel: "Harmony",
     baseStats: { power: 8, armor: 4, agility: 5, vitality: 6 },
     startingSpells: ["wrath", "regrowth", "heal", "thorn_burst", "moonfire", "entangling_roots"],
-    startingGear: [
-      { slot: "weapon", itemId: "grove_staff" },
-      { slot: "chest", itemId: "cloth_robe" },
-    ],
+    startingGear: [{ slot: "weapon", itemId: "grove_staff" }],
   },
   paladin: {
     id: "paladin",
@@ -100,10 +85,7 @@ export const CLASSES: Record<ClassId, ClassTemplate> = {
     resourceLabel: "Faith",
     baseStats: { power: 8, armor: 8, agility: 4, vitality: 9 },
     startingSpells: ["crusader_strike", "divine_favor", "heal", "consecration", "hammer_of_wrath", "holy_shield"],
-    startingGear: [
-      { slot: "weapon", itemId: "sunforged_blade" },
-      { slot: "chest", itemId: "leather_armor" },
-    ],
+    startingGear: [{ slot: "weapon", itemId: "sunforged_blade" }],
   },
   berserker: {
     id: "berserker",
@@ -112,10 +94,7 @@ export const CLASSES: Record<ClassId, ClassTemplate> = {
     resourceLabel: "Rage",
     baseStats: { power: 10, armor: 6, agility: 3, vitality: 10 },
     startingSpells: ["rend", "charge", "heal", "whirlwind", "execute"],
-    startingGear: [
-      { slot: "weapon", itemId: "axe_2handed_large" },
-      { slot: "chest", itemId: "leather_armor" },
-    ],
+    startingGear: [{ slot: "weapon", itemId: "axe_2handed_large" }],
   },
   assassin: {
     id: "assassin",
@@ -124,10 +103,7 @@ export const CLASSES: Record<ClassId, ClassTemplate> = {
     resourceLabel: "Energy",
     baseStats: { power: 8, armor: 4, agility: 11, vitality: 5 },
     startingSpells: ["backstab", "poison_strike", "heal", "fan_of_knives", "eviscerate", "garrote"],
-    startingGear: [
-      { slot: "weapon", itemId: "dagger" },
-      { slot: "chest", itemId: "leather_armor" },
-    ],
+    startingGear: [{ slot: "weapon", itemId: "dagger" }],
   },
   engineer: {
     id: "engineer",
@@ -136,14 +112,32 @@ export const CLASSES: Record<ClassId, ClassTemplate> = {
     resourceLabel: "Steam",
     baseStats: { power: 8, armor: 8, agility: 5, vitality: 7 },
     startingSpells: ["charge", "frostbolt", "heal", "shield_wall", "whirlwind"],
-    startingGear: [
-      { slot: "weapon", itemId: "wrench" },
-      { slot: "chest", itemId: "leather_armor" },
-    ],
+    startingGear: [{ slot: "weapon", itemId: "wrench" }],
   },
 };
 
 export const CLASS_IDS = Object.keys(CLASSES) as ClassId[];
+
+/** Hotbar slot for the class's first attack/spell (keyboard `1`). */
+export const STARTING_HOTBAR_ATTACK_SLOT = 0;
+/** Hotbar slot for Heal (keyboard `Q`). */
+export const STARTING_HOTBAR_HEAL_SLOT = 6;
+
+/**
+ * Default hotbar loadout at character creation: primary combat spell on `1`,
+ * Heal on `Q`. Cleric's list leads with Heal — their first non-heal (Smite)
+ * still goes on `1`.
+ */
+export function startingHotbarLoadout(
+  template: ClassTemplate,
+): { slot: number; spellId: string }[] {
+  const attack = template.startingSpells.find((id) => id !== "heal");
+  const heal = template.startingSpells.find((id) => id === "heal");
+  const out: { slot: number; spellId: string }[] = [];
+  if (attack) out.push({ slot: STARTING_HOTBAR_ATTACK_SLOT, spellId: attack });
+  if (heal) out.push({ slot: STARTING_HOTBAR_HEAL_SLOT, spellId: heal });
+  return out;
+}
 
 export function classDef(id: string): ClassTemplate {
   const def = CLASSES[id as ClassId];

@@ -25,4 +25,4 @@ export class StreamBudget {
 }
 
 /** Soft wall-clock slice after paint for all region ADT + grass work. */
-export const REGION_STREAM_BUDGET_MS = 1.5;
+export const REGION_STREAM_BUDGET_MS = 2.5;

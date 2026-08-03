@@ -72,9 +72,8 @@
   let draftHairColor = $state(0x2b1a12);
   let draftEyeColor = $state(0x6b4423);
   let draftOutfitHue = $state(0xffffff);
-  // Off by default -- creation preview shows the bare body/hair so the
-  // appearance choices actually being made stay clearly visible, without
-  // the class's starting armor covering most of it up.
+  // Off by default -- creation preview shows the bare body/hair so appearance
+  // choices stay visible. Starters spawn unclothed (weapon only).
   let previewGear = $state(false);
 
   const characters = $derived(app.me?.characters ?? []);
@@ -84,16 +83,14 @@
       ? ((activeCharacter?.classId as ClassId) ?? CLASS_IDS[0]!)
       : (hoveredClassId ?? selectedClassId ?? CLASS_IDS[0]!),
   );
-  // A roster character always shows its real equipped gear. The create-mode
-  // class picker has no character yet -- it shows just the bare starting
-  // weapon by default (see previewGear, off by default), or the class's full
-  // starting armor set too once the player opts into previewing it.
+  // Roster characters show real equip. Create mode shows starting weapon
+  // (previewGear on) or bare body (off).
   const stageEquip = $derived.by(() => {
     if (mode === "select") return activeCharacter?.equip ?? null;
     if (!previewGear) return null;
     const equip: Partial<Record<string, string>> = {};
     for (const g of CLASSES[stageClassId].startingGear) {
-      if (g.slot !== "weapon") equip[g.slot] = g.itemId;
+      equip[g.slot] = g.itemId;
     }
     return equip;
   });

@@ -1,0 +1,271 @@
+{
+  "asset": {
+    "generator": "Khronos glTF Blender I/O v5.2.39",
+    "version": "2.0"
+  },
+  "extensionsUsed": [
+    "KHR_materials_specular"
+  ],
+  "scene": 0,
+  "scenes": [
+    {
+      "name": "Scene",
+      "nodes": [
+        0
+      ]
+    }
+  ],
+  "nodes": [
+    {
+      "mesh": 0,
+      "name": "SM_PROP_brazier_03",
+      "rotation": [
+        0.70710688829422,
+        0,
+        0,
+        0.7071066498756409
+      ],
+      "scale": [
+        0.009999999776482582,
+        0.009999999776482582,
+        0.009999999776482582
+      ]
+    }
+  ],
+  "animations": [
+    {
+      "channels": [
+        {
+          "sampler": 0,
+          "target": {
+            "node": 0,
+            "path": "translation"
+          }
+        },
+        {
+          "sampler": 1,
+          "target": {
+            "node": 0,
+            "path": "rotation"
+          }
+        },
+        {
+          "sampler": 2,
+          "target": {
+            "node": 0,
+            "path": "scale"
+          }
+        }
+      ],
+      "name": "SM_PROP_brazier_03|SM_PROP_brazier_03|SM_ENV_PLANT_shroom_v1_01|Take 001|Layer 001",
+      "samplers": [
+        {
+          "input": 5,
+          "interpolation": "STEP",
+          "output": 6
+        },
+        {
+          "input": 5,
+          "interpolation": "STEP",
+          "output": 7
+        },
+        {
+          "input": 5,
+          "interpolation": "STEP",
+          "output": 8
+        }
+      ]
+    }
+  ],
+  "materials": [
+    {
+      "doubleSided": true,
+      "extensions": {
+        "KHR_materials_specular": {
+          "specularFactor": 0.6299212574958801
+        }
+      },
+      "name": "M_metal_01",
+      "normalTexture": {
+        "index": 1
+      },
+      "pbrMetallicRoughness": {
+        "baseColorTexture": {
+          "index": 0
+        },
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.8
+      },
+      "alphaMode": "OPAQUE"
+    }
+  ],
+  "meshes": [
+    {
+      "name": "Mesh.053",
+      "primitives": [
+        {
+          "attributes": {
+            "POSITION": 0,
+            "NORMAL": 1,
+            "TEXCOORD_0": 2,
+            "TEXCOORD_1": 3
+          },
+          "indices": 4,
+          "material": 0
+        }
+      ]
+    }
+  ],
+  "textures": [
+    {
+      "source": 0
+    },
+    {
+      "source": 1
+    }
+  ],
+  "images": [
+    {
+      "uri": "textures/T_metal_01_BC.png"
+    },
+    {
+      "uri": "textures/T_metal_01_N.png"
+    }
+  ],
+  "accessors": [
+    {
+      "bufferView": 0,
+      "componentType": 5126,
+      "count": 403,
+      "max": [
+        0.00018479769641999155,
+        0.27325278520584106,
+        0.16314028203487396
+      ],
+      "min": [
+        -0.43278768658638,
+        -0.45910584926605225,
+        -0.14253497123718262
+      ],
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 1,
+      "componentType": 5126,
+      "count": 403,
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 2,
+      "componentType": 5126,
+      "count": 403,
+      "type": "VEC2"
+    },
+    {
+      "bufferView": 3,
+      "componentType": 5126,
+      "count": 403,
+      "type": "VEC2"
+    },
+    {
+      "bufferView": 4,
+      "componentType": 5123,
+      "count": 876,
+      "type": "SCALAR"
+    },
+    {
+      "bufferView": 5,
+      "componentType": 5126,
+      "count": 2,
+      "max": [
+        0.08333333333333333
+      ],
+      "min": [
+        0.041666666666666664
+      ],
+      "type": "SCALAR"
+    },
+    {
+      "bufferView": 6,
+      "componentType": 5126,
+      "count": 2,
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 7,
+      "componentType": 5126,
+      "count": 2,
+      "type": "VEC4"
+    },
+    {
+      "bufferView": 8,
+      "componentType": 5126,
+      "count": 2,
+      "type": "VEC3"
+    }
+  ],
+  "bufferViews": [
+    {
+      "buffer": 0,
+      "byteLength": 4836,
+      "byteOffset": 0,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 4836,
+      "byteOffset": 4836,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 3224,
+      "byteOffset": 9672,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 3224,
+      "byteOffset": 12896,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 1752,
+      "byteOffset": 16120,
+      "target": 34963
+    },
+    {
+      "buffer": 0,
+      "byteLength": 8,
+      "byteOffset": 17872
+    },
+    {
+      "buffer": 0,
+      "byteLength": 24,
+      "byteOffset": 17880
+    },
+    {
+      "buffer": 0,
+      "byteLength": 32,
+      "byteOffset": 17904
+    },
+    {
+      "buffer": 0,
+      "byteLength": 24,
+      "byteOffset": 17936
+    }
+  ],
+  "samplers": [
+    {
+      "magFilter": 9729,
+      "minFilter": 9987
+    }
+  ],
+  "buffers": [
+    {
+      "byteLength": 17960,
+      "uri": "brazier_03.bin"
+    }
+  ]
+}

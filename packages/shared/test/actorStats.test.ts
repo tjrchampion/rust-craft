@@ -62,14 +62,16 @@ describe("armorMitigation", () => {
 });
 
 describe("modular equipment slots", () => {
-  it("defines six equipment slots including arms, legs, and feet", () => {
+  it("defines equipment slots including shoulders and neck accessories", () => {
     expect(EQUIP_SLOTS).toContain("weapon");
     expect(EQUIP_SLOTS).toContain("head");
     expect(EQUIP_SLOTS).toContain("chest");
     expect(EQUIP_SLOTS).toContain("arms");
     expect(EQUIP_SLOTS).toContain("legs");
     expect(EQUIP_SLOTS).toContain("feet");
-    expect(EQUIP_SLOTS.length).toBe(6);
+    expect(EQUIP_SLOTS).toContain("shoulders");
+    expect(EQUIP_SLOTS).toContain("neck");
+    expect(EQUIP_SLOTS.length).toBe(8);
   });
 
   it("assigns correct slots and stats to new modular items", () => {
@@ -84,6 +86,18 @@ describe("modular equipment slots", () => {
 
       expect(rangerFeet.slot).toBe("feet");
       expect(rangerFeet.statModifiers?.moveSpeedMult).toBe(0.12);
+    }
+  });
+
+  it("starts every class with a weapon and no armor (naked spawn)", () => {
+    const armorSlots = new Set(["head", "chest", "arms", "legs", "feet", "shoulders", "neck"]);
+    for (const id of CLASS_IDS) {
+      const gear = CLASSES[id].startingGear;
+      expect(gear.some((g) => g.slot === "weapon"), id).toBe(true);
+      expect(gear.every((g) => !armorSlots.has(g.slot)), id).toBe(true);
+      for (const g of gear) {
+        expect(ITEMS[g.itemId], `${id}:${g.itemId}`).toBeDefined();
+      }
     }
   });
 });

@@ -19,7 +19,7 @@ import {
   type RegionBlueprint,
 } from "@rustcraft/shared";
 import {
-  makeBladeGeometry,
+  makeBladeTuftGeometry,
   makeBladeMaterial,
   createGrassBladeUniforms,
   MAX_ROCKS,
@@ -37,22 +37,24 @@ const BASE_GRASS_WIND_STRENGTH = 0.3;
  *  cutoff -- avoids a visible fence-like edge where a brush stroke ends. */
 const GRASS_FEATHER_START = 0.55;
 
-/** Meters between candidate blade cells within a patch, jittered -- tighter
- *  than the open-world ambient grass's 3.4m cell (see render/grass.ts) since
- *  these blades are individually visible up close, not a distant tuft impostor. */
-const GRASS_BLADE_CELL = 0.35;
+/** Meters between tuft instances. Each tuft draws ~4 blades, so this reads
+ *  denser than single-blade spacing at the same instance budget. */
+const GRASS_BLADE_CELL = 0.48;
+
+/** Scratch color so collectBlades doesn't allocate a THREE.Color per blade. */
+const BLADE_COLOR_SCRATCH = new THREE.Color();
 
 /** ADT tile size for grass chunking (matches region/overworld terrain tiles). */
 const GRASS_CHUNK_SIZE = ADT_SIZE;
 
-const BLADE_WIDTH = 0.06;
-const BLADE_HEIGHT = 0.28;
+const BLADE_WIDTH = 0.1;
+const BLADE_HEIGHT = 0.45;
 
 /** Exclusion hash-grid cell size -- trades a bit of memory for skipping the
  *  O(exclusions) scan on every candidate blade cell. */
 const EXCLUSION_CELL = 8;
 
-const BLADE_GEOMETRY = makeBladeGeometry();
+const BLADE_GEOMETRY = makeBladeTuftGeometry(3, 5);
 
 export interface GrassTrampler {
   x: number;
@@ -74,6 +76,8 @@ export interface GrassField {
   tickWind(dt: number): void;
   /** Re-apply authored region wind (updates gust baseline). */
   applyWind(wind: RegionWind): void;
+  /** Grass-only motion amount (0..n); wind strength still multiplies on top. */
+  setGrassSway(amount: number): void;
   /**
    * Re-expand blades and (re)build meshes. Pass `onlyKeys` to refresh just the
    * ADT tiles a brush stroke touched — full rebuild when omitted.
@@ -92,6 +96,8 @@ export interface GrassField {
 export interface GrassVisualOptions {
   color?: GrassColor;
   wind?: RegionWind;
+  /** Grass-only sway multiplier (default 1). Wind still scales motion. */
+  grassSway?: number;
   /**
    * When true, only build InstancedMeshes for ADT tiles near the viewer.
    * Editor and runtime both benefit — editor used to eager-build everything.
@@ -111,7 +117,10 @@ interface Blade {
   widthScale: number;
   heightScale: number;
   lengthScale: number;
-  color: THREE.Color;
+  /** Packed RGB 0–1 (avoids per-blade THREE.Color alloc). */
+  r: number;
+  g: number;
+  b: number;
 }
 
 /** ADT keys whose tiles intersect a circle (brush stroke / patch footprint). */
@@ -174,6 +183,67 @@ class ExclusionIndex {
   }
 }
 
+function tryEmitBlade(
+  chunks: Map<string, Blade[]>,
+  patch: GrassPatch,
+  exclusionIndex: ExclusionIndex,
+  heightmap: Pick<RegionBlueprint, "gridSize" | "pitch" | "heights">,
+  ix: number,
+  iz: number,
+  originX: number,
+  originZ: number,
+  patchLength: number,
+  onlyKeys?: Set<string>,
+): void {
+  const base = ix * 977 + iz;
+  const jx = hash2(patch.seed + 11, base, 0);
+  const jz = hash2(patch.seed + 13, base, 1);
+  const x = originX + (ix + jx) * GRASS_BLADE_CELL;
+  const z = originZ + (iz + jz) * GRASS_BLADE_CELL;
+
+  const key = adtKey(adtIndex(x), adtIndex(z));
+  if (onlyKeys && onlyKeys.size > 0 && !onlyKeys.has(key)) return;
+  if (exclusionIndex.rejects(x, z, base)) return;
+
+  const distRatio = dist2D(x, z, patch.localX, patch.localZ) / patch.radius;
+  if (distRatio > 1) return;
+  const edgeFalloff =
+    distRatio <= GRASS_FEATHER_START
+      ? 1
+      : 1 - smoothstep((distRatio - GRASS_FEATHER_START) / (1 - GRASS_FEATHER_START));
+
+  const roll = hash2(patch.seed + 17, base, 2);
+  if (roll > patch.density * edgeFalloff) return;
+
+  const y = sampleRegionHeight(heightmap, x, z);
+  const yaw = hash2(patch.seed + 19, base, 3) * Math.PI * 2;
+  const widthScale = 0.8 + hash2(patch.seed + 23, base, 4) * 0.5;
+
+  const clumpCellSize = Math.max(1.2, patch.radius * 0.6);
+  const lengthClump = fbm(patch.seed + 37, x, z, clumpCellSize, 2);
+  const heightScale = 0.45 + lengthClump * 1.15 + hash2(patch.seed + 29, base, 5) * 0.25;
+
+  const rMul = 0.85 + hash2(patch.seed + 41, base, 6) * 0.3;
+  const gMul = 0.92 + hash2(patch.seed + 43, base, 7) * 0.16;
+  const bMul = 0.7 + hash2(patch.seed + 47, base, 8) * 0.5;
+
+  const blade: Blade = {
+    x,
+    y,
+    z,
+    yaw,
+    widthScale,
+    heightScale,
+    lengthScale: patchLength,
+    r: rMul,
+    g: gMul,
+    b: bMul,
+  };
+  const list = chunks.get(key);
+  if (list) list.push(blade);
+  else chunks.set(key, [blade]);
+}
+
 function collectBlades(
   patches: GrassPatch[],
   exclusions: GrassExclusion[] | undefined,
@@ -185,58 +255,64 @@ function collectBlades(
 
   for (const patch of patches) {
     if (patch.radius <= 0 || patch.density <= 0) continue;
-    if (onlyKeys && onlyKeys.size > 0) {
-      const patchKeys = grassKeysOverlapping(patch.localX, patch.localZ, patch.radius);
-      if (!patchKeys.some((k) => onlyKeys.has(k))) continue;
-    }
 
     const patchLength = patch.lengthScale ?? 1;
     const cells = Math.max(1, Math.ceil((patch.radius * 2) / GRASS_BLADE_CELL));
     const originX = patch.localX - patch.radius;
     const originZ = patch.localZ - patch.radius;
 
+    // Partial rebuild: only walk cells that land in the dirtied ADT tiles
+    // (full nested loops over large patches were freezing erase strokes).
+    if (onlyKeys && onlyKeys.size > 0) {
+      let overlaps = false;
+      for (const key of grassKeysOverlapping(patch.localX, patch.localZ, patch.radius)) {
+        if (!onlyKeys.has(key)) continue;
+        overlaps = true;
+        const { ix: tx, iz: tz } = parseAdtKey(key);
+        const bounds = adtWorldBounds(tx, tz);
+        const minX = Math.max(originX, bounds.minX);
+        const maxX = Math.min(originX + patch.radius * 2, bounds.maxX);
+        const minZ = Math.max(originZ, bounds.minZ);
+        const maxZ = Math.min(originZ + patch.radius * 2, bounds.maxZ);
+        if (minX >= maxX || minZ >= maxZ) continue;
+        const ix0 = Math.max(0, Math.floor((minX - originX) / GRASS_BLADE_CELL));
+        const ix1 = Math.min(cells - 1, Math.ceil((maxX - originX) / GRASS_BLADE_CELL));
+        const iz0 = Math.max(0, Math.floor((minZ - originZ) / GRASS_BLADE_CELL));
+        const iz1 = Math.min(cells - 1, Math.ceil((maxZ - originZ) / GRASS_BLADE_CELL));
+        for (let ix = ix0; ix <= ix1; ix++) {
+          for (let iz = iz0; iz <= iz1; iz++) {
+            tryEmitBlade(
+              chunks,
+              patch,
+              exclusionIndex,
+              heightmap,
+              ix,
+              iz,
+              originX,
+              originZ,
+              patchLength,
+              onlyKeys,
+            );
+          }
+        }
+      }
+      if (!overlaps) continue;
+      continue;
+    }
+
     for (let ix = 0; ix < cells; ix++) {
       for (let iz = 0; iz < cells; iz++) {
-        const base = ix * 977 + iz;
-        const jx = hash2(patch.seed + 11, base, 0);
-        const jz = hash2(patch.seed + 13, base, 1);
-        const x = originX + (ix + jx) * GRASS_BLADE_CELL;
-        const z = originZ + (iz + jz) * GRASS_BLADE_CELL;
-
-        const cx = adtIndex(x);
-        const cz = adtIndex(z);
-        const key = adtKey(cx, cz);
-        if (onlyKeys && onlyKeys.size > 0 && !onlyKeys.has(key)) continue;
-
-        if (exclusionIndex.rejects(x, z, base)) continue;
-
-        const distRatio = dist2D(x, z, patch.localX, patch.localZ) / patch.radius;
-        if (distRatio > 1) continue;
-        const edgeFalloff =
-          distRatio <= GRASS_FEATHER_START
-            ? 1
-            : 1 - smoothstep((distRatio - GRASS_FEATHER_START) / (1 - GRASS_FEATHER_START));
-
-        const roll = hash2(patch.seed + 17, base, 2);
-        if (roll > patch.density * edgeFalloff) continue;
-
-        const y = sampleRegionHeight(heightmap, x, z);
-        const yaw = hash2(patch.seed + 19, base, 3) * Math.PI * 2;
-        const widthScale = 0.8 + hash2(patch.seed + 23, base, 4) * 0.5;
-
-        const clumpCellSize = Math.max(1.2, patch.radius * 0.6);
-        const lengthClump = fbm(patch.seed + 37, x, z, clumpCellSize, 2);
-        const heightScale = 0.45 + lengthClump * 1.15 + hash2(patch.seed + 29, base, 5) * 0.25;
-
-        const rMul = 0.85 + hash2(patch.seed + 41, base, 6) * 0.3;
-        const gMul = 0.92 + hash2(patch.seed + 43, base, 7) * 0.16;
-        const bMul = 0.7 + hash2(patch.seed + 47, base, 8) * 0.5;
-        const color = new THREE.Color(rMul, gMul, bMul);
-
-        const blade: Blade = { x, y, z, yaw, widthScale, heightScale, lengthScale: patchLength, color };
-        const list = chunks.get(key);
-        if (list) list.push(blade);
-        else chunks.set(key, [blade]);
+        tryEmitBlade(
+          chunks,
+          patch,
+          exclusionIndex,
+          heightmap,
+          ix,
+          iz,
+          originX,
+          originZ,
+          patchLength,
+        );
       }
     }
   }
@@ -244,30 +320,52 @@ function collectBlades(
   return chunks;
 }
 
-function buildChunkMesh(blades: Blade[], material: THREE.Material): THREE.InstancedMesh {
-  const mesh = new THREE.InstancedMesh(BLADE_GEOMETRY, material, blades.length);
-  mesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(blades.length * 3), 3);
+/**
+ * Build an InstancedMesh for one ADT grass tile.
+ * `lodStep` > 1 keeps every Nth blade (outer ring tiles) to cut draw cost.
+ */
+function buildChunkMesh(blades: Blade[], material: THREE.Material, lodStep = 1): THREE.InstancedMesh {
+  const step = Math.max(1, lodStep | 0);
+  const count = Math.ceil(blades.length / step);
+  const mesh = new THREE.InstancedMesh(BLADE_GEOMETRY, material, count);
+  mesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(count * 3), 3);
   const matrix = new THREE.Matrix4();
   const quat = new THREE.Quaternion();
   const up = new THREE.Vector3(0, 1, 0);
   const pos = new THREE.Vector3();
   const scaleVec = new THREE.Vector3();
-  for (let i = 0; i < blades.length; i++) {
+  let written = 0;
+  for (let i = 0; i < blades.length && written < count; i += step) {
     const b = blades[i]!;
     pos.set(b.x, b.y, b.z);
     quat.setFromAxisAngle(up, b.yaw);
     scaleVec.set(BLADE_WIDTH * b.widthScale, BLADE_HEIGHT * b.heightScale * b.lengthScale, BLADE_WIDTH * b.widthScale);
     matrix.compose(pos, quat, scaleVec);
-    mesh.setMatrixAt(i, matrix);
-    mesh.setColorAt(i, b.color);
+    mesh.setMatrixAt(written, matrix);
+    BLADE_COLOR_SCRATCH.setRGB(b.r, b.g, b.b);
+    mesh.setColorAt(written, BLADE_COLOR_SCRATCH);
+    written++;
   }
+  mesh.count = written;
   mesh.instanceMatrix.needsUpdate = true;
-  mesh.instanceColor.needsUpdate = true;
+  if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
   mesh.computeBoundingSphere();
   mesh.castShadow = false;
-  mesh.receiveShadow = true;
+  // Custom multi-tap shadow sampling in the blade shader is expensive; grass
+  // reads ambient/key light only. Terrain still receives character shadows.
+  mesh.receiveShadow = false;
+  mesh.frustumCulled = true;
   mesh.userData.sharedGeometry = true; // BLADE_GEOMETRY is module-shared
   return mesh;
+}
+
+function chunkLodStep(key: string, px: number, pz: number): number {
+  const { ix, iz } = parseAdtKey(key);
+  const dx = Math.abs(ix - adtIndex(px));
+  const dz = Math.abs(iz - adtIndex(pz));
+  const chebyshev = Math.max(dx, dz);
+  // Center tile full density; ring-1 tiles keep ~half the blades.
+  return chebyshev <= 0 ? 1 : 2;
 }
 
 function refreshGrassBounds(chunkBlades: Map<string, Blade[]>): {
@@ -320,6 +418,9 @@ export function buildGrassInstances(
     baseWindStrength = uniforms.uWindStrength.value;
     baseWindTurb = uniforms.uWindTurb.value;
   }
+  if (options?.grassSway !== undefined) {
+    uniforms.uGrassSway.value = Math.max(0, options.grassSway);
+  }
   const material = makeBladeMaterial(uniforms);
   const chunkBlades = collectBlades(patches, exclusions, heightmap);
   const stream = !!options?.stream;
@@ -342,11 +443,19 @@ export function buildGrassInstances(
   };
 
   const ensureMesh = (key: string): THREE.InstancedMesh | null => {
+    const lod = Number.isFinite(lastPx) ? chunkLodStep(key, lastPx, lastPz) : 1;
     const existing = liveMeshes.get(key);
-    if (existing) return existing;
+    if (existing) {
+      // Promote to full density when this tile becomes the viewer center.
+      if ((existing.userData.lodStep as number | undefined) === lod || existing.userData.lodStep < lod) {
+        return existing;
+      }
+      dropMesh(key);
+    }
     const blades = chunkBlades.get(key);
     if (!blades || blades.length === 0) return null;
-    const mesh = buildChunkMesh(blades, material);
+    const mesh = buildChunkMesh(blades, material, lod);
+    mesh.userData.lodStep = lod;
     liveMeshes.set(key, mesh);
     parent?.add(mesh);
     return mesh;
@@ -373,11 +482,19 @@ export function buildGrassInstances(
       lastPz = pz;
 
       const wanted = new Set(adtRingKeysInBounds(px, pz, grassRing, grassBounds));
+      const keepRing = grassRing + 1;
+      const keep = new Set(adtRingKeysInBounds(px, pz, keepRing, grassBounds));
       for (const key of wanted) {
-        if (chunkBlades.has(key)) pending.add(key);
+        if (!chunkBlades.has(key)) continue;
+        pending.add(key);
+        // Re-queue center tiles that were built at outer LOD so they promote.
+        const live = liveMeshes.get(key);
+        if (live && (live.userData.lodStep as number) > chunkLodStep(key, px, pz)) {
+          dropMesh(key);
+        }
       }
       for (const key of [...liveMeshes.keys()]) {
-        if (!wanted.has(key)) dropMesh(key);
+        if (!keep.has(key)) dropMesh(key);
       }
       field.drain(2, budget);
     },
@@ -411,6 +528,9 @@ export function buildGrassInstances(
       applyRegionWind(uniforms, wind, BASE_GRASS_WIND_STRENGTH);
       baseWindStrength = uniforms.uWindStrength.value;
       baseWindTurb = uniforms.uWindTurb.value;
+    },
+    setGrassSway(amount: number) {
+      uniforms.uGrassSway.value = Math.max(0, amount);
     },
     rebuild(nextPatches, nextExclusions, nextHeightmap, onlyKeys) {
       const keySet = onlyKeys ? new Set(onlyKeys) : undefined;

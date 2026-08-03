@@ -87,6 +87,12 @@ export const TERRAIN_VOLUME_SHAPES: readonly { id: TerrainVolumeShape; label: st
   { id: "ramp", label: "📐 Ramp" },
 ];
 
+/** Shapes supported by the experimental Blender-style clay sculpt brush. */
+export const CLAY_SCULPT_SHAPES: readonly { id: TerrainVolumeShape; label: string }[] = [
+  { id: "boulder", label: "🪨 Boulder" },
+  { id: "block", label: "🧱 Block / Cliff" },
+];
+
 export const TERRAIN_VOLUME_MATERIALS: readonly { id: TerrainVolumeMaterial; label: string }[] = [
   { id: "rock", label: "Rock" },
   { id: "dirt", label: "Dirt" },

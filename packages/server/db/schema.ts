@@ -21,6 +21,8 @@ export const accounts = pgTable(
     displayName: text("display_name"),
     // Only set for provider = 'password'; `scrypt` salt:hash, see utils/password.ts.
     passwordHash: text("password_hash"),
+    /** Client prefs (graphics, …) — see AccountSettings in shared. */
+    settings: jsonb("settings").notNull().default({}).$type<Record<string, unknown>>(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [uniqueIndex("accounts_provider_idx").on(t.provider, t.providerId)],
@@ -111,6 +113,21 @@ export const questProgress = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [primaryKey({ columns: [t.characterId, t.questId] })],
+);
+
+export const characterAchievements = pgTable(
+  "character_achievements",
+  {
+    characterId: uuid("character_id")
+      .notNull()
+      .references(() => characters.id, { onDelete: "cascade" }),
+    achievementId: text("achievement_id").notNull(),
+    /** Counter toward unlock (mirrors criteria target when complete). */
+    progress: integer("progress").notNull().default(0),
+    unlockedAt: timestamp("unlocked_at", { withTimezone: true }),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.characterId, t.achievementId] })],
 );
 
 // Base building lands in Milestone 2; schema exists now so saves survive it.

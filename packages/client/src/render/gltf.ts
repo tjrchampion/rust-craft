@@ -4,12 +4,11 @@ import { SkeletonUtils } from "three/examples/jsm/Addons.js";
 import { ITEMS, type CharacterAppearance, type CharacterGender, type HairStyleId } from "@rustcraft/shared";
 import {
   UNIVERSAL_ANIMATION_LIBRARY,
+  UNIVERSAL_ANIMATION_LIBRARY_2,
   isUniversalCharacterUrl,
   hairStyleUrl,
   facialHairUrl,
   eyebrowsUrl,
-  allHairStyleUrls,
-  allFacialHairUrls,
   HAIR_AUTHORED_GENDER,
   MALE_HEAD_SIZE_COMPENSATION,
   GENDER_MODEL_URLS,
@@ -20,15 +19,9 @@ import { createSharedGltfLoader } from "./sharedGltf";
 const loader = createSharedGltfLoader();
 const cache = new Map<string, Promise<GLTF>>();
 
-/** Free-tier directional locomotion for the Universal rig -- UAL1_Standard
- *  ships no strafe/backpedal/directional-roll clips at all (its only
- *  locomotion is forward Walk/Jog/Sprint plus one generic "Roll"). These are
- *  retargeted from the old KayKit Rig_Medium library's
- *  Running_Strafe_Left/Right, Walking_Backwards and Dodge_Forward/Backward/
- *  Left/Right clips onto the Universal skeleton via SkeletonUtils.retargetClip
- *  (see scripts/retarget-locomotion.mjs -- run once, output committed as
- *  data, not regenerated at build time). Good enough until a proper
- *  Universal-rig locomotion pack is purchased; swap/extend that script then. */
+/** Legacy free-tier directional locomotion for the Universal rig. UAL2 now
+ *  ships native Walk_L/R/Bwd + dash clips; these retargeted KayKit clips stay
+ *  as a fallback for older clients / missing UAL2. */
 const UAL_RETARGETED_CLIPS = "/assets/models/animations/UAL1_Retargeted.json";
 let retargetedClipsPromise: Promise<THREE.AnimationClip[]> | null = null;
 function loadRetargetedClips(): Promise<THREE.AnimationClip[]> {
@@ -39,6 +32,50 @@ function loadRetargetedClips(): Promise<THREE.AnimationClip[]> {
       .catch(() => []);
   }
   return retargetedClipsPromise;
+}
+
+/** Cleaned AnimationClips shared across all AnimatedModel instances so each
+ *  character doesn't rebuild ~30k track channels from UAL. */
+const cleanedClipCache = new Map<string, THREE.AnimationClip>();
+
+function cleanAnimationClip(clip: THREE.AnimationClip): THREE.AnimationClip {
+  const cached = cleanedClipCache.get(clip.name);
+  if (cached) return cached;
+  const cleanTracks = clip.tracks.map((t) => {
+    let name = t.name;
+    if (name.startsWith("Character_Armature/")) {
+      name = name.replace(/^Character_Armature\//, "");
+    } else if (name.startsWith("Root/")) {
+      name = name.replace(/^Root\//, "");
+    }
+    if (name !== t.name) {
+      const clone = t.clone();
+      clone.name = name;
+      return clone;
+    }
+    return t;
+  });
+  const cleaned = new THREE.AnimationClip(clip.name, clip.duration, cleanTracks);
+  cleanedClipCache.set(clip.name, cleaned);
+  return cleaned;
+}
+
+/** Only bind clips this rig's AnimSpec (plus weapon overrides) actually
+ *  references — UAL2 alone is 134 clips; binding all of them per character
+ *  was the main CPU hitch when many players / previews loaded. */
+function clipNameAllowlist(spec: AnimSpec): Set<string> {
+  const names = new Set<string>();
+  for (const value of Object.values(spec)) {
+    if (!Array.isArray(value)) continue;
+    for (const n of value) names.add(n);
+  }
+  names.add("Swim_Up_Loop");
+  names.add("Swim_Down_Loop");
+  for (const item of Object.values(ITEMS)) {
+    for (const n of item.attackAnim ?? []) names.add(n);
+    for (const n of item.castAnim ?? []) names.add(n);
+  }
+  return names;
 }
 
 const textureLoader = new THREE.TextureLoader();
@@ -54,19 +91,17 @@ export function applyMasterTextures(root: THREE.Object3D): void {
   root.traverse((o) => {
     const mesh = o as THREE.Mesh;
     if (mesh.isMesh) {
-      mesh.frustumCulled = false;
       mesh.castShadow = true;
       mesh.receiveShadow = true;
       if (mesh.geometry) {
         if (!mesh.geometry.boundingSphere) mesh.geometry.computeBoundingSphere();
-        if (mesh.geometry.boundingSphere) mesh.geometry.boundingSphere.radius = 10000.0;
       }
       if (mesh.material) {
         const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
         mats.forEach((m) => {
           const std = m as THREE.MeshStandardMaterial;
-          std.side = THREE.DoubleSide;
-          std.shadowSide = THREE.DoubleSide;
+          std.side = THREE.FrontSide;
+          std.shadowSide = THREE.FrontSide;
           std.transparent = false;
           std.depthWrite = true;
           std.depthTest = true;
@@ -316,6 +351,11 @@ export interface AnimSpec {
   strafeLeft?: string[];
   strafeRight?: string[];
   walkBack?: string[];
+  /** Diagonal locomotion (UAL2 Walk_Fwd/Bwd_L/R). */
+  walkFwdLeft?: string[];
+  walkFwdRight?: string[];
+  walkBackLeft?: string[];
+  walkBackRight?: string[];
   hit?: string[];
   jump?: string[];
   block?: string[];
@@ -325,38 +365,50 @@ export interface AnimSpec {
   dodgeBackward?: string[];
   dodgeLeft?: string[];
   dodgeRight?: string[];
-  /** Deep-water tread/swim. Falls back to walk when the clip is missing. */
+  /** Surface tread / idle swim. */
   swim?: string[];
+  /** Forward (or active) swim stroke. */
+  swimFwd?: string[];
+  /** Ascend / swim-up stroke (derived from Swim_Fwd when absent). */
+  swimUp?: string[];
+  /** Dive / swim-down stroke (derived from Swim_Fwd when absent). */
+  swimDown?: string[];
 }
 
 export const PLAYER_ANIMS: AnimSpec = {
   idle: ["Idle_Loop", "Idle_Talking_Loop", "Sword_Idle"],
-  walk: ["Walk_Loop", "Walk_Formal_Loop"],
+  walk: ["Walk_Fwd_Loop", "Walk_Loop", "Walk_Formal_Loop"],
   run: ["Sprint_Loop", "Jog_Fwd_Loop"],
-  attack: ["Sword_Attack", "Punch_Jab", "Punch_Cross"],
-  gather: ["PickUp_Table", "Interact"],
+  attack: ["Sword_Attack", "Sword_Light_A", "Melee_Combo", "Punch_Jab", "Punch_Cross"],
+  gather: ["PickUp_Table", "Interact", "Farm_Harvest", "Consume"],
   cast: ["Spell_Simple_Shoot", "Spell_Simple_Idle_Loop", "Spell_Simple_Enter"],
   dead: ["Death01"],
-  // Real per-direction clips first (retargeted onto Universal, or baked into
-  // the Mixamo-style pack skeleton-type mobs load) -- the plain Walk/Jog/
-  // Sprint names after them are the last-resort synthetic substitute
-  // (see AnimatedModel.directionalLocomotionNames) for any rig that has
-  // neither.
-  strafeLeft: ["Running_Strafe_Left", "Left Strafe", "Walk_Loop", "Jog_Fwd_Loop", "Sprint_Loop"],
-  strafeRight: ["Running_Strafe_Right", "Right Strafe", "Walk_Loop", "Jog_Fwd_Loop", "Sprint_Loop"],
-  walkBack: ["Walking_Backwards", "Running Backward", "Walk_Loop", "Jog_Fwd_Loop", "Sprint_Loop"],
-  hit: ["Hit_Chest", "Hit_Head"],
-  jump: ["Jump_Start", "Jump_Loop", "Jump_Land"],
-  block: ["Sword_Idle", "Idle_Loop"],
+  // UAL2 native 8-dir walk + legacy retargeted names as fallback.
+  strafeLeft: ["Walk_L_Loop", "Running_Strafe_Left", "Left Strafe", "Walk_Loop"],
+  strafeRight: ["Walk_R_Loop", "Running_Strafe_Right", "Right Strafe", "Walk_Loop"],
+  walkBack: ["Walk_Bwd_Loop", "Walking_Backwards", "Running Backward", "Walk_Loop"],
+  walkFwdLeft: ["Walk_Fwd_L_Loop", "Walk_L_Loop", "Walk_Fwd_Loop", "Walk_Loop"],
+  walkFwdRight: ["Walk_Fwd_R_Loop", "Walk_R_Loop", "Walk_Fwd_Loop", "Walk_Loop"],
+  walkBackLeft: ["Walk_Bwd_L_Loop", "Walk_Bwd_Loop", "Walk_L_Loop", "Walk_Loop"],
+  walkBackRight: ["Walk_Bwd_R_Loop", "Walk_Bwd_Loop", "Walk_R_Loop", "Walk_Loop"],
+  hit: ["Hit_Chest", "Hit_Head", "Hit_Knockback"],
+  jump: ["Jump_Start", "NinjaJump_Start", "Jump_Loop", "Jump_Land"],
+  block: ["Sword_Block", "Idle_Shield_Loop", "Sword_Idle", "Idle_Loop"],
   sit: ["Sitting_Idle_Loop", "Sitting_Enter"],
   cheer: ["Dance_Loop", "Idle_Talking_Loop"],
-  dodgeForward: ["Dodge_Forward", "Roll"],
-  dodgeBackward: ["Dodge_Backward", "Roll"],
-  dodgeLeft: ["Dodge_Left", "Roll"],
-  dodgeRight: ["Dodge_Right", "Roll"],
-  // Prefer a real swim clip when present; otherwise Walk_Loop reads as a
-  // slow paddle better than a dry idle/jump pose.
-  swim: ["Swim_Loop", "Swimming", "Treading_Water", "Walk_Loop"],
+  // Prefer full UAL clips — retargeted Dodge_* are sparse (~21 tracks) and
+  // look like a no-op on the Universal rig. Forward/back = Roll; sides =
+  // WallRun_Jump (the pack's directional dive/jump).
+  dodgeForward: ["Roll", "Sword_Dash", "SafetyVault"],
+  // Order overridden at play-time: 50% Roll, 50% JogToFlip (backflip).
+  dodgeBackward: ["Roll", "JogToFlip", "Shield_Dash", "Sword_Dash"],
+  dodgeLeft: ["WallRun_Jump_L", "Turn180_L", "Roll", "Sword_Dash"],
+  dodgeRight: ["WallRun_Jump_R", "Turn180_R", "Roll", "Sword_Dash"],
+  // UAL1 swim clips (UAL2 has no swim set). Up/down loops are derived at load.
+  swim: ["Swim_Idle_Loop", "Swim_Loop", "Swimming", "Treading_Water", "Walk_Loop"],
+  swimFwd: ["Swim_Fwd_Loop", "Swim_Idle_Loop", "Walk_Fwd_Loop", "Walk_Loop"],
+  swimUp: ["Swim_Up_Loop", "Swim_Fwd_Loop", "Swim_Idle_Loop"],
+  swimDown: ["Swim_Down_Loop", "Swim_Fwd_Loop", "Swim_Idle_Loop"],
 };
 
 export const WOLF_ANIMS: AnimSpec = {
@@ -377,9 +429,55 @@ const ANIM_FALLBACK: Partial<Record<LogicalAnim, LogicalAnim>> = {
   strafeLeft: "walk",
   strafeRight: "walk",
   walkBack: "walk",
+  walkFwdLeft: "walk",
+  walkFwdRight: "walk",
+  walkBackLeft: "walkBack",
+  walkBackRight: "walkBack",
+  dodgeForward: "jump",
+  dodgeBackward: "jump",
+  dodgeLeft: "jump",
+  dodgeRight: "jump",
   jump: "idle",
   swim: "walk",
+  swimFwd: "swim",
+  swimUp: "swimFwd",
+  swimDown: "swimFwd",
 };
+
+/**
+ * UAL only ships flat swim strokes — derive angled variants by pitching
+ * root/pelvis (negative pitch = nose up / ascend, positive = nose down / dive).
+ */
+function deriveSwimPitchedClip(
+  fwd: THREE.AnimationClip,
+  name: string,
+  rootPitch: number,
+): THREE.AnimationClip {
+  const pitch = new THREE.Quaternion().setFromEuler(new THREE.Euler(rootPitch, 0, 0, "XYZ"));
+  const pelvisPitch = new THREE.Quaternion().setFromEuler(
+    new THREE.Euler(rootPitch * 0.22, 0, 0, "XYZ"),
+  );
+  const q = new THREE.Quaternion();
+  const out = new THREE.Quaternion();
+  const tracks = fwd.tracks.map((track) => {
+    const isRootQuat = track.name === "root.quaternion";
+    const isPelvisQuat = track.name === "pelvis.quaternion";
+    if (!isRootQuat && !isPelvisQuat) return track;
+    const cloned = track.clone();
+    const values = cloned.values;
+    const extra = isPelvisQuat ? pelvisPitch : pitch;
+    for (let i = 0; i < values.length; i += 4) {
+      q.set(values[i]!, values[i + 1]!, values[i + 2]!, values[i + 3]!);
+      out.copy(q).multiply(extra);
+      values[i] = out.x;
+      values[i + 1] = out.y;
+      values[i + 2] = out.z;
+      values[i + 3] = out.w;
+    }
+    return cloned;
+  });
+  return new THREE.AnimationClip(name, fwd.duration, tracks);
+}
 
 /** Config for bone-parenting a weapon/armor prop -- shared shape used by
  *  `setWeaponProp`/`setArmorProp` (see items.ts's `weaponProp`/`armorProp`
@@ -463,10 +561,13 @@ export class AnimatedModel {
   private attachedArmorPropUrl: string | null = null;
   private pendingArmorProp: PropAttachConfig | null = null;
   private characterSkeleton: THREE.Skeleton | null = null;
-  private pendingModularSlots = new Map<string, { url: string | null; coversHands?: boolean; fit?: ModularFit }>();
+  private pendingModularSlots = new Map<
+    string,
+    { url: string | null; coversHands?: boolean; coversHead?: boolean; fit?: ModularFit; tint?: number | null }
+  >();
   private equippedModularSlots = new Map<
     string,
-    { url: string; key: string; obj: THREE.Object3D; coversHands?: boolean }
+    { url: string; key: string; obj: THREE.Object3D; coversHands?: boolean; coversHead?: boolean; tint?: number | null }
   >();
   /** Multiplier tints reapplied to their respective slots' meshes whenever
    *  those meshes change (new hairstyle, new armor piece) -- see
@@ -482,14 +583,21 @@ export class AnimatedModel {
     this.locomotionRunThreshold = runThreshold;
   }
 
-  /** Last-resort substitute for strafe/backpedal on a rig with no real
-   *  directional clips in `this.spec` (speed-matched forward loop played
-   *  while the character visually slides sideways/backward) -- checked only
-   *  *after* `this.spec[logical]` comes up empty, see `play()`. */
+  /** Last-resort substitute for directional loco on a rig with no real
+   *  clips in `this.spec` (speed-matched forward loop while sliding) --
+   *  checked only *after* `this.spec[logical]` comes up empty, see `play()`. */
   private directionalLocomotionNames(logical: LogicalAnim): string[] | null {
-    if (logical !== "strafeLeft" && logical !== "strafeRight" && logical !== "walkBack") return null;
+    const directional =
+      logical === "strafeLeft" ||
+      logical === "strafeRight" ||
+      logical === "walkBack" ||
+      logical === "walkFwdLeft" ||
+      logical === "walkFwdRight" ||
+      logical === "walkBackLeft" ||
+      logical === "walkBackRight";
+    if (!directional) return null;
     const fast = this.locomotionSpeed > this.locomotionRunThreshold;
-    if (logical === "walkBack") {
+    if (logical === "walkBack" || logical === "walkBackLeft" || logical === "walkBackRight") {
       return fast ? ["Jog_Fwd_Loop", "Sprint_Loop", "Walk_Loop"] : ["Walk_Loop", "Jog_Fwd_Loop"];
     }
     return fast ? ["Jog_Fwd_Loop", "Sprint_Loop", "Walk_Loop"] : ["Walk_Loop", "Jog_Fwd_Loop"];
@@ -502,9 +610,15 @@ export class AnimatedModel {
   async equipModularSlot(
     slot: string,
     url: string | null,
-    opts?: { coversHands?: boolean; fit?: ModularFit },
+    opts?: { coversHands?: boolean; coversHead?: boolean; fit?: ModularFit; tint?: number | null },
   ): Promise<void> {
-    this.pendingModularSlots.set(slot, { url, coversHands: opts?.coversHands, fit: opts?.fit });
+    this.pendingModularSlots.set(slot, {
+      url,
+      coversHands: opts?.coversHands,
+      coversHead: opts?.coversHead,
+      fit: opts?.fit,
+      tint: opts?.tint,
+    });
     if (!this.innerScene) return;
     await this.applyModularSlot(slot, url, opts);
   }
@@ -569,7 +683,7 @@ export class AnimatedModel {
   private async applyModularSlot(
     slot: string,
     url: string | null,
-    opts?: { coversHands?: boolean; fit?: ModularFit },
+    opts?: { coversHands?: boolean; coversHead?: boolean; fit?: ModularFit; tint?: number | null },
   ): Promise<void> {
     const current = this.equippedModularSlots.get(slot);
     if (!url) {
@@ -581,7 +695,14 @@ export class AnimatedModel {
       return;
     }
     const key = modularSlotKey(url, opts?.fit);
-    if (current && current.key === key) return;
+    if (current && current.key === key) {
+      // Refresh coverage flags even when the mesh URL/fit didn't change.
+      current.coversHands = opts?.coversHands;
+      current.coversHead = opts?.coversHead;
+      current.tint = opts?.tint;
+      this.autoManageBodySkin();
+      return;
+    }
     if (current) {
       current.obj.parent?.remove(current.obj);
       this.equippedModularSlots.delete(slot);
@@ -595,6 +716,10 @@ export class AnimatedModel {
       this.autoManageBodySkin();
       return;
     }
+    // A newer equipModularSlot call may have superseded this request while
+    // we awaited the GLTF — don't attach a stale piece.
+    const pending = this.pendingModularSlots.get(slot);
+    if (!pending || pending.url !== url) return;
     if (!this.innerScene || !this.characterSkeleton) return;
     const itemObj = this.attachModularMeshes(SkeletonUtils.clone(gltf.scene), opts?.fit);
     if (!isUniversalCharacterUrl(url)) {
@@ -612,8 +737,8 @@ export class AnimatedModel {
         const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
         mats.forEach((m) => {
           const std = m as THREE.MeshStandardMaterial;
-          std.side = THREE.DoubleSide;
-          std.shadowSide = THREE.DoubleSide;
+          std.side = THREE.FrontSide;
+          std.shadowSide = THREE.FrontSide;
           std.transparent = false;
           std.depthWrite = true;
           std.depthTest = true;
@@ -625,7 +750,14 @@ export class AnimatedModel {
       }
     });
     this.innerScene.add(itemObj);
-    this.equippedModularSlots.set(slot, { url, key, obj: itemObj, coversHands: opts?.coversHands });
+    this.equippedModularSlots.set(slot, {
+      url,
+      key,
+      obj: itemObj,
+      coversHands: opts?.coversHands,
+      coversHead: opts?.coversHead,
+      tint: opts?.tint,
+    });
     if (OUTFIT_TINT_SLOTS.includes(slot)) this.tintObject(itemObj, this.outfitTint);
     else if (HAIR_TINT_SLOTS.includes(slot)) this.tintObject(itemObj, this.hairTint);
     this.autoManageBodySkin();
@@ -638,11 +770,14 @@ export class AnimatedModel {
    * per-region nodes named "Regular_<Gender>_<Region>" — Head/Neck/Torso/
    * Arms/Hands/Thigh/Calf/Feet — and each equip slot hides exactly the
    * regions its own outfit piece is authored to cover:
-   *   - head  -> Head (+ Eyes/Eyebrows, which are separate meshes)
-   *   - chest -> Torso (Neck is its own region and is never hidden -- no
-   *     collar in this pack reliably covers it, so hiding it left a gap)
+   *   - head  -> Head (+ Eyes) only when coversHead (closed helm). Hoods
+   *     overlay the face and leave the base head visible.
+   *   - chest -> Torso (Neck stays visible; pelvis/hips live with Thigh so
+   *     a chest piece does not erase the buttocks — those are covered by
+   *     Legs outfits, not Body)
    *   - arms  -> Arms, and Hands too if the item is a glove (coversHands)
-   *   - legs  -> Thigh + Calf
+   *   - legs  -> Calf only (Thigh stays visible to seal the open torso/hip
+   *     split; pants cover hips via polygon-offset)
    *   - feet  -> Calf + Feet (every boot in this pack rises past the ankle)
    * This is a plain lookup driven by which slots are filled, not a fuzzy
    * URL/name guess — so an empty slot never hides skin, and a filled slot
@@ -650,7 +785,9 @@ export class AnimatedModel {
    */
   private autoManageBodySkin(): void {
     if (!this.innerScene) return;
-    const hasHeadArmor = !!this.equippedModularSlots.get("head")?.url;
+    const headSlot = this.equippedModularSlots.get("head");
+    // Only closed helms (coversHead) replace the face. Hoods/crowns overlay.
+    const coversHead = !!headSlot?.url && !!headSlot.coversHead;
     // Chest coverage comes from *either* a skinned modular tunic or a rigid
     // bone-parented armor prop (see setArmorProp) -- either way the bare
     // torso skin underneath needs to swap out.
@@ -658,21 +795,31 @@ export class AnimatedModel {
     const armsSlot = this.equippedModularSlots.get("arms");
     const hasArmsArmor = !!armsSlot?.url;
     const hasGloveArmor = hasArmsArmor && !!armsSlot?.coversHands;
-    const hasLegsArmor = !!this.equippedModularSlots.get("legs")?.url;
+    const legsSlot = this.equippedModularSlots.get("legs");
+    const hasLegsArmor = !!legsSlot?.url;
     const hasFeetArmor = !!this.equippedModularSlots.get("feet")?.url;
 
     const hiddenRegions = new Set<string>();
-    if (hasHeadArmor) hiddenRegions.add("head");
+    if (coversHead) hiddenRegions.add("head");
     if (hasChestArmor) hiddenRegions.add("torso");
     if (hasArmsArmor) hiddenRegions.add("arms");
     if (hasGloveArmor) hiddenRegions.add("hands");
     if (hasLegsArmor) {
-      hiddenRegions.add("thigh");
+      // Do NOT hide "thigh" here. Torso/Thigh are an open split of one mesh —
+      // hiding Thigh leaves a jagged hole at the waist that reads as a bright
+      // fringe above the pants. Legs pieces cover the hips with polygon-offset
+      // so the thigh skin stays sealed underneath.
       hiddenRegions.add("calf");
     }
     if (hasFeetArmor) {
       hiddenRegions.add("calf");
       hiddenRegions.add("feet");
+    }
+
+    // Closed helms hide modular hair/brows that would poke through.
+    for (const hairSlot of ["hair", "facialHair", "eyebrows"] as const) {
+      const s = this.equippedModularSlots.get(hairSlot);
+      if (s) s.obj.visible = !coversHead;
     }
 
     this.innerScene.traverse((o: THREE.Object3D) => {
@@ -684,7 +831,7 @@ export class AnimatedModel {
         return;
       }
       if (o.name === "Eyes") {
-        o.visible = !hasHeadArmor;
+        o.visible = !coversHead;
         return;
       }
       if (o.name === "Eyebrows") {
@@ -703,7 +850,18 @@ export class AnimatedModel {
         // hiding it (as it used to be lumped into "torso") left a gap
         // between chin and collar. Keeping it always-visible is the safer
         // failure mode than a hole in the character.
-        o.visible = !hiddenRegions.has(regionMatch[1].toLowerCase());
+        const region = regionMatch[1].toLowerCase();
+        o.visible = !hiddenRegions.has(region);
+        if (region === "thigh") {
+          // Some legs pieces (e.g. the Knight greaves) are shaped like
+          // discrete plates rather than a full pant-leg cylinder, so they
+          // don't fully occlude Thigh the way the polygon-offset trick
+          // assumes -- the base rig's stock underwear texture shows through
+          // the gaps. Tinting Thigh to the equipped legs' color turns that
+          // sliver into a plausible underlayer instead of a jarring bare-skin
+          // patch; untinted (null) restores the stock look when legs is empty.
+          this.tintMesh(o as THREE.Mesh, hasLegsArmor ? (legsSlot?.tint ?? null) : null);
+        }
         return;
       }
       // Fallback for any base mesh that hasn't been through the region
@@ -719,6 +877,17 @@ export class AnimatedModel {
    *  into the wearer's own rig (e.g. the Ranger's bow). Pass `null` to
    *  detach whatever's currently attached. */
   async setWeaponProp(prop: PropAttachConfig | null): Promise<void> {
+    // Unequip must always clear, even if we already think nothing is attached
+    // (guards against a stale in-flight attach completing after a prior clear).
+    if (prop === null) {
+      this.attachedPropUrl = null;
+      this.pendingProp = null;
+      if (this.attachedProp) {
+        this.attachedProp.parent?.remove(this.attachedProp);
+        this.attachedProp = null;
+      }
+      return;
+    }
     const key = propKey(prop);
     if (this.attachedPropUrl === key) return;
     this.attachedPropUrl = key;
@@ -730,7 +899,7 @@ export class AnimatedModel {
     // has finished loading) so loadFrom's completion can retry once the
     // bone it needs actually exists.
     this.pendingProp = prop;
-    if (prop) await this.tryApplyProp(prop, key);
+    await this.tryApplyProp(prop, key);
   }
 
   private async tryApplyProp(prop: PropAttachConfig, key: string | null): Promise<void> {
@@ -991,10 +1160,13 @@ export class AnimatedModel {
       if (mesh.isMesh) {
         mesh.castShadow = true;
         mesh.receiveShadow = true;
-        mesh.frustumCulled = false;
-        if (mesh.geometry) {
-          if (!mesh.geometry.boundingSphere) mesh.geometry.computeBoundingSphere();
-          if (mesh.geometry.boundingSphere) mesh.geometry.boundingSphere.radius = 10000.0;
+        // Skinned meshes have bind-pose AABBs that don't track animation, so
+        // they need frustumCulled off — but don't inflate bounds to 10000
+        // (that defeated GPU cull for every non-skinned child too).
+        if ((mesh as THREE.SkinnedMesh).isSkinnedMesh) {
+          mesh.frustumCulled = false;
+        } else if (mesh.geometry && !mesh.geometry.boundingSphere) {
+          mesh.geometry.computeBoundingSphere();
         }
         if (tintColor) {
           // Clone materials so the tint doesn't leak to other instances.
@@ -1019,7 +1191,15 @@ export class AnimatedModel {
       try {
         const ual = await load(UNIVERSAL_ANIMATION_LIBRARY);
         if (ual.animations?.length) clips.push(...ual.animations);
-      } catch (e) {}
+      } catch {
+        /* UAL1 optional if UAL2 covers needs */
+      }
+      try {
+        const ual2 = await load(UNIVERSAL_ANIMATION_LIBRARY_2);
+        if (ual2.animations?.length) clips.push(...ual2.animations);
+      } catch {
+        /* keep UAL1-only */
+      }
       clips.push(...(await loadRetargetedClips()));
     } else {
       const isFemale = url.includes("F_") || url.includes("Female");
@@ -1043,35 +1223,37 @@ export class AnimatedModel {
       clips.push(...gltf.animations);
     }
 
-    for (const clip of clips) {
-      const cleanTracks = clip.tracks.map((t) => {
-        let name = t.name;
-        if (name.startsWith("Character_Armature/")) {
-          name = name.replace(/^Character_Armature\//, "");
-        } else if (name.startsWith("Root/")) {
-          name = name.replace(/^Root\//, "");
-        }
+    // Universal libraries are huge; only bind clips this AnimSpec (and weapon
+    // overrides) can actually play. Mob specs stay small via their own lists.
+    const allow = universal ? clipNameAllowlist(this.spec) : null;
 
-        if (name !== t.name) {
-          const clone = t.clone();
-          clone.name = name;
-          return clone;
-        }
-        return t;
-      });
-      const cleanClip = new THREE.AnimationClip(clip.name, clip.duration, cleanTracks);
+    for (const clip of clips) {
+      const bare = clip.name.split("|").pop()!;
+      if (allow && !allow.has(clip.name) && !allow.has(bare)) continue;
+      const cleanClip = cleanAnimationClip(clip);
+      if (this.actions.has(cleanClip.name) && this.actions.has(bare)) continue;
       const action = this.mixer.clipAction(cleanClip);
-      if (!this.actions.has(cleanClip.name)) {
-        this.actions.set(cleanClip.name, action);
+      if (!this.actions.has(cleanClip.name)) this.actions.set(cleanClip.name, action);
+      if (!this.actions.has(bare)) this.actions.set(bare, action);
+    }
+    // Procedural swim up/down: pitch Swim_Fwd so vertical travel isn't flat.
+    const swimFwd = this.actions.get("Swim_Fwd_Loop");
+    if (swimFwd) {
+      const base = swimFwd.getClip();
+      if (!this.actions.has("Swim_Up_Loop")) {
+        const up = deriveSwimPitchedClip(base, "Swim_Up_Loop", -Math.PI * 0.55);
+        cleanedClipCache.set(up.name, up);
+        this.actions.set("Swim_Up_Loop", this.mixer.clipAction(up));
       }
-      const bare = cleanClip.name.split("|").pop()!;
-      if (!this.actions.has(bare)) {
-        this.actions.set(bare, action);
+      if (!this.actions.has("Swim_Down_Loop")) {
+        const down = deriveSwimPitchedClip(base, "Swim_Down_Loop", Math.PI * 0.5);
+        cleanedClipCache.set(down.name, down);
+        this.actions.set("Swim_Down_Loop", this.mixer.clipAction(down));
       }
     }
-    // Pre-bind track property bindings for all loaded clips so switching to
-    // cast/attack/dodge animations during gameplay never stalls the main thread.
-    for (const action of this.actions.values()) {
+    // Pre-bind only the (now filtered) unique actions so first play() is free.
+    const uniqueActions = new Set(this.actions.values());
+    for (const action of uniqueActions) {
       action.play();
       action.stop();
     }
@@ -1085,8 +1267,8 @@ export class AnimatedModel {
       this.applyGearTint(nodes, color);
     }
     this.pendingGearTint.clear();
-    for (const [slot, { url: itemUrl, coversHands, fit }] of this.pendingModularSlots) {
-      await this.applyModularSlot(slot, itemUrl, { coversHands, fit });
+    for (const [slot, { url: itemUrl, coversHands, coversHead, fit }] of this.pendingModularSlots) {
+      await this.applyModularSlot(slot, itemUrl, { coversHands, coversHead, fit });
     }
     this.autoManageBodySkin();
     if (this.pendingProp) {
@@ -1126,6 +1308,14 @@ export class AnimatedModel {
     if (!oneShot && now < this.oneShotUntil) return; // let the swing finish
 
     let action = overrideNames?.length ? this.findAction(overrideNames) : null;
+    // Backward dodge: coin-flip between roll and backflip (JogToFlip).
+    if (!action && logical === "dodgeBackward") {
+      const names =
+        Math.random() < 0.5
+          ? ["JogToFlip", "Roll", "Shield_Dash", "Sword_Dash"]
+          : ["Roll", "JogToFlip", "Shield_Dash", "Sword_Dash"];
+      action = this.findAction(names);
+    }
     if (!action) action = this.findAction(this.spec[logical]);
     // Only fall through to the synthetic forward-loop substitute once the
     // rig's own spec (which now lists real strafe/backpedal clips first,
@@ -1147,6 +1337,9 @@ export class AnimatedModel {
       if (!locoNames || action === this.current) return;
     }
 
+    // Avoid sticky speed from a previous sped-up dodge roll.
+    action.timeScale = 1;
+
     if (this.current && this.current !== action) {
       action.reset();
       action.crossFadeFrom(this.current, 0.18, false);
@@ -1161,7 +1354,25 @@ export class AnimatedModel {
       action.setLoop(THREE.LoopOnce, 1);
       action.clampWhenFinished = false;
       const clip = action.getClip();
-      this.oneShotUntil = now + Math.min(700, clip.duration * 1000 * 0.9);
+      const isDodge =
+        logical === "dodgeForward" ||
+        logical === "dodgeBackward" ||
+        logical === "dodgeLeft" ||
+        logical === "dodgeRight";
+      // Forward roll recovery is long — play faster and release the loco lock
+      // early so sprint/walk can crossfade in while still moving.
+      if (logical === "dodgeForward" && clip.name === "Roll") {
+        action.timeScale = 1.35;
+      }
+      const effectiveMs = (clip.duration / Math.max(0.01, action.timeScale)) * 1000;
+      const holdFrac =
+        logical === "dodgeForward" ? 0.55 : logical === "dodgeBackward" ? 0.7 : 0.65;
+      const holdMs = isDodge
+        ? Math.min(2000, effectiveMs * holdFrac)
+        : Math.min(700, clip.duration * 1000 * 0.9);
+      this.oneShotUntil = now + holdMs;
+      action.setEffectiveWeight(1);
+      action.enabled = true;
     } else {
       action.setLoop(THREE.LoopRepeat, Infinity);
     }
@@ -1177,16 +1388,59 @@ export class AnimatedModel {
   update(dt: number): void {
     this.mixer?.update(dt);
   }
+
+  /** Release mixer/actions and detach from the scene graph. Does not dispose
+   *  shared GLTF cache geometry (SkeletonUtils.clone shares it). */
+  dispose(): void {
+    this.mixer?.stopAllAction();
+    this.mixer = null;
+    this.actions.clear();
+    this.current = null;
+    this.currentLogical = null;
+    this.oneShotUntil = 0;
+    this.pendingNodeVisibility.clear();
+    this.pendingGearTint.clear();
+    for (const { obj } of this.equippedModularSlots.values()) {
+      obj.parent?.remove(obj);
+    }
+    this.equippedModularSlots.clear();
+    this.pendingModularSlots.clear();
+    this.attachedProp?.parent?.remove(this.attachedProp);
+    this.attachedProp = null;
+    this.attachedPropUrl = null;
+    this.pendingProp = null;
+    this.attachedArmorProp?.parent?.remove(this.attachedArmorProp);
+    this.attachedArmorProp = null;
+    this.attachedArmorPropUrl = null;
+    this.pendingArmorProp = null;
+    this.characterSkeleton = null;
+    if (this.innerScene) {
+      this.group.remove(this.innerScene);
+      this.innerScene = null;
+    }
+    while (this.group.children.length > 0) {
+      this.group.remove(this.group.children[0]!);
+    }
+  }
 }
 
 /** Every rig's body always faces its yaw (camera yaw for the local player,
  *  server-authoritative yaw for remote entities) rather than its movement
- *  direction, so strafing/backpedaling needs its own clips instead of just
- *  running the forward-walk cycle sideways. `localMoveX`/`localMoveY` are the
- *  movement vector in that facing's own local space: +X = strafing right,
+ *  direction, so strafing/backpedaling/diagonals need their own clips instead
+ *  of running the forward-walk cycle sideways. `localMoveX`/`localMoveY` are
+ *  the movement vector in that facing's own local space: +X = strafing right,
  *  +Y = moving backward (matches InputManager's camera-relative axes). */
 function directionalMove(localMoveX: number, localMoveY: number, running: boolean): LogicalAnim {
-  if (Math.abs(localMoveX) > Math.abs(localMoveY) * 1.1) {
+  const ax = Math.abs(localMoveX);
+  const ay = Math.abs(localMoveY);
+  // W+A / W+D / S+A / S+D (or stick diagonal): use UAL2 8-dir walk clips.
+  if (ax > 0.25 && ay > 0.25) {
+    const forward = localMoveY < 0;
+    const right = localMoveX > 0;
+    if (forward) return right ? "walkFwdRight" : "walkFwdLeft";
+    return right ? "walkBackRight" : "walkBackLeft";
+  }
+  if (ax > ay * 1.1) {
     return localMoveX > 0 ? "strafeRight" : "strafeLeft";
   }
   if (localMoveY > 0.15) return "walkBack";
@@ -1207,13 +1461,15 @@ export function dodgeLogicalFor(yaw: number, dirX: number, dirZ: number): Logica
   return localY > 0 ? "dodgeBackward" : "dodgeForward";
 }
 
-/** Map server anim + observed speed/direction to a logical clip. */
+/** Map server anim + observed speed/direction to a logical clip.
+ *  `swimVert`: +1 ascending, -1 diving (local player; remotes leave 0). */
 export function logicalFromState(
   serverAnim: string,
   speed: number,
   runThreshold: number,
   localMoveX = 0,
   localMoveY = 0,
+  swimVert = 0,
 ): LogicalAnim {
   switch (serverAnim) {
     case "dead":
@@ -1235,7 +1491,15 @@ export function logicalFromState(
     case "gather":
       return "gather";
     case "swim":
-      if (speed > 0.35) return directionalMove(localMoveX, localMoveY, false);
+      // Vertical travel uses the forward stroke; body pitch is applied on the
+      // avatar group from camera look (see Game.swimBodyPitch).
+      if (
+        Math.abs(swimVert) > 0.25 ||
+        speed > 0.35 ||
+        Math.abs(localMoveX) + Math.abs(localMoveY) > 0.2
+      ) {
+        return "swimFwd";
+      }
       return "swim";
     default:
       if (speed > runThreshold) return directionalMove(localMoveX, localMoveY, true);
@@ -1245,31 +1509,14 @@ export function logicalFromState(
 }
 
 export function preloadCharacterAssets(): Promise<void> {
-  // Essentials only -- modular outfit parts load on equip (see modularGear.ts).
-  // Eager-loading every gender×slot GLTF used to re-upload the same 4K maps
-  // many times and balloon VRAM into multi-GB territory.
-  const propUrls = Object.values(ITEMS)
-    .map((i) => i.weaponProp?.url)
-    .filter((url): url is string => !!url);
+  // Warm only shared anim libs + both gender bases. Hair/facial/eyebrows,
+  // skeletons, weapon props, and medium/large creature anim packs load on
+  // demand — eager-fetching them ballooned VRAM and stalled welcome.
   const urls = [
     UNIVERSAL_ANIMATION_LIBRARY,
+    UNIVERSAL_ANIMATION_LIBRARY_2,
     "/assets/models/modular/base/Regular_Male.glb",
     "/assets/models/modular/base/Regular_Female.glb",
-    ...allHairStyleUrls(),
-    ...allFacialHairUrls(),
-    eyebrowsUrl("male"),
-    eyebrowsUrl("female"),
-    "/assets/models/bundled/base/BaseMale_Animated.glb",
-    "/assets/models/bundled/base/BaseFemale_Animated.glb",
-    ...PLAYER_MODELS,
-    WOLF_MODEL,
-    ...Object.values(SKELETON_MODELS),
-    ...propUrls,
   ];
-  return Promise.all([
-    ...urls.map((url) => load(url).catch(() => null)),
-    loadAnimationLibrary("medium").catch(() => []),
-    loadAnimationLibrary("large").catch(() => []),
-    loadRetargetedClips(),
-  ]).then(() => {});
+  return Promise.all(urls.map((url) => load(url).catch(() => null))).then(() => {});
 }

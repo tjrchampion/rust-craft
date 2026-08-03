@@ -34,12 +34,16 @@
  * (Re-run any time Regular_Male.glb / Regular_Female.glb is re-imported
  * from a fresh Superhero_*_FullBody.gltf export.)
  */
-import { NodeIO } from "@gltf-transform/core";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const BASE_DIR = path.join(__dirname, "..", "packages/client/public/assets/models/modular/base");
+// Resolve from packages/client (where @gltf-transform is installed) even when
+// this script is invoked from the monorepo root.
+const require = createRequire(path.join(__dirname, "..", "packages/client/package.json"));
+const { NodeIO } = await import(pathToFileURL(require.resolve("@gltf-transform/core")).href);
 
 /** joint name -> region bucket. Any joint not listed here (there shouldn't
  *  be any on this rig) falls back to "Torso". */
@@ -53,7 +57,12 @@ function buildRegionOf() {
   // whenever chest gear was equipped (which is effectively always). Keeping
   // it split out lets it stay permanently visible regardless of gear.
   set(["neck_01"], "Neck");
-  set(["root", "pelvis", "spine_01", "spine_02", "spine_03", "clavicle_l", "clavicle_r"], "Torso");
+  // Pelvis is intentionally NOT in Torso: chest outfit pieces (Body_Armor /
+  // Body_Cloth / Peasant Body …) only cover the ribcage/abdomen, while the
+  // buttocks and hips are authored into Legs pieces. Bucketing pelvis with
+  // spine meant equipping a chest hid the butt without anything covering it.
+  // Pelvis stays with Thigh so bare hips remain visible until Legs are worn.
+  set(["root", "spine_01", "spine_02", "spine_03", "clavicle_l", "clavicle_r"], "Torso");
   set(["upperarm_l", "upperarm_r", "lowerarm_l", "lowerarm_r"], "Arms");
   const handNames = [];
   for (const side of ["l", "r"]) {
@@ -63,7 +72,7 @@ function buildRegionOf() {
     }
   }
   set(handNames, "Hands");
-  set(["thigh_l", "thigh_r"], "Thigh");
+  set(["pelvis", "thigh_l", "thigh_r"], "Thigh");
   set(["calf_l", "calf_r"], "Calf");
   set(["foot_l", "foot_r", "ball_l", "ball_r", "ball_leaf_l", "ball_leaf_r"], "Feet");
   return REGION_OF;
@@ -194,16 +203,108 @@ async function splitBase(fileName, baseMeshNodeMatcher) {
   }
 }
 
-/** Re-carve the Neck out of an already-split file's combined Torso node,
- *  for bases that were split before Neck became its own region — without
- *  this, migrating an existing Regular_Male.glb/Regular_Female.glb would
- *  require re-importing from the original unsplit Superhero_*_FullBody
- *  source, which usually isn't lying around anymore. Skips (no-op) if this
- *  file's Neck region already exists. */
 async function hasNode(fileName, nameMatcher) {
   const io = new NodeIO();
   const doc = await io.read(path.join(BASE_DIR, fileName));
   return doc.getRoot().listNodes().some((n) => nameMatcher(n.getName()));
+}
+
+/**
+ * Move pelvis-dominant triangles from an already-split Torso node into the
+ * existing Thigh node (appending indices). Used to migrate bases that were
+ * split when pelvis still lived in the Torso bucket.
+ */
+async function recarvePelvisFromTorsoToThigh(fileName, gender) {
+  const filePath = path.join(BASE_DIR, fileName);
+  const io = new NodeIO();
+  const doc = await io.read(filePath);
+  const root = doc.getRoot();
+
+  const torsoRe = new RegExp(`^regular_${gender}_torso$`, "i");
+  const thighRe = new RegExp(`^regular_${gender}_thigh$`, "i");
+  const torsoNode = root.listNodes().find((n) => n.getMesh() && torsoRe.test(n.getName()));
+  const thighNode = root.listNodes().find((n) => n.getMesh() && thighRe.test(n.getName()));
+  if (!torsoNode || !thighNode) {
+    console.log(`[${fileName}] missing Torso/Thigh region — skip pelvis recarve.`);
+    return;
+  }
+
+  const torsoPrim = torsoNode.getMesh().listPrimitives()[0];
+  const thighPrim = thighNode.getMesh().listPrimitives()[0];
+  if (!torsoPrim || !thighPrim) throw new Error(`[${fileName}] Torso/Thigh missing primitive`);
+
+  const skin = torsoNode.getSkin();
+  if (!skin) throw new Error(`[${fileName}] Torso has no skin`);
+  const jointNames = skin.listJoints().map((j) => j.getName());
+  const pelvisJoint = jointNames.indexOf("pelvis");
+  if (pelvisJoint < 0) {
+    console.log(`[${fileName}] no pelvis joint — skip.`);
+    return;
+  }
+
+  const jointsAttr = torsoPrim.getAttribute("JOINTS_0");
+  const weightsAttr = torsoPrim.getAttribute("WEIGHTS_0");
+  const torsoIdxAcc = torsoPrim.getIndices();
+  if (!jointsAttr || !weightsAttr || !torsoIdxAcc) {
+    throw new Error(`[${fileName}] Torso missing skinning/indices`);
+  }
+  const torsoIndices = torsoIdxAcc.getArray();
+  const j = [0, 0, 0, 0];
+  const w = [0, 0, 0, 0];
+
+  function dominantJoint(v) {
+    jointsAttr.getElement(v, j);
+    weightsAttr.getElement(v, w);
+    let bestW = -1;
+    let bestJ = 0;
+    for (let k = 0; k < 4; k++) {
+      if (w[k] > bestW) {
+        bestW = w[k];
+        bestJ = j[k];
+      }
+    }
+    return bestJ;
+  }
+
+  const keepTorso = [];
+  const moveToThigh = [];
+  for (let t = 0; t < torsoIndices.length; t += 3) {
+    const i0 = torsoIndices[t];
+    const i1 = torsoIndices[t + 1];
+    const i2 = torsoIndices[t + 2];
+    let pelvisVotes = 0;
+    for (const vi of [i0, i1, i2]) {
+      if (dominantJoint(vi) === pelvisJoint) pelvisVotes++;
+    }
+    if (pelvisVotes >= 2) moveToThigh.push(i0, i1, i2);
+    else keepTorso.push(i0, i1, i2);
+  }
+
+  if (moveToThigh.length === 0) {
+    console.log(`[${fileName}] no pelvis-majority tris in Torso — already migrated.`);
+    return;
+  }
+
+  const IndicesCtor = torsoIndices.constructor;
+  const thighIdxAcc = thighPrim.getIndices();
+  const existingThigh = thighIdxAcc ? Array.from(thighIdxAcc.getArray()) : [];
+  const mergedThigh = existingThigh.concat(moveToThigh);
+
+  torsoPrim.setIndices(
+    doc.createAccessor(`${torsoNode.getName()}_indices`).setArray(new IndicesCtor(keepTorso)).setType("SCALAR"),
+  );
+  thighPrim.setIndices(
+    doc
+      .createAccessor(`${thighNode.getName()}_indices`)
+      .setArray(new IndicesCtor(mergedThigh))
+      .setType("SCALAR"),
+  );
+
+  await io.write(filePath, doc);
+  console.log(
+    `[${fileName}] moved ${moveToThigh.length / 3} pelvis tris Torso→Thigh ` +
+      `(Torso now ${keepTorso.length / 3}, Thigh now ${mergedThigh.length / 3}).`,
+  );
 }
 
 for (const [fileName, gender] of [
@@ -212,17 +313,17 @@ for (const [fileName, gender] of [
 ]) {
   const monolithicMatcher = (name) => new RegExp(`^superhero_${gender}$`, "i").test(name);
   const neckExists = await hasNode(fileName, (name) => new RegExp(`^regular_${gender}_neck$`, "i").test(name));
-  if (neckExists) {
-    console.log(`[${fileName}] Neck region already present, nothing to do.`);
-    continue;
-  }
   if (await hasNode(fileName, monolithicMatcher)) {
     await splitBase(fileName, monolithicMatcher);
-  } else {
+  } else if (!neckExists) {
     // Already split under the old (Neck-less) region set -- re-carve Neck
     // out of the existing combined Torso node instead of the full body.
     const torsoMatcher = (name) => new RegExp(`^regular_${gender}_torso$`, "i").test(name);
     await splitBase(fileName, torsoMatcher);
+  } else {
+    console.log(`[${fileName}] already region-split; migrating pelvis Torso→Thigh if needed.`);
   }
+  // Safe to run repeatedly -- no-ops once pelvis tris are gone from Torso.
+  await recarvePelvisFromTorsoToThigh(fileName, gender);
 }
 console.log("Done.");

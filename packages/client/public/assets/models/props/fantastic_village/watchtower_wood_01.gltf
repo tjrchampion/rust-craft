@@ -1,0 +1,273 @@
+{
+  "asset": {
+    "generator": "Khronos glTF Blender I/O v5.2.39",
+    "version": "2.0"
+  },
+  "extensionsUsed": [
+    "KHR_materials_specular"
+  ],
+  "scene": 0,
+  "scenes": [
+    {
+      "name": "Scene",
+      "nodes": [
+        0
+      ]
+    }
+  ],
+  "nodes": [
+    {
+      "mesh": 0,
+      "name": "SM_PROP_watchtower_wood_01",
+      "translation": [
+        -0.021103620529174805,
+        0.14852289855480194,
+        0.5532993674278259
+      ]
+    }
+  ],
+  "materials": [
+    {
+      "doubleSided": true,
+      "extensions": {
+        "KHR_materials_specular": {
+          "specularFactor": 0
+        }
+      },
+      "name": "M_wood_planks_07",
+      "pbrMetallicRoughness": {
+        "baseColorTexture": {
+          "index": 0
+        },
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.8
+      },
+      "alphaMode": "OPAQUE"
+    },
+    {
+      "doubleSided": true,
+      "extensions": {
+        "KHR_materials_specular": {
+          "specularFactor": 0
+        }
+      },
+      "name": "M_wood_planks_05",
+      "normalTexture": {
+        "index": 2
+      },
+      "pbrMetallicRoughness": {
+        "baseColorTexture": {
+          "index": 1
+        },
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.8
+      },
+      "alphaMode": "OPAQUE"
+    }
+  ],
+  "meshes": [
+    {
+      "name": "Mesh.048",
+      "primitives": [
+        {
+          "attributes": {
+            "POSITION": 0,
+            "NORMAL": 1,
+            "TEXCOORD_0": 2,
+            "TEXCOORD_1": 3
+          },
+          "indices": 4,
+          "material": 0
+        },
+        {
+          "attributes": {
+            "POSITION": 5,
+            "NORMAL": 6,
+            "TEXCOORD_0": 7,
+            "TEXCOORD_1": 8
+          },
+          "indices": 9,
+          "material": 1
+        }
+      ]
+    }
+  ],
+  "textures": [
+    {
+      "source": 0
+    },
+    {
+      "source": 1
+    },
+    {
+      "source": 2
+    }
+  ],
+  "images": [
+    {
+      "uri": "textures/T_wood_planks_07_BC.png"
+    },
+    {
+      "uri": "textures/T_wood_planks_05_BC.png"
+    },
+    {
+      "uri": "textures/T_wood_planks_05_N.png"
+    }
+  ],
+  "accessors": [
+    {
+      "bufferView": 0,
+      "componentType": 5126,
+      "count": 496,
+      "max": [
+        2.527413845062256,
+        11.06587028503418,
+        1.6886564493179321
+      ],
+      "min": [
+        -2.4852066040039062,
+        -0.14852289855480194,
+        -2.795255184173584
+      ],
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 1,
+      "componentType": 5126,
+      "count": 496,
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 2,
+      "componentType": 5126,
+      "count": 496,
+      "type": "VEC2"
+    },
+    {
+      "bufferView": 3,
+      "componentType": 5126,
+      "count": 496,
+      "type": "VEC2"
+    },
+    {
+      "bufferView": 4,
+      "componentType": 5123,
+      "count": 888,
+      "type": "SCALAR"
+    },
+    {
+      "bufferView": 5,
+      "componentType": 5126,
+      "count": 1910,
+      "max": [
+        2.2225046157836914,
+        10.340398788452148,
+        1.4957966804504395
+      ],
+      "min": [
+        -2.264948606491089,
+        4.108027935028076,
+        -2.3743278980255127
+      ],
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 6,
+      "componentType": 5126,
+      "count": 1910,
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 7,
+      "componentType": 5126,
+      "count": 1910,
+      "type": "VEC2"
+    },
+    {
+      "bufferView": 8,
+      "componentType": 5126,
+      "count": 1910,
+      "type": "VEC2"
+    },
+    {
+      "bufferView": 9,
+      "componentType": 5123,
+      "count": 3348,
+      "type": "SCALAR"
+    }
+  ],
+  "bufferViews": [
+    {
+      "buffer": 0,
+      "byteLength": 5952,
+      "byteOffset": 0,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 5952,
+      "byteOffset": 5952,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 3968,
+      "byteOffset": 11904,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 3968,
+      "byteOffset": 15872,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 1776,
+      "byteOffset": 19840,
+      "target": 34963
+    },
+    {
+      "buffer": 0,
+      "byteLength": 22920,
+      "byteOffset": 21616,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 22920,
+      "byteOffset": 44536,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 15280,
+      "byteOffset": 67456,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 15280,
+      "byteOffset": 82736,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 6696,
+      "byteOffset": 98016,
+      "target": 34963
+    }
+  ],
+  "samplers": [
+    {
+      "magFilter": 9729,
+      "minFilter": 9987
+    }
+  ],
+  "buffers": [
+    {
+      "byteLength": 104712,
+      "uri": "watchtower_wood_01.bin"
+    }
+  ]
+}

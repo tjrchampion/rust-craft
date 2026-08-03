@@ -27,6 +27,8 @@ import type * as QUARKS from "three.quarks";
 // own zero-latency client-side prediction.
 const INTERP_DELAY_MS = 130;
 const DESPAWN_AFTER_MS = 1200;
+/** Defer GLB/anim binding for mobs/pets until within this range of the camera. */
+const MOB_MODEL_LOAD_RADIUS = 72;
 
 /** Which schools have a textured effect extracted from the Hovl Studio pack
  *  (see scripts/hovl/) instead of SpellVfxSystem's built-in procedural
@@ -69,6 +71,8 @@ interface RemoteEntity {
   appearance: CharacterAppearance | null;
   group: THREE.Group;
   model: AnimatedModel;
+  /** When set, `loadFrom` has not run yet — filled once the camera is near. */
+  pendingLoad: { url: string; height: number; tint?: number } | null;
   nameplate?: THREE.Sprite;
   hpBar?: THREE.Sprite;
   debuffIcons: THREE.Sprite;
@@ -98,6 +102,8 @@ interface RemoteEntity {
   armsId: string | null;
   legsId: string | null;
   feetId: string | null;
+  shouldersId: string | null;
+  neckId: string | null;
   lootRing?: THREE.Mesh;
   freezeMesh?: THREE.Group;
   lootable?: boolean;
@@ -281,6 +287,9 @@ export class EntityManager {
    *  alone read weak for the instantaneous punch a hit wants, this adds a
    *  school-parametrized noise/ring/spoke flash at the impact point. */
   private schoolFlash: SchoolFlashSystem;
+  /** Client Display settings -- toggled from System → Settings. */
+  showPlayerNameplates = true;
+  showMobNameplates = true;
 
   constructor(scene: THREE.Scene) {
     this.scene = scene;
@@ -384,6 +393,7 @@ export class EntityManager {
     appearance?: CharacterAppearance,
   ): RemoteEntity {
     let model: AnimatedModel;
+    let pendingLoad: RemoteEntity["pendingLoad"] = null;
     let plateY = 2.35;
     let barY = kind === "player" ? 2.05 : 1.5;
     let plateColor = "#9fd0ff";
@@ -398,13 +408,11 @@ export class EntityManager {
       const def = mobDef(mobType ?? "wolf");
       const spec = mobModelSpec(def.render.model);
       model = new AnimatedModel(spec.anims);
-      void model.loadFrom(spec.url, def.render.height, def.render.tint);
-      // A pet reuses the wild mob's model but keeps the caller's own display
-      // name ("<Owner>'s Wolf") and a friendly nameplate color instead of
-      // the wild mobDef's own name/color.
+      // Defer GLB clone + clip bind until the camera is close — spawning a
+      // whole region of wolves used to hitch every remote createEntity.
+      pendingLoad = { url: spec.url, height: def.render.height, tint: def.render.tint };
       plateColor = kind === "pet" ? "#7be07b" : def.render.color;
       plateName = kind === "pet" ? name : def.name;
-      // Nameplate/HP bar sit above the model's normalized height.
       plateY = def.render.height + 0.7;
       barY = def.render.height + 0.4;
     }
@@ -433,6 +441,7 @@ export class EntityManager {
       appearance: appearance ?? null,
       group,
       model,
+      pendingLoad,
       nameplate,
       hpBar,
       debuffIcons,
@@ -458,6 +467,8 @@ export class EntityManager {
       armsId: null,
       legsId: null,
       feetId: null,
+      shouldersId: null,
+      neckId: null,
     };
     this.entities.set(id, entity);
     return entity;
@@ -527,19 +538,25 @@ export class EntityManager {
       entity.chestId !== snap.chestId ||
       entity.armsId !== snap.armsId ||
       entity.legsId !== snap.legsId ||
-      entity.feetId !== snap.feetId
+      entity.feetId !== snap.feetId ||
+      entity.shouldersId !== snap.shouldersId ||
+      entity.neckId !== snap.neckId
     ) {
       entity.headId = snap.headId;
       entity.chestId = snap.chestId;
       entity.armsId = snap.armsId;
       entity.legsId = snap.legsId;
       entity.feetId = snap.feetId;
+      entity.shouldersId = snap.shouldersId;
+      entity.neckId = snap.neckId;
       void applyModularGearFromSnapAsync(entity.model, entity.gender, {
         headId: snap.headId,
         chestId: snap.chestId,
         armsId: snap.armsId,
         legsId: snap.legsId,
         feetId: snap.feetId,
+        shouldersId: snap.shouldersId,
+        neckId: snap.neckId,
       });
     }
   }
@@ -580,6 +597,7 @@ export class EntityManager {
       entity.samples.push({ t: now, x: snap.x, y: snap.y, z: snap.z, yaw: snap.yaw });
       if (entity.samples.length > 12) entity.samples.shift();
       if (entity.hpBar) paintHpBar(entity.hpBar, snap.hp / snap.maxHp);
+      if (entity.nameplate) entity.nameplate.visible = this.showPlayerNameplates;
       this.updateDebuffs(entity, snap.debuffs);
     }
   }
@@ -649,7 +667,7 @@ export class EntityManager {
         if (snap.hp > 0) paintHpBar(entity.hpBar, snap.hp / snap.maxHp);
       }
       if (entity.nameplate) {
-        entity.nameplate.visible = snap.hp > 0;
+        entity.nameplate.visible = snap.hp > 0 && this.nameplatesEnabledFor(entity.kind);
       }
       if (entity.debuffIcons) {
         entity.debuffIcons.visible = snap.hp > 0;
@@ -657,6 +675,20 @@ export class EntityManager {
       entity.samples.push({ t: now, x: snap.x, y: snap.y, z: snap.z, yaw: snap.yaw });
       if (entity.samples.length > 12) entity.samples.shift();
       this.updateDebuffs(entity, snap.hp > 0 ? snap.debuffs : []);
+    }
+  }
+
+  private nameplatesEnabledFor(kind: RemoteEntity["kind"]): boolean {
+    if (kind === "player") return this.showPlayerNameplates;
+    return this.showMobNameplates;
+  }
+
+  /** Apply Display → nameplate toggles immediately (between snapshots). */
+  syncNameplateVisibility(): void {
+    for (const entity of this.entities.values()) {
+      if (!entity.nameplate) continue;
+      const alive = entity.hp > 0;
+      entity.nameplate.visible = alive && this.nameplatesEnabledFor(entity.kind);
     }
   }
 
@@ -686,6 +718,9 @@ export class EntityManager {
       entity.samples.push({ t: now, x: snap.x, y: snap.y, z: snap.z, yaw: snap.yaw });
       if (entity.samples.length > 12) entity.samples.shift();
       if (entity.hpBar) paintHpBar(entity.hpBar, snap.hp / snap.maxHp);
+      if (entity.nameplate) {
+        entity.nameplate.visible = snap.hp > 0 && this.showMobNameplates;
+      }
     }
   }
 
@@ -1004,7 +1039,7 @@ export class EntityManager {
 
     for (const [id, entity] of this.entities) {
       if (now - entity.lastSeen > DESPAWN_AFTER_MS) {
-        this.scene.remove(entity.group);
+        this.disposeEntity(entity);
         this.entities.delete(id);
         continue;
       }
@@ -1055,9 +1090,19 @@ export class EntityManager {
       if (camera) {
         this.cullSphere.center.set(entity.group.position.x, entity.group.position.y + 1, entity.group.position.z);
         inView = this.cullFrustum.intersectsSphere(this.cullSphere);
+
+        if (entity.pendingLoad) {
+          const dx = entity.group.position.x - camera.position.x;
+          const dz = entity.group.position.z - camera.position.z;
+          if (dx * dx + dz * dz <= MOB_MODEL_LOAD_RADIUS * MOB_MODEL_LOAD_RADIUS) {
+            const pending = entity.pendingLoad;
+            entity.pendingLoad = null;
+            void entity.model.loadFrom(pending.url, pending.height, pending.tint);
+          }
+        }
       }
       entity.group.visible = inView;
-      if (inView) {
+      if (inView && entity.model.loaded) {
         entity.model.setLocomotionSpeed(entity.speed, entity.kind === "player" ? 3.5 : 3);
         const logical = logicalFromState(
           entity.anim,
@@ -1326,8 +1371,18 @@ export class EntityManager {
     );
   }
 
+  private disposeEntity(entity: RemoteEntity): void {
+    this.scene.remove(entity.group);
+    if (entity.nameplate) {
+      (entity.nameplate.material as THREE.SpriteMaterial).map?.dispose();
+      entity.nameplate.material.dispose();
+      delete entity.nameplate;
+    }
+    entity.model.dispose();
+  }
+
   clear(): void {
-    for (const e of this.entities.values()) this.scene.remove(e.group);
+    for (const e of this.entities.values()) this.disposeEntity(e);
     for (const p of this.projectiles.values()) {
       const core = p.group.getObjectByName("core");
       if (core) core.visible = false;

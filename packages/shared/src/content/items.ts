@@ -6,10 +6,28 @@ export type ItemType = "resource" | "tool" | "weapon" | "consumable" | "placeabl
 /** Equip-slot gear is a separate container from the hotbar (see protocol.ts's
  *  container enum) — it feeds passive stat modifiers into the dynamic stat
  *  calculation engine rather than being "held" for melee damage. */
-export type GearSlot = "weapon" | "head" | "chest" | "arms" | "legs" | "feet";
+export type GearSlot =
+  | "weapon"
+  | "head"
+  | "chest"
+  | "arms"
+  | "legs"
+  | "feet"
+  | "shoulders"
+  | "neck";
 
-/** Fixed equip-slot indices -- slot 0 is always the weapon, etc. */
-export const EQUIP_SLOTS: GearSlot[] = ["weapon", "head", "chest", "arms", "legs", "feet"];
+/** Fixed equip-slot indices -- slot 0 is always the weapon, etc.
+ *  Append-only: existing characters store numeric slot indices in the DB. */
+export const EQUIP_SLOTS: GearSlot[] = [
+  "weapon",
+  "head",
+  "chest",
+  "arms",
+  "legs",
+  "feet",
+  "shoulders",
+  "neck",
+];
 
 export interface ItemDef {
   id: string;
@@ -72,8 +90,18 @@ export interface ItemDef {
    *  visual stand-in for actually wearing this piece. legs/feet share the
    *  same leg mesh, so if both slots are filled, legs wins. */
   gearTint?: number;
-  /** Gear (head/chest/legs): GLTF path for modular 3D armor/prop equipment piece. */
-  modularModel?: { head?: string; chest?: string; arms?: string; legs?: string; feet?: string };
+  /** Gear (armor slots): GLTF path for modular 3D armor/prop equipment piece.
+   *  `shoulders` / `neck` are overlay accessories (pauldrons, scarf, gorget)
+   *  and do not hide base body regions. */
+  modularModel?: {
+    head?: string;
+    chest?: string;
+    arms?: string;
+    legs?: string;
+    feet?: string;
+    shoulders?: string;
+    neck?: string;
+  };
   /** Gear (chest slot only): a static, unskinned armor prop bone-parented
    *  onto the torso (see AnimatedModel.setArmorProp), for chest pieces from
    *  packs (e.g. Ultimate RPG Items) that ship rigid meshes rather than
@@ -93,6 +121,9 @@ export interface ItemDef {
    *  this, gloved pieces would double up with visible bare-hand skin
    *  underneath, and bracer pieces would wrongly delete the hands. */
   coversHands?: boolean;
+  /** Gear (head slot only): true for closed helmets that fully replace the
+   *  face. Hoods/crowns/horns leave the base head + eyes visible underneath. */
+  coversHead?: boolean;
 }
 
 /** Standalone alias for the weapon-type union, for spells.ts to import
@@ -965,6 +996,7 @@ export const ITEMS: Record<string, ItemDef> = {
     stack: 1,
     slot: "head",
     statModifiers: { armor: 3, agility: 2 },
+    requiredClasses: ["ranger", "rogue", "assassin", "druid"],
     modularModel: {
       head: "/assets/models/modular/Modular Parts/{gender}_Ranger_Head_Hood.gltf",
     },
@@ -977,6 +1009,7 @@ export const ITEMS: Record<string, ItemDef> = {
     slot: "chest",
     statModifiers: { armor: 7, vitality: 2, agility: 1 },
     gearTint: 0x4a7c4a,
+    requiredClasses: ["ranger", "rogue", "assassin", "druid"],
     modularModel: {
       chest: "/assets/models/modular/Modular Parts/{gender}_Ranger_Body.gltf",
     },
@@ -990,6 +1023,7 @@ export const ITEMS: Record<string, ItemDef> = {
     statModifiers: { armor: 2, agility: 1 },
     gearTint: 0x4a7c4a,
     coversHands: true,
+    requiredClasses: ["ranger", "rogue", "assassin", "druid"],
     modularModel: {
       arms: "/assets/models/modular/Modular Parts/{gender}_Ranger_Arms.gltf",
     },
@@ -1002,6 +1036,7 @@ export const ITEMS: Record<string, ItemDef> = {
     slot: "legs",
     statModifiers: { armor: 5, agility: 1 },
     gearTint: 0x4a7c4a,
+    requiredClasses: ["ranger", "rogue", "assassin", "druid"],
     modularModel: {
       legs: "/assets/models/modular/Modular Parts/{gender}_Ranger_Legs.gltf",
     },
@@ -1014,8 +1049,306 @@ export const ITEMS: Record<string, ItemDef> = {
     slot: "feet",
     statModifiers: { armor: 2, moveSpeedMult: 0.12 },
     gearTint: 0x4a7c4a,
+    requiredClasses: ["ranger", "rogue", "assassin", "druid"],
     modularModel: {
       feet: "/assets/models/modular/Modular Parts/{gender}_Ranger_Feet.gltf",
+    },
+  },
+  // Quaternius Fantasy modular outfits (Universal rig) -- Knight / Noble /
+  // Wizard. Paths use {gender}; male Knight feet/legs are aliased in
+  // resolveModularUrl (Feet_Armor / Legs_Armor). Soft requiredClasses are
+  // UI hints only -- every class can equip these on either gender base.
+  noble_crown: {
+    id: "noble_crown",
+    name: "Noble Crown",
+    type: "gear",
+    stack: 1,
+    slot: "head",
+    statModifiers: { armor: 2, power: 1 },
+    requiredClasses: ["cleric", "engineer", "paladin"],
+    modularModel: {
+      head: "/assets/models/modular/Modular Parts/{gender}_Noble_Head_Crown.gltf",
+    },
+  },
+  noble_chest: {
+    id: "noble_chest",
+    name: "Noble Doublet",
+    type: "gear",
+    stack: 1,
+    slot: "chest",
+    statModifiers: { armor: 5, vitality: 1, power: 1 },
+    gearTint: 0xc4a35a,
+    requiredClasses: ["cleric", "engineer", "paladin"],
+    modularModel: {
+      chest: "/assets/models/modular/Modular Parts/{gender}_Noble_Body.gltf",
+    },
+  },
+  noble_arms: {
+    id: "noble_arms",
+    name: "Noble Sleeves",
+    type: "gear",
+    stack: 1,
+    slot: "arms",
+    statModifiers: { armor: 2 },
+    gearTint: 0xc4a35a,
+    coversHands: true,
+    requiredClasses: ["cleric", "engineer", "paladin"],
+    modularModel: {
+      arms: "/assets/models/modular/Modular Parts/{gender}_Noble_Arms.gltf",
+    },
+  },
+  noble_legs: {
+    id: "noble_legs",
+    name: "Noble Trousers",
+    type: "gear",
+    stack: 1,
+    slot: "legs",
+    statModifiers: { armor: 3 },
+    gearTint: 0xc4a35a,
+    requiredClasses: ["cleric", "engineer", "paladin"],
+    modularModel: {
+      legs: "/assets/models/modular/Modular Parts/{gender}_Noble_Legs.gltf",
+    },
+  },
+  noble_feet: {
+    id: "noble_feet",
+    name: "Noble Shoes",
+    type: "gear",
+    stack: 1,
+    slot: "feet",
+    statModifiers: { armor: 2, moveSpeedMult: 0.06 },
+    gearTint: 0xc4a35a,
+    requiredClasses: ["cleric", "engineer", "paladin"],
+    modularModel: {
+      feet: "/assets/models/modular/Modular Parts/{gender}_Noble_Feet.gltf",
+    },
+  },
+  wizard_chest: {
+    id: "wizard_chest",
+    name: "Wizard Robe",
+    type: "gear",
+    stack: 1,
+    slot: "chest",
+    statModifiers: { armor: 4, power: 3 },
+    gearTint: 0x6b5b95,
+    requiredClasses: ["mage", "druid", "cleric"],
+    modularModel: {
+      chest: "/assets/models/modular/Modular Parts/{gender}_Wizard_Body.gltf",
+    },
+  },
+  wizard_arms: {
+    id: "wizard_arms",
+    name: "Wizard Sleeves",
+    type: "gear",
+    stack: 1,
+    slot: "arms",
+    statModifiers: { armor: 1, power: 1 },
+    gearTint: 0x6b5b95,
+    coversHands: true,
+    requiredClasses: ["mage", "druid", "cleric"],
+    modularModel: {
+      arms: "/assets/models/modular/Modular Parts/{gender}_Wizard_Arms.gltf",
+    },
+  },
+  wizard_legs: {
+    id: "wizard_legs",
+    name: "Wizard Leggings",
+    type: "gear",
+    stack: 1,
+    slot: "legs",
+    statModifiers: { armor: 2, power: 1 },
+    gearTint: 0x6b5b95,
+    requiredClasses: ["mage", "druid", "cleric"],
+    modularModel: {
+      legs: "/assets/models/modular/Modular Parts/{gender}_Wizard_Legs.gltf",
+    },
+  },
+  wizard_feet: {
+    id: "wizard_feet",
+    name: "Wizard Boots",
+    type: "gear",
+    stack: 1,
+    slot: "feet",
+    statModifiers: { armor: 1, power: 1, moveSpeedMult: 0.04 },
+    gearTint: 0x6b5b95,
+    requiredClasses: ["mage", "druid", "cleric"],
+    modularModel: {
+      feet: "/assets/models/modular/Modular Parts/{gender}_Wizard_Feet.gltf",
+    },
+  },
+  knight_helmet: {
+    id: "knight_helmet",
+    name: "Knight Armet",
+    type: "gear",
+    stack: 1,
+    slot: "head",
+    statModifiers: { armor: 6, vitality: 1 },
+    requiredClasses: ["warrior", "paladin", "berserker"],
+    coversHead: true,
+    modularModel: {
+      head: "/assets/models/modular/Modular Parts/{gender}_Knight_Head_Armet.gltf",
+    },
+  },
+  knight_chest: {
+    id: "knight_chest",
+    name: "Knight Breastplate",
+    type: "gear",
+    stack: 1,
+    slot: "chest",
+    statModifiers: { armor: 12, vitality: 3 },
+    gearTint: 0x9aa0a8,
+    requiredClasses: ["warrior", "paladin", "berserker"],
+    modularModel: {
+      chest: "/assets/models/modular/Modular Parts/{gender}_Knight_Body_Armor.gltf",
+    },
+  },
+  knight_chest_cloth: {
+    id: "knight_chest_cloth",
+    name: "Knight Surcoat",
+    type: "gear",
+    stack: 1,
+    slot: "chest",
+    statModifiers: { armor: 7, vitality: 2 },
+    gearTint: 0xb8a070,
+    requiredClasses: ["warrior", "paladin", "berserker"],
+    modularModel: {
+      chest: "/assets/models/modular/Modular Parts/{gender}_Knight_Body_Cloth.gltf",
+    },
+  },
+  knight_arms: {
+    id: "knight_arms",
+    name: "Knight Gauntlets",
+    type: "gear",
+    stack: 1,
+    slot: "arms",
+    statModifiers: { armor: 4, vitality: 1 },
+    gearTint: 0x9aa0a8,
+    coversHands: true,
+    requiredClasses: ["warrior", "paladin", "berserker"],
+    modularModel: {
+      arms: "/assets/models/modular/Modular Parts/{gender}_Knight_Arms.gltf",
+    },
+  },
+  knight_legs: {
+    id: "knight_legs",
+    name: "Knight Greaves",
+    type: "gear",
+    stack: 1,
+    slot: "legs",
+    statModifiers: { armor: 8, vitality: 1 },
+    gearTint: 0x9aa0a8,
+    requiredClasses: ["warrior", "paladin", "berserker"],
+    modularModel: {
+      legs: "/assets/models/modular/Modular Parts/{gender}_Knight_Legs.gltf",
+    },
+  },
+  knight_feet: {
+    id: "knight_feet",
+    name: "Knight Sabatons",
+    type: "gear",
+    stack: 1,
+    slot: "feet",
+    statModifiers: { armor: 4, moveSpeedMult: 0.03 },
+    gearTint: 0x9aa0a8,
+    requiredClasses: ["warrior", "paladin", "berserker"],
+    modularModel: {
+      feet: "/assets/models/modular/Modular Parts/{gender}_Knight_Feet.gltf",
+    },
+  },
+  knight_horns: {
+    id: "knight_horns",
+    name: "Knight Horns",
+    type: "gear",
+    stack: 1,
+    slot: "head",
+    statModifiers: { armor: 4, power: 2 },
+    requiredClasses: ["warrior", "paladin", "berserker"],
+    modularModel: {
+      head: "/assets/models/modular/Modular Parts/{gender}_Knight_Head_Horns.gltf",
+    },
+  },
+  knight_pauldrons_round: {
+    id: "knight_pauldrons_round",
+    name: "Knight Round Pauldrons",
+    type: "gear",
+    stack: 1,
+    slot: "shoulders",
+    statModifiers: { armor: 3, vitality: 1 },
+    requiredClasses: ["warrior", "paladin", "berserker"],
+    modularModel: {
+      shoulders: "/assets/models/modular/Modular Parts/{gender}_Knight_Acc_Pauldrons_Round.gltf",
+    },
+  },
+  knight_pauldrons_spike: {
+    id: "knight_pauldrons_spike",
+    name: "Knight Spike Pauldrons",
+    type: "gear",
+    stack: 1,
+    slot: "shoulders",
+    statModifiers: { armor: 3, power: 1 },
+    requiredClasses: ["warrior", "paladin", "berserker"],
+    modularModel: {
+      shoulders: "/assets/models/modular/Modular Parts/{gender}_Knight_Acc_Pauldrons_Spike.gltf",
+    },
+  },
+  knight_scarf: {
+    id: "knight_scarf",
+    name: "Knight Scarf",
+    type: "gear",
+    stack: 1,
+    slot: "neck",
+    statModifiers: { armor: 1, vitality: 1 },
+    requiredClasses: ["warrior", "paladin", "berserker"],
+    modularModel: {
+      neck: "/assets/models/modular/Modular Parts/{gender}_Knight_Acc_Scarf.gltf",
+    },
+  },
+  noble_pauldrons: {
+    id: "noble_pauldrons",
+    name: "Noble Pauldrons",
+    type: "gear",
+    stack: 1,
+    slot: "shoulders",
+    statModifiers: { armor: 2, power: 1 },
+    requiredClasses: ["cleric", "engineer", "paladin"],
+    modularModel: {
+      shoulders: "/assets/models/modular/Modular Parts/{gender}_Noble_Acc_Pauldron.gltf",
+    },
+  },
+  noble_pauldrons_lion: {
+    id: "noble_pauldrons_lion",
+    name: "Noble Lion Pauldrons",
+    type: "gear",
+    stack: 1,
+    slot: "shoulders",
+    statModifiers: { armor: 2, power: 2 },
+    requiredClasses: ["cleric", "engineer", "paladin"],
+    modularModel: {
+      shoulders: "/assets/models/modular/Modular Parts/{gender}_Noble_Acc_Pauldron_Lion.gltf",
+    },
+  },
+  noble_gorget: {
+    id: "noble_gorget",
+    name: "Noble Gorget",
+    type: "gear",
+    stack: 1,
+    slot: "neck",
+    statModifiers: { armor: 2, vitality: 1 },
+    requiredClasses: ["cleric", "engineer", "paladin"],
+    modularModel: {
+      neck: "/assets/models/modular/Modular Parts/{gender}_Noble_Acc_Gorget.gltf",
+    },
+  },
+  ranger_pauldrons: {
+    id: "ranger_pauldrons",
+    name: "Ranger Pauldrons",
+    type: "gear",
+    stack: 1,
+    slot: "shoulders",
+    statModifiers: { armor: 2, agility: 1 },
+    requiredClasses: ["ranger", "rogue", "assassin", "druid"],
+    modularModel: {
+      shoulders: "/assets/models/modular/Modular Parts/{gender}_Ranger_Acc_Pauldrons.gltf",
     },
   },
   // Chest armor from the Ultimate RPG Items Pack (Aug 2019) -- unlike the

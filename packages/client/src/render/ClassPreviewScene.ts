@@ -60,6 +60,15 @@ function buildMotes(): { points: THREE.Points; speeds: Float32Array } {
   return { points: new THREE.Points(geo, material), speeds };
 }
 
+export interface ClassPreviewOptions {
+  /** Character-select stage dressing (stone dais). Default true. */
+  pedestal?: boolean;
+  /** Floating gold motes. Default true. */
+  motes?: boolean;
+  /** Soft spotlight pulse. Default true; inventory paperdoll turns this off. */
+  spotlight?: boolean;
+}
+
 /**
  * Small self-contained viewer for the character-select screen: one
  * AnimatedModel per class, preloaded and kept in the scene (hidden) so
@@ -74,6 +83,7 @@ export class ClassPreviewScene {
   private activeGender: CharacterGender | null = null;
   private activeKey: string | null = null;
   private running = true;
+  private paused = false;
   private lastFrame = performance.now();
   private yaw = 0;
   private dragging = false;
@@ -81,12 +91,19 @@ export class ClassPreviewScene {
   private lastPointerX = 0;
   private downX = 0;
   private downY = 0;
-  private spotlight: THREE.SpotLight;
-  private motes: THREE.Points;
-  private moteSpeeds: Float32Array;
+  private spotlight: THREE.SpotLight | null = null;
+  private motes: THREE.Points | null = null;
+  private moteSpeeds: Float32Array | null = null;
   private start = performance.now();
 
-  constructor(private canvas: HTMLCanvasElement) {
+  constructor(
+    private canvas: HTMLCanvasElement,
+    options: ClassPreviewOptions = {},
+  ) {
+    const showPedestal = options.pedestal !== false;
+    const showMotes = options.motes !== false;
+    const showSpotlight = options.spotlight !== false;
+
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 
@@ -94,27 +111,31 @@ export class ClassPreviewScene {
     this.camera.position.set(0, 1.05, 5.2);
     this.camera.lookAt(0, 0.95, 0);
 
-    this.scene.add(new THREE.AmbientLight(0xfff2da, 0.55));
-    const key = new THREE.DirectionalLight(0xffe4b0, 1.3);
+    this.scene.add(new THREE.AmbientLight(0xfff2da, showSpotlight ? 0.55 : 0.7));
+    const key = new THREE.DirectionalLight(0xffe4b0, showSpotlight ? 1.3 : 1.45);
     key.position.set(-2, 3, 2.5);
     this.scene.add(key);
     const rim = new THREE.DirectionalLight(0x9db9ff, 0.7);
     rim.position.set(2, 1.5, -2);
     this.scene.add(rim);
 
-    // Theatrical stage spotlight from above -- a directional key light alone
-    // reads as generic even-ish lighting; a cone of light landing right at
-    // the character's feet is what actually sells "spotlit pedestal".
-    this.spotlight = new THREE.SpotLight(0xfff2da, 6, 8, Math.PI / 7, 0.4, 1.2);
-    this.spotlight.position.set(0, 4.2, 1.2);
-    this.spotlight.target.position.set(0, 0, 0);
-    this.scene.add(this.spotlight, this.spotlight.target);
+    if (showSpotlight) {
+      // Theatrical stage spotlight from above -- a directional key light alone
+      // reads as generic even-ish lighting; a cone of light landing right at
+      // the character's feet is what actually sells "spotlit pedestal".
+      this.spotlight = new THREE.SpotLight(0xfff2da, 6, 8, Math.PI / 7, 0.4, 1.2);
+      this.spotlight.position.set(0, 4.2, 1.2);
+      this.spotlight.target.position.set(0, 0, 0);
+      this.scene.add(this.spotlight, this.spotlight.target);
+    }
 
-    this.scene.add(buildPedestal());
-    const { points, speeds } = buildMotes();
-    this.motes = points;
-    this.moteSpeeds = speeds;
-    this.scene.add(this.motes);
+    if (showPedestal) this.scene.add(buildPedestal());
+    if (showMotes) {
+      const { points, speeds } = buildMotes();
+      this.motes = points;
+      this.moteSpeeds = speeds;
+      this.scene.add(this.motes);
+    }
 
     this.resize();
     canvas.addEventListener("pointerdown", this.onPointerDown);
@@ -162,7 +183,14 @@ export class ClassPreviewScene {
     appearance: CharacterAppearance,
     equip: Partial<Record<string, string>> | null,
   ): void {
-    const weaponId = equip?.weapon ?? classDef(id).startingGear.find((g) => g.slot === "weapon")?.itemId;
+    // `equip == null` means "no loadout provided" (character-create bare
+    // preview) -- show the class starting weapon for identity. A real equip
+    // map (inventory paperdoll / roster character) must honor an empty
+    // weapon slot: falling back here made unequipped weapons reappear.
+    const weaponId =
+      equip == null
+        ? classDef(id).startingGear.find((g) => g.slot === "weapon")?.itemId
+        : (equip.weapon ?? null);
     const weaponDef = weaponId ? itemDef(weaponId) : null;
 
     void applyModularGearFromSnapAsync(model, gender, {
@@ -171,6 +199,8 @@ export class ClassPreviewScene {
       armsId: equip?.arms ?? null,
       legsId: equip?.legs ?? null,
       feetId: equip?.feet ?? null,
+      shouldersId: equip?.shoulders ?? null,
+      neckId: equip?.neck ?? null,
     });
     void model.applyAppearance(gender, appearance);
 
@@ -232,6 +262,7 @@ export class ClassPreviewScene {
   private frame = (): void => {
     if (!this.running) return;
     requestAnimationFrame(this.frame);
+    if (this.paused) return;
     const now = performance.now();
     const dt = Math.min(0.1, (now - this.lastFrame) / 1000);
     this.lastFrame = now;
@@ -241,25 +272,46 @@ export class ClassPreviewScene {
       model.update(dt);
     }
 
-    const positions = this.motes.geometry.attributes.position!.array as Float32Array;
-    for (let i = 0; i < this.moteSpeeds.length; i++) {
-      const yi = i * 3 + 1;
-      positions[yi] = (positions[yi] ?? 0) + this.moteSpeeds[i]! * dt;
-      if (positions[yi]! > 2.0) positions[yi] = 0;
+    if (this.motes && this.moteSpeeds) {
+      const positions = this.motes.geometry.attributes.position!.array as Float32Array;
+      for (let i = 0; i < this.moteSpeeds.length; i++) {
+        const yi = i * 3 + 1;
+        positions[yi] = (positions[yi] ?? 0) + this.moteSpeeds[i]! * dt;
+        if (positions[yi]! > 2.0) positions[yi] = 0;
+      }
+      this.motes.geometry.attributes.position!.needsUpdate = true;
     }
-    this.motes.geometry.attributes.position!.needsUpdate = true;
 
-    const t = (now - this.start) / 1000;
-    this.spotlight.intensity = 6 + Math.sin(t * 1.7) * 0.3;
+    if (this.spotlight) {
+      const t = (now - this.start) / 1000;
+      this.spotlight.intensity = 6 + Math.sin(t * 1.7) * 0.3;
+    }
 
     this.renderer.render(this.scene, this.camera);
   };
+
+  /** Stop updating/rendering while keeping models warm (e.g. inventory tab hidden). */
+  setPaused(paused: boolean): void {
+    if (this.paused === paused) return;
+    this.paused = paused;
+    if (!paused) this.lastFrame = performance.now();
+  }
 
   dispose(): void {
     this.running = false;
     this.canvas.removeEventListener("pointerdown", this.onPointerDown);
     window.removeEventListener("pointermove", this.onPointerMove);
     window.removeEventListener("pointerup", this.onPointerUp);
+    for (const model of this.models.values()) {
+      this.scene.remove(model.group);
+      model.dispose();
+    }
+    this.models.clear();
+    if (this.motes) {
+      this.motes.geometry.dispose();
+      (this.motes.material as THREE.PointsMaterial).dispose();
+      this.motes = null;
+    }
     this.renderer.dispose();
   }
 }

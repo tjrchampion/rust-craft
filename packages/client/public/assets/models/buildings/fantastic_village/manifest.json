@@ -1,0 +1,7193 @@
+{
+  "building/balcony_v01_01": {
+    "file": "balcony_v01_01.gltf",
+    "category": "building",
+    "source": "SM_BLD_balcony_v01_01.fbx",
+    "meshCount": 1,
+    "height": 6.5608,
+    "footprint": [
+      3.162,
+      5.2072
+    ],
+    "size": [
+      3.162,
+      5.2072,
+      6.5608
+    ],
+    "bytes": 52989
+  },
+  "building/balcony_v02_01": {
+    "file": "balcony_v02_01.gltf",
+    "category": "building",
+    "source": "SM_BLD_balcony_v02_01.fbx",
+    "meshCount": 1,
+    "height": 7.9847,
+    "footprint": [
+      5.3491,
+      4.8232
+    ],
+    "size": [
+      5.3491,
+      4.8232,
+      7.9847
+    ],
+    "bytes": 58236
+  },
+  "building/base_v01_01": {
+    "file": "base_v01_01.gltf",
+    "category": "building",
+    "source": "SM_BLD_base_v01_01.fbx",
+    "meshCount": 1,
+    "height": 1.0948,
+    "footprint": [
+      6.4694,
+      6.4285
+    ],
+    "size": [
+      6.4694,
+      6.4285,
+      1.0948
+    ],
+    "bytes": 33595
+  },
+  "building/base_v02_01": {
+    "file": "base_v02_01.gltf",
+    "category": "building",
+    "source": "SM_BLD_base_v02_01.fbx",
+    "meshCount": 1,
+    "height": 0.6339,
+    "footprint": [
+      6.2005,
+      6.2214
+    ],
+    "size": [
+      6.2005,
+      6.2214,
+      0.6339
+    ],
+    "bytes": 24176
+  },
+  "building/base_v03_01": {
+    "file": "base_v03_01.gltf",
+    "category": "building",
+    "source": "SM_BLD_base_v03_01.fbx",
+    "meshCount": 1,
+    "height": 0.4125,
+    "footprint": [
+      6.0,
+      6.0974
+    ],
+    "size": [
+      6.0,
+      6.0974,
+      0.4125
+    ],
+    "bytes": 5754
+  },
+  "building/base_v04_01": {
+    "file": "base_v04_01.gltf",
+    "category": "building",
+    "source": "SM_BLD_base_v04_01.fbx",
+    "meshCount": 1,
+    "height": 2.3463,
+    "footprint": [
+      6.5271,
+      6.6568
+    ],
+    "size": [
+      6.5271,
+      6.6568,
+      2.3463
+    ],
+    "bytes": 64143
+  },
+  "building/base_v04_02": {
+    "file": "base_v04_02.gltf",
+    "category": "building",
+    "source": "SM_BLD_base_v04_02.fbx",
+    "meshCount": 1,
+    "height": 2.3463,
+    "footprint": [
+      6.2069,
+      6.2005
+    ],
+    "size": [
+      6.2069,
+      6.2005,
+      2.3463
+    ],
+    "bytes": 49916
+  },
+  "building/base_v05_01": {
+    "file": "base_v05_01.gltf",
+    "category": "building",
+    "source": "SM_BLD_base_v05_01.fbx",
+    "meshCount": 1,
+    "height": 2.3463,
+    "footprint": [
+      6.2214,
+      6.2005
+    ],
+    "size": [
+      6.2214,
+      6.2005,
+      2.3463
+    ],
+    "bytes": 51197
+  },
+  "building/beam_big_v01_01": {
+    "file": "beam_big_v01_01.gltf",
+    "category": "building",
+    "source": "SM_BLD_beam_big_v01_01.fbx",
+    "meshCount": 1,
+    "height": 1.9659,
+    "footprint": [
+      1.6381,
+      8.6428
+    ],
+    "size": [
+      1.6381,
+      8.6428,
+      1.9659
+    ],
+    "bytes": 17695
+  },
+  "building/beam_big_v01_v2": {
+    "file": "beam_big_v01_v2.gltf",
+    "category": "building",
+    "source": "SM_BLD_beam_big_v01_v2.fbx",
+    "meshCount": 1,
+    "height": 1.978,
+    "footprint": [
+      1.7885,
+      8.6428
+    ],
+    "size": [
+      1.7885,
+      8.6428,
+      1.978
+    ],
+    "bytes": 21518
+  },
+  "building/beam_big_v02_01": {
+    "file": "beam_big_v02_01.gltf",
+    "category": "building",
+    "source": "SM_BLD_beam_big_v02_01.fbx",
+    "meshCount": 1,
+    "height": 1.872,
+    "footprint": [
+      1.456,
+      8.6428
+    ],
+    "size": [
+      1.456,
+      8.6428,
+      1.872
+    ],
+    "bytes": 23155
+  },
+  "building/beam_big_v02_02": {
+    "file": "beam_big_v02_02.gltf",
+    "category": "building",
+    "source": "SM_BLD_beam_big_v02_02.fbx",
+    "meshCount": 1,
+    "height": 1.9229,
+    "footprint": [
+      1.5648,
+      8.6428
+    ],
+    "size": [
+      1.5648,
+      8.6428,
+      1.9229
+    ],
+    "bytes": 25175
+  },
+  "building/beam_big_v03_01": {
+    "file": "beam_big_v03_01.gltf",
+    "category": "building",
+    "source": "SM_BLD_beam_big_v03_01.fbx",
+    "meshCount": 1,
+    "height": 1.7005,
+    "footprint": [
+      1.6337,
+      8.2457
+    ],
+    "size": [
+      1.6337,
+      8.2457,
+      1.7005
+    ],
+    "bytes": 14220
+  },
+  "building/beam_big_v03_02": {
+    "file": "beam_big_v03_02.gltf",
+    "category": "building",
+    "source": "SM_BLD_beam_big_v03_02.fbx",
+    "meshCount": 1,
+    "height": 1.6988,
+    "footprint": [
+      1.6337,
+      8.2441
+    ],
+    "size": [
+      1.6337,
+      8.2441,
+      1.6988
+    ],
+    "bytes": 16181
+  },
+  "building/beam_big_v03_03": {
+    "file": "beam_big_v03_03.gltf",
+    "category": "building",
+    "source": "SM_BLD_beam_big_v03_03.fbx",
+    "meshCount": 1,
+    "height": 1.6988,
+    "footprint": [
+      1.6337,
+      8.2441
+    ],
+    "size": [
+      1.6337,
+      8.2441,
+      1.6988
+    ],
+    "bytes": 18621
+  },
+  "building/beam_small_v01_01": {
+    "file": "beam_small_v01_01.gltf",
+    "category": "building",
+    "source": "SM_BLD_beam_small_v01_01.fbx",
+    "meshCount": 1,
+    "height": 1.0452,
+    "footprint": [
+      0.5824,
+      2.8729
+    ],
+    "size": [
+      0.5824,
+      2.8729,
+      1.0452
+    ],
+    "bytes": 13603
+  },
+  "building/beam_small_v01_02": {
+    "file": "beam_small_v01_02.gltf",
+    "category": "building",
+    "source": "SM_BLD_beam_small_v01_02.fbx",
+    "meshCount": 1,
+    "height": 1.0452,
+    "footprint": [
+      0.5824,
+      2.8729
+    ],
+    "size": [
+      0.5824,
+      2.8729,
+      1.0452
+    ],
+    "bytes": 16413
+  },
+  "building/beam_small_v02_01": {
+    "file": "beam_small_v02_01.gltf",
+    "category": "building",
+    "source": "SM_BLD_beam_small_v02_01.fbx",
+    "meshCount": 1,
+    "height": 0.6989,
+    "footprint": [
+      0.6624,
+      3.1561
+    ],
+    "size": [
+      0.6624,
+      3.1561,
+      0.6989
+    ],
+    "bytes": 9635
+  },
+  "building/beam_small_v02_02": {
+    "file": "beam_small_v02_02.gltf",
+    "category": "building",
+    "source": "SM_BLD_beam_small_v02_02.fbx",
+    "meshCount": 1,
+    "height": 0.6989,
+    "footprint": [
+      0.6624,
+      3.1561
+    ],
+    "size": [
+      0.6624,
+      3.1561,
+      0.6989
+    ],
+    "bytes": 11594
+  },
+  "building/beam_small_v03_01": {
+    "file": "beam_small_v03_01.gltf",
+    "category": "building",
+    "source": "SM_BLD_beam_small_v03_01.fbx",
+    "meshCount": 1,
+    "height": 0.6838,
+    "footprint": [
+      0.6608,
+      3.0169
+    ],
+    "size": [
+      0.6608,
+      3.0169,
+      0.6838
+    ],
+    "bytes": 9633
+  },
+  "building/beam_small_v03_02": {
+    "file": "beam_small_v03_02.gltf",
+    "category": "building",
+    "source": "SM_BLD_beam_small_v03_02.fbx",
+    "meshCount": 1,
+    "height": 0.6838,
+    "footprint": [
+      0.6608,
+      3.0169
+    ],
+    "size": [
+      0.6608,
+      3.0169,
+      0.6838
+    ],
+    "bytes": 11593
+  },
+  "building/beam_small_v04_01": {
+    "file": "beam_small_v04_01.gltf",
+    "category": "building",
+    "source": "SM_BLD_beam_small_v04_01.fbx",
+    "meshCount": 1,
+    "height": 0.9371,
+    "footprint": [
+      0.9163,
+      3.0092
+    ],
+    "size": [
+      0.9163,
+      3.0092,
+      0.9371
+    ],
+    "bytes": 11800
+  },
+  "building/beam_small_v04_02": {
+    "file": "beam_small_v04_02.gltf",
+    "category": "building",
+    "source": "SM_BLD_beam_small_v04_02.fbx",
+    "meshCount": 1,
+    "height": 0.9371,
+    "footprint": [
+      0.9163,
+      3.0092
+    ],
+    "size": [
+      0.9163,
+      3.0092,
+      0.9371
+    ],
+    "bytes": 13761
+  },
+  "building/beam_small_v05_01": {
+    "file": "beam_small_v05_01.gltf",
+    "category": "building",
+    "source": "SM_BLD_beam_small_v05_01.fbx",
+    "meshCount": 1,
+    "height": 0.9099,
+    "footprint": [
+      0.7511,
+      3.0092
+    ],
+    "size": [
+      0.7511,
+      3.0092,
+      0.9099
+    ],
+    "bytes": 9337
+  },
+  "building/beam_small_v05_02": {
+    "file": "beam_small_v05_02.gltf",
+    "category": "building",
+    "source": "SM_BLD_beam_small_v05_02.fbx",
+    "meshCount": 1,
+    "height": 0.9099,
+    "footprint": [
+      0.7511,
+      3.0092
+    ],
+    "size": [
+      0.7511,
+      3.0092,
+      0.9099
+    ],
+    "bytes": 11298
+  },
+  "building/beam_small_v06_01": {
+    "file": "beam_small_v06_01.gltf",
+    "category": "building",
+    "source": "SM_BLD_beam_small_v06_01.fbx",
+    "meshCount": 1,
+    "height": 0.9567,
+    "footprint": [
+      0.8896,
+      3.3973
+    ],
+    "size": [
+      0.8896,
+      3.3973,
+      0.9567
+    ],
+    "bytes": 8355
+  },
+  "building/beam_small_v06_02": {
+    "file": "beam_small_v06_02.gltf",
+    "category": "building",
+    "source": "SM_BLD_beam_small_v06_02.fbx",
+    "meshCount": 1,
+    "height": 0.9567,
+    "footprint": [
+      0.8896,
+      3.3973
+    ],
+    "size": [
+      0.8896,
+      3.3973,
+      0.9567
+    ],
+    "bytes": 10304
+  },
+  "building/beam_small_v06_03": {
+    "file": "beam_small_v06_03.gltf",
+    "category": "building",
+    "source": "SM_BLD_beam_small_v06_03.fbx",
+    "meshCount": 1,
+    "height": 0.9555,
+    "footprint": [
+      0.8576,
+      3.395
+    ],
+    "size": [
+      0.8576,
+      3.395,
+      0.9555
+    ],
+    "bytes": 11280
+  },
+  "building/beam_small_v07_01": {
+    "file": "beam_small_v07_01.gltf",
+    "category": "building",
+    "source": "SM_BLD_beam_small_v07_01.fbx",
+    "meshCount": 1,
+    "height": 0.6547,
+    "footprint": [
+      0.4953,
+      3.0253
+    ],
+    "size": [
+      0.4953,
+      3.0253,
+      0.6547
+    ],
+    "bytes": 5215
+  },
+  "building/body_add_v01_01": {
+    "file": "body_add_v01_01.gltf",
+    "category": "building",
+    "source": "SM_BLD_body_add_v01_01.fbx",
+    "meshCount": 1,
+    "height": 4.6743,
+    "footprint": [
+      3.796,
+      1.7249
+    ],
+    "size": [
+      3.796,
+      1.7249,
+      4.6743
+    ],
+    "bytes": 20778
+  },
+  "building/body_add_v02_01": {
+    "file": "body_add_v02_01.gltf",
+    "category": "building",
+    "source": "SM_BLD_body_add_v02_01.fbx",
+    "meshCount": 1,
+    "height": 8.9781,
+    "footprint": [
+      5.3491,
+      4.5991
+    ],
+    "size": [
+      5.3491,
+      4.5991,
+      8.9781
+    ],
+    "bytes": 22244
+  },
+  "building/body_add_v03_01": {
+    "file": "body_add_v03_01.gltf",
+    "category": "building",
+    "source": "SM_BLD_body_add_v03_01.fbx",
+    "meshCount": 1,
+    "height": 10.7841,
+    "footprint": [
+      7.3423,
+      6.4696
+    ],
+    "size": [
+      7.3423,
+      6.4696,
+      10.7841
+    ],
+    "bytes": 35329
+  },
+  "building/body_add_v04_01": {
+    "file": "body_add_v04_01.gltf",
+    "category": "building",
+    "source": "SM_BLD_body_add_v04_01.fbx",
+    "meshCount": 1,
+    "height": 4.2096,
+    "footprint": [
+      4.6533,
+      4.0884
+    ],
+    "size": [
+      4.6533,
+      4.0884,
+      4.2096
+    ],
+    "bytes": 32783
+  },
+  "building/body_v01_01": {
+    "file": "body_v01_01.gltf",
+    "category": "building",
+    "source": "SM_BLD_body_v01_01.fbx",
+    "meshCount": 1,
+    "height": 14.2848,
+    "footprint": [
+      8.2118,
+      7.1107
+    ],
+    "size": [
+      8.2118,
+      7.1107,
+      14.2848
+    ],
+    "bytes": 112528
+  },
+  "building/body_v01_02": {
+    "file": "body_v01_02.gltf",
+    "category": "building",
+    "source": "SM_BLD_body_v01_02.fbx",
+    "meshCount": 1,
+    "height": 14.2848,
+    "footprint": [
+      8.2118,
+      7.1107
+    ],
+    "size": [
+      8.2118,
+      7.1107,
+      14.2848
+    ],
+    "bytes": 110564
+  },
+  "building/body_v02_01": {
+    "file": "body_v02_01.gltf",
+    "category": "building",
+    "source": "SM_BLD_body_v02_01.fbx",
+    "meshCount": 1,
+    "height": 8.47,
+    "footprint": [
+      7.9085,
+      7.8831
+    ],
+    "size": [
+      7.9085,
+      7.8831,
+      8.47
+    ],
+    "bytes": 83610
+  },
+  "building/body_v02_02": {
+    "file": "body_v02_02.gltf",
+    "category": "building",
+    "source": "SM_BLD_body_v02_02.fbx",
+    "meshCount": 1,
+    "height": 8.47,
+    "footprint": [
+      7.9085,
+      7.8831
+    ],
+    "size": [
+      7.9085,
+      7.8831,
+      8.47
+    ],
+    "bytes": 83616
+  },
+  "building/body_v03_01": {
+    "file": "body_v03_01.gltf",
+    "category": "building",
+    "source": "SM_BLD_body_v03_01.fbx",
+    "meshCount": 1,
+    "height": 8.3636,
+    "footprint": [
+      7.2248,
+      6.8975
+    ],
+    "size": [
+      7.2248,
+      6.8975,
+      8.3636
+    ],
+    "bytes": 67573
+  },
+  "building/body_v03_02": {
+    "file": "body_v03_02.gltf",
+    "category": "building",
+    "source": "SM_BLD_body_v03_02.fbx",
+    "meshCount": 1,
+    "height": 8.3636,
+    "footprint": [
+      7.2248,
+      6.8975
+    ],
+    "size": [
+      7.2248,
+      6.8975,
+      8.3636
+    ],
+    "bytes": 67579
+  },
+  "building/body_v04_01": {
+    "file": "body_v04_01.gltf",
+    "category": "building",
+    "source": "SM_BLD_body_v04_01.fbx",
+    "meshCount": 1,
+    "height": 10.7841,
+    "footprint": [
+      7.5858,
+      12.8751
+    ],
+    "size": [
+      7.5858,
+      12.8751,
+      10.7841
+    ],
+    "bytes": 108982
+  },
+  "building/body_v04_02": {
+    "file": "body_v04_02.gltf",
+    "category": "building",
+    "source": "SM_BLD_body_v04_02.fbx",
+    "meshCount": 1,
+    "height": 10.7841,
+    "footprint": [
+      7.5858,
+      12.8751
+    ],
+    "size": [
+      7.5858,
+      12.8751,
+      10.7841
+    ],
+    "bytes": 107030
+  },
+  "building/body_v05_01": {
+    "file": "body_v05_01.gltf",
+    "category": "building",
+    "source": "SM_BLD_body_v05_01.fbx",
+    "meshCount": 1,
+    "height": 10.7841,
+    "footprint": [
+      10.2369,
+      12.8751
+    ],
+    "size": [
+      10.2369,
+      12.8751,
+      10.7841
+    ],
+    "bytes": 146504
+  },
+  "building/body_v05_02": {
+    "file": "body_v05_02.gltf",
+    "category": "building",
+    "source": "SM_BLD_body_v05_02.fbx",
+    "meshCount": 1,
+    "height": 10.7841,
+    "footprint": [
+      10.2369,
+      12.8751
+    ],
+    "size": [
+      10.2369,
+      12.8751,
+      10.7841
+    ],
+    "bytes": 144544
+  },
+  "building/body_v06_01": {
+    "file": "body_v06_01.gltf",
+    "category": "building",
+    "source": "SM_BLD_body_v06_01.fbx",
+    "meshCount": 1,
+    "height": 10.7841,
+    "footprint": [
+      10.2369,
+      10.2142
+    ],
+    "size": [
+      10.2369,
+      10.2142,
+      10.7841
+    ],
+    "bytes": 118599
+  },
+  "building/body_v06_02": {
+    "file": "body_v06_02.gltf",
+    "category": "building",
+    "source": "SM_BLD_body_v06_02.fbx",
+    "meshCount": 1,
+    "height": 10.7841,
+    "footprint": [
+      10.2369,
+      10.2142
+    ],
+    "size": [
+      10.2369,
+      10.2142,
+      10.7841
+    ],
+    "bytes": 116641
+  },
+  "building/body_v07_01": {
+    "file": "body_v07_01.gltf",
+    "category": "building",
+    "source": "SM_BLD_body_v07_01.fbx",
+    "meshCount": 1,
+    "height": 10.7841,
+    "footprint": [
+      12.8751,
+      12.8751
+    ],
+    "size": [
+      12.8751,
+      12.8751,
+      10.7841
+    ],
+    "bytes": 167026
+  },
+  "building/body_v07_02": {
+    "file": "body_v07_02.gltf",
+    "category": "building",
+    "source": "SM_BLD_body_v07_02.fbx",
+    "meshCount": 1,
+    "height": 10.7841,
+    "footprint": [
+      12.8751,
+      12.8751
+    ],
+    "size": [
+      12.8751,
+      12.8751,
+      10.7841
+    ],
+    "bytes": 165062
+  },
+  "building/chimney_v01_01": {
+    "file": "chimney_v01_01.gltf",
+    "category": "building",
+    "source": "SM_BLD_chimney_v01_01.fbx",
+    "meshCount": 1,
+    "height": 5.6985,
+    "footprint": [
+      1.4243,
+      1.4243
+    ],
+    "size": [
+      1.4243,
+      1.4243,
+      5.6985
+    ],
+    "bytes": 7123
+  },
+  "building/chimney_v01_02": {
+    "file": "chimney_v01_02.gltf",
+    "category": "building",
+    "source": "SM_BLD_chimney_v01_02.fbx",
+    "meshCount": 1,
+    "height": 5.6985,
+    "footprint": [
+      1.4243,
+      1.4243
+    ],
+    "size": [
+      1.4243,
+      1.4243,
+      5.6985
+    ],
+    "bytes": 11821
+  },
+  "building/chimney_v01_03": {
+    "file": "chimney_v01_03.gltf",
+    "category": "building",
+    "source": "SM_BLD_chimney_v01_03.fbx",
+    "meshCount": 1,
+    "height": 7.3845,
+    "footprint": [
+      1.4444,
+      1.4806
+    ],
+    "size": [
+      1.4444,
+      1.4806,
+      7.3845
+    ],
+    "bytes": 17346
+  },
+  "building/chimney_v02_01": {
+    "file": "chimney_v02_01.gltf",
+    "category": "building",
+    "source": "SM_BLD_chimney_v02_01.fbx",
+    "meshCount": 1,
+    "height": 10.3126,
+    "footprint": [
+      1.3582,
+      1.3815
+    ],
+    "size": [
+      1.3582,
+      1.3815,
+      10.3126
+    ],
+    "bytes": 7067
+  },
+  "building/chimney_v02_02": {
+    "file": "chimney_v02_02.gltf",
+    "category": "building",
+    "source": "SM_BLD_chimney_v02_02.fbx",
+    "meshCount": 1,
+    "height": 10.3126,
+    "footprint": [
+      1.3582,
+      1.3815
+    ],
+    "size": [
+      1.3582,
+      1.3815,
+      10.3126
+    ],
+    "bytes": 12229
+  },
+  "building/chimney_v02_03": {
+    "file": "chimney_v02_03.gltf",
+    "category": "building",
+    "source": "SM_BLD_chimney_v02_03.fbx",
+    "meshCount": 1,
+    "height": 12.0463,
+    "footprint": [
+      1.4444,
+      1.4438
+    ],
+    "size": [
+      1.4444,
+      1.4438,
+      12.0463
+    ],
+    "bytes": 17776
+  },
+  "building/door_v01_01": {
+    "file": "door_v01_01.gltf",
+    "category": "building",
+    "source": "SM_BLD_door_v01_01.fbx",
+    "meshCount": 1,
+    "height": 3.1911,
+    "footprint": [
+      3.2065,
+      2.0102
+    ],
+    "size": [
+      3.2065,
+      2.0102,
+      3.1911
+    ],
+    "bytes": 28418
+  },
+  "building/door_v02_01": {
+    "file": "door_v02_01.gltf",
+    "category": "building",
+    "source": "SM_BLD_door_v02_01.fbx",
+    "meshCount": 1,
+    "height": 3.2858,
+    "footprint": [
+      2.45,
+      1.9387
+    ],
+    "size": [
+      2.45,
+      1.9387,
+      3.2858
+    ],
+    "bytes": 34473
+  },
+  "building/door_v03_01": {
+    "file": "door_v03_01.gltf",
+    "category": "building",
+    "source": "SM_BLD_door_v03_01.fbx",
+    "meshCount": 1,
+    "height": 2.9045,
+    "footprint": [
+      1.9537,
+      1.7719
+    ],
+    "size": [
+      1.9537,
+      1.7719,
+      2.9045
+    ],
+    "bytes": 25364
+  },
+  "building/door_v04_01": {
+    "file": "door_v04_01.gltf",
+    "category": "building",
+    "source": "SM_BLD_door_v04_01.fbx",
+    "meshCount": 1,
+    "height": 2.8446,
+    "footprint": [
+      2.2098,
+      0.708
+    ],
+    "size": [
+      2.2098,
+      0.708,
+      2.8446
+    ],
+    "bytes": 20178
+  },
+  "building/stairs_v01_01": {
+    "file": "stairs_v01_01.gltf",
+    "category": "building",
+    "source": "SM_BLD_stairs_v01_01.fbx",
+    "meshCount": 1,
+    "height": 2.0614,
+    "footprint": [
+      2.4047,
+      3.3976
+    ],
+    "size": [
+      2.4047,
+      3.3976,
+      2.0614
+    ],
+    "bytes": 22983
+  },
+  "building/stairs_v02_01": {
+    "file": "stairs_v02_01.gltf",
+    "category": "building",
+    "source": "SM_BLD_stairs_v02_01.fbx",
+    "meshCount": 1,
+    "height": 5.866,
+    "footprint": [
+      3.1474,
+      5.08
+    ],
+    "size": [
+      3.1474,
+      5.08,
+      5.866
+    ],
+    "bytes": 35086
+  },
+  "building/stairs_v02_02": {
+    "file": "stairs_v02_02.gltf",
+    "category": "building",
+    "source": "SM_BLD_stairs_v02_02.fbx",
+    "meshCount": 1,
+    "height": 5.866,
+    "footprint": [
+      3.1474,
+      5.08
+    ],
+    "size": [
+      3.1474,
+      5.08,
+      5.866
+    ],
+    "bytes": 35085
+  },
+  "building/stairs_v03_v1": {
+    "file": "stairs_v03_v1.gltf",
+    "category": "building",
+    "source": "SM_BLD_stairs_v03_v1.fbx",
+    "meshCount": 1,
+    "height": 3.2251,
+    "footprint": [
+      3.0771,
+      5.08
+    ],
+    "size": [
+      3.0771,
+      5.08,
+      3.2251
+    ],
+    "bytes": 25975
+  },
+  "building/stairs_v03_v2": {
+    "file": "stairs_v03_v2.gltf",
+    "category": "building",
+    "source": "SM_BLD_stairs_v03_v2.fbx",
+    "meshCount": 1,
+    "height": 3.2251,
+    "footprint": [
+      3.0771,
+      5.08
+    ],
+    "size": [
+      3.0771,
+      5.08,
+      3.2251
+    ],
+    "bytes": 25974
+  },
+  "building/stairs_v04_v1": {
+    "file": "stairs_v04_v1.gltf",
+    "category": "building",
+    "source": "SM_BLD_stairs_v04_v1.fbx",
+    "meshCount": 1,
+    "height": 3.2555,
+    "footprint": [
+      3.1233,
+      5.08
+    ],
+    "size": [
+      3.1233,
+      5.08,
+      3.2555
+    ],
+    "bytes": 25500
+  },
+  "building/stairs_v04_v2": {
+    "file": "stairs_v04_v2.gltf",
+    "category": "building",
+    "source": "SM_BLD_stairs_v04_v2.fbx",
+    "meshCount": 1,
+    "height": 3.2555,
+    "footprint": [
+      3.1233,
+      5.08
+    ],
+    "size": [
+      3.1233,
+      5.08,
+      3.2555
+    ],
+    "bytes": 25499
+  },
+  "building/waterwheel_construct": {
+    "file": "waterwheel_construct.gltf",
+    "category": "building",
+    "source": "SM_BLD_waterwheel_construct.fbx",
+    "meshCount": 2,
+    "height": 7.3573,
+    "footprint": [
+      6.2373,
+      5.7733
+    ],
+    "size": [
+      6.2373,
+      5.7733,
+      7.3573
+    ],
+    "bytes": 103421
+  },
+  "building/windmill_sail": {
+    "file": "windmill_sail.gltf",
+    "category": "building",
+    "source": "SM_BLD_windmill_sail.fbx",
+    "meshCount": 1,
+    "height": 17.0666,
+    "footprint": [
+      17.0665,
+      3.4799
+    ],
+    "size": [
+      17.0665,
+      3.4799,
+      17.0666
+    ],
+    "bytes": 52326
+  },
+  "building/window_v01_01": {
+    "file": "window_v01_01.gltf",
+    "category": "building",
+    "source": "SM_BLD_window_v01_01.fbx",
+    "meshCount": 1,
+    "height": 3.324,
+    "footprint": [
+      2.3907,
+      2.021
+    ],
+    "size": [
+      2.3907,
+      2.021,
+      3.324
+    ],
+    "bytes": 32146
+  },
+  "building/window_v02_01": {
+    "file": "window_v02_01.gltf",
+    "category": "building",
+    "source": "SM_BLD_window_v02_01.fbx",
+    "meshCount": 1,
+    "height": 2.8324,
+    "footprint": [
+      2.1474,
+      2.2152
+    ],
+    "size": [
+      2.1474,
+      2.2152,
+      2.8324
+    ],
+    "bytes": 29091
+  },
+  "building/window_v03_01": {
+    "file": "window_v03_01.gltf",
+    "category": "building",
+    "source": "SM_BLD_window_v03_01.fbx",
+    "meshCount": 1,
+    "height": 3.7365,
+    "footprint": [
+      3.1149,
+      3.5351
+    ],
+    "size": [
+      3.1149,
+      3.5351,
+      3.7365
+    ],
+    "bytes": 33616
+  },
+  "building/window_v04_01": {
+    "file": "window_v04_01.gltf",
+    "category": "building",
+    "source": "SM_BLD_window_v04_01.fbx",
+    "meshCount": 1,
+    "height": 3.8231,
+    "footprint": [
+      4.2838,
+      3.8328
+    ],
+    "size": [
+      4.2838,
+      3.8328,
+      3.8231
+    ],
+    "bytes": 45628
+  },
+  "building/window_v05_01": {
+    "file": "window_v05_01.gltf",
+    "category": "building",
+    "source": "SM_BLD_window_v05_01.fbx",
+    "meshCount": 1,
+    "height": 3.7789,
+    "footprint": [
+      4.5508,
+      3.6915
+    ],
+    "size": [
+      4.5508,
+      3.6915,
+      3.7789
+    ],
+    "bytes": 30779
+  },
+  "building/window_v06_01": {
+    "file": "window_v06_01.gltf",
+    "category": "building",
+    "source": "SM_BLD_window_v06_01.fbx",
+    "meshCount": 1,
+    "height": 1.2996,
+    "footprint": [
+      1.2138,
+      0.5178
+    ],
+    "size": [
+      1.2138,
+      0.5178,
+      1.2996
+    ],
+    "bytes": 11108
+  },
+  "building/window_v06_02": {
+    "file": "window_v06_02.gltf",
+    "category": "building",
+    "source": "SM_BLD_window_v06_02.fbx",
+    "meshCount": 1,
+    "height": 1.2996,
+    "footprint": [
+      1.2138,
+      0.5178
+    ],
+    "size": [
+      1.2138,
+      0.5178,
+      1.2996
+    ],
+    "bytes": 9023
+  },
+  "building/window_v07_01": {
+    "file": "window_v07_01.gltf",
+    "category": "building",
+    "source": "SM_BLD_window_v07_01.fbx",
+    "meshCount": 1,
+    "height": 1.1874,
+    "footprint": [
+      1.2242,
+      0.4124
+    ],
+    "size": [
+      1.2242,
+      0.4124,
+      1.1874
+    ],
+    "bytes": 12116
+  },
+  "building/window_v07_02": {
+    "file": "window_v07_02.gltf",
+    "category": "building",
+    "source": "SM_BLD_window_v07_02.fbx",
+    "meshCount": 1,
+    "height": 1.1874,
+    "footprint": [
+      1.2242,
+      0.4124
+    ],
+    "size": [
+      1.2242,
+      0.4124,
+      1.1874
+    ],
+    "bytes": 10033
+  },
+  "building/window_v08_01": {
+    "file": "window_v08_01.gltf",
+    "category": "building",
+    "source": "SM_BLD_window_v08_01.fbx",
+    "meshCount": 1,
+    "height": 0.8665,
+    "footprint": [
+      1.128,
+      0.5222
+    ],
+    "size": [
+      1.128,
+      0.5222,
+      0.8665
+    ],
+    "bytes": 13038
+  },
+  "building/window_v08_02": {
+    "file": "window_v08_02.gltf",
+    "category": "building",
+    "source": "SM_BLD_window_v08_02.fbx",
+    "meshCount": 1,
+    "height": 0.8665,
+    "footprint": [
+      1.128,
+      0.5222
+    ],
+    "size": [
+      1.128,
+      0.5222,
+      0.8665
+    ],
+    "bytes": 15131
+  },
+  "building/window_v08_03": {
+    "file": "window_v08_03.gltf",
+    "category": "building",
+    "source": "SM_BLD_window_v08_03.fbx",
+    "meshCount": 1,
+    "height": 0.8665,
+    "footprint": [
+      0.7882,
+      0.4041
+    ],
+    "size": [
+      0.7882,
+      0.4041,
+      0.8665
+    ],
+    "bytes": 10980
+  },
+  "building/window_v08_04": {
+    "file": "window_v08_04.gltf",
+    "category": "building",
+    "source": "SM_BLD_window_v08_04.fbx",
+    "meshCount": 1,
+    "height": 0.8665,
+    "footprint": [
+      0.7882,
+      0.4041
+    ],
+    "size": [
+      0.7882,
+      0.4041,
+      0.8665
+    ],
+    "bytes": 13068
+  },
+  "building/window_v09_01": {
+    "file": "window_v09_01.gltf",
+    "category": "building",
+    "source": "SM_BLD_window_v09_01.fbx",
+    "meshCount": 1,
+    "height": 0.9701,
+    "footprint": [
+      1.25,
+      0.6235
+    ],
+    "size": [
+      1.25,
+      0.6235,
+      0.9701
+    ],
+    "bytes": 12161
+  },
+  "building/window_v09_02": {
+    "file": "window_v09_02.gltf",
+    "category": "building",
+    "source": "SM_BLD_window_v09_02.fbx",
+    "meshCount": 1,
+    "height": 1.2191,
+    "footprint": [
+      1.5386,
+      0.7411
+    ],
+    "size": [
+      1.5386,
+      0.7411,
+      1.2191
+    ],
+    "bytes": 13000
+  },
+  "building/window_v09_03": {
+    "file": "window_v09_03.gltf",
+    "category": "building",
+    "source": "SM_BLD_window_v09_03.fbx",
+    "meshCount": 1,
+    "height": 0.9701,
+    "footprint": [
+      1.25,
+      0.3007
+    ],
+    "size": [
+      1.25,
+      0.3007,
+      0.9701
+    ],
+    "bytes": 12416
+  },
+  "building/window_v09_04": {
+    "file": "window_v09_04.gltf",
+    "category": "building",
+    "source": "SM_BLD_window_v09_04.fbx",
+    "meshCount": 1,
+    "height": 1.2191,
+    "footprint": [
+      1.5386,
+      0.4256
+    ],
+    "size": [
+      1.5386,
+      0.4256,
+      1.2191
+    ],
+    "bytes": 13175
+  },
+  "prop/plant_pot_v1_01": {
+    "file": "plant_pot_v1_01.gltf",
+    "category": "prop",
+    "source": "SM_PROP_PLANT_pot_v1_01.fbx",
+    "meshCount": 1,
+    "height": 0.4043,
+    "footprint": [
+      1.0639,
+      0.5985
+    ],
+    "size": [
+      1.0639,
+      0.5985,
+      0.4043
+    ],
+    "bytes": 13564
+  },
+  "prop/plant_pot_v1_02": {
+    "file": "plant_pot_v1_02.gltf",
+    "category": "prop",
+    "source": "SM_PROP_PLANT_pot_v1_02.fbx",
+    "meshCount": 1,
+    "height": 0.4004,
+    "footprint": [
+      1.0549,
+      0.5985
+    ],
+    "size": [
+      1.0549,
+      0.5985,
+      0.4004
+    ],
+    "bytes": 13641
+  },
+  "prop/plant_pot_v1_03": {
+    "file": "plant_pot_v1_03.gltf",
+    "category": "prop",
+    "source": "SM_PROP_PLANT_pot_v1_03.fbx",
+    "meshCount": 1,
+    "height": 0.4293,
+    "footprint": [
+      1.0874,
+      0.5985
+    ],
+    "size": [
+      1.0874,
+      0.5985,
+      0.4293
+    ],
+    "bytes": 13521
+  },
+  "prop/plant_pot_v1_04": {
+    "file": "plant_pot_v1_04.gltf",
+    "category": "prop",
+    "source": "SM_PROP_PLANT_pot_v1_04.fbx",
+    "meshCount": 1,
+    "height": 0.4012,
+    "footprint": [
+      1.1214,
+      0.5989
+    ],
+    "size": [
+      1.1214,
+      0.5989,
+      0.4012
+    ],
+    "bytes": 13298
+  },
+  "prop/plant_pot_v2_01": {
+    "file": "plant_pot_v2_01.gltf",
+    "category": "prop",
+    "source": "SM_PROP_PLANT_pot_v2_01.fbx",
+    "meshCount": 1,
+    "height": 0.7509,
+    "footprint": [
+      0.8346,
+      0.7565
+    ],
+    "size": [
+      0.8346,
+      0.7565,
+      0.7509
+    ],
+    "bytes": 11518
+  },
+  "prop/plant_pot_v2_02": {
+    "file": "plant_pot_v2_02.gltf",
+    "category": "prop",
+    "source": "SM_PROP_PLANT_pot_v2_02.fbx",
+    "meshCount": 1,
+    "height": 0.7045,
+    "footprint": [
+      0.7667,
+      0.7879
+    ],
+    "size": [
+      0.7667,
+      0.7879,
+      0.7045
+    ],
+    "bytes": 11604
+  },
+  "prop/plant_pot_v2_03": {
+    "file": "plant_pot_v2_03.gltf",
+    "category": "prop",
+    "source": "SM_PROP_PLANT_pot_v2_03.fbx",
+    "meshCount": 1,
+    "height": 0.6634,
+    "footprint": [
+      0.7784,
+      0.7681
+    ],
+    "size": [
+      0.7784,
+      0.7681,
+      0.6634
+    ],
+    "bytes": 11519
+  },
+  "prop/plant_pot_v2_04": {
+    "file": "plant_pot_v2_04.gltf",
+    "category": "prop",
+    "source": "SM_PROP_PLANT_pot_v2_04.fbx",
+    "meshCount": 1,
+    "height": 0.6758,
+    "footprint": [
+      0.7724,
+      0.7368
+    ],
+    "size": [
+      0.7724,
+      0.7368,
+      0.6758
+    ],
+    "bytes": 11524
+  },
+  "prop/plant_pot_v3_01": {
+    "file": "plant_pot_v3_01.gltf",
+    "category": "prop",
+    "source": "SM_PROP_PLANT_pot_v3_01.fbx",
+    "meshCount": 1,
+    "height": 1.3019,
+    "footprint": [
+      1.2274,
+      1.1628
+    ],
+    "size": [
+      1.2274,
+      1.1628,
+      1.3019
+    ],
+    "bytes": 17614
+  },
+  "prop/plant_pot_v3_02": {
+    "file": "plant_pot_v3_02.gltf",
+    "category": "prop",
+    "source": "SM_PROP_PLANT_pot_v3_02.fbx",
+    "meshCount": 1,
+    "height": 1.3019,
+    "footprint": [
+      1.2274,
+      1.1628
+    ],
+    "size": [
+      1.2274,
+      1.1628,
+      1.3019
+    ],
+    "bytes": 17614
+  },
+  "prop/plant_pot_v3_03": {
+    "file": "plant_pot_v3_03.gltf",
+    "category": "prop",
+    "source": "SM_PROP_PLANT_pot_v3_03.fbx",
+    "meshCount": 1,
+    "height": 1.3019,
+    "footprint": [
+      1.2274,
+      1.1628
+    ],
+    "size": [
+      1.2274,
+      1.1628,
+      1.3019
+    ],
+    "bytes": 17614
+  },
+  "prop/plant_pot_v3_04": {
+    "file": "plant_pot_v3_04.gltf",
+    "category": "prop",
+    "source": "SM_PROP_PLANT_pot_v3_04.fbx",
+    "meshCount": 1,
+    "height": 1.3019,
+    "footprint": [
+      1.2274,
+      1.1628
+    ],
+    "size": [
+      1.2274,
+      1.1628,
+      1.3019
+    ],
+    "bytes": 17614
+  },
+  "prop/plant_pot_v4_01": {
+    "file": "plant_pot_v4_01.gltf",
+    "category": "prop",
+    "source": "SM_PROP_PLANT_pot_v4_01.fbx",
+    "meshCount": 1,
+    "height": 0.7731,
+    "footprint": [
+      1.6008,
+      0.6832
+    ],
+    "size": [
+      1.6008,
+      0.6832,
+      0.7731
+    ],
+    "bytes": 26336
+  },
+  "prop/plant_pot_v5_01": {
+    "file": "plant_pot_v5_01.gltf",
+    "category": "prop",
+    "source": "SM_PROP_PLANT_pot_v5_01.fbx",
+    "meshCount": 1,
+    "height": 0.8307,
+    "footprint": [
+      1.2578,
+      0.781
+    ],
+    "size": [
+      1.2578,
+      0.781,
+      0.8307
+    ],
+    "bytes": 19866
+  },
+  "prop/plant_pot_v6_01": {
+    "file": "plant_pot_v6_01.gltf",
+    "category": "prop",
+    "source": "SM_PROP_PLANT_pot_v6_01.fbx",
+    "meshCount": 1,
+    "height": 0.9427,
+    "footprint": [
+      0.7639,
+      0.7639
+    ],
+    "size": [
+      0.7639,
+      0.7639,
+      0.9427
+    ],
+    "bytes": 14879
+  },
+  "prop/barrel_01": {
+    "file": "barrel_01.gltf",
+    "category": "prop",
+    "source": "SM_PROP_barrel_01.fbx",
+    "meshCount": 1,
+    "height": 0.8929,
+    "footprint": [
+      0.7716,
+      0.7497
+    ],
+    "size": [
+      0.7716,
+      0.7497,
+      0.8929
+    ],
+    "bytes": 16127
+  },
+  "prop/barrel_02": {
+    "file": "barrel_02.gltf",
+    "category": "prop",
+    "source": "SM_PROP_barrel_02.fbx",
+    "meshCount": 1,
+    "height": 0.8439,
+    "footprint": [
+      0.7706,
+      0.7486
+    ],
+    "size": [
+      0.7706,
+      0.7486,
+      0.8439
+    ],
+    "bytes": 16469
+  },
+  "prop/barrel_03": {
+    "file": "barrel_03.gltf",
+    "category": "prop",
+    "source": "SM_PROP_barrel_03.fbx",
+    "meshCount": 1,
+    "height": 0.8439,
+    "footprint": [
+      0.7706,
+      0.7486
+    ],
+    "size": [
+      0.7706,
+      0.7486,
+      0.8439
+    ],
+    "bytes": 17857
+  },
+  "prop/barrel_04": {
+    "file": "barrel_04.gltf",
+    "category": "prop",
+    "source": "SM_PROP_barrel_04.fbx",
+    "meshCount": 1,
+    "height": 0.8439,
+    "footprint": [
+      0.7706,
+      0.7486
+    ],
+    "size": [
+      0.7706,
+      0.7486,
+      0.8439
+    ],
+    "bytes": 17856
+  },
+  "prop/barrel_05": {
+    "file": "barrel_05.gltf",
+    "category": "prop",
+    "source": "SM_PROP_barrel_05.fbx",
+    "meshCount": 1,
+    "height": 0.8439,
+    "footprint": [
+      0.7706,
+      0.7486
+    ],
+    "size": [
+      0.7706,
+      0.7486,
+      0.8439
+    ],
+    "bytes": 17856
+  },
+  "prop/barrel_06": {
+    "file": "barrel_06.gltf",
+    "category": "prop",
+    "source": "SM_PROP_barrel_06.fbx",
+    "meshCount": 1,
+    "height": 1.2405,
+    "footprint": [
+      0.9295,
+      1.3987
+    ],
+    "size": [
+      0.9295,
+      1.3987,
+      1.2405
+    ],
+    "bytes": 36370
+  },
+  "prop/barrel_07": {
+    "file": "barrel_07.gltf",
+    "category": "prop",
+    "source": "SM_PROP_barrel_07.fbx",
+    "meshCount": 1,
+    "height": 2.1037,
+    "footprint": [
+      1.0042,
+      2.4913
+    ],
+    "size": [
+      1.0042,
+      2.4913,
+      2.1037
+    ],
+    "bytes": 94110
+  },
+  "prop/barrel_08": {
+    "file": "barrel_08.gltf",
+    "category": "prop",
+    "source": "SM_PROP_barrel_08.fbx",
+    "meshCount": 1,
+    "height": 1.0476,
+    "footprint": [
+      1.0442,
+      0.9652
+    ],
+    "size": [
+      1.0442,
+      0.9652,
+      1.0476
+    ],
+    "bytes": 26908
+  },
+  "prop/basket_01": {
+    "file": "basket_01.gltf",
+    "category": "prop",
+    "source": "SM_PROP_basket_01.fbx",
+    "meshCount": 1,
+    "height": 0.2401,
+    "footprint": [
+      0.5545,
+      0.5424
+    ],
+    "size": [
+      0.5545,
+      0.5424,
+      0.2401
+    ],
+    "bytes": 6670
+  },
+  "prop/basket_02": {
+    "file": "basket_02.gltf",
+    "category": "prop",
+    "source": "SM_PROP_basket_02.fbx",
+    "meshCount": 1,
+    "height": 0.4532,
+    "footprint": [
+      0.5084,
+      0.4738
+    ],
+    "size": [
+      0.5084,
+      0.4738,
+      0.4532
+    ],
+    "bytes": 6746
+  },
+  "prop/basket_03": {
+    "file": "basket_03.gltf",
+    "category": "prop",
+    "source": "SM_PROP_basket_03.fbx",
+    "meshCount": 1,
+    "height": 0.2303,
+    "footprint": [
+      0.4172,
+      0.5978
+    ],
+    "size": [
+      0.4172,
+      0.5978,
+      0.2303
+    ],
+    "bytes": 6788
+  },
+  "prop/bench_01": {
+    "file": "bench_01.gltf",
+    "category": "prop",
+    "source": "SM_PROP_bench_01.fbx",
+    "meshCount": 1,
+    "height": 0.4421,
+    "footprint": [
+      1.809,
+      0.6406
+    ],
+    "size": [
+      1.809,
+      0.6406,
+      0.4421
+    ],
+    "bytes": 12178
+  },
+  "prop/bench_02": {
+    "file": "bench_02.gltf",
+    "category": "prop",
+    "source": "SM_PROP_bench_02.fbx",
+    "meshCount": 1,
+    "height": 1.0966,
+    "footprint": [
+      1.8949,
+      0.8965
+    ],
+    "size": [
+      1.8949,
+      0.8965,
+      1.0966
+    ],
+    "bytes": 14572
+  },
+  "prop/board_01": {
+    "file": "board_01.gltf",
+    "category": "prop",
+    "source": "SM_PROP_board_01.fbx",
+    "meshCount": 1,
+    "height": 1.5448,
+    "footprint": [
+      2.1456,
+      0.3859
+    ],
+    "size": [
+      2.1456,
+      0.3859,
+      1.5448
+    ],
+    "bytes": 20470
+  },
+  "prop/board_02": {
+    "file": "board_02.gltf",
+    "category": "prop",
+    "source": "SM_PROP_board_02.fbx",
+    "meshCount": 1,
+    "height": 1.5448,
+    "footprint": [
+      2.1456,
+      0.2494
+    ],
+    "size": [
+      2.1456,
+      0.2494,
+      1.5448
+    ],
+    "bytes": 9967
+  },
+  "prop/bottle_01": {
+    "file": "bottle_01.gltf",
+    "category": "prop",
+    "source": "SM_PROP_bottle_01.fbx",
+    "meshCount": 1,
+    "height": 0.2789,
+    "footprint": [
+      0.1128,
+      0.1251
+    ],
+    "size": [
+      0.1128,
+      0.1251,
+      0.2789
+    ],
+    "bytes": 5541
+  },
+  "prop/bottle_02": {
+    "file": "bottle_02.gltf",
+    "category": "prop",
+    "source": "SM_PROP_bottle_02.fbx",
+    "meshCount": 1,
+    "height": 0.2895,
+    "footprint": [
+      0.1687,
+      0.1871
+    ],
+    "size": [
+      0.1687,
+      0.1871,
+      0.2895
+    ],
+    "bytes": 6529
+  },
+  "prop/bottle_03": {
+    "file": "bottle_03.gltf",
+    "category": "prop",
+    "source": "SM_PROP_bottle_03.fbx",
+    "meshCount": 1,
+    "height": 0.2845,
+    "footprint": [
+      0.2001,
+      0.2219
+    ],
+    "size": [
+      0.2001,
+      0.2219,
+      0.2845
+    ],
+    "bytes": 6528
+  },
+  "prop/bottle_04": {
+    "file": "bottle_04.gltf",
+    "category": "prop",
+    "source": "SM_PROP_bottle_04.fbx",
+    "meshCount": 1,
+    "height": 0.2789,
+    "footprint": [
+      0.1128,
+      0.1251
+    ],
+    "size": [
+      0.1128,
+      0.1251,
+      0.2789
+    ],
+    "bytes": 5541
+  },
+  "prop/bottle_05": {
+    "file": "bottle_05.gltf",
+    "category": "prop",
+    "source": "SM_PROP_bottle_05.fbx",
+    "meshCount": 1,
+    "height": 0.2895,
+    "footprint": [
+      0.1687,
+      0.1871
+    ],
+    "size": [
+      0.1687,
+      0.1871,
+      0.2895
+    ],
+    "bytes": 6529
+  },
+  "prop/bottle_06": {
+    "file": "bottle_06.gltf",
+    "category": "prop",
+    "source": "SM_PROP_bottle_06.fbx",
+    "meshCount": 1,
+    "height": 0.2845,
+    "footprint": [
+      0.2001,
+      0.2219
+    ],
+    "size": [
+      0.2001,
+      0.2219,
+      0.2845
+    ],
+    "bytes": 6528
+  },
+  "prop/bottle_07": {
+    "file": "bottle_07.gltf",
+    "category": "prop",
+    "source": "SM_PROP_bottle_07.fbx",
+    "meshCount": 1,
+    "height": 0.2789,
+    "footprint": [
+      0.1128,
+      0.1251
+    ],
+    "size": [
+      0.1128,
+      0.1251,
+      0.2789
+    ],
+    "bytes": 5541
+  },
+  "prop/bottle_08": {
+    "file": "bottle_08.gltf",
+    "category": "prop",
+    "source": "SM_PROP_bottle_08.fbx",
+    "meshCount": 1,
+    "height": 0.2895,
+    "footprint": [
+      0.1687,
+      0.1871
+    ],
+    "size": [
+      0.1687,
+      0.1871,
+      0.2895
+    ],
+    "bytes": 6529
+  },
+  "prop/bottle_09": {
+    "file": "bottle_09.gltf",
+    "category": "prop",
+    "source": "SM_PROP_bottle_09.fbx",
+    "meshCount": 1,
+    "height": 0.2845,
+    "footprint": [
+      0.2001,
+      0.2219
+    ],
+    "size": [
+      0.2001,
+      0.2219,
+      0.2845
+    ],
+    "bytes": 6528
+  },
+  "prop/bowl_metal": {
+    "file": "bowl_metal.gltf",
+    "category": "prop",
+    "source": "SM_PROP_bowl_metal.fbx",
+    "meshCount": 1,
+    "height": 0.1277,
+    "footprint": [
+      0.3482,
+      0.339
+    ],
+    "size": [
+      0.3482,
+      0.339,
+      0.1277
+    ],
+    "bytes": 7295
+  },
+  "prop/bowl_wood_01": {
+    "file": "bowl_wood_01.gltf",
+    "category": "prop",
+    "source": "SM_PROP_bowl_wood_01.fbx",
+    "meshCount": 1,
+    "height": 0.1016,
+    "footprint": [
+      0.2769,
+      0.2696
+    ],
+    "size": [
+      0.2769,
+      0.2696,
+      0.1016
+    ],
+    "bytes": 6860
+  },
+  "prop/bowl_wood_02": {
+    "file": "bowl_wood_02.gltf",
+    "category": "prop",
+    "source": "SM_PROP_bowl_wood_02.fbx",
+    "meshCount": 1,
+    "height": 0.1016,
+    "footprint": [
+      0.2769,
+      0.2696
+    ],
+    "size": [
+      0.2769,
+      0.2696,
+      0.1016
+    ],
+    "bytes": 8693
+  },
+  "prop/bowl_wood_03": {
+    "file": "bowl_wood_03.gltf",
+    "category": "prop",
+    "source": "SM_PROP_bowl_wood_03.fbx",
+    "meshCount": 1,
+    "height": 0.1016,
+    "footprint": [
+      0.2769,
+      0.2696
+    ],
+    "size": [
+      0.2769,
+      0.2696,
+      0.1016
+    ],
+    "bytes": 8413
+  },
+  "prop/bowl_wood_04": {
+    "file": "bowl_wood_04.gltf",
+    "category": "prop",
+    "source": "SM_PROP_bowl_wood_04.fbx",
+    "meshCount": 1,
+    "height": 0.1016,
+    "footprint": [
+      0.2769,
+      0.2696
+    ],
+    "size": [
+      0.2769,
+      0.2696,
+      0.1016
+    ],
+    "bytes": 8774
+  },
+  "prop/bowl_wood_05": {
+    "file": "bowl_wood_05.gltf",
+    "category": "prop",
+    "source": "SM_PROP_bowl_wood_05.fbx",
+    "meshCount": 1,
+    "height": 0.1016,
+    "footprint": [
+      0.2769,
+      0.2696
+    ],
+    "size": [
+      0.2769,
+      0.2696,
+      0.1016
+    ],
+    "bytes": 8774
+  },
+  "prop/box_01": {
+    "file": "box_01.gltf",
+    "category": "prop",
+    "source": "SM_PROP_box_01.fbx",
+    "meshCount": 1,
+    "height": 0.9658,
+    "footprint": [
+      0.9806,
+      1.0585
+    ],
+    "size": [
+      0.9806,
+      1.0585,
+      0.9658
+    ],
+    "bytes": 15199
+  },
+  "prop/box_02": {
+    "file": "box_02.gltf",
+    "category": "prop",
+    "source": "SM_PROP_box_02.fbx",
+    "meshCount": 2,
+    "height": 0.845,
+    "footprint": [
+      1.2361,
+      0.9277
+    ],
+    "size": [
+      1.2361,
+      0.9277,
+      0.845
+    ],
+    "bytes": 24351
+  },
+  "prop/box_03": {
+    "file": "box_03.gltf",
+    "category": "prop",
+    "source": "SM_PROP_box_03.fbx",
+    "meshCount": 2,
+    "height": 0.845,
+    "footprint": [
+      1.2591,
+      0.9656
+    ],
+    "size": [
+      1.2591,
+      0.9656,
+      0.845
+    ],
+    "bytes": 24332
+  },
+  "prop/box_04": {
+    "file": "box_04.gltf",
+    "category": "prop",
+    "source": "SM_PROP_box_04.fbx",
+    "meshCount": 2,
+    "height": 0.845,
+    "footprint": [
+      1.2514,
+      0.9619
+    ],
+    "size": [
+      1.2514,
+      0.9619,
+      0.845
+    ],
+    "bytes": 22424
+  },
+  "prop/box_05": {
+    "file": "box_05.gltf",
+    "category": "prop",
+    "source": "SM_PROP_box_05.fbx",
+    "meshCount": 1,
+    "height": 0.4949,
+    "footprint": [
+      0.6337,
+      0.9324
+    ],
+    "size": [
+      0.6337,
+      0.9324,
+      0.4949
+    ],
+    "bytes": 14305
+  },
+  "prop/brazier_01": {
+    "file": "brazier_01.gltf",
+    "category": "prop",
+    "source": "SM_PROP_brazier_01.fbx",
+    "meshCount": 1,
+    "height": 0.7437,
+    "footprint": [
+      1.1894,
+      1.2268
+    ],
+    "size": [
+      1.1894,
+      1.2268,
+      0.7437
+    ],
+    "bytes": 25349
+  },
+  "prop/brazier_02": {
+    "file": "brazier_02.gltf",
+    "category": "prop",
+    "source": "SM_PROP_brazier_02.fbx",
+    "meshCount": 1,
+    "height": 0.4787,
+    "footprint": [
+      1.1894,
+      1.2268
+    ],
+    "size": [
+      1.1894,
+      1.2268,
+      0.4787
+    ],
+    "bytes": 14465
+  },
+  "prop/brazier_03": {
+    "file": "brazier_03.gltf",
+    "category": "prop",
+    "source": "SM_PROP_brazier_03.fbx",
+    "meshCount": 1,
+    "height": 0.7324,
+    "footprint": [
+      0.433,
+      0.3057
+    ],
+    "size": [
+      0.433,
+      0.3057,
+      0.7324
+    ],
+    "bytes": 22723
+  },
+  "prop/brazier_04": {
+    "file": "brazier_04.gltf",
+    "category": "prop",
+    "source": "SM_PROP_brazier_04.fbx",
+    "meshCount": 1,
+    "height": 1.2206,
+    "footprint": [
+      0.9037,
+      0.874
+    ],
+    "size": [
+      0.9037,
+      0.874,
+      1.2206
+    ],
+    "bytes": 39172
+  },
+  "prop/brazier_05": {
+    "file": "brazier_05.gltf",
+    "category": "prop",
+    "source": "SM_PROP_brazier_05.fbx",
+    "meshCount": 1,
+    "height": 2.1839,
+    "footprint": [
+      0.4086,
+      0.4155
+    ],
+    "size": [
+      0.4086,
+      0.4155,
+      2.1839
+    ],
+    "bytes": 19216
+  },
+  "prop/bridge_stone_01": {
+    "file": "bridge_stone_01.gltf",
+    "category": "prop",
+    "source": "SM_PROP_bridge_stone_01.fbx",
+    "meshCount": 1,
+    "height": 3.2171,
+    "footprint": [
+      3.5707,
+      9.3336
+    ],
+    "size": [
+      3.5707,
+      9.3336,
+      3.2171
+    ],
+    "bytes": 25615
+  },
+  "prop/bridge_wood_01": {
+    "file": "bridge_wood_01.gltf",
+    "category": "prop",
+    "source": "SM_PROP_bridge_wood_01.fbx",
+    "meshCount": 1,
+    "height": 1.4304,
+    "footprint": [
+      1.9923,
+      4.4159
+    ],
+    "size": [
+      1.9923,
+      4.4159,
+      1.4304
+    ],
+    "bytes": 30095
+  },
+  "prop/bridge_wood_02": {
+    "file": "bridge_wood_02.gltf",
+    "category": "prop",
+    "source": "SM_PROP_bridge_wood_02.fbx",
+    "meshCount": 1,
+    "height": 1.4304,
+    "footprint": [
+      2.0347,
+      4.4159
+    ],
+    "size": [
+      2.0347,
+      4.4159,
+      1.4304
+    ],
+    "bytes": 32140
+  },
+  "prop/bridge_wood_03": {
+    "file": "bridge_wood_03.gltf",
+    "category": "prop",
+    "source": "SM_PROP_bridge_wood_03.fbx",
+    "meshCount": 1,
+    "height": 1.7683,
+    "footprint": [
+      1.9975,
+      4.2864
+    ],
+    "size": [
+      1.9975,
+      4.2864,
+      1.7683
+    ],
+    "bytes": 31572
+  },
+  "prop/bridge_wood_04": {
+    "file": "bridge_wood_04.gltf",
+    "category": "prop",
+    "source": "SM_PROP_bridge_wood_04.fbx",
+    "meshCount": 1,
+    "height": 2.2421,
+    "footprint": [
+      2.0183,
+      6.7868
+    ],
+    "size": [
+      2.0183,
+      6.7868,
+      2.2421
+    ],
+    "bytes": 33610
+  },
+  "prop/bucket_01": {
+    "file": "bucket_01.gltf",
+    "category": "prop",
+    "source": "SM_PROP_bucket_01.fbx",
+    "meshCount": 1,
+    "height": 0.3584,
+    "footprint": [
+      0.5429,
+      0.6022
+    ],
+    "size": [
+      0.5429,
+      0.6022,
+      0.3584
+    ],
+    "bytes": 11742
+  },
+  "prop/bucket_02": {
+    "file": "bucket_02.gltf",
+    "category": "prop",
+    "source": "SM_PROP_bucket_02.fbx",
+    "meshCount": 1,
+    "height": 0.3741,
+    "footprint": [
+      0.6914,
+      0.6022
+    ],
+    "size": [
+      0.6914,
+      0.6022,
+      0.3741
+    ],
+    "bytes": 11822
+  },
+  "prop/bucket_03": {
+    "file": "bucket_03.gltf",
+    "category": "prop",
+    "source": "SM_PROP_bucket_03.fbx",
+    "meshCount": 1,
+    "height": 0.3741,
+    "footprint": [
+      0.705,
+      0.6022
+    ],
+    "size": [
+      0.705,
+      0.6022,
+      0.3741
+    ],
+    "bytes": 14867
+  },
+  "prop/bucket_04": {
+    "file": "bucket_04.gltf",
+    "category": "prop",
+    "source": "SM_PROP_bucket_04.fbx",
+    "meshCount": 2,
+    "height": 0.8831,
+    "footprint": [
+      0.6609,
+      0.6294
+    ],
+    "size": [
+      0.6609,
+      0.6294,
+      0.8831
+    ],
+    "bytes": 34480
+  },
+  "prop/campfire": {
+    "file": "campfire.gltf",
+    "category": "prop",
+    "source": "SM_PROP_campfire.fbx",
+    "meshCount": 1,
+    "height": 0.3275,
+    "footprint": [
+      1.0165,
+      1.0545
+    ],
+    "size": [
+      1.0165,
+      1.0545,
+      0.3275
+    ],
+    "bytes": 32570
+  },
+  "prop/campfire_poles": {
+    "file": "campfire_poles.gltf",
+    "category": "prop",
+    "source": "SM_PROP_campfire_poles.fbx",
+    "meshCount": 1,
+    "height": 1.1255,
+    "footprint": [
+      1.682,
+      0.3786
+    ],
+    "size": [
+      1.682,
+      0.3786,
+      1.1255
+    ],
+    "bytes": 15774
+  },
+  "prop/cart_01": {
+    "file": "cart_01.gltf",
+    "category": "prop",
+    "source": "SM_PROP_cart_01.fbx",
+    "meshCount": 3,
+    "height": 1.6776,
+    "footprint": [
+      2.3525,
+      4.3884
+    ],
+    "size": [
+      2.3525,
+      4.3884,
+      1.6776
+    ],
+    "bytes": 91729
+  },
+  "prop/cart_02": {
+    "file": "cart_02.gltf",
+    "category": "prop",
+    "source": "SM_PROP_cart_02.fbx",
+    "meshCount": 3,
+    "height": 1.927,
+    "footprint": [
+      2.7843,
+      4.9018
+    ],
+    "size": [
+      2.7843,
+      4.9018,
+      1.927
+    ],
+    "bytes": 91721
+  },
+  "prop/cart_03": {
+    "file": "cart_03.gltf",
+    "category": "prop",
+    "source": "SM_PROP_cart_03.fbx",
+    "meshCount": 3,
+    "height": 2.2936,
+    "footprint": [
+      2.8044,
+      4.8785
+    ],
+    "size": [
+      2.8044,
+      4.8785,
+      2.2936
+    ],
+    "bytes": 104205
+  },
+  "prop/cart_wheel_big": {
+    "file": "cart_wheel_big.gltf",
+    "category": "prop",
+    "source": "SM_PROP_cart_wheel_big.fbx",
+    "meshCount": 1,
+    "height": 1.4112,
+    "footprint": [
+      0.3499,
+      1.4112
+    ],
+    "size": [
+      0.3499,
+      1.4112,
+      1.4112
+    ],
+    "bytes": 28570
+  },
+  "prop/cart_wheel_small": {
+    "file": "cart_wheel_small.gltf",
+    "category": "prop",
+    "source": "SM_PROP_cart_wheel_small.fbx",
+    "meshCount": 1,
+    "height": 0.6562,
+    "footprint": [
+      0.097,
+      0.6562
+    ],
+    "size": [
+      0.097,
+      0.6562,
+      0.6562
+    ],
+    "bytes": 27384
+  },
+  "prop/chair_02": {
+    "file": "chair_02.gltf",
+    "category": "prop",
+    "source": "SM_PROP_chair_02.fbx",
+    "meshCount": 1,
+    "height": 1.1672,
+    "footprint": [
+      0.4963,
+      0.6606
+    ],
+    "size": [
+      0.4963,
+      0.6606,
+      1.1672
+    ],
+    "bytes": 10385
+  },
+  "prop/chair_03": {
+    "file": "chair_03.gltf",
+    "category": "prop",
+    "source": "SM_PROP_chair_03.fbx",
+    "meshCount": 1,
+    "height": 0.9678,
+    "footprint": [
+      0.5405,
+      0.614
+    ],
+    "size": [
+      0.5405,
+      0.614,
+      0.9678
+    ],
+    "bytes": 13287
+  },
+  "prop/clothesline_01": {
+    "file": "clothesline_01.gltf",
+    "category": "prop",
+    "source": "SM_PROP_clothesline_01.fbx",
+    "meshCount": 1,
+    "height": 1.2881,
+    "footprint": [
+      0.2797,
+      2.8958
+    ],
+    "size": [
+      0.2797,
+      2.8958,
+      1.2881
+    ],
+    "bytes": 15705
+  },
+  "prop/clothesline_02": {
+    "file": "clothesline_02.gltf",
+    "category": "prop",
+    "source": "SM_PROP_clothesline_02.fbx",
+    "meshCount": 1,
+    "height": 0.9882,
+    "footprint": [
+      0.2017,
+      2.8958
+    ],
+    "size": [
+      0.2017,
+      2.8958,
+      0.9882
+    ],
+    "bytes": 16542
+  },
+  "prop/clothesline_03": {
+    "file": "clothesline_03.gltf",
+    "category": "prop",
+    "source": "SM_PROP_clothesline_03.fbx",
+    "meshCount": 1,
+    "height": 0.4483,
+    "footprint": [
+      0.1869,
+      2.8958
+    ],
+    "size": [
+      0.1869,
+      2.8958,
+      0.4483
+    ],
+    "bytes": 12279
+  },
+  "prop/coffin": {
+    "file": "coffin.gltf",
+    "category": "prop",
+    "source": "SM_PROP_coffin.fbx",
+    "meshCount": 2,
+    "height": 0.7904,
+    "footprint": [
+      1.5403,
+      2.7529
+    ],
+    "size": [
+      1.5403,
+      2.7529,
+      0.7904
+    ],
+    "bytes": 14834
+  },
+  "prop/cookingpot_big": {
+    "file": "cookingpot_big.gltf",
+    "category": "prop",
+    "source": "SM_PROP_cookingpot_big.fbx",
+    "meshCount": 1,
+    "height": 0.8217,
+    "footprint": [
+      1.6141,
+      1.2503
+    ],
+    "size": [
+      1.6141,
+      1.2503,
+      0.8217
+    ],
+    "bytes": 31794
+  },
+  "prop/cookingpot_small": {
+    "file": "cookingpot_small.gltf",
+    "category": "prop",
+    "source": "SM_PROP_cookingpot_small.fbx",
+    "meshCount": 2,
+    "height": 0.6046,
+    "footprint": [
+      0.5777,
+      0.6294
+    ],
+    "size": [
+      0.5777,
+      0.6294,
+      0.6046
+    ],
+    "bytes": 39245
+  },
+  "prop/crate_01": {
+    "file": "crate_01.gltf",
+    "category": "prop",
+    "source": "SM_PROP_crate_01.fbx",
+    "meshCount": 1,
+    "height": 0.4619,
+    "footprint": [
+      0.645,
+      0.8913
+    ],
+    "size": [
+      0.645,
+      0.8913,
+      0.4619
+    ],
+    "bytes": 23085
+  },
+  "prop/crate_02": {
+    "file": "crate_02.gltf",
+    "category": "prop",
+    "source": "SM_PROP_crate_02.fbx",
+    "meshCount": 1,
+    "height": 0.5102,
+    "footprint": [
+      0.645,
+      0.8913
+    ],
+    "size": [
+      0.645,
+      0.8913,
+      0.5102
+    ],
+    "bytes": 41248
+  },
+  "prop/crate_03": {
+    "file": "crate_03.gltf",
+    "category": "prop",
+    "source": "SM_PROP_crate_03.fbx",
+    "meshCount": 1,
+    "height": 0.5536,
+    "footprint": [
+      0.645,
+      0.8913
+    ],
+    "size": [
+      0.645,
+      0.8913,
+      0.5536
+    ],
+    "bytes": 40342
+  },
+  "prop/crate_04": {
+    "file": "crate_04.gltf",
+    "category": "prop",
+    "source": "SM_PROP_crate_04.fbx",
+    "meshCount": 1,
+    "height": 0.4619,
+    "footprint": [
+      0.645,
+      0.8913
+    ],
+    "size": [
+      0.645,
+      0.8913,
+      0.4619
+    ],
+    "bytes": 51456
+  },
+  "prop/crate_05": {
+    "file": "crate_05.gltf",
+    "category": "prop",
+    "source": "SM_PROP_crate_05.fbx",
+    "meshCount": 1,
+    "height": 0.4666,
+    "footprint": [
+      0.645,
+      0.8913
+    ],
+    "size": [
+      0.645,
+      0.8913,
+      0.4666
+    ],
+    "bytes": 44098
+  },
+  "prop/cup": {
+    "file": "cup.gltf",
+    "category": "prop",
+    "source": "SM_PROP_cup.fbx",
+    "meshCount": 1,
+    "height": 0.1218,
+    "footprint": [
+      0.1608,
+      0.1179
+    ],
+    "size": [
+      0.1608,
+      0.1179,
+      0.1218
+    ],
+    "bytes": 8173
+  },
+  "prop/fence_door_gate": {
+    "file": "fence_door_gate.gltf",
+    "category": "prop",
+    "source": "SM_PROP_fence_door_gate.fbx",
+    "meshCount": 2,
+    "height": 1.1771,
+    "footprint": [
+      2.0598,
+      0.3414
+    ],
+    "size": [
+      2.0598,
+      0.3414,
+      1.1771
+    ],
+    "bytes": 22326
+  },
+  "prop/fence_v01_01": {
+    "file": "fence_v01_01.gltf",
+    "category": "prop",
+    "source": "SM_PROP_fence_v01_01.fbx",
+    "meshCount": 1,
+    "height": 2.0096,
+    "footprint": [
+      2.8625,
+      0.4643
+    ],
+    "size": [
+      2.8625,
+      0.4643,
+      2.0096
+    ],
+    "bytes": 22397
+  },
+  "prop/fence_v01_02": {
+    "file": "fence_v01_02.gltf",
+    "category": "prop",
+    "source": "SM_PROP_fence_v01_02.fbx",
+    "meshCount": 1,
+    "height": 2.0115,
+    "footprint": [
+      2.8193,
+      0.5428
+    ],
+    "size": [
+      2.8193,
+      0.5428,
+      2.0115
+    ],
+    "bytes": 22395
+  },
+  "prop/fence_v01_03": {
+    "file": "fence_v01_03.gltf",
+    "category": "prop",
+    "source": "SM_PROP_fence_v01_03.fbx",
+    "meshCount": 1,
+    "height": 2.0543,
+    "footprint": [
+      2.8018,
+      0.5428
+    ],
+    "size": [
+      2.8018,
+      0.5428,
+      2.0543
+    ],
+    "bytes": 22390
+  },
+  "prop/fence_v01_04": {
+    "file": "fence_v01_04.gltf",
+    "category": "prop",
+    "source": "SM_PROP_fence_v01_04.fbx",
+    "meshCount": 1,
+    "height": 2.0159,
+    "footprint": [
+      2.7913,
+      0.5428
+    ],
+    "size": [
+      2.7913,
+      0.5428,
+      2.0159
+    ],
+    "bytes": 19509
+  },
+  "prop/fence_v01_05": {
+    "file": "fence_v01_05.gltf",
+    "category": "prop",
+    "source": "SM_PROP_fence_v01_05.fbx",
+    "meshCount": 1,
+    "height": 2.0201,
+    "footprint": [
+      3.2734,
+      1.2534
+    ],
+    "size": [
+      3.2734,
+      1.2534,
+      2.0201
+    ],
+    "bytes": 17318
+  },
+  "prop/fence_v02_01": {
+    "file": "fence_v02_01.gltf",
+    "category": "prop",
+    "source": "SM_PROP_fence_v02_01.fbx",
+    "meshCount": 1,
+    "height": 1.1688,
+    "footprint": [
+      2.1078,
+      0.4186
+    ],
+    "size": [
+      2.1078,
+      0.4186,
+      1.1688
+    ],
+    "bytes": 13946
+  },
+  "prop/fence_v02_02": {
+    "file": "fence_v02_02.gltf",
+    "category": "prop",
+    "source": "SM_PROP_fence_v02_02.fbx",
+    "meshCount": 1,
+    "height": 1.1688,
+    "footprint": [
+      2.0857,
+      0.389
+    ],
+    "size": [
+      2.0857,
+      0.389,
+      1.1688
+    ],
+    "bytes": 13899
+  },
+  "prop/fence_v02_03": {
+    "file": "fence_v02_03.gltf",
+    "category": "prop",
+    "source": "SM_PROP_fence_v02_03.fbx",
+    "meshCount": 1,
+    "height": 1.1688,
+    "footprint": [
+      2.0881,
+      0.4115
+    ],
+    "size": [
+      2.0881,
+      0.4115,
+      1.1688
+    ],
+    "bytes": 13901
+  },
+  "prop/fence_v02_04": {
+    "file": "fence_v02_04.gltf",
+    "category": "prop",
+    "source": "SM_PROP_fence_v02_04.fbx",
+    "meshCount": 1,
+    "height": 1.1688,
+    "footprint": [
+      2.0757,
+      0.4299
+    ],
+    "size": [
+      2.0757,
+      0.4299,
+      1.1688
+    ],
+    "bytes": 16777
+  },
+  "prop/fence_v03_01": {
+    "file": "fence_v03_01.gltf",
+    "category": "prop",
+    "source": "SM_PROP_fence_v03_01.fbx",
+    "meshCount": 1,
+    "height": 1.1688,
+    "footprint": [
+      2.1346,
+      0.4186
+    ],
+    "size": [
+      2.1346,
+      0.4186,
+      1.1688
+    ],
+    "bytes": 12496
+  },
+  "prop/fence_v03_02": {
+    "file": "fence_v03_02.gltf",
+    "category": "prop",
+    "source": "SM_PROP_fence_v03_02.fbx",
+    "meshCount": 1,
+    "height": 1.1688,
+    "footprint": [
+      2.0598,
+      0.3718
+    ],
+    "size": [
+      2.0598,
+      0.3718,
+      1.1688
+    ],
+    "bytes": 12499
+  },
+  "prop/fence_v03_03": {
+    "file": "fence_v03_03.gltf",
+    "category": "prop",
+    "source": "SM_PROP_fence_v03_03.fbx",
+    "meshCount": 1,
+    "height": 1.1688,
+    "footprint": [
+      2.0657,
+      0.3884
+    ],
+    "size": [
+      2.0657,
+      0.3884,
+      1.1688
+    ],
+    "bytes": 12500
+  },
+  "prop/fence_v03_04": {
+    "file": "fence_v03_04.gltf",
+    "category": "prop",
+    "source": "SM_PROP_fence_v03_04.fbx",
+    "meshCount": 1,
+    "height": 1.1688,
+    "footprint": [
+      2.0657,
+      0.4169
+    ],
+    "size": [
+      2.0657,
+      0.4169,
+      1.1688
+    ],
+    "bytes": 13937
+  },
+  "prop/fence_v04_01": {
+    "file": "fence_v04_01.gltf",
+    "category": "prop",
+    "source": "SM_PROP_fence_v04_01.fbx",
+    "meshCount": 1,
+    "height": 4.0136,
+    "footprint": [
+      5.7171,
+      0.9273
+    ],
+    "size": [
+      5.7171,
+      0.9273,
+      4.0136
+    ],
+    "bytes": 22913
+  },
+  "prop/fence_v04_02": {
+    "file": "fence_v04_02.gltf",
+    "category": "prop",
+    "source": "SM_PROP_fence_v04_02.fbx",
+    "meshCount": 1,
+    "height": 4.0175,
+    "footprint": [
+      5.6308,
+      1.0841
+    ],
+    "size": [
+      5.6308,
+      1.0841,
+      4.0175
+    ],
+    "bytes": 22909
+  },
+  "prop/fence_v04_03": {
+    "file": "fence_v04_03.gltf",
+    "category": "prop",
+    "source": "SM_PROP_fence_v04_03.fbx",
+    "meshCount": 1,
+    "height": 4.1029,
+    "footprint": [
+      5.5959,
+      1.0841
+    ],
+    "size": [
+      5.5959,
+      1.0841,
+      4.1029
+    ],
+    "bytes": 22908
+  },
+  "prop/firepit": {
+    "file": "firepit.gltf",
+    "category": "prop",
+    "source": "SM_PROP_firepit.fbx",
+    "meshCount": 1,
+    "height": 0.2344,
+    "footprint": [
+      1.3638,
+      1.3594
+    ],
+    "size": [
+      1.3638,
+      1.3594,
+      0.2344
+    ],
+    "bytes": 9248
+  },
+  "prop/firepit_woodpile": {
+    "file": "firepit_woodpile.gltf",
+    "category": "prop",
+    "source": "SM_PROP_firepit_woodpile.fbx",
+    "meshCount": 1,
+    "height": 0.2843,
+    "footprint": [
+      0.7321,
+      0.6638
+    ],
+    "size": [
+      0.7321,
+      0.6638,
+      0.2843
+    ],
+    "bytes": 10140
+  },
+  "prop/flag_01": {
+    "file": "flag_01.gltf",
+    "category": "prop",
+    "source": "SM_PROP_flag_01.fbx",
+    "meshCount": 1,
+    "height": 5.8655,
+    "footprint": [
+      1.2271,
+      3.7751
+    ],
+    "size": [
+      1.2271,
+      3.7751,
+      5.8655
+    ],
+    "bytes": 40731
+  },
+  "prop/flag_02": {
+    "file": "flag_02.gltf",
+    "category": "prop",
+    "source": "SM_PROP_flag_02.fbx",
+    "meshCount": 1,
+    "height": 5.8991,
+    "footprint": [
+      1.2271,
+      3.7751
+    ],
+    "size": [
+      1.2271,
+      3.7751,
+      5.8991
+    ],
+    "bytes": 41423
+  },
+  "prop/flag_03": {
+    "file": "flag_03.gltf",
+    "category": "prop",
+    "source": "SM_PROP_flag_03.fbx",
+    "meshCount": 1,
+    "height": 6.5638,
+    "footprint": [
+      0.4065,
+      0.7552
+    ],
+    "size": [
+      0.4065,
+      0.7552,
+      6.5638
+    ],
+    "bytes": 20070
+  },
+  "prop/flag_04": {
+    "file": "flag_04.gltf",
+    "category": "prop",
+    "source": "SM_PROP_flag_04.fbx",
+    "meshCount": 1,
+    "height": 6.5638,
+    "footprint": [
+      0.4065,
+      0.7552
+    ],
+    "size": [
+      0.4065,
+      0.7552,
+      6.5638
+    ],
+    "bytes": 20077
+  },
+  "prop/flag_05": {
+    "file": "flag_05.gltf",
+    "category": "prop",
+    "source": "SM_PROP_flag_05.fbx",
+    "meshCount": 1,
+    "height": 6.5638,
+    "footprint": [
+      0.4065,
+      2.8587
+    ],
+    "size": [
+      0.4065,
+      2.8587,
+      6.5638
+    ],
+    "bytes": 20075
+  },
+  "prop/flag_06": {
+    "file": "flag_06.gltf",
+    "category": "prop",
+    "source": "SM_PROP_flag_06.fbx",
+    "meshCount": 1,
+    "height": 6.5638,
+    "footprint": [
+      0.4065,
+      2.8587
+    ],
+    "size": [
+      0.4065,
+      2.8587,
+      6.5638
+    ],
+    "bytes": 20075
+  },
+  "prop/food_apple": {
+    "file": "food_apple.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_apple.fbx",
+    "meshCount": 1,
+    "height": 0.1774,
+    "footprint": [
+      0.1815,
+      0.1815
+    ],
+    "size": [
+      0.1815,
+      0.1815,
+      0.1774
+    ],
+    "bytes": 6470
+  },
+  "prop/food_banana_01": {
+    "file": "food_banana_01.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_banana_01.fbx",
+    "meshCount": 1,
+    "height": 0.0881,
+    "footprint": [
+      0.1471,
+      0.3837
+    ],
+    "size": [
+      0.1471,
+      0.3837,
+      0.0881
+    ],
+    "bytes": 5774
+  },
+  "prop/food_banana_02": {
+    "file": "food_banana_02.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_banana_02.fbx",
+    "meshCount": 1,
+    "height": 0.1723,
+    "footprint": [
+      0.2571,
+      0.3741
+    ],
+    "size": [
+      0.2571,
+      0.3741,
+      0.1723
+    ],
+    "bytes": 18247
+  },
+  "prop/food_bellpepper": {
+    "file": "food_bellpepper.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_bellpepper.fbx",
+    "meshCount": 1,
+    "height": 0.1867,
+    "footprint": [
+      0.1566,
+      0.1554
+    ],
+    "size": [
+      0.1566,
+      0.1554,
+      0.1867
+    ],
+    "bytes": 6868
+  },
+  "prop/food_bread_01": {
+    "file": "food_bread_01.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_bread_01.fbx",
+    "meshCount": 1,
+    "height": 0.0972,
+    "footprint": [
+      0.3462,
+      0.1731
+    ],
+    "size": [
+      0.3462,
+      0.1731,
+      0.0972
+    ],
+    "bytes": 3953
+  },
+  "prop/food_bread_02": {
+    "file": "food_bread_02.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_bread_02.fbx",
+    "meshCount": 1,
+    "height": 0.0972,
+    "footprint": [
+      0.3462,
+      0.3462
+    ],
+    "size": [
+      0.3462,
+      0.3462,
+      0.0972
+    ],
+    "bytes": 4204
+  },
+  "prop/food_bread_03": {
+    "file": "food_bread_03.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_bread_03.fbx",
+    "meshCount": 1,
+    "height": 0.0966,
+    "footprint": [
+      0.1303,
+      0.067
+    ],
+    "size": [
+      0.1303,
+      0.067,
+      0.0966
+    ],
+    "bytes": 4397
+  },
+  "prop/food_bread_04": {
+    "file": "food_bread_04.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_bread_04.fbx",
+    "meshCount": 1,
+    "height": 0.1156,
+    "footprint": [
+      0.1823,
+      0.1823
+    ],
+    "size": [
+      0.1823,
+      0.1823,
+      0.1156
+    ],
+    "bytes": 4620
+  },
+  "prop/food_bread_05": {
+    "file": "food_bread_05.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_bread_05.fbx",
+    "meshCount": 1,
+    "height": 0.1232,
+    "footprint": [
+      0.1823,
+      0.1823
+    ],
+    "size": [
+      0.1823,
+      0.1823,
+      0.1232
+    ],
+    "bytes": 4621
+  },
+  "prop/food_bread_06": {
+    "file": "food_bread_06.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_bread_06.fbx",
+    "meshCount": 1,
+    "height": 0.1408,
+    "footprint": [
+      0.2401,
+      0.0677
+    ],
+    "size": [
+      0.2401,
+      0.0677,
+      0.1408
+    ],
+    "bytes": 3916
+  },
+  "prop/food_bread_07": {
+    "file": "food_bread_07.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_bread_07.fbx",
+    "meshCount": 1,
+    "height": 0.1408,
+    "footprint": [
+      0.2401,
+      0.3172
+    ],
+    "size": [
+      0.2401,
+      0.3172,
+      0.1408
+    ],
+    "bytes": 4109
+  },
+  "prop/food_bread_08": {
+    "file": "food_bread_08.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_bread_08.fbx",
+    "meshCount": 1,
+    "height": 0.1379,
+    "footprint": [
+      0.2351,
+      0.5969
+    ],
+    "size": [
+      0.2351,
+      0.5969,
+      0.1379
+    ],
+    "bytes": 4282
+  },
+  "prop/food_bread_09": {
+    "file": "food_bread_09.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_bread_09.fbx",
+    "meshCount": 1,
+    "height": 0.1471,
+    "footprint": [
+      0.1893,
+      1.0433
+    ],
+    "size": [
+      0.1893,
+      1.0433,
+      0.1471
+    ],
+    "bytes": 4319
+  },
+  "prop/food_bread_10": {
+    "file": "food_bread_10.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_bread_10.fbx",
+    "meshCount": 1,
+    "height": 0.141,
+    "footprint": [
+      0.1835,
+      0.6215
+    ],
+    "size": [
+      0.1835,
+      0.6215,
+      0.141
+    ],
+    "bytes": 4249
+  },
+  "prop/food_bread_11": {
+    "file": "food_bread_11.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_bread_11.fbx",
+    "meshCount": 1,
+    "height": 0.1364,
+    "footprint": [
+      0.2057,
+      0.3534
+    ],
+    "size": [
+      0.2057,
+      0.3534,
+      0.1364
+    ],
+    "bytes": 4674
+  },
+  "prop/food_broccoli": {
+    "file": "food_broccoli.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_broccoli.fbx",
+    "meshCount": 1,
+    "height": 0.3101,
+    "footprint": [
+      0.3049,
+      0.3901
+    ],
+    "size": [
+      0.3049,
+      0.3901,
+      0.3101
+    ],
+    "bytes": 6759
+  },
+  "prop/food_carrot_01": {
+    "file": "food_carrot_01.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_carrot_01.fbx",
+    "meshCount": 1,
+    "height": 0.1259,
+    "footprint": [
+      0.2421,
+      0.9106
+    ],
+    "size": [
+      0.2421,
+      0.9106,
+      0.1259
+    ],
+    "bytes": 6134
+  },
+  "prop/food_carrot_02": {
+    "file": "food_carrot_02.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_carrot_02.fbx",
+    "meshCount": 1,
+    "height": 0.0916,
+    "footprint": [
+      0.0984,
+      0.3922
+    ],
+    "size": [
+      0.0984,
+      0.3922,
+      0.0916
+    ],
+    "bytes": 4918
+  },
+  "prop/food_cauliflower": {
+    "file": "food_cauliflower.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_cauliflower.fbx",
+    "meshCount": 1,
+    "height": 0.2857,
+    "footprint": [
+      0.3747,
+      0.3739
+    ],
+    "size": [
+      0.3747,
+      0.3739,
+      0.2857
+    ],
+    "bytes": 7403
+  },
+  "prop/food_cheese_01": {
+    "file": "food_cheese_01.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_cheese_01.fbx",
+    "meshCount": 1,
+    "height": 0.1338,
+    "footprint": [
+      0.4312,
+      0.4312
+    ],
+    "size": [
+      0.4312,
+      0.4312,
+      0.1338
+    ],
+    "bytes": 4179
+  },
+  "prop/food_cheese_02": {
+    "file": "food_cheese_02.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_cheese_02.fbx",
+    "meshCount": 1,
+    "height": 0.1267,
+    "footprint": [
+      0.4821,
+      0.4809
+    ],
+    "size": [
+      0.4821,
+      0.4809,
+      0.1267
+    ],
+    "bytes": 4648
+  },
+  "prop/food_cheese_03": {
+    "file": "food_cheese_03.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_cheese_03.fbx",
+    "meshCount": 1,
+    "height": 0.126,
+    "footprint": [
+      0.4162,
+      0.1644
+    ],
+    "size": [
+      0.4162,
+      0.1644,
+      0.126
+    ],
+    "bytes": 3889
+  },
+  "prop/food_cheese_04": {
+    "file": "food_cheese_04.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_cheese_04.fbx",
+    "meshCount": 1,
+    "height": 0.1071,
+    "footprint": [
+      0.1569,
+      0.1569
+    ],
+    "size": [
+      0.1569,
+      0.1569,
+      0.1071
+    ],
+    "bytes": 3539
+  },
+  "prop/food_cheese_05": {
+    "file": "food_cheese_05.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_cheese_05.fbx",
+    "meshCount": 1,
+    "height": 0.1023,
+    "footprint": [
+      0.1356,
+      0.0792
+    ],
+    "size": [
+      0.1356,
+      0.0792,
+      0.1023
+    ],
+    "bytes": 3356
+  },
+  "prop/food_cheese_06": {
+    "file": "food_cheese_06.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_cheese_06.fbx",
+    "meshCount": 1,
+    "height": 0.079,
+    "footprint": [
+      0.0569,
+      0.0933
+    ],
+    "size": [
+      0.0569,
+      0.0933,
+      0.079
+    ],
+    "bytes": 3343
+  },
+  "prop/food_chili_01": {
+    "file": "food_chili_01.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_chili_01.fbx",
+    "meshCount": 1,
+    "height": 0.0492,
+    "footprint": [
+      0.0824,
+      0.225
+    ],
+    "size": [
+      0.0824,
+      0.225,
+      0.0492
+    ],
+    "bytes": 5736
+  },
+  "prop/food_chili_02": {
+    "file": "food_chili_02.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_chili_02.fbx",
+    "meshCount": 1,
+    "height": 0.1561,
+    "footprint": [
+      0.1532,
+      0.2429
+    ],
+    "size": [
+      0.1532,
+      0.2429,
+      0.1561
+    ],
+    "bytes": 6418
+  },
+  "prop/food_chili_03": {
+    "file": "food_chili_03.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_chili_03.fbx",
+    "meshCount": 1,
+    "height": 0.1627,
+    "footprint": [
+      0.1483,
+      0.3342
+    ],
+    "size": [
+      0.1483,
+      0.3342,
+      0.1627
+    ],
+    "bytes": 6375
+  },
+  "prop/food_chili_04": {
+    "file": "food_chili_04.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_chili_04.fbx",
+    "meshCount": 1,
+    "height": 0.1627,
+    "footprint": [
+      0.1668,
+      0.3133
+    ],
+    "size": [
+      0.1668,
+      0.3133,
+      0.1627
+    ],
+    "bytes": 6374
+  },
+  "prop/food_coconut_01": {
+    "file": "food_coconut_01.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_coconut_01.fbx",
+    "meshCount": 1,
+    "height": 0.2064,
+    "footprint": [
+      0.2159,
+      0.2065
+    ],
+    "size": [
+      0.2159,
+      0.2065,
+      0.2064
+    ],
+    "bytes": 4821
+  },
+  "prop/food_coconut_02": {
+    "file": "food_coconut_02.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_coconut_02.fbx",
+    "meshCount": 1,
+    "height": 0.0951,
+    "footprint": [
+      0.1621,
+      0.1636
+    ],
+    "size": [
+      0.1621,
+      0.1636,
+      0.0951
+    ],
+    "bytes": 6398
+  },
+  "prop/food_corn": {
+    "file": "food_corn.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_corn.fbx",
+    "meshCount": 1,
+    "height": 0.1233,
+    "footprint": [
+      0.225,
+      0.3355
+    ],
+    "size": [
+      0.225,
+      0.3355,
+      0.1233
+    ],
+    "bytes": 4639
+  },
+  "prop/food_cucumber_01": {
+    "file": "food_cucumber_01.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_cucumber_01.fbx",
+    "meshCount": 1,
+    "height": 0.1167,
+    "footprint": [
+      0.1422,
+      0.5443
+    ],
+    "size": [
+      0.1422,
+      0.5443,
+      0.1167
+    ],
+    "bytes": 4920
+  },
+  "prop/food_cucumber_02": {
+    "file": "food_cucumber_02.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_cucumber_02.fbx",
+    "meshCount": 1,
+    "height": 0.1201,
+    "footprint": [
+      0.1334,
+      0.3158
+    ],
+    "size": [
+      0.1334,
+      0.3158,
+      0.1201
+    ],
+    "bytes": 3975
+  },
+  "prop/food_cucumber_03": {
+    "file": "food_cucumber_03.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_cucumber_03.fbx",
+    "meshCount": 1,
+    "height": 0.0473,
+    "footprint": [
+      0.1271,
+      0.1159
+    ],
+    "size": [
+      0.1271,
+      0.1159,
+      0.0473
+    ],
+    "bytes": 3816
+  },
+  "prop/food_egg_01": {
+    "file": "food_egg_01.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_egg_01.fbx",
+    "meshCount": 1,
+    "height": 0.1237,
+    "footprint": [
+      0.0987,
+      0.0987
+    ],
+    "size": [
+      0.0987,
+      0.0987,
+      0.1237
+    ],
+    "bytes": 4816
+  },
+  "prop/food_egg_02": {
+    "file": "food_egg_02.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_egg_02.fbx",
+    "meshCount": 1,
+    "height": 0.1062,
+    "footprint": [
+      0.1126,
+      0.1121
+    ],
+    "size": [
+      0.1126,
+      0.1121,
+      0.1062
+    ],
+    "bytes": 6491
+  },
+  "prop/food_egg_03": {
+    "file": "food_egg_03.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_egg_03.fbx",
+    "meshCount": 1,
+    "height": 0.1237,
+    "footprint": [
+      0.0987,
+      0.0987
+    ],
+    "size": [
+      0.0987,
+      0.0987,
+      0.1237
+    ],
+    "bytes": 4816
+  },
+  "prop/food_egg_04": {
+    "file": "food_egg_04.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_egg_04.fbx",
+    "meshCount": 1,
+    "height": 0.1062,
+    "footprint": [
+      0.1126,
+      0.1121
+    ],
+    "size": [
+      0.1126,
+      0.1121,
+      0.1062
+    ],
+    "bytes": 6491
+  },
+  "prop/food_egg_05": {
+    "file": "food_egg_05.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_egg_05.fbx",
+    "meshCount": 1,
+    "height": 0.0307,
+    "footprint": [
+      0.1872,
+      0.2197
+    ],
+    "size": [
+      0.1872,
+      0.2197,
+      0.0307
+    ],
+    "bytes": 3821
+  },
+  "prop/food_fish_01": {
+    "file": "food_fish_01.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_fish_01.fbx",
+    "meshCount": 1,
+    "height": 0.1177,
+    "footprint": [
+      0.3186,
+      0.3846
+    ],
+    "size": [
+      0.3186,
+      0.3846,
+      0.1177
+    ],
+    "bytes": 5099
+  },
+  "prop/food_fish_02": {
+    "file": "food_fish_02.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_fish_02.fbx",
+    "meshCount": 1,
+    "height": 0.3608,
+    "footprint": [
+      0.4047,
+      0.6091
+    ],
+    "size": [
+      0.4047,
+      0.6091,
+      0.3608
+    ],
+    "bytes": 7198
+  },
+  "prop/food_garlic": {
+    "file": "food_garlic.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_garlic.fbx",
+    "meshCount": 1,
+    "height": 0.1804,
+    "footprint": [
+      0.1888,
+      0.1892
+    ],
+    "size": [
+      0.1888,
+      0.1892,
+      0.1804
+    ],
+    "bytes": 5878
+  },
+  "prop/food_grapes_01": {
+    "file": "food_grapes_01.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_grapes_01.fbx",
+    "meshCount": 1,
+    "height": 0.2264,
+    "footprint": [
+      0.3212,
+      0.1971
+    ],
+    "size": [
+      0.3212,
+      0.1971,
+      0.2264
+    ],
+    "bytes": 15769
+  },
+  "prop/food_grapes_02": {
+    "file": "food_grapes_02.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_grapes_02.fbx",
+    "meshCount": 1,
+    "height": 0.2264,
+    "footprint": [
+      0.3212,
+      0.1971
+    ],
+    "size": [
+      0.3212,
+      0.1971,
+      0.2264
+    ],
+    "bytes": 15769
+  },
+  "prop/food_leek": {
+    "file": "food_leek.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_leek.fbx",
+    "meshCount": 1,
+    "height": 0.2273,
+    "footprint": [
+      0.1892,
+      0.5896
+    ],
+    "size": [
+      0.1892,
+      0.5896,
+      0.2273
+    ],
+    "bytes": 5473
+  },
+  "prop/food_lemon_01": {
+    "file": "food_lemon_01.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_lemon_01.fbx",
+    "meshCount": 1,
+    "height": 0.1596,
+    "footprint": [
+      0.3396,
+      0.2587
+    ],
+    "size": [
+      0.3396,
+      0.2587,
+      0.1596
+    ],
+    "bytes": 6246
+  },
+  "prop/food_lemon_02": {
+    "file": "food_lemon_02.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_lemon_02.fbx",
+    "meshCount": 1,
+    "height": 0.1285,
+    "footprint": [
+      0.1505,
+      0.1374
+    ],
+    "size": [
+      0.1505,
+      0.1374,
+      0.1285
+    ],
+    "bytes": 5215
+  },
+  "prop/food_lemon_03": {
+    "file": "food_lemon_03.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_lemon_03.fbx",
+    "meshCount": 1,
+    "height": 0.1402,
+    "footprint": [
+      0.0955,
+      0.1413
+    ],
+    "size": [
+      0.0955,
+      0.1413,
+      0.1402
+    ],
+    "bytes": 4499
+  },
+  "prop/food_mango_01": {
+    "file": "food_mango_01.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_mango_01.fbx",
+    "meshCount": 1,
+    "height": 0.1664,
+    "footprint": [
+      0.2003,
+      0.1664
+    ],
+    "size": [
+      0.2003,
+      0.1664,
+      0.1664
+    ],
+    "bytes": 6053
+  },
+  "prop/food_mango_02": {
+    "file": "food_mango_02.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_mango_02.fbx",
+    "meshCount": 1,
+    "height": 0.1747,
+    "footprint": [
+      0.1181,
+      0.1664
+    ],
+    "size": [
+      0.1181,
+      0.1664,
+      0.1747
+    ],
+    "bytes": 5317
+  },
+  "prop/food_meat_01": {
+    "file": "food_meat_01.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_meat_01.fbx",
+    "meshCount": 1,
+    "height": 0.0968,
+    "footprint": [
+      0.3044,
+      0.4947
+    ],
+    "size": [
+      0.3044,
+      0.4947,
+      0.0968
+    ],
+    "bytes": 4736
+  },
+  "prop/food_meat_02": {
+    "file": "food_meat_02.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_meat_02.fbx",
+    "meshCount": 1,
+    "height": 0.1638,
+    "footprint": [
+      0.5189,
+      0.5773
+    ],
+    "size": [
+      0.5189,
+      0.5773,
+      0.1638
+    ],
+    "bytes": 9032
+  },
+  "prop/food_meat_03": {
+    "file": "food_meat_03.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_meat_03.fbx",
+    "meshCount": 1,
+    "height": 0.405,
+    "footprint": [
+      0.4219,
+      0.5836
+    ],
+    "size": [
+      0.4219,
+      0.5836,
+      0.405
+    ],
+    "bytes": 13113
+  },
+  "prop/food_meat_04": {
+    "file": "food_meat_04.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_meat_04.fbx",
+    "meshCount": 1,
+    "height": 0.098,
+    "footprint": [
+      0.3684,
+      0.3646
+    ],
+    "size": [
+      0.3684,
+      0.3646,
+      0.098
+    ],
+    "bytes": 6077
+  },
+  "prop/food_meat_05": {
+    "file": "food_meat_05.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_meat_05.fbx",
+    "meshCount": 1,
+    "height": 0.5309,
+    "footprint": [
+      0.4081,
+      0.7059
+    ],
+    "size": [
+      0.4081,
+      0.7059,
+      0.5309
+    ],
+    "bytes": 7776
+  },
+  "prop/food_meat_06": {
+    "file": "food_meat_06.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_meat_06.fbx",
+    "meshCount": 1,
+    "height": 0.3867,
+    "footprint": [
+      0.3691,
+      0.4483
+    ],
+    "size": [
+      0.3691,
+      0.4483,
+      0.3867
+    ],
+    "bytes": 7775
+  },
+  "prop/food_meat_07": {
+    "file": "food_meat_07.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_meat_07.fbx",
+    "meshCount": 1,
+    "height": 0.1844,
+    "footprint": [
+      0.1944,
+      0.3786
+    ],
+    "size": [
+      0.1944,
+      0.3786,
+      0.1844
+    ],
+    "bytes": 6976
+  },
+  "prop/food_meat_08": {
+    "file": "food_meat_08.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_meat_08.fbx",
+    "meshCount": 1,
+    "height": 0.0784,
+    "footprint": [
+      0.2448,
+      0.386
+    ],
+    "size": [
+      0.2448,
+      0.386,
+      0.0784
+    ],
+    "bytes": 4734
+  },
+  "prop/food_meat_09": {
+    "file": "food_meat_09.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_meat_09.fbx",
+    "meshCount": 1,
+    "height": 0.0194,
+    "footprint": [
+      0.0876,
+      0.3196
+    ],
+    "size": [
+      0.0876,
+      0.3196,
+      0.0194
+    ],
+    "bytes": 4935
+  },
+  "prop/food_meat_10": {
+    "file": "food_meat_10.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_meat_10.fbx",
+    "meshCount": 1,
+    "height": 0.0383,
+    "footprint": [
+      0.2661,
+      0.3298
+    ],
+    "size": [
+      0.2661,
+      0.3298,
+      0.0383
+    ],
+    "bytes": 9634
+  },
+  "prop/food_meat_11": {
+    "file": "food_meat_11.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_meat_11.fbx",
+    "meshCount": 1,
+    "height": 0.0902,
+    "footprint": [
+      0.1405,
+      0.34
+    ],
+    "size": [
+      0.1405,
+      0.34,
+      0.0902
+    ],
+    "bytes": 5616
+  },
+  "prop/food_mushroom_01": {
+    "file": "food_mushroom_01.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_mushroom_01.fbx",
+    "meshCount": 1,
+    "height": 0.0978,
+    "footprint": [
+      0.123,
+      0.1266
+    ],
+    "size": [
+      0.123,
+      0.1266,
+      0.0978
+    ],
+    "bytes": 8380
+  },
+  "prop/food_mushroom_02": {
+    "file": "food_mushroom_02.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_mushroom_02.fbx",
+    "meshCount": 1,
+    "height": 0.0978,
+    "footprint": [
+      0.123,
+      0.1266
+    ],
+    "size": [
+      0.123,
+      0.1266,
+      0.0978
+    ],
+    "bytes": 8380
+  },
+  "prop/food_onion": {
+    "file": "food_onion.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_onion.fbx",
+    "meshCount": 1,
+    "height": 0.1637,
+    "footprint": [
+      0.1673,
+      0.179
+    ],
+    "size": [
+      0.1673,
+      0.179,
+      0.1637
+    ],
+    "bytes": 4730
+  },
+  "prop/food_orange_01": {
+    "file": "food_orange_01.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_orange_01.fbx",
+    "meshCount": 1,
+    "height": 0.1785,
+    "footprint": [
+      0.1872,
+      0.1758
+    ],
+    "size": [
+      0.1872,
+      0.1758,
+      0.1785
+    ],
+    "bytes": 4936
+  },
+  "prop/food_orange_02": {
+    "file": "food_orange_02.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_orange_02.fbx",
+    "meshCount": 1,
+    "height": 0.1873,
+    "footprint": [
+      0.1223,
+      0.1888
+    ],
+    "size": [
+      0.1223,
+      0.1888,
+      0.1873
+    ],
+    "bytes": 4343
+  },
+  "prop/food_pear": {
+    "file": "food_pear.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_pear.fbx",
+    "meshCount": 1,
+    "height": 0.1657,
+    "footprint": [
+      0.1473,
+      0.1473
+    ],
+    "size": [
+      0.1473,
+      0.1473,
+      0.1657
+    ],
+    "bytes": 6505
+  },
+  "prop/food_plum": {
+    "file": "food_plum.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_plum.fbx",
+    "meshCount": 1,
+    "height": 0.088,
+    "footprint": [
+      0.0816,
+      0.0908
+    ],
+    "size": [
+      0.0816,
+      0.0908,
+      0.088
+    ],
+    "bytes": 4358
+  },
+  "prop/food_potato_01": {
+    "file": "food_potato_01.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_potato_01.fbx",
+    "meshCount": 1,
+    "height": 0.1196,
+    "footprint": [
+      0.144,
+      0.1184
+    ],
+    "size": [
+      0.144,
+      0.1184,
+      0.1196
+    ],
+    "bytes": 4886
+  },
+  "prop/food_potato_02": {
+    "file": "food_potato_02.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_potato_02.fbx",
+    "meshCount": 1,
+    "height": 0.1165,
+    "footprint": [
+      0.1232,
+      0.1227
+    ],
+    "size": [
+      0.1232,
+      0.1227,
+      0.1165
+    ],
+    "bytes": 4982
+  },
+  "prop/food_potato_03": {
+    "file": "food_potato_03.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_potato_03.fbx",
+    "meshCount": 1,
+    "height": 0.1557,
+    "footprint": [
+      0.2301,
+      0.174
+    ],
+    "size": [
+      0.2301,
+      0.174,
+      0.1557
+    ],
+    "bytes": 5002
+  },
+  "prop/food_pumpkin_01": {
+    "file": "food_pumpkin_01.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_pumpkin_01.fbx",
+    "meshCount": 1,
+    "height": 0.4839,
+    "footprint": [
+      0.6315,
+      0.6315
+    ],
+    "size": [
+      0.6315,
+      0.6315,
+      0.4839
+    ],
+    "bytes": 7148
+  },
+  "prop/food_pumpkin_02": {
+    "file": "food_pumpkin_02.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_pumpkin_02.fbx",
+    "meshCount": 1,
+    "height": 0.3555,
+    "footprint": [
+      0.3853,
+      0.3873
+    ],
+    "size": [
+      0.3853,
+      0.3873,
+      0.3555
+    ],
+    "bytes": 7144
+  },
+  "prop/food_pumpkin_03": {
+    "file": "food_pumpkin_03.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_pumpkin_03.fbx",
+    "meshCount": 1,
+    "height": 0.2164,
+    "footprint": [
+      0.3297,
+      0.3287
+    ],
+    "size": [
+      0.3297,
+      0.3287,
+      0.2164
+    ],
+    "bytes": 7063
+  },
+  "prop/food_pumpkin_04": {
+    "file": "food_pumpkin_04.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_pumpkin_04.fbx",
+    "meshCount": 1,
+    "height": 0.4047,
+    "footprint": [
+      0.4511,
+      0.4535
+    ],
+    "size": [
+      0.4511,
+      0.4535,
+      0.4047
+    ],
+    "bytes": 10227
+  },
+  "prop/food_salad": {
+    "file": "food_salad.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_salad.fbx",
+    "meshCount": 1,
+    "height": 0.2748,
+    "footprint": [
+      0.3151,
+      0.3151
+    ],
+    "size": [
+      0.3151,
+      0.3151,
+      0.2748
+    ],
+    "bytes": 5215
+  },
+  "prop/food_sausage_01": {
+    "file": "food_sausage_01.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_sausage_01.fbx",
+    "meshCount": 1,
+    "height": 0.0806,
+    "footprint": [
+      0.1109,
+      0.2961
+    ],
+    "size": [
+      0.1109,
+      0.2961,
+      0.0806
+    ],
+    "bytes": 5037
+  },
+  "prop/food_sausage_02": {
+    "file": "food_sausage_02.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_sausage_02.fbx",
+    "meshCount": 1,
+    "height": 0.0807,
+    "footprint": [
+      0.1556,
+      0.5037
+    ],
+    "size": [
+      0.1556,
+      0.5037,
+      0.0807
+    ],
+    "bytes": 5041
+  },
+  "prop/food_sausage_03": {
+    "file": "food_sausage_03.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_sausage_03.fbx",
+    "meshCount": 1,
+    "height": 0.1298,
+    "footprint": [
+      0.0695,
+      0.3632
+    ],
+    "size": [
+      0.0695,
+      0.3632,
+      0.1298
+    ],
+    "bytes": 4715
+  },
+  "prop/food_sausage_04": {
+    "file": "food_sausage_04.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_sausage_04.fbx",
+    "meshCount": 1,
+    "height": 0.0806,
+    "footprint": [
+      0.1109,
+      0.2961
+    ],
+    "size": [
+      0.1109,
+      0.2961,
+      0.0806
+    ],
+    "bytes": 5037
+  },
+  "prop/food_sausage_05": {
+    "file": "food_sausage_05.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_sausage_05.fbx",
+    "meshCount": 1,
+    "height": 0.0807,
+    "footprint": [
+      0.1556,
+      0.5037
+    ],
+    "size": [
+      0.1556,
+      0.5037,
+      0.0807
+    ],
+    "bytes": 5041
+  },
+  "prop/food_sausage_06": {
+    "file": "food_sausage_06.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_sausage_06.fbx",
+    "meshCount": 1,
+    "height": 0.1298,
+    "footprint": [
+      0.0695,
+      0.3632
+    ],
+    "size": [
+      0.0695,
+      0.3632,
+      0.1298
+    ],
+    "bytes": 4719
+  },
+  "prop/food_springonion": {
+    "file": "food_springonion.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_springonion.fbx",
+    "meshCount": 1,
+    "height": 0.1437,
+    "footprint": [
+      0.1132,
+      0.467
+    ],
+    "size": [
+      0.1132,
+      0.467,
+      0.1437
+    ],
+    "bytes": 5992
+  },
+  "prop/food_tomato": {
+    "file": "food_tomato.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_tomato.fbx",
+    "meshCount": 1,
+    "height": 0.204,
+    "footprint": [
+      0.1995,
+      0.1995
+    ],
+    "size": [
+      0.1995,
+      0.1995,
+      0.204
+    ],
+    "bytes": 5126
+  },
+  "prop/food_turnip": {
+    "file": "food_turnip.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_turnip.fbx",
+    "meshCount": 1,
+    "height": 0.1698,
+    "footprint": [
+      0.1919,
+      0.6328
+    ],
+    "size": [
+      0.1919,
+      0.6328,
+      0.1698
+    ],
+    "bytes": 5818
+  },
+  "prop/food_watermelon_01": {
+    "file": "food_watermelon_01.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_watermelon_01.fbx",
+    "meshCount": 1,
+    "height": 0.4561,
+    "footprint": [
+      0.5055,
+      0.4561
+    ],
+    "size": [
+      0.5055,
+      0.4561,
+      0.4561
+    ],
+    "bytes": 5323
+  },
+  "prop/food_watermelon_02": {
+    "file": "food_watermelon_02.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_watermelon_02.fbx",
+    "meshCount": 1,
+    "height": 0.4212,
+    "footprint": [
+      0.4214,
+      0.2476
+    ],
+    "size": [
+      0.4214,
+      0.2476,
+      0.4212
+    ],
+    "bytes": 4728
+  },
+  "prop/food_watermelon_03": {
+    "file": "food_watermelon_03.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_watermelon_03.fbx",
+    "meshCount": 1,
+    "height": 0.1087,
+    "footprint": [
+      0.456,
+      0.2288
+    ],
+    "size": [
+      0.456,
+      0.2288,
+      0.1087
+    ],
+    "bytes": 3480
+  },
+  "prop/food_watermelon_04": {
+    "file": "food_watermelon_04.gltf",
+    "category": "prop",
+    "source": "SM_PROP_food_watermelon_04.fbx",
+    "meshCount": 1,
+    "height": 0.0355,
+    "footprint": [
+      0.2587,
+      0.1829
+    ],
+    "size": [
+      0.2587,
+      0.1829,
+      0.0355
+    ],
+    "bytes": 3527
+  },
+  "prop/foundation_wood_01": {
+    "file": "foundation_wood_01.gltf",
+    "category": "prop",
+    "source": "SM_PROP_foundation_wood_01.fbx",
+    "meshCount": 1,
+    "height": 1.0569,
+    "footprint": [
+      3.9013,
+      2.6633
+    ],
+    "size": [
+      3.9013,
+      2.6633,
+      1.0569
+    ],
+    "bytes": 25792
+  },
+  "prop/foundation_wood_02": {
+    "file": "foundation_wood_02.gltf",
+    "category": "prop",
+    "source": "SM_PROP_foundation_wood_02.fbx",
+    "meshCount": 1,
+    "height": 1.0471,
+    "footprint": [
+      2.6808,
+      2.6633
+    ],
+    "size": [
+      2.6808,
+      2.6633,
+      1.0471
+    ],
+    "bytes": 18316
+  },
+  "prop/foundation_wood_03": {
+    "file": "foundation_wood_03.gltf",
+    "category": "prop",
+    "source": "SM_PROP_foundation_wood_03.fbx",
+    "meshCount": 1,
+    "height": 1.0536,
+    "footprint": [
+      5.2102,
+      2.6634
+    ],
+    "size": [
+      5.2102,
+      2.6634,
+      1.0536
+    ],
+    "bytes": 28954
+  },
+  "prop/foundation_wood_04": {
+    "file": "foundation_wood_04.gltf",
+    "category": "prop",
+    "source": "SM_PROP_foundation_wood_04.fbx",
+    "meshCount": 1,
+    "height": 1.0536,
+    "footprint": [
+      4.1869,
+      2.6634
+    ],
+    "size": [
+      4.1869,
+      2.6634,
+      1.0536
+    ],
+    "bytes": 21475
+  },
+  "prop/foundation_wood_05": {
+    "file": "foundation_wood_05.gltf",
+    "category": "prop",
+    "source": "SM_PROP_foundation_wood_05.fbx",
+    "meshCount": 1,
+    "height": 1.0536,
+    "footprint": [
+      5.2249,
+      5.1847
+    ],
+    "size": [
+      5.2249,
+      5.1847,
+      1.0536
+    ],
+    "bytes": 39298
+  },
+  "prop/gallows": {
+    "file": "gallows.gltf",
+    "category": "prop",
+    "source": "SM_PROP_gallows.fbx",
+    "meshCount": 1,
+    "height": 5.4462,
+    "footprint": [
+      3.9013,
+      3.1044
+    ],
+    "size": [
+      3.9013,
+      3.1044,
+      5.4462
+    ],
+    "bytes": 54691
+  },
+  "prop/guillotine": {
+    "file": "guillotine.gltf",
+    "category": "prop",
+    "source": "SM_PROP_guillotine.fbx",
+    "meshCount": 2,
+    "height": 4.2408,
+    "footprint": [
+      2.0231,
+      2.8599
+    ],
+    "size": [
+      2.0231,
+      2.8599,
+      4.2408
+    ],
+    "bytes": 43193
+  },
+  "prop/hangingboard": {
+    "file": "hangingboard.gltf",
+    "category": "prop",
+    "source": "SM_PROP_hangingboard.fbx",
+    "meshCount": 1,
+    "height": 1.8037,
+    "footprint": [
+      0.4003,
+      2.133
+    ],
+    "size": [
+      0.4003,
+      2.133,
+      1.8037
+    ],
+    "bytes": 17827
+  },
+  "prop/hay_01": {
+    "file": "hay_01.gltf",
+    "category": "prop",
+    "source": "SM_PROP_hay_01.fbx",
+    "meshCount": 1,
+    "height": 1.2277,
+    "footprint": [
+      1.6309,
+      1.2861
+    ],
+    "size": [
+      1.6309,
+      1.2861,
+      1.2277
+    ],
+    "bytes": 16993
+  },
+  "prop/hay_02": {
+    "file": "hay_02.gltf",
+    "category": "prop",
+    "source": "SM_PROP_hay_02.fbx",
+    "meshCount": 1,
+    "height": 0.6089,
+    "footprint": [
+      0.8853,
+      0.766
+    ],
+    "size": [
+      0.8853,
+      0.766,
+      0.6089
+    ],
+    "bytes": 16999
+  },
+  "prop/hay_03": {
+    "file": "hay_03.gltf",
+    "category": "prop",
+    "source": "SM_PROP_hay_03.fbx",
+    "meshCount": 1,
+    "height": 0.5749,
+    "footprint": [
+      0.8651,
+      0.6346
+    ],
+    "size": [
+      0.8651,
+      0.6346,
+      0.5749
+    ],
+    "bytes": 10825
+  },
+  "prop/hay_04": {
+    "file": "hay_04.gltf",
+    "category": "prop",
+    "source": "SM_PROP_hay_04.fbx",
+    "meshCount": 1,
+    "height": 0.994,
+    "footprint": [
+      0.9818,
+      1.2525
+    ],
+    "size": [
+      0.9818,
+      1.2525,
+      0.994
+    ],
+    "bytes": 27172
+  },
+  "prop/hay_05": {
+    "file": "hay_05.gltf",
+    "category": "prop",
+    "source": "SM_PROP_hay_05.fbx",
+    "meshCount": 1,
+    "height": 1.3031,
+    "footprint": [
+      2.4812,
+      2.4069
+    ],
+    "size": [
+      2.4812,
+      2.4069,
+      1.3031
+    ],
+    "bytes": 12492
+  },
+  "prop/hay_06": {
+    "file": "hay_06.gltf",
+    "category": "prop",
+    "source": "SM_PROP_hay_06.fbx",
+    "meshCount": 1,
+    "height": 0.3327,
+    "footprint": [
+      1.4695,
+      1.5149
+    ],
+    "size": [
+      1.4695,
+      1.5149,
+      0.3327
+    ],
+    "bytes": 9320
+  },
+  "prop/horsestation": {
+    "file": "horsestation.gltf",
+    "category": "prop",
+    "source": "SM_PROP_horsestation.fbx",
+    "meshCount": 1,
+    "height": 1.158,
+    "footprint": [
+      2.0503,
+      0.3321
+    ],
+    "size": [
+      2.0503,
+      0.3321,
+      1.158
+    ],
+    "bytes": 22748
+  },
+  "prop/knife_01": {
+    "file": "knife_01.gltf",
+    "category": "prop",
+    "source": "SM_PROP_knife_01.fbx",
+    "meshCount": 1,
+    "height": 0.0506,
+    "footprint": [
+      0.7031,
+      0.2723
+    ],
+    "size": [
+      0.7031,
+      0.2723,
+      0.0506
+    ],
+    "bytes": 7506
+  },
+  "prop/knife_02": {
+    "file": "knife_02.gltf",
+    "category": "prop",
+    "source": "SM_PROP_knife_02.fbx",
+    "meshCount": 1,
+    "height": 0.0506,
+    "footprint": [
+      0.7396,
+      0.1561
+    ],
+    "size": [
+      0.7396,
+      0.1561,
+      0.0506
+    ],
+    "bytes": 8649
+  },
+  "prop/ladder": {
+    "file": "ladder.gltf",
+    "category": "prop",
+    "source": "SM_PROP_ladder.fbx",
+    "meshCount": 1,
+    "height": 3.247,
+    "footprint": [
+      1.092,
+      0.2102
+    ],
+    "size": [
+      1.092,
+      0.2102,
+      3.247
+    ],
+    "bytes": 15733
+  },
+  "prop/lantern_01": {
+    "file": "lantern_01.gltf",
+    "category": "prop",
+    "source": "SM_PROP_lantern_01.fbx",
+    "meshCount": 1,
+    "height": 0.9362,
+    "footprint": [
+      0.5077,
+      0.5862
+    ],
+    "size": [
+      0.5077,
+      0.5862,
+      0.9362
+    ],
+    "bytes": 18511
+  },
+  "prop/lantern_02": {
+    "file": "lantern_02.gltf",
+    "category": "prop",
+    "source": "SM_PROP_lantern_02.fbx",
+    "meshCount": 1,
+    "height": 0.939,
+    "footprint": [
+      0.5077,
+      0.5863
+    ],
+    "size": [
+      0.5077,
+      0.5863,
+      0.939
+    ],
+    "bytes": 19528
+  },
+  "prop/lantern_03": {
+    "file": "lantern_03.gltf",
+    "category": "prop",
+    "source": "SM_PROP_lantern_03.fbx",
+    "meshCount": 1,
+    "height": 0.9383,
+    "footprint": [
+      0.5077,
+      0.5863
+    ],
+    "size": [
+      0.5077,
+      0.5863,
+      0.9383
+    ],
+    "bytes": 22624
+  },
+  "prop/lantern_04": {
+    "file": "lantern_04.gltf",
+    "category": "prop",
+    "source": "SM_PROP_lantern_04.fbx",
+    "meshCount": 1,
+    "height": 0.939,
+    "footprint": [
+      0.5077,
+      0.5863
+    ],
+    "size": [
+      0.5077,
+      0.5863,
+      0.939
+    ],
+    "bytes": 27058
+  },
+  "prop/mailbox": {
+    "file": "mailbox.gltf",
+    "category": "prop",
+    "source": "SM_PROP_mailbox.fbx",
+    "meshCount": 1,
+    "height": 1.5114,
+    "footprint": [
+      0.6707,
+      0.3618
+    ],
+    "size": [
+      0.6707,
+      0.3618,
+      1.5114
+    ],
+    "bytes": 27131
+  },
+  "prop/market_shelf_01": {
+    "file": "market_shelf_01.gltf",
+    "category": "prop",
+    "source": "SM_PROP_market_shelf_01.fbx",
+    "meshCount": 1,
+    "height": 0.9697,
+    "footprint": [
+      3.1642,
+      1.1887
+    ],
+    "size": [
+      3.1642,
+      1.1887,
+      0.9697
+    ],
+    "bytes": 15014
+  },
+  "prop/market_shelf_02": {
+    "file": "market_shelf_02.gltf",
+    "category": "prop",
+    "source": "SM_PROP_market_shelf_02.fbx",
+    "meshCount": 1,
+    "height": 0.8011,
+    "footprint": [
+      2.9293,
+      1.1165
+    ],
+    "size": [
+      2.9293,
+      1.1165,
+      0.8011
+    ],
+    "bytes": 12092
+  },
+  "prop/market_shelf_03": {
+    "file": "market_shelf_03.gltf",
+    "category": "prop",
+    "source": "SM_PROP_market_shelf_03.fbx",
+    "meshCount": 1,
+    "height": 1.5953,
+    "footprint": [
+      2.9293,
+      1.1165
+    ],
+    "size": [
+      2.9293,
+      1.1165,
+      1.5953
+    ],
+    "bytes": 20568
+  },
+  "prop/market_v01_01": {
+    "file": "market_v01_01.gltf",
+    "category": "prop",
+    "source": "SM_PROP_market_v01_01.fbx",
+    "meshCount": 1,
+    "height": 3.4988,
+    "footprint": [
+      4.2059,
+      3.6191
+    ],
+    "size": [
+      4.2059,
+      3.6191,
+      3.4988
+    ],
+    "bytes": 48636
+  },
+  "prop/market_v01_02": {
+    "file": "market_v01_02.gltf",
+    "category": "prop",
+    "source": "SM_PROP_market_v01_02.fbx",
+    "meshCount": 1,
+    "height": 3.4739,
+    "footprint": [
+      3.9137,
+      3.6191
+    ],
+    "size": [
+      3.9137,
+      3.6191,
+      3.4739
+    ],
+    "bytes": 42402
+  },
+  "prop/market_v02_01": {
+    "file": "market_v02_01.gltf",
+    "category": "prop",
+    "source": "SM_PROP_market_v02_01.fbx",
+    "meshCount": 1,
+    "height": 3.4754,
+    "footprint": [
+      4.2059,
+      3.6191
+    ],
+    "size": [
+      4.2059,
+      3.6191,
+      3.4754
+    ],
+    "bytes": 40072
+  },
+  "prop/market_v02_02": {
+    "file": "market_v02_02.gltf",
+    "category": "prop",
+    "source": "SM_PROP_market_v02_02.fbx",
+    "meshCount": 1,
+    "height": 3.4506,
+    "footprint": [
+      3.9137,
+      3.6191
+    ],
+    "size": [
+      3.9137,
+      3.6191,
+      3.4506
+    ],
+    "bytes": 33842
+  },
+  "prop/market_v03_01": {
+    "file": "market_v03_01.gltf",
+    "category": "prop",
+    "source": "SM_PROP_market_v03_01.fbx",
+    "meshCount": 1,
+    "height": 3.8212,
+    "footprint": [
+      3.7057,
+      3.6966
+    ],
+    "size": [
+      3.7057,
+      3.6966,
+      3.8212
+    ],
+    "bytes": 72008
+  },
+  "prop/market_v03_02": {
+    "file": "market_v03_02.gltf",
+    "category": "prop",
+    "source": "SM_PROP_market_v03_02.fbx",
+    "meshCount": 1,
+    "height": 3.8212,
+    "footprint": [
+      3.7057,
+      3.6966
+    ],
+    "size": [
+      3.7057,
+      3.6966,
+      3.8212
+    ],
+    "bytes": 72150
+  },
+  "prop/market_v04_01": {
+    "file": "market_v04_01.gltf",
+    "category": "prop",
+    "source": "SM_PROP_market_v04_01.fbx",
+    "meshCount": 1,
+    "height": 3.7751,
+    "footprint": [
+      6.679,
+      3.4913
+    ],
+    "size": [
+      6.679,
+      3.4913,
+      3.7751
+    ],
+    "bytes": 86521
+  },
+  "prop/market_v04_02": {
+    "file": "market_v04_02.gltf",
+    "category": "prop",
+    "source": "SM_PROP_market_v04_02.fbx",
+    "meshCount": 1,
+    "height": 3.7751,
+    "footprint": [
+      6.679,
+      3.4913
+    ],
+    "size": [
+      6.679,
+      3.4913,
+      3.7751
+    ],
+    "bytes": 81996
+  },
+  "prop/outhouse": {
+    "file": "outhouse.gltf",
+    "category": "prop",
+    "source": "SM_PROP_outhouse.fbx",
+    "meshCount": 2,
+    "height": 2.7247,
+    "footprint": [
+      1.9083,
+      1.6693
+    ],
+    "size": [
+      1.9083,
+      1.6693,
+      2.7247
+    ],
+    "bytes": 38586
+  },
+  "prop/pan": {
+    "file": "pan.gltf",
+    "category": "prop",
+    "source": "SM_PROP_pan.fbx",
+    "meshCount": 2,
+    "height": 0.2533,
+    "footprint": [
+      0.4377,
+      0.8944
+    ],
+    "size": [
+      0.4377,
+      0.8944,
+      0.2533
+    ],
+    "bytes": 16976
+  },
+  "prop/pan_lid": {
+    "file": "pan_lid.gltf",
+    "category": "prop",
+    "source": "SM_PROP_pan_lid.fbx",
+    "meshCount": 1,
+    "height": 0.1729,
+    "footprint": [
+      0.4133,
+      0.4198
+    ],
+    "size": [
+      0.4133,
+      0.4198,
+      0.1729
+    ],
+    "bytes": 8805
+  },
+  "prop/paper_01": {
+    "file": "paper_01.gltf",
+    "category": "prop",
+    "source": "SM_PROP_paper_01.fbx",
+    "meshCount": 1,
+    "height": 0.0836,
+    "footprint": [
+      0.4063,
+      0.5141
+    ],
+    "size": [
+      0.4063,
+      0.5141,
+      0.0836
+    ],
+    "bytes": 3180
+  },
+  "prop/paper_02": {
+    "file": "paper_02.gltf",
+    "category": "prop",
+    "source": "SM_PROP_paper_02.fbx",
+    "meshCount": 1,
+    "height": 0.0754,
+    "footprint": [
+      0.375,
+      0.4958
+    ],
+    "size": [
+      0.375,
+      0.4958,
+      0.0754
+    ],
+    "bytes": 3175
+  },
+  "prop/paper_03": {
+    "file": "paper_03.gltf",
+    "category": "prop",
+    "source": "SM_PROP_paper_03.fbx",
+    "meshCount": 1,
+    "height": 0.1859,
+    "footprint": [
+      0.4662,
+      0.5451
+    ],
+    "size": [
+      0.4662,
+      0.5451,
+      0.1859
+    ],
+    "bytes": 5686
+  },
+  "prop/paper_04": {
+    "file": "paper_04.gltf",
+    "category": "prop",
+    "source": "SM_PROP_paper_04.fbx",
+    "meshCount": 1,
+    "height": 0.1691,
+    "footprint": [
+      0.5332,
+      0.2015
+    ],
+    "size": [
+      0.5332,
+      0.2015,
+      0.1691
+    ],
+    "bytes": 4888
+  },
+  "prop/pitchfork": {
+    "file": "pitchfork.gltf",
+    "category": "prop",
+    "source": "SM_PROP_pitchfork.fbx",
+    "meshCount": 1,
+    "height": 0.1736,
+    "footprint": [
+      0.3742,
+      1.7363
+    ],
+    "size": [
+      0.3742,
+      1.7363,
+      0.1736
+    ],
+    "bytes": 13487
+  },
+  "prop/planks_01": {
+    "file": "planks_01.gltf",
+    "category": "prop",
+    "source": "SM_PROP_planks_01.fbx",
+    "meshCount": 1,
+    "height": 0.3711,
+    "footprint": [
+      1.9197,
+      1.0377
+    ],
+    "size": [
+      1.9197,
+      1.0377,
+      0.3711
+    ],
+    "bytes": 5787
+  },
+  "prop/planks_02": {
+    "file": "planks_02.gltf",
+    "category": "prop",
+    "source": "SM_PROP_planks_02.fbx",
+    "meshCount": 1,
+    "height": 0.2636,
+    "footprint": [
+      1.9027,
+      1.8995
+    ],
+    "size": [
+      1.9027,
+      1.8995,
+      0.2636
+    ],
+    "bytes": 7232
+  },
+  "prop/planks_03": {
+    "file": "planks_03.gltf",
+    "category": "prop",
+    "source": "SM_PROP_planks_03.fbx",
+    "meshCount": 1,
+    "height": 0.1213,
+    "footprint": [
+      1.7934,
+      1.0852
+    ],
+    "size": [
+      1.7934,
+      1.0852,
+      0.1213
+    ],
+    "bytes": 4349
+  },
+  "prop/plate_metal_01": {
+    "file": "plate_metal_01.gltf",
+    "category": "prop",
+    "source": "SM_PROP_plate_metal_01.fbx",
+    "meshCount": 1,
+    "height": 0.0962,
+    "footprint": [
+      0.6748,
+      0.6265
+    ],
+    "size": [
+      0.6748,
+      0.6265,
+      0.0962
+    ],
+    "bytes": 7275
+  },
+  "prop/plate_metal_02": {
+    "file": "plate_metal_02.gltf",
+    "category": "prop",
+    "source": "SM_PROP_plate_metal_02.fbx",
+    "meshCount": 1,
+    "height": 0.0511,
+    "footprint": [
+      0.3745,
+      0.3526
+    ],
+    "size": [
+      0.3745,
+      0.3526,
+      0.0511
+    ],
+    "bytes": 7214
+  },
+  "prop/plate_wood": {
+    "file": "plate_wood.gltf",
+    "category": "prop",
+    "source": "SM_PROP_plate_wood.fbx",
+    "meshCount": 1,
+    "height": 0.0529,
+    "footprint": [
+      0.3213,
+      0.3143
+    ],
+    "size": [
+      0.3213,
+      0.3143,
+      0.0529
+    ],
+    "bytes": 6162
+  },
+  "prop/poster_01": {
+    "file": "poster_01.gltf",
+    "category": "prop",
+    "source": "SM_PROP_poster_01.fbx",
+    "meshCount": 1,
+    "height": 0.533,
+    "footprint": [
+      0.3716,
+      0.2566
+    ],
+    "size": [
+      0.3716,
+      0.2566,
+      0.533
+    ],
+    "bytes": 7192
+  },
+  "prop/poster_02": {
+    "file": "poster_02.gltf",
+    "category": "prop",
+    "source": "SM_PROP_poster_02.fbx",
+    "meshCount": 1,
+    "height": 0.5331,
+    "footprint": [
+      0.401,
+      0.2773
+    ],
+    "size": [
+      0.401,
+      0.2773,
+      0.5331
+    ],
+    "bytes": 7193
+  },
+  "prop/railing_v01_01": {
+    "file": "railing_v01_01.gltf",
+    "category": "prop",
+    "source": "SM_PROP_railing_v01_01.fbx",
+    "meshCount": 1,
+    "height": 1.0349,
+    "footprint": [
+      0.4115,
+      3.0953
+    ],
+    "size": [
+      0.4115,
+      3.0953,
+      1.0349
+    ],
+    "bytes": 10129
+  },
+  "prop/railing_v01_02": {
+    "file": "railing_v01_02.gltf",
+    "category": "prop",
+    "source": "SM_PROP_railing_v01_02.fbx",
+    "meshCount": 1,
+    "height": 1.1568,
+    "footprint": [
+      0.336,
+      3.0995
+    ],
+    "size": [
+      0.336,
+      3.0995,
+      1.1568
+    ],
+    "bytes": 10126
+  },
+  "prop/railing_v02_01": {
+    "file": "railing_v02_01.gltf",
+    "category": "prop",
+    "source": "SM_PROP_railing_v02_01.fbx",
+    "meshCount": 1,
+    "height": 1.0388,
+    "footprint": [
+      0.3793,
+      3.1814
+    ],
+    "size": [
+      0.3793,
+      3.1814,
+      1.0388
+    ],
+    "bytes": 17341
+  },
+  "prop/railing_v02_02": {
+    "file": "railing_v02_02.gltf",
+    "category": "prop",
+    "source": "SM_PROP_railing_v02_02.fbx",
+    "meshCount": 1,
+    "height": 1.438,
+    "footprint": [
+      1.9346,
+      3.4499
+    ],
+    "size": [
+      1.9346,
+      3.4499,
+      1.438
+    ],
+    "bytes": 17341
+  },
+  "prop/railing_v03_01": {
+    "file": "railing_v03_01.gltf",
+    "category": "prop",
+    "source": "SM_PROP_railing_v03_01.fbx",
+    "meshCount": 1,
+    "height": 1.0341,
+    "footprint": [
+      0.341,
+      2.0098
+    ],
+    "size": [
+      0.341,
+      2.0098,
+      1.0341
+    ],
+    "bytes": 13076
+  },
+  "prop/railing_v03_02": {
+    "file": "railing_v03_02.gltf",
+    "category": "prop",
+    "source": "SM_PROP_railing_v03_02.fbx",
+    "meshCount": 1,
+    "height": 1.015,
+    "footprint": [
+      0.3698,
+      1.8719
+    ],
+    "size": [
+      0.3698,
+      1.8719,
+      1.015
+    ],
+    "bytes": 13117
+  },
+  "prop/rowboat": {
+    "file": "rowboat.gltf",
+    "category": "prop",
+    "source": "SM_PROP_rowboat.fbx",
+    "meshCount": 6,
+    "height": 2.1411,
+    "footprint": [
+      3.7825,
+      4.0598
+    ],
+    "size": [
+      3.7825,
+      4.0598,
+      2.1411
+    ],
+    "bytes": 97427
+  },
+  "prop/sack_01": {
+    "file": "sack_01.gltf",
+    "category": "prop",
+    "source": "SM_PROP_sack_01.fbx",
+    "meshCount": 1,
+    "height": 0.493,
+    "footprint": [
+      0.6272,
+      0.7005
+    ],
+    "size": [
+      0.6272,
+      0.7005,
+      0.493
+    ],
+    "bytes": 9082
+  },
+  "prop/sack_02": {
+    "file": "sack_02.gltf",
+    "category": "prop",
+    "source": "SM_PROP_sack_02.fbx",
+    "meshCount": 1,
+    "height": 0.493,
+    "footprint": [
+      0.6272,
+      0.7005
+    ],
+    "size": [
+      0.6272,
+      0.7005,
+      0.493
+    ],
+    "bytes": 9081
+  },
+  "prop/sack_03": {
+    "file": "sack_03.gltf",
+    "category": "prop",
+    "source": "SM_PROP_sack_03.fbx",
+    "meshCount": 1,
+    "height": 0.493,
+    "footprint": [
+      0.6272,
+      0.7005
+    ],
+    "size": [
+      0.6272,
+      0.7005,
+      0.493
+    ],
+    "bytes": 9081
+  },
+  "prop/sack_04": {
+    "file": "sack_04.gltf",
+    "category": "prop",
+    "source": "SM_PROP_sack_04.fbx",
+    "meshCount": 1,
+    "height": 0.493,
+    "footprint": [
+      0.6272,
+      0.7005
+    ],
+    "size": [
+      0.6272,
+      0.7005,
+      0.493
+    ],
+    "bytes": 9081
+  },
+  "prop/sack_05": {
+    "file": "sack_05.gltf",
+    "category": "prop",
+    "source": "SM_PROP_sack_05.fbx",
+    "meshCount": 1,
+    "height": 0.5237,
+    "footprint": [
+      0.3534,
+      0.5423
+    ],
+    "size": [
+      0.3534,
+      0.5423,
+      0.5237
+    ],
+    "bytes": 8767
+  },
+  "prop/sack_06": {
+    "file": "sack_06.gltf",
+    "category": "prop",
+    "source": "SM_PROP_sack_06.fbx",
+    "meshCount": 1,
+    "height": 0.2296,
+    "footprint": [
+      0.6741,
+      0.5546
+    ],
+    "size": [
+      0.6741,
+      0.5546,
+      0.2296
+    ],
+    "bytes": 8167
+  },
+  "prop/sack_07": {
+    "file": "sack_07.gltf",
+    "category": "prop",
+    "source": "SM_PROP_sack_07.fbx",
+    "meshCount": 1,
+    "height": 0.4983,
+    "footprint": [
+      0.6555,
+      0.6781
+    ],
+    "size": [
+      0.6555,
+      0.6781,
+      0.4983
+    ],
+    "bytes": 10182
+  },
+  "prop/sack_08": {
+    "file": "sack_08.gltf",
+    "category": "prop",
+    "source": "SM_PROP_sack_08.fbx",
+    "meshCount": 1,
+    "height": 0.5529,
+    "footprint": [
+      0.6224,
+      0.6844
+    ],
+    "size": [
+      0.6224,
+      0.6844,
+      0.5529
+    ],
+    "bytes": 9865
+  },
+  "prop/sack_09": {
+    "file": "sack_09.gltf",
+    "category": "prop",
+    "source": "SM_PROP_sack_09.fbx",
+    "meshCount": 1,
+    "height": 0.4906,
+    "footprint": [
+      0.6463,
+      0.7085
+    ],
+    "size": [
+      0.6463,
+      0.7085,
+      0.4906
+    ],
+    "bytes": 9863
+  },
+  "prop/sack_10": {
+    "file": "sack_10.gltf",
+    "category": "prop",
+    "source": "SM_PROP_sack_10.fbx",
+    "meshCount": 1,
+    "height": 0.5132,
+    "footprint": [
+      0.6525,
+      0.7451
+    ],
+    "size": [
+      0.6525,
+      0.7451,
+      0.5132
+    ],
+    "bytes": 9866
+  },
+  "prop/sack_11": {
+    "file": "sack_11.gltf",
+    "category": "prop",
+    "source": "SM_PROP_sack_11.fbx",
+    "meshCount": 1,
+    "height": 0.3643,
+    "footprint": [
+      1.2695,
+      1.2905
+    ],
+    "size": [
+      1.2695,
+      1.2905,
+      0.3643
+    ],
+    "bytes": 23346
+  },
+  "prop/scroll": {
+    "file": "scroll.gltf",
+    "category": "prop",
+    "source": "SM_PROP_scroll.fbx",
+    "meshCount": 1,
+    "height": 0.1456,
+    "footprint": [
+      0.3976,
+      0.1356
+    ],
+    "size": [
+      0.3976,
+      0.1356,
+      0.1456
+    ],
+    "bytes": 4886
+  },
+  "prop/sign_01": {
+    "file": "sign_01.gltf",
+    "category": "prop",
+    "source": "SM_PROP_sign_01.fbx",
+    "meshCount": 1,
+    "height": 3.3972,
+    "footprint": [
+      0.6551,
+      1.8282
+    ],
+    "size": [
+      0.6551,
+      1.8282,
+      3.3972
+    ],
+    "bytes": 37840
+  },
+  "prop/sign_02": {
+    "file": "sign_02.gltf",
+    "category": "prop",
+    "source": "SM_PROP_sign_02.fbx",
+    "meshCount": 1,
+    "height": 3.3972,
+    "footprint": [
+      0.6551,
+      1.8282
+    ],
+    "size": [
+      0.6551,
+      1.8282,
+      3.3972
+    ],
+    "bytes": 37840
+  },
+  "prop/sign_03": {
+    "file": "sign_03.gltf",
+    "category": "prop",
+    "source": "SM_PROP_sign_03.fbx",
+    "meshCount": 1,
+    "height": 3.3972,
+    "footprint": [
+      0.6551,
+      1.8282
+    ],
+    "size": [
+      0.6551,
+      1.8282,
+      3.3972
+    ],
+    "bytes": 37840
+  },
+  "prop/sign_04": {
+    "file": "sign_04.gltf",
+    "category": "prop",
+    "source": "SM_PROP_sign_04.fbx",
+    "meshCount": 1,
+    "height": 3.3972,
+    "footprint": [
+      0.6551,
+      1.8282
+    ],
+    "size": [
+      0.6551,
+      1.8282,
+      3.3972
+    ],
+    "bytes": 37841
+  },
+  "prop/sign_05": {
+    "file": "sign_05.gltf",
+    "category": "prop",
+    "source": "SM_PROP_sign_05.fbx",
+    "meshCount": 1,
+    "height": 3.3972,
+    "footprint": [
+      0.6551,
+      1.8282
+    ],
+    "size": [
+      0.6551,
+      1.8282,
+      3.3972
+    ],
+    "bytes": 37840
+  },
+  "prop/sign_06": {
+    "file": "sign_06.gltf",
+    "category": "prop",
+    "source": "SM_PROP_sign_06.fbx",
+    "meshCount": 1,
+    "height": 3.3972,
+    "footprint": [
+      0.6551,
+      1.8282
+    ],
+    "size": [
+      0.6551,
+      1.8282,
+      3.3972
+    ],
+    "bytes": 37841
+  },
+  "prop/signpost_01": {
+    "file": "signpost_01.gltf",
+    "category": "prop",
+    "source": "SM_PROP_signpost_01.fbx",
+    "meshCount": 1,
+    "height": 4.1184,
+    "footprint": [
+      2.3019,
+      2.1769
+    ],
+    "size": [
+      2.3019,
+      2.1769,
+      4.1184
+    ],
+    "bytes": 16944
+  },
+  "prop/signpost_02": {
+    "file": "signpost_02.gltf",
+    "category": "prop",
+    "source": "SM_PROP_signpost_02.fbx",
+    "meshCount": 1,
+    "height": 3.9847,
+    "footprint": [
+      0.5356,
+      1.4076
+    ],
+    "size": [
+      0.5356,
+      1.4076,
+      3.9847
+    ],
+    "bytes": 11502
+  },
+  "prop/signpost_03": {
+    "file": "signpost_03.gltf",
+    "category": "prop",
+    "source": "SM_PROP_signpost_03.fbx",
+    "meshCount": 1,
+    "height": 4.3813,
+    "footprint": [
+      2.3852,
+      2.385
+    ],
+    "size": [
+      2.3852,
+      2.385,
+      4.3813
+    ],
+    "bytes": 19792
+  },
+  "prop/signpost_04": {
+    "file": "signpost_04.gltf",
+    "category": "prop",
+    "source": "SM_PROP_signpost_04.fbx",
+    "meshCount": 1,
+    "height": 4.1184,
+    "footprint": [
+      0.3209,
+      2.385
+    ],
+    "size": [
+      0.3209,
+      2.385,
+      4.1184
+    ],
+    "bytes": 13616
+  },
+  "prop/spikes_v01_01": {
+    "file": "spikes_v01_01.gltf",
+    "category": "prop",
+    "source": "SM_PROP_spikes_v01_01.fbx",
+    "meshCount": 1,
+    "height": 2.2117,
+    "footprint": [
+      2.0276,
+      2.2961
+    ],
+    "size": [
+      2.0276,
+      2.2961,
+      2.2117
+    ],
+    "bytes": 19889
+  },
+  "prop/spikes_v01_02": {
+    "file": "spikes_v01_02.gltf",
+    "category": "prop",
+    "source": "SM_PROP_spikes_v01_02.fbx",
+    "meshCount": 1,
+    "height": 2.0454,
+    "footprint": [
+      2.0574,
+      2.0684
+    ],
+    "size": [
+      2.0574,
+      2.0684,
+      2.0454
+    ],
+    "bytes": 19891
+  },
+  "prop/spikes_v01_03": {
+    "file": "spikes_v01_03.gltf",
+    "category": "prop",
+    "source": "SM_PROP_spikes_v01_03.fbx",
+    "meshCount": 1,
+    "height": 2.0359,
+    "footprint": [
+      1.9922,
+      2.0425
+    ],
+    "size": [
+      1.9922,
+      2.0425,
+      2.0359
+    ],
+    "bytes": 19887
+  },
+  "prop/spikes_v02_01": {
+    "file": "spikes_v02_01.gltf",
+    "category": "prop",
+    "source": "SM_PROP_spikes_v02_01.fbx",
+    "meshCount": 1,
+    "height": 2.2117,
+    "footprint": [
+      4.0341,
+      2.4402
+    ],
+    "size": [
+      4.0341,
+      2.4402,
+      2.2117
+    ],
+    "bytes": 33661
+  },
+  "prop/spikes_v02_02": {
+    "file": "spikes_v02_02.gltf",
+    "category": "prop",
+    "source": "SM_PROP_spikes_v02_02.fbx",
+    "meshCount": 1,
+    "height": 2.0454,
+    "footprint": [
+      3.8165,
+      2.0921
+    ],
+    "size": [
+      3.8165,
+      2.0921,
+      2.0454
+    ],
+    "bytes": 34270
+  },
+  "prop/spikes_v02_03": {
+    "file": "spikes_v02_03.gltf",
+    "category": "prop",
+    "source": "SM_PROP_spikes_v02_03.fbx",
+    "meshCount": 1,
+    "height": 2.0817,
+    "footprint": [
+      3.456,
+      2.1404
+    ],
+    "size": [
+      3.456,
+      2.1404,
+      2.0817
+    ],
+    "bytes": 32459
+  },
+  "prop/spoon_01": {
+    "file": "spoon_01.gltf",
+    "category": "prop",
+    "source": "SM_PROP_spoon_01.fbx",
+    "meshCount": 1,
+    "height": 0.0453,
+    "footprint": [
+      0.079,
+      0.2613
+    ],
+    "size": [
+      0.079,
+      0.2613,
+      0.0453
+    ],
+    "bytes": 8598
+  },
+  "prop/spoon_02": {
+    "file": "spoon_02.gltf",
+    "category": "prop",
+    "source": "SM_PROP_spoon_02.fbx",
+    "meshCount": 1,
+    "height": 0.0508,
+    "footprint": [
+      0.0782,
+      0.2596
+    ],
+    "size": [
+      0.0782,
+      0.2596,
+      0.0508
+    ],
+    "bytes": 8158
+  },
+  "prop/stairs_wood_01": {
+    "file": "stairs_wood_01.gltf",
+    "category": "prop",
+    "source": "SM_PROP_stairs_wood_01.fbx",
+    "meshCount": 1,
+    "height": 3.6105,
+    "footprint": [
+      4.1158,
+      2.8076
+    ],
+    "size": [
+      4.1158,
+      2.8076,
+      3.6105
+    ],
+    "bytes": 17465
+  },
+  "prop/stairs_wood_02": {
+    "file": "stairs_wood_02.gltf",
+    "category": "prop",
+    "source": "SM_PROP_stairs_wood_02.fbx",
+    "meshCount": 1,
+    "height": 2.0635,
+    "footprint": [
+      2.7095,
+      2.7398
+    ],
+    "size": [
+      2.7095,
+      2.7398,
+      2.0635
+    ],
+    "bytes": 11702
+  },
+  "prop/stairs_wood_03": {
+    "file": "stairs_wood_03.gltf",
+    "category": "prop",
+    "source": "SM_PROP_stairs_wood_03.fbx",
+    "meshCount": 1,
+    "height": 1.0323,
+    "footprint": [
+      1.2826,
+      1.8618
+    ],
+    "size": [
+      1.2826,
+      1.8618,
+      1.0323
+    ],
+    "bytes": 10266
+  },
+  "prop/stepladder": {
+    "file": "stepladder.gltf",
+    "category": "prop",
+    "source": "SM_PROP_stepladder.fbx",
+    "meshCount": 1,
+    "height": 0.7594,
+    "footprint": [
+      0.5634,
+      0.6013
+    ],
+    "size": [
+      0.5634,
+      0.6013,
+      0.7594
+    ],
+    "bytes": 12716
+  },
+  "prop/stone_01": {
+    "file": "stone_01.gltf",
+    "category": "prop",
+    "source": "SM_PROP_stone_01.fbx",
+    "meshCount": 1,
+    "height": 0.2694,
+    "footprint": [
+      1.8205,
+      1.7914
+    ],
+    "size": [
+      1.8205,
+      1.7914,
+      0.2694
+    ],
+    "bytes": 5921
+  },
+  "prop/stone_02": {
+    "file": "stone_02.gltf",
+    "category": "prop",
+    "source": "SM_PROP_stone_02.fbx",
+    "meshCount": 1,
+    "height": 0.1805,
+    "footprint": [
+      1.0892,
+      1.1172
+    ],
+    "size": [
+      1.0892,
+      1.1172,
+      0.1805
+    ],
+    "bytes": 5920
+  },
+  "prop/stone_03": {
+    "file": "stone_03.gltf",
+    "category": "prop",
+    "source": "SM_PROP_stone_03.fbx",
+    "meshCount": 1,
+    "height": 0.1476,
+    "footprint": [
+      0.8362,
+      0.6979
+    ],
+    "size": [
+      0.8362,
+      0.6979,
+      0.1476
+    ],
+    "bytes": 5921
+  },
+  "prop/stone_04": {
+    "file": "stone_04.gltf",
+    "category": "prop",
+    "source": "SM_PROP_stone_04.fbx",
+    "meshCount": 1,
+    "height": 0.2126,
+    "footprint": [
+      1.8205,
+      1.7909
+    ],
+    "size": [
+      1.8205,
+      1.7909,
+      0.2126
+    ],
+    "bytes": 4646
+  },
+  "prop/stool_01": {
+    "file": "stool_01.gltf",
+    "category": "prop",
+    "source": "SM_PROP_stool_01.fbx",
+    "meshCount": 1,
+    "height": 0.3262,
+    "footprint": [
+      0.3556,
+      0.5758
+    ],
+    "size": [
+      0.3556,
+      0.5758,
+      0.3262
+    ],
+    "bytes": 8955
+  },
+  "prop/stool_02": {
+    "file": "stool_02.gltf",
+    "category": "prop",
+    "source": "SM_PROP_stool_02.fbx",
+    "meshCount": 1,
+    "height": 0.5127,
+    "footprint": [
+      0.4336,
+      0.5837
+    ],
+    "size": [
+      0.4336,
+      0.5837,
+      0.5127
+    ],
+    "bytes": 8972
+  },
+  "prop/streetlamp_v01_01": {
+    "file": "streetlamp_v01_01.gltf",
+    "category": "prop",
+    "source": "SM_PROP_streetlamp_v01_01.fbx",
+    "meshCount": 1,
+    "height": 3.7391,
+    "footprint": [
+      0.863,
+      1.9988
+    ],
+    "size": [
+      0.863,
+      1.9988,
+      3.7391
+    ],
+    "bytes": 32716
+  },
+  "prop/streetlamp_v01_02": {
+    "file": "streetlamp_v01_02.gltf",
+    "category": "prop",
+    "source": "SM_PROP_streetlamp_v01_02.fbx",
+    "meshCount": 1,
+    "height": 5.3101,
+    "footprint": [
+      14.9499,
+      13.8085
+    ],
+    "size": [
+      14.9499,
+      13.8085,
+      5.3101
+    ],
+    "bytes": 48579
+  },
+  "prop/streetlamp_v01_03": {
+    "file": "streetlamp_v01_03.gltf",
+    "category": "prop",
+    "source": "SM_PROP_streetlamp_v01_03.fbx",
+    "meshCount": 1,
+    "height": 3.7391,
+    "footprint": [
+      0.8783,
+      1.9985
+    ],
+    "size": [
+      0.8783,
+      1.9985,
+      3.7391
+    ],
+    "bytes": 43903
+  },
+  "prop/streetlamp_v01_04": {
+    "file": "streetlamp_v01_04.gltf",
+    "category": "prop",
+    "source": "SM_PROP_streetlamp_v01_04.fbx",
+    "meshCount": 1,
+    "height": 3.7391,
+    "footprint": [
+      0.8783,
+      3.2234
+    ],
+    "size": [
+      0.8783,
+      3.2234,
+      3.7391
+    ],
+    "bytes": 72016
+  },
+  "prop/streetlamp_v02_01": {
+    "file": "streetlamp_v02_01.gltf",
+    "category": "prop",
+    "source": "SM_PROP_streetlamp_v02_01.fbx",
+    "meshCount": 1,
+    "height": 3.7826,
+    "footprint": [
+      0.8232,
+      1.6912
+    ],
+    "size": [
+      0.8232,
+      1.6912,
+      3.7826
+    ],
+    "bytes": 44769
+  },
+  "prop/streetlamp_v02_02": {
+    "file": "streetlamp_v02_02.gltf",
+    "category": "prop",
+    "source": "SM_PROP_streetlamp_v02_02.fbx",
+    "meshCount": 1,
+    "height": 4.0219,
+    "footprint": [
+      0.8232,
+      2.6276
+    ],
+    "size": [
+      0.8232,
+      2.6276,
+      4.0219
+    ],
+    "bytes": 74846
+  },
+  "prop/streetlamp_v02_03": {
+    "file": "streetlamp_v02_03.gltf",
+    "category": "prop",
+    "source": "SM_PROP_streetlamp_v02_03.fbx",
+    "meshCount": 1,
+    "height": 3.7727,
+    "footprint": [
+      0.8232,
+      1.6912
+    ],
+    "size": [
+      0.8232,
+      1.6912,
+      3.7727
+    ],
+    "bytes": 36763
+  },
+  "prop/streetlamp_v02_04": {
+    "file": "streetlamp_v02_04.gltf",
+    "category": "prop",
+    "source": "SM_PROP_streetlamp_v02_04.fbx",
+    "meshCount": 1,
+    "height": 4.0292,
+    "footprint": [
+      0.8232,
+      2.6276
+    ],
+    "size": [
+      0.8232,
+      2.6276,
+      4.0292
+    ],
+    "bytes": 59381
+  },
+  "prop/table_01": {
+    "file": "table_01.gltf",
+    "category": "prop",
+    "source": "SM_PROP_table_01.fbx",
+    "meshCount": 1,
+    "height": 0.8249,
+    "footprint": [
+      1.7946,
+      1.1434
+    ],
+    "size": [
+      1.7946,
+      1.1434,
+      0.8249
+    ],
+    "bytes": 12306
+  },
+  "prop/table_02": {
+    "file": "table_02.gltf",
+    "category": "prop",
+    "source": "SM_PROP_table_02.fbx",
+    "meshCount": 1,
+    "height": 0.7859,
+    "footprint": [
+      2.4142,
+      1.372
+    ],
+    "size": [
+      2.4142,
+      1.372,
+      0.7859
+    ],
+    "bytes": 12434
+  },
+  "prop/table_03": {
+    "file": "table_03.gltf",
+    "category": "prop",
+    "source": "SM_PROP_table_03.fbx",
+    "meshCount": 1,
+    "height": 0.7486,
+    "footprint": [
+      1.2441,
+      1.1246
+    ],
+    "size": [
+      1.2441,
+      1.1246,
+      0.7486
+    ],
+    "bytes": 9539
+  },
+  "prop/table_04": {
+    "file": "table_04.gltf",
+    "category": "prop",
+    "source": "SM_PROP_table_04.fbx",
+    "meshCount": 1,
+    "height": 0.4398,
+    "footprint": [
+      0.6427,
+      0.5798
+    ],
+    "size": [
+      0.6427,
+      0.5798,
+      0.4398
+    ],
+    "bytes": 9545
+  },
+  "prop/treasurechest": {
+    "file": "treasurechest.gltf",
+    "category": "prop",
+    "source": "SM_PROP_treasurechest.fbx",
+    "meshCount": 2,
+    "height": 0.7247,
+    "footprint": [
+      0.8165,
+      0.5769
+    ],
+    "size": [
+      0.8165,
+      0.5769,
+      0.7247
+    ],
+    "bytes": 60940
+  },
+  "prop/treetrunk_01": {
+    "file": "treetrunk_01.gltf",
+    "category": "prop",
+    "source": "SM_PROP_treetrunk_01.fbx",
+    "meshCount": 1,
+    "height": 1.6003,
+    "footprint": [
+      4.8366,
+      2.5735
+    ],
+    "size": [
+      4.8366,
+      2.5735,
+      1.6003
+    ],
+    "bytes": 13045
+  },
+  "prop/treetrunk_02": {
+    "file": "treetrunk_02.gltf",
+    "category": "prop",
+    "source": "SM_PROP_treetrunk_02.fbx",
+    "meshCount": 1,
+    "height": 0.7884,
+    "footprint": [
+      4.5932,
+      0.9104
+    ],
+    "size": [
+      4.5932,
+      0.9104,
+      0.7884
+    ],
+    "bytes": 6436
+  },
+  "prop/treetrunk_03": {
+    "file": "treetrunk_03.gltf",
+    "category": "prop",
+    "source": "SM_PROP_treetrunk_03.fbx",
+    "meshCount": 1,
+    "height": 1.6162,
+    "footprint": [
+      4.8366,
+      2.5469
+    ],
+    "size": [
+      4.8366,
+      2.5469,
+      1.6162
+    ],
+    "bytes": 13408
+  },
+  "prop/treetrunk_04": {
+    "file": "treetrunk_04.gltf",
+    "category": "prop",
+    "source": "SM_PROP_treetrunk_04.fbx",
+    "meshCount": 1,
+    "height": 0.9104,
+    "footprint": [
+      4.5932,
+      0.7884
+    ],
+    "size": [
+      4.5932,
+      0.7884,
+      0.9104
+    ],
+    "bytes": 6555
+  },
+  "prop/trough_01": {
+    "file": "trough_01.gltf",
+    "category": "prop",
+    "source": "SM_PROP_trough_01.fbx",
+    "meshCount": 1,
+    "height": 0.924,
+    "footprint": [
+      1.0353,
+      2.6097
+    ],
+    "size": [
+      1.0353,
+      2.6097,
+      0.924
+    ],
+    "bytes": 21226
+  },
+  "prop/trough_02": {
+    "file": "trough_02.gltf",
+    "category": "prop",
+    "source": "SM_PROP_trough_02.fbx",
+    "meshCount": 1,
+    "height": 0.8188,
+    "footprint": [
+      1.1059,
+      2.5493
+    ],
+    "size": [
+      1.1059,
+      2.5493,
+      0.8188
+    ],
+    "bytes": 11271
+  },
+  "prop/walkway_wood": {
+    "file": "walkway_wood.gltf",
+    "category": "prop",
+    "source": "SM_PROP_walkway_wood.fbx",
+    "meshCount": 1,
+    "height": 0.6486,
+    "footprint": [
+      2.9124,
+      5.794
+    ],
+    "size": [
+      2.9124,
+      5.794,
+      0.6486
+    ],
+    "bytes": 17182
+  },
+  "prop/wall_stone_small_01": {
+    "file": "wall_stone_small_01.gltf",
+    "category": "prop",
+    "source": "SM_PROP_wall_stone_small_01.fbx",
+    "meshCount": 1,
+    "height": 1.066,
+    "footprint": [
+      0.4262,
+      2.9788
+    ],
+    "size": [
+      0.4262,
+      2.9788,
+      1.066
+    ],
+    "bytes": 3897
+  },
+  "prop/wall_stone_small_02": {
+    "file": "wall_stone_small_02.gltf",
+    "category": "prop",
+    "source": "SM_PROP_wall_stone_small_02.fbx",
+    "meshCount": 1,
+    "height": 1.1811,
+    "footprint": [
+      0.5491,
+      2.9707
+    ],
+    "size": [
+      0.5491,
+      2.9707,
+      1.1811
+    ],
+    "bytes": 3897
+  },
+  "prop/wall_stone_small_03": {
+    "file": "wall_stone_small_03.gltf",
+    "category": "prop",
+    "source": "SM_PROP_wall_stone_small_03.fbx",
+    "meshCount": 1,
+    "height": 1.2852,
+    "footprint": [
+      0.468,
+      2.9707
+    ],
+    "size": [
+      0.468,
+      2.9707,
+      1.2852
+    ],
+    "bytes": 6973
+  },
+  "prop/wall_stone_small_04": {
+    "file": "wall_stone_small_04.gltf",
+    "category": "prop",
+    "source": "SM_PROP_wall_stone_small_04.fbx",
+    "meshCount": 1,
+    "height": 1.2684,
+    "footprint": [
+      0.9248,
+      2.9707
+    ],
+    "size": [
+      0.9248,
+      2.9707,
+      1.2684
+    ],
+    "bytes": 9101
+  },
+  "prop/wall_wood": {
+    "file": "wall_wood.gltf",
+    "category": "prop",
+    "source": "SM_PROP_wall_wood.fbx",
+    "meshCount": 1,
+    "height": 10.3003,
+    "footprint": [
+      3.6043,
+      6.2618
+    ],
+    "size": [
+      3.6043,
+      6.2618,
+      10.3003
+    ],
+    "bytes": 44368
+  },
+  "prop/wall_wood_corner_01": {
+    "file": "wall_wood_corner_01.gltf",
+    "category": "prop",
+    "source": "SM_PROP_wall_wood_corner_01.fbx",
+    "meshCount": 1,
+    "height": 5.214,
+    "footprint": [
+      5.4045,
+      5.3274
+    ],
+    "size": [
+      5.4045,
+      5.3274,
+      5.214
+    ],
+    "bytes": 48294
+  },
+  "prop/wall_wood_corner_02": {
+    "file": "wall_wood_corner_02.gltf",
+    "category": "prop",
+    "source": "SM_PROP_wall_wood_corner_02.fbx",
+    "meshCount": 1,
+    "height": 5.2664,
+    "footprint": [
+      4.5772,
+      5.6311
+    ],
+    "size": [
+      4.5772,
+      5.6311,
+      5.2664
+    ],
+    "bytes": 42599
+  },
+  "prop/wall_wood_gate_frame_01": {
+    "file": "wall_wood_gate_frame_01.gltf",
+    "category": "prop",
+    "source": "SM_PROP_wall_wood_gate_frame_01.fbx",
+    "meshCount": 3,
+    "height": 7.4695,
+    "footprint": [
+      1.5279,
+      6.4847
+    ],
+    "size": [
+      1.5279,
+      6.4847,
+      7.4695
+    ],
+    "bytes": 51356
+  },
+  "prop/wall_wood_gate_frame_02": {
+    "file": "wall_wood_gate_frame_02.gltf",
+    "category": "prop",
+    "source": "SM_PROP_wall_wood_gate_frame_02.fbx",
+    "meshCount": 3,
+    "height": 5.9654,
+    "footprint": [
+      1.2118,
+      6.0583
+    ],
+    "size": [
+      1.2118,
+      6.0583,
+      5.9654
+    ],
+    "bytes": 37460
+  },
+  "prop/wall_wood_post_01": {
+    "file": "wall_wood_post_01.gltf",
+    "category": "prop",
+    "source": "SM_PROP_wall_wood_post_01.fbx",
+    "meshCount": 1,
+    "height": 5.8173,
+    "footprint": [
+      1.1464,
+      1.0261
+    ],
+    "size": [
+      1.1464,
+      1.0261,
+      5.8173
+    ],
+    "bytes": 10103
+  },
+  "prop/wall_wood_post_02": {
+    "file": "wall_wood_post_02.gltf",
+    "category": "prop",
+    "source": "SM_PROP_wall_wood_post_02.fbx",
+    "meshCount": 1,
+    "height": 5.8173,
+    "footprint": [
+      0.9018,
+      0.9598
+    ],
+    "size": [
+      0.9018,
+      0.9598,
+      5.8173
+    ],
+    "bytes": 5854
+  },
+  "prop/wall_wood_post_03": {
+    "file": "wall_wood_post_03.gltf",
+    "category": "prop",
+    "source": "SM_PROP_wall_wood_post_03.fbx",
+    "meshCount": 1,
+    "height": 4.8384,
+    "footprint": [
+      0.678,
+      0.5546
+    ],
+    "size": [
+      0.678,
+      0.5546,
+      4.8384
+    ],
+    "bytes": 5903
+  },
+  "prop/wall_wood_post_04": {
+    "file": "wall_wood_post_04.gltf",
+    "category": "prop",
+    "source": "SM_PROP_wall_wood_post_04.fbx",
+    "meshCount": 1,
+    "height": 4.9063,
+    "footprint": [
+      0.8918,
+      5.8609
+    ],
+    "size": [
+      0.8918,
+      5.8609,
+      4.9063
+    ],
+    "bytes": 16497
+  },
+  "prop/wall_wood_stairs_01": {
+    "file": "wall_wood_stairs_01.gltf",
+    "category": "prop",
+    "source": "SM_PROP_wall_wood_stairs_01.fbx",
+    "meshCount": 1,
+    "height": 5.4088,
+    "footprint": [
+      6.1728,
+      6.2726
+    ],
+    "size": [
+      6.1728,
+      6.2726,
+      5.4088
+    ],
+    "bytes": 69044
+  },
+  "prop/wall_wood_stairs_02": {
+    "file": "wall_wood_stairs_02.gltf",
+    "category": "prop",
+    "source": "SM_PROP_wall_wood_stairs_02.fbx",
+    "meshCount": 1,
+    "height": 5.4088,
+    "footprint": [
+      6.1728,
+      6.2726
+    ],
+    "size": [
+      6.1728,
+      6.2726,
+      5.4088
+    ],
+    "bytes": 69124
+  },
+  "prop/watchtower_wood_01": {
+    "file": "watchtower_wood_01.gltf",
+    "category": "prop",
+    "source": "SM_PROP_watchtower_wood_01.fbx",
+    "meshCount": 1,
+    "height": 11.2144,
+    "footprint": [
+      5.0126,
+      4.4839
+    ],
+    "size": [
+      5.0126,
+      4.4839,
+      11.2144
+    ],
+    "bytes": 109620
+  },
+  "prop/watchtower_wood_02": {
+    "file": "watchtower_wood_02.gltf",
+    "category": "prop",
+    "source": "SM_PROP_watchtower_wood_02.fbx",
+    "meshCount": 1,
+    "height": 13.0959,
+    "footprint": [
+      7.3379,
+      6.0751
+    ],
+    "size": [
+      7.3379,
+      6.0751,
+      13.0959
+    ],
+    "bytes": 129190
+  },
+  "prop/watchtower_wood_02_small": {
+    "file": "watchtower_wood_02_small.gltf",
+    "category": "prop",
+    "source": "SM_PROP_watchtower_wood_02_small.fbx",
+    "meshCount": 1,
+    "height": 11.2975,
+    "footprint": [
+      5.0126,
+      4.4839
+    ],
+    "size": [
+      5.0126,
+      4.4839,
+      11.2975
+    ],
+    "bytes": 134432
+  },
+  "prop/weathervane": {
+    "file": "weathervane.gltf",
+    "category": "prop",
+    "source": "SM_PROP_weathervane.fbx",
+    "meshCount": 1,
+    "height": 3.9443,
+    "footprint": [
+      2.0862,
+      2.2311
+    ],
+    "size": [
+      2.0862,
+      2.2311,
+      3.9443
+    ],
+    "bytes": 12136
+  },
+  "prop/well": {
+    "file": "well.gltf",
+    "category": "prop",
+    "source": "SM_PROP_well.fbx",
+    "meshCount": 2,
+    "height": 4.2409,
+    "footprint": [
+      2.5007,
+      4.7106
+    ],
+    "size": [
+      2.5007,
+      4.7106,
+      4.2409
+    ],
+    "bytes": 56618
+  },
+  "foliage/plant_grass_village": {
+    "file": "plant_grass_village.gltf",
+    "category": "foliage",
+    "source": "SM_ENV_PLANT_grass_village.fbx",
+    "meshCount": 1,
+    "height": 0.5073,
+    "footprint": [
+      0.5757,
+      0.4948
+    ],
+    "size": [
+      0.5757,
+      0.4948,
+      0.5073
+    ],
+    "bytes": 3818
+  },
+  "foliage/plant_leaf_village": {
+    "file": "plant_leaf_village.gltf",
+    "category": "foliage",
+    "source": "SM_ENV_PLANT_leaf_village.fbx",
+    "meshCount": 1,
+    "height": 0.7904,
+    "footprint": [
+      2.0413,
+      2.1219
+    ],
+    "size": [
+      2.0413,
+      2.1219,
+      0.7904
+    ],
+    "bytes": 8430
+  },
+  "foliage/tree_village": {
+    "file": "tree_village.gltf",
+    "category": "foliage",
+    "source": "SM_ENV_TREE_village.fbx",
+    "meshCount": 3,
+    "height": 5.9617,
+    "footprint": [
+      4.7148,
+      4.7148
+    ],
+    "size": [
+      4.7148,
+      4.7148,
+      5.9617
+    ],
+    "bytes": 28416
+  }
+}

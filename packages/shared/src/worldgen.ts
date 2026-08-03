@@ -36,6 +36,8 @@ export interface WorldNode {
   /** Deterministic per-node variation in [0,1) for scale/rotation. */
   variant: number;
   biome: Biome;
+  /** Optional foliage filename (e.g. `pine_1.glb`) for authored tree nodes. */
+  model?: string;
 }
 
 export interface MobSpawn {

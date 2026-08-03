@@ -1,6 +1,8 @@
 import { mulberry32, hashString } from "../rng";
 import { fbm } from "../terrain";
 import { clamp, smoothstep, lerp } from "../math";
+import type { QuickGrassSettings } from "./quickGrass";
+import type { SkyPresetId } from "./skyPresets";
 
 /** Ten selectable region biomes -- covers the user's requested category list
  *  (Grasslands & Savannas, Deserts, Arctic & Tundra, Forests & Jungles,
@@ -40,6 +42,21 @@ export const REGION_BIOME_LABELS: Record<RegionBiome, string> = {
  *  so the category can't stay implicit. */
 export type RegionAssetCategory = "building" | "foliage" | "prop";
 
+/** Point light attached to a prop (lanterns, etc.). */
+export interface RegionAssetLight {
+  /** When false, the prop does not emit (overrides model defaults). */
+  enabled?: boolean;
+  color?: string;
+  intensity?: number;
+  /** Range in meters where the light falls to zero. */
+  distance?: number;
+  decay?: number;
+  /** Local-space offset from the asset origin to the bulb (meters). */
+  offsetX?: number;
+  offsetY?: number;
+  offsetZ?: number;
+}
+
 export interface RegionAsset {
   id?: string;
   model: string;
@@ -48,13 +65,154 @@ export interface RegionAsset {
   localY: number;
   localZ: number;
   yaw: number;
+  /** Uniform scale (legacy). When scaleX/Y/Z are set, those win per axis. */
   scale?: number;
+  /** Per-axis stretch from the editor scale gizmo. Omitted = use `scale`. */
+  scaleX?: number;
+  scaleY?: number;
+  scaleZ?: number;
   /** Optional editor grouping key -- assets that share a groupId (e.g. every
    *  piece of a procedurally-generated house) are selected/moved/deleted
    *  together when any one of them is clicked. Purely an authoring aid;
    *  the runtime renderer ignores it. Legacy houses used this; new houses
    *  are stored as RegionHouse and expanded at load time. */
   groupId?: string;
+  /** Optional attached point light. Known emitter models (e.g. lanterns)
+   *  get defaults when this is omitted; set `enabled: false` to turn off. */
+  light?: RegionAssetLight;
+  /** When true, this placement is walkable on top (and hard-blocks sides for
+   *  compact props). Wide spans like bridges bake a thin deck at the mesh top
+   *  so the full AABB does not wall the player off mid-volume. Omitted =
+   *  model/category defaults. */
+  solid?: boolean;
+  /** Mesh-measured local AABB used when `solid` is true. Half-extents and
+   *  center offsets are model-local (pre-scale); yaw/position come from the
+   *  placement. Prefer this over the circular model override. */
+  solidBox?: RegionAssetSolidBox;
+}
+
+/** Resolve authored placement scale (supports legacy uniform `scale`). */
+export function regionAssetScale(
+  a: Pick<RegionAsset, "scale" | "scaleX" | "scaleY" | "scaleZ">,
+): { x: number; y: number; z: number } {
+  const fallback = a.scale ?? 1;
+  return {
+    x: Math.max(0.001, a.scaleX ?? fallback),
+    y: Math.max(0.001, a.scaleY ?? fallback),
+    z: Math.max(0.001, a.scaleZ ?? fallback),
+  };
+}
+
+/** Persist scale fields: uniform → `scale` only; stretched → scale + scaleX/Y/Z. */
+export function regionAssetScaleFields(
+  sx: number,
+  sy: number,
+  sz: number,
+): Pick<RegionAsset, "scale" | "scaleX" | "scaleY" | "scaleZ"> {
+  const x = Math.max(0.001, sx);
+  const y = Math.max(0.001, sy);
+  const z = Math.max(0.001, sz);
+  if (Math.abs(x - y) < 1e-4 && Math.abs(y - z) < 1e-4) return { scale: x };
+  return { scale: x, scaleX: x, scaleY: y, scaleZ: z };
+}
+
+/** Local-space AABB for an authored solid placement (pre-placement-scale). */
+export interface RegionAssetSolidBox {
+  halfX: number;
+  halfY: number;
+  halfZ: number;
+  /** Center offset from the placement pivot (model-local, pre-scale). */
+  offsetX?: number;
+  offsetY?: number;
+  offsetZ?: number;
+}
+
+/** World-space oriented box fields from a placement + measured solidBox. */
+export function solidBoxColliderFields(
+  a: Pick<RegionAsset, "localX" | "localY" | "localZ" | "yaw" | "scale" | "scaleX" | "scaleY" | "scaleZ" | "solidBox">,
+): Pick<RegionAssetCollider, "x" | "z" | "radius" | "baseY" | "topY" | "halfX" | "halfZ" | "yaw"> | null {
+  const box = a.solidBox;
+  if (!box) return null;
+  const { x: sx, y: sy, z: sz } = regionAssetScale(a);
+  const yaw = a.yaw;
+  const cos = Math.cos(yaw);
+  const sin = Math.sin(yaw);
+  const ox = (box.offsetX ?? 0) * sx;
+  const oy = (box.offsetY ?? 0) * sy;
+  const oz = (box.offsetZ ?? 0) * sz;
+  const hx = Math.max(0.05, box.halfX * sx);
+  const hy = Math.max(0.05, box.halfY * sy);
+  const hz = Math.max(0.05, box.halfZ * sz);
+  // THREE.js rotation-Y: x' = x·cos + z·sin, z' = −x·sin + z·cos
+  return {
+    x: a.localX + ox * cos + oz * sin,
+    z: a.localZ - ox * sin + oz * cos,
+    radius: Math.hypot(hx, hz),
+    baseY: a.localY + oy - hy,
+    topY: a.localY + oy + hy,
+    halfX: hx,
+    halfZ: hz,
+    yaw,
+  };
+}
+
+/** Default bulb settings for props that should glow when placed. */
+export const REGION_ASSET_LIGHT_DEFAULTS: Record<
+  string,
+  Required<
+    Pick<RegionAssetLight, "color" | "intensity" | "distance" | "decay" | "offsetX" | "offsetY" | "offsetZ">
+  >
+> = {
+  "post_lantern.glb": {
+    color: "#ffb060",
+    intensity: 6,
+    distance: 32,
+    decay: 2,
+    // Lamp head sits above the post; nudge forward a bit toward the lantern cage.
+    offsetX: 0,
+    offsetY: 2.55,
+    offsetZ: 0.15,
+  },
+};
+
+export function isRegionAssetLightModel(model: string): boolean {
+  return model in REGION_ASSET_LIGHT_DEFAULTS;
+}
+
+/** Resolved light for rendering, or null when the asset should not emit. */
+export function resolveRegionAssetLight(
+  asset: Pick<RegionAsset, "model" | "light">,
+): {
+  color: string;
+  intensity: number;
+  distance: number;
+  decay: number;
+  offsetX: number;
+  offsetY: number;
+  offsetZ: number;
+} | null {
+  const defaults = REGION_ASSET_LIGHT_DEFAULTS[asset.model];
+  const authored = asset.light;
+  if (authored?.enabled === false) return null;
+  if (!defaults && !authored) return null;
+  const base = defaults ?? {
+    color: "#ff9933",
+    intensity: 6,
+    distance: 28,
+    decay: 2,
+    offsetX: 0,
+    offsetY: 1.5,
+    offsetZ: 0,
+  };
+  return {
+    color: authored?.color ?? base.color,
+    intensity: authored?.intensity ?? base.intensity,
+    distance: authored?.distance ?? base.distance,
+    decay: authored?.decay ?? base.decay,
+    offsetX: authored?.offsetX ?? base.offsetX,
+    offsetY: authored?.offsetY ?? base.offsetY,
+    offsetZ: authored?.offsetZ ?? base.offsetZ,
+  };
 }
 
 /** One procedural house — expands to modular wall/floor/roof pieces via
@@ -409,7 +567,8 @@ export const ASSET_COLLISION_OVERRIDES: Record<string, AssetCollisionOverride | 
   "stylized_nature/Plant_1_Big.gltf": { radius: 0.45, height: 2.254, climbable: false },
   "stylized_nature/Plant_7.gltf": { radius: 0.21, height: 0.15, climbable: false },
   "stylized_nature/Plant_7_Big.gltf": { radius: 0.27, height: 0.152, climbable: false },
-  // Rocks — climbable
+  // Rocks — climbable by default; mark individual placements `solid: true`
+  // in the region editor to hard-block walking through them.
   "stylized_nature/Rock_Medium_1.gltf": { radius: 1.371, height: 2.26, climbable: true },
   "stylized_nature/Rock_Medium_2.gltf": { radius: 1.296, height: 1.899, climbable: true },
   "stylized_nature/Rock_Medium_3.gltf": { radius: 1.477, height: 2.316, climbable: true },
@@ -554,15 +713,141 @@ export interface RegionAssetCollider {
    *  (world units, already scaled). stepMovement uses this to interpolate
    *  height linearly along the ramp instead of treating it as a flat topY. */
   stairRamp?: { dx: number; dz: number; halfLength: number; rise: number };
+  /** Oriented box half-extents (XZ). When set, used instead of the circle. */
+  halfX?: number;
+  halfZ?: number;
+  /** Yaw for oriented box colliders (radians). */
+  yaw?: number;
+  /** Hard solid (invisible barriers): never walk through while overlapping. */
+  solid?: boolean;
+}
+
+/** Minimum barrier half-thickness (meters) so sprint steps can't tunnel. */
+export const BARRIER_MIN_HALF_THICKNESS = 1.0;
+
+/** Horizontal body radius used when testing player vs barriers/props. */
+export const PLAYER_BODY_RADIUS = 0.45;
+
+/** True if (px,pz) is inside the collider footprint (circle or oriented box). */
+export function pointInColliderXZ(
+  px: number,
+  pz: number,
+  c: RegionAssetCollider,
+  pad = 0,
+): boolean {
+  if (c.halfX !== undefined && c.halfZ !== undefined) {
+    const dx = px - c.x;
+    const dz = pz - c.z;
+    const yaw = c.yaw ?? 0;
+    const cos = Math.cos(-yaw);
+    const sin = Math.sin(-yaw);
+    const lx = dx * cos - dz * sin;
+    const lz = dx * sin + dz * cos;
+    return Math.abs(lx) <= c.halfX + pad && Math.abs(lz) <= c.halfZ + pad;
+  }
+  const dx = px - c.x;
+  const dz = pz - c.z;
+  const r = c.radius + pad;
+  return dx * dx + dz * dz < r * r;
+}
+
+/**
+ * True if the movement segment from (x0,z0)→(x1,z1) enters the collider.
+ * Catches thin walls that a single end-point test would tunnel through.
+ */
+export function segmentHitsColliderXZ(
+  x0: number,
+  z0: number,
+  x1: number,
+  z1: number,
+  c: RegionAssetCollider,
+  pad = PLAYER_BODY_RADIUS,
+): boolean {
+  if (pointInColliderXZ(x1, z1, c, pad)) return true;
+  if (c.halfX !== undefined && c.halfZ !== undefined) {
+    const yaw = c.yaw ?? 0;
+    const cos = Math.cos(-yaw);
+    const sin = Math.sin(-yaw);
+    const toLocal = (x: number, z: number) => {
+      const dx = x - c.x;
+      const dz = z - c.z;
+      return { x: dx * cos - dz * sin, z: dx * sin + dz * cos };
+    };
+    const a = toLocal(x0, z0);
+    const b = toLocal(x1, z1);
+    return segmentHitsAabb2D(a.x, a.z, b.x, b.z, c.halfX + pad, c.halfZ + pad);
+  }
+  // Closest point on segment to circle center.
+  const dx = x1 - x0;
+  const dz = z1 - z0;
+  const len2 = dx * dx + dz * dz;
+  let t = 0;
+  if (len2 > 1e-8) {
+    t = ((c.x - x0) * dx + (c.z - z0) * dz) / len2;
+    t = Math.max(0, Math.min(1, t));
+  }
+  const px = x0 + dx * t;
+  const pz = z0 + dz * t;
+  const r = c.radius + pad;
+  const ex = px - c.x;
+  const ez = pz - c.z;
+  return ex * ex + ez * ez < r * r;
+}
+
+/** Liang-Barsky style segment vs axis-aligned box in 2D (half-extents). */
+function segmentHitsAabb2D(
+  x0: number,
+  z0: number,
+  x1: number,
+  z1: number,
+  halfX: number,
+  halfZ: number,
+): boolean {
+  let t0 = 0;
+  let t1 = 1;
+  const dx = x1 - x0;
+  const dz = z1 - z0;
+  const clip = (p: number, q: number): boolean => {
+    if (Math.abs(p) < 1e-12) return q >= 0;
+    const r = q / p;
+    if (p < 0) {
+      if (r > t1) return false;
+      if (r > t0) t0 = r;
+    } else {
+      if (r < t0) return false;
+      if (r < t1) t1 = r;
+    }
+    return true;
+  };
+  return (
+    clip(-dx, x0 + halfX) &&
+    clip(dx, halfX - x0) &&
+    clip(-dz, z0 + halfZ) &&
+    clip(dz, halfZ - z0) &&
+    t0 <= t1
+  );
+}
+
+/** True for boulder/rock/stone decor models that should stay rigid (no
+ *  foliage wind sway). Excludes walkable RockPath_* decals. Collision is
+ *  authored per placement via RegionAsset.solid — not inferred here. */
+export function isRockLikeAssetModel(model: string): boolean {
+  const file = model.replace(/^.*\//, "").replace(/\.(glb|gltf)$/i, "");
+  if (/^RockPath_/i.test(file)) return false;
+  if (/^rocks?(_|$)/i.test(file)) return true;
+  if (/^Rock(_Medium|_Large|_Small)?(_|$)/i.test(file)) return true;
+  if (/^rock_single_/i.test(file)) return true;
+  if (/^stone_\d+/i.test(file)) return true;
+  return false;
 }
 
 /** Returns the per-model override for `model`, falling back to per-category
  *  defaults. Returns `null` if the model explicitly has no collision. */
-function resolveCollisionOverride(
+export function resolveAssetCollision(
   model: string,
   category: RegionAssetCategory,
 ): AssetCollisionOverride | null {
-  if (model in ASSET_COLLISION_OVERRIDES) {
+  if (Object.prototype.hasOwnProperty.call(ASSET_COLLISION_OVERRIDES, model)) {
     return ASSET_COLLISION_OVERRIDES[model] ?? null;
   }
   return {
@@ -582,21 +867,68 @@ function resolveCollisionOverride(
 export function regionAssetColliders(assets: RegionAsset[]): RegionAssetCollider[] {
   const out: RegionAssetCollider[] = [];
   for (const a of assets) {
-    const scale = a.scale ?? 1;
-    const ov = resolveCollisionOverride(a.model, a.category);
-    if (ov === null) continue; // purely visual, no collider
+    const { x: sx, y: sy, z: sz } = regionAssetScale(a);
+    const scaleXZ = Math.max(sx, sz);
+
+    // Mesh-measured oriented box (authored via Solid in the region editor).
+    // Compact props (rocks): full volume — stand on top, hard-block sides.
+    // Wide / tall spans (bridges): thin walk deck. Prefer a measured thin
+    // solidBox (editor raycast); for legacy full-AABB boxes, estimate the
+    // deck below railing height so players aren't stood on (or blocked by)
+    // the AABB lid.
+    if (a.solid && a.solidBox) {
+      const box = solidBoxColliderFields(a);
+      if (box) {
+        const height = box.topY - box.baseY;
+        const compact = Math.max(box.halfX, box.halfZ) < 2.5;
+        if (compact || height <= 1.0) {
+          out.push({ ...box, climbable: true, solid: true });
+        } else if (height <= 1.75) {
+          // Short platform slab already (or small mound) — walkable soft floor.
+          out.push({ ...box, climbable: true, solid: false });
+        } else {
+          // Legacy tall AABB: deck sits below rails (~25% down from the top).
+          const deckTop = box.topY - Math.min(2.85, height * 0.28);
+          const slab = 0.4;
+          out.push({
+            ...box,
+            baseY: deckTop - slab,
+            topY: deckTop,
+            climbable: true,
+            // Soft floor: no XZ wall through pillars under the span.
+            solid: false,
+          });
+        }
+        continue;
+      }
+    }
+
+    let ov = resolveAssetCollision(a.model, a.category);
+    if (ov === null && !a.solid) continue; // purely visual, no collider
+    // Authored solid without a measured box: hard-block cylinder, still standable.
+    if (a.solid) {
+      ov = ov
+        ? { radius: Math.max(ov.radius, 0.35), height: ov.height, climbable: true }
+        : {
+            radius: REGION_ASSET_COLLISION_RADIUS[a.category],
+            height: REGION_ASSET_COLLISION_HEIGHT[a.category],
+            climbable: true,
+          };
+    }
+    if (ov === null) continue;
     if (ov.radius === 0 && !ov.climbable) continue; // degenerate, skip
 
     const collider: RegionAssetCollider = {
       x: a.localX,
       z: a.localZ,
-      radius: ov.radius * scale,
+      radius: ov.radius * scaleXZ,
       baseY: a.localY,
-      topY: a.localY + ov.height * scale,
+      topY: a.localY + ov.height * sy,
       climbable: ov.climbable,
+      ...(a.solid ? { solid: true } : {}),
     };
 
-    if (ov.stairHalfLength !== undefined) {
+    if (!a.solid && ov.stairHalfLength !== undefined) {
       // Rotate the local +Z ramp direction by the placed asset's yaw so
       // stepMovement tests in world space. Same convention as
       // deriveDungeonGridFromAssets: yaw 0 -> ascending toward -Z.
@@ -606,8 +938,8 @@ export function regionAssetColliders(assets: RegionAsset[]): RegionAssetCollider
         // Local +Z rotated by yaw (THREE.js Euler Y rotation: new_z = cos*z - sin*x)
         dx: -sin,
         dz: -cos,
-        halfLength: ov.stairHalfLength * scale,
-        rise: ov.height * scale,
+        halfLength: ov.stairHalfLength * scaleXZ,
+        rise: ov.height * sy,
       };
     }
 
@@ -736,12 +1068,101 @@ export function regionVolumeColliders(volumes: RegionTerrainVolume[]): RegionAss
   return out;
 }
 
+/** Bake invisible barrier volumes into hard (non-climbable) oriented-box colliders. */
+export function regionBarrierColliders(barriers: RegionBarrierVolume[] | undefined): RegionAssetCollider[] {
+  if (!barriers?.length) return [];
+  const out: RegionAssetCollider[] = [];
+  for (const b of barriers) {
+    const hx = Math.max(0.1, b.sizeX);
+    const hy = Math.max(0.1, b.sizeY);
+    // Paper-thin authored walls still get a minimum collision thickness so
+    // sprint / large playtest frame steps can't tunnel through.
+    const hz = Math.max(BARRIER_MIN_HALF_THICKNESS, b.sizeZ);
+    out.push({
+      x: b.localX,
+      z: b.localZ,
+      radius: Math.hypot(hx, hz),
+      // Boundaries should block at any standing height (authors often leave
+      // the box centered near y=0 while terrain sits higher).
+      baseY: b.localY - hy - 200,
+      topY: b.localY + hy + 200,
+      climbable: false,
+      solid: true,
+      halfX: hx,
+      halfZ: hz,
+      yaw: b.yaw,
+    });
+  }
+  return out;
+}
+
+/**
+ * Push (px,pz) to the nearest point just outside an oriented-box collider.
+ * Used when a solid barrier overlap must be resolved instead of ignored.
+ */
+export function depenetrateColliderXZ(
+  px: number,
+  pz: number,
+  c: RegionAssetCollider,
+  pad = PLAYER_BODY_RADIUS,
+): { x: number; z: number } {
+  if (c.halfX === undefined || c.halfZ === undefined) {
+    const dx = px - c.x;
+    const dz = pz - c.z;
+    const dist = Math.hypot(dx, dz);
+    const r = c.radius + pad + 0.02;
+    if (dist < 1e-8) return { x: c.x + r, z: c.z };
+    if (dist >= r) return { x: px, z: pz };
+    const s = r / dist;
+    return { x: c.x + dx * s, z: c.z + dz * s };
+  }
+  const yaw = c.yaw ?? 0;
+  const cos = Math.cos(yaw);
+  const sin = Math.sin(yaw);
+  const cosN = Math.cos(-yaw);
+  const sinN = Math.sin(-yaw);
+  const dx = px - c.x;
+  const dz = pz - c.z;
+  let lx = dx * cosN - dz * sinN;
+  let lz = dx * sinN + dz * cosN;
+  const hx = c.halfX + pad;
+  const hz = c.halfZ + pad;
+  if (Math.abs(lx) > hx || Math.abs(lz) > hz) return { x: px, z: pz };
+  const pushX = lx >= 0 ? hx + 0.02 - lx : -hx - 0.02 - lx;
+  const pushZ = lz >= 0 ? hz + 0.02 - lz : -hz - 0.02 - lz;
+  if (Math.abs(pushX) <= Math.abs(pushZ)) lx += pushX;
+  else lz += pushZ;
+  return {
+    x: c.x + lx * cos - lz * sin,
+    z: c.z + lx * sin + lz * cos,
+  };
+}
+
 export interface RegionMobSpawn {
   localX: number;
   localZ: number;
   /** Author-pinned specific mob type; when absent the server rolls one from
    *  the region's biome mob table at spawn time (see REGION_MOB_TABLE). */
   type?: string;
+  /** Combat scale vs base mob stats (HP / damage). Default 1 when omitted. */
+  difficulty?: number;
+}
+
+/** Authored gatherable node (tree/rock/ore/…). World Y comes from the heightmap. */
+export interface RegionResourceNode {
+  /** Stable id for depletion persistence; auto-assigned if omitted. */
+  id?: string;
+  /** Key into NODE_TYPES / PLACEABLE_REGION_NODE_TYPES. */
+  type: string;
+  localX: number;
+  localZ: number;
+  /** Mesh variant seed (0..1-ish). Deterministic from id when omitted. */
+  variant?: number;
+  /**
+   * Optional foliage/prop filename (e.g. `pine_1.glb`) used for tree visuals.
+   * When omitted for `tree`, a biome brush model is chosen from variant.
+   */
+  model?: string;
 }
 
 export interface RegionVillage {
@@ -771,6 +1192,62 @@ export interface RegionColorGrading {
   fillIntensity?: number;
   /** Renderer exposure multiplier (0.4..2.5). Absent = 1. */
   exposure?: number;
+  /**
+   * WoW-style layered skydome preset (sunny / overcast / stormy / mystical).
+   * Drives zenith→horizon gradient + cloud/star shells via the 24h timeline.
+   * Absent = "sunny".
+   */
+  skyPreset?: SkyPresetId;
+  /** Optional zenith override (top of gradient dome). Falls back to skyColor. */
+  zenithColor?: string;
+  /** Optional mid-sky override. Falls back to a blend of skyColor. */
+  skyMidColor?: string;
+  /** Optional horizon-sky override (dome skirt). Falls back to fogColor/skyColor. */
+  horizonSkyColor?: string;
+  /** Distant mountain-ring backdrop (region-local). Off by default. */
+  horizonEnabled?: boolean;
+  /** Multiplier tint on the horizon rock/haze. */
+  horizonTint?: string;
+  /** Peak height scale (0.4..2). Default 1. */
+  horizonPeakScale?: number;
+  /** Inner radius of the mountain ring (meters from region origin). */
+  horizonInnerRadius?: number;
+  /** Outer radius of the mountain ring. */
+  horizonOuterRadius?: number;
+}
+
+/** Invisible (or ghosted-in-editor) solid wall the player cannot walk through. */
+export interface RegionBarrierVolume {
+  id?: string;
+  localX: number;
+  localY: number;
+  localZ: number;
+  yaw: number;
+  /** Half-extents in meters. */
+  sizeX: number;
+  sizeY: number;
+  sizeZ: number;
+}
+
+export type RegionCloudShape = "cumulus" | "wispy" | "flat";
+
+/** Individual authored cloud puff that drifts over the region. */
+export interface RegionCloud {
+  id?: string;
+  localX: number;
+  localY: number;
+  localZ: number;
+  yaw: number;
+  scaleX: number;
+  scaleY: number;
+  scaleZ: number;
+  color: string;
+  opacity: number;
+  shape: RegionCloudShape;
+  /** Drift speed along +local X before yaw (m/s). Default 1.2. */
+  driftSpeed?: number;
+  /** Vertical bob amplitude (meters). Default 0.4. */
+  bobAmp?: number;
 }
 
 /** Placeable local fog pocket — independent of global FogExp2 color grading. */
@@ -814,7 +1291,11 @@ export interface RegionRoad {
  *  time (see client/render/grassField.ts's buildGrassInstances, used
  *  identically by the region editor's live preview and the runtime
  *  RegionInteriorRenderer) rather than stored as one RegionAsset per blade,
- *  which would bloat the region file badly at any real density. */
+ *  which would bloat the region file badly at any real density. Also feeds
+ *  the GPU-driven quickGrass field (client/render/quickGrass/field.ts's
+ *  createQuickGrassField), which rasterizes these same patches (plus
+ *  GrassExclusion holes) into a density texture instead of expanding them
+ *  into discrete blade instances on the CPU. */
 export interface GrassPatch {
   id?: string;
   localX: number;
@@ -990,6 +1471,8 @@ export interface RegionBlueprint {
   /** Procedural houses (one row each). Expanded to modular pieces at runtime. */
   houses?: RegionHouse[];
   mobSpawns: RegionMobSpawn[];
+  /** Optional authored gatherables (tree/rock/ore…). Absent on older regions. */
+  resourceNodes?: RegionResourceNode[];
   villages: RegionVillage[];
   /** Optional -- absent on regions saved before roads existed; every reader
    *  falls back to an empty array rather than requiring a migration. */
@@ -1001,6 +1484,10 @@ export interface RegionBlueprint {
    *  at 0 mean "not placed in the world yet" (editor-only draft). */
   portalWorldX: number;
   portalWorldZ: number;
+  /** World-space position of local (0,0) for seamless multi-region streaming.
+   *  Absent → treated as (0,0), or packed by ensureRegionWorldOrigins(). */
+  worldOriginX?: number;
+  worldOriginZ?: number;
   /** Optional -- If true, this region is designated as the default Starting Town where new players spawn. */
   isStartingRegion?: boolean;
   /** Optional -- Authored inter-region portals placed inside this region. */
@@ -1019,6 +1506,10 @@ export interface RegionBlueprint {
   lights?: RegionPointLight[];
   /** Optional -- movable local fog volumes (mist pockets independent of global fog). */
   fogVolumes?: RegionFogVolume[];
+  /** Optional -- invisible solid barriers (player blocking volumes). */
+  barrierVolumes?: RegionBarrierVolume[];
+  /** Optional -- individual drifting cloud props. */
+  clouds?: RegionCloud[];
   /** Optional -- absent on regions saved before the grass-patch brush
    *  existed; every reader falls back to an empty array. */
   grassPatches?: GrassPatch[];
@@ -1027,6 +1518,10 @@ export interface RegionBlueprint {
   grassExclusions?: GrassExclusion[];
   /** Optional -- per-region grass blade color override, see GrassColor. */
   grassColor?: GrassColor;
+  /** Optional -- how strongly grass blades respond to region wind (0 = still
+   *  grass even if wind is blowing; 1 = default). Independent of RegionWind
+   *  strength, which also drives trees/clouds. Absent → 1. */
+  grassSway?: number;
   /** Optional -- region-wide wind direction/strength, see RegionWind. Absent
    *  means the default calm-breeze feel (direction 0, strength 1) that grass
    *  already had before this was configurable -- not still air. */
@@ -1038,6 +1533,10 @@ export interface RegionBlueprint {
   /** Optional -- id of the REGION_MUSIC_TRACKS entry to loop while inside this
    *  region (fades in on entry, out on exit). Absent/null means no music. */
   musicTrack?: string | null;
+  /** Optional -- per-region overrides for the quickGrass field (blade shape,
+   *  wind, colour, lighting -- see QuickGrassSettings). Absent falls back to
+   *  DEFAULT_QUICK_GRASS_SETTINGS via mergeQuickGrassSettings(). */
+  grassSettings?: Partial<QuickGrassSettings>;
 }
 
 /** A single loopable background-music track available to the region editor,
@@ -1268,6 +1767,21 @@ export const REGION_TREE_BRUSH: Record<RegionBiome, string[]> = {
   ],
 };
 
+/** Pick a biome tree brush model from a [0,1) roll (stable across clients). */
+export function pickRandomRegionTreeModel(biome: RegionBiome, roll: number): string {
+  const list = REGION_TREE_BRUSH[biome] ?? REGION_TREE_BRUSH.grassland;
+  const i = Math.max(0, Math.min(list.length - 1, Math.floor(roll * list.length)));
+  return list[i]!;
+}
+
+/** Map a placed foliage filename to a gatherable node type id, if any. */
+export function foliageModelToResourceType(model: string): string | null {
+  const base = model.replace(/\.(glb|gltf)$/i, "").toLowerCase();
+  if (/^(oak|pine|dead|twisted)_\d+$/.test(base)) return "tree";
+  if (base === "bush" || base === "bush_flowers") return "berry_bush";
+  if (/^rock_\d+$/.test(base)) return "rock";
+  return null;
+}
 
 /** Real props/ directory rock decor, layered on top of the foliage rocks
  *  above for bigger set-dressing clusters. */
@@ -1324,16 +1838,16 @@ export function pickRegionMob(biome: RegionBiome, roll: number): string {
 
 export const REGION_COLOR_PRESETS: Record<RegionBiome, RegionColorGrading> = {
   // Soft atmospheric fog — foliage is distance-culled to the terrain ADT ring.
-  grassland: { skyColor: "#8fc7ff", fogColor: "#bcd9f0", fogDensity: 0.006, ambientColor: "#ffffff", ambientIntensity: 0.9, sunColor: "#fff3d6", sunIntensity: 1.1, groundTint: "#8aa04f" },
-  forest: { skyColor: "#6fa8d8", fogColor: "#9fc2a8", fogDensity: 0.01, ambientColor: "#dcefe0", ambientIntensity: 0.8, sunColor: "#fff0c8", sunIntensity: 0.95, groundTint: "#4d7a3a" },
-  jungle: { skyColor: "#5c9bd1", fogColor: "#7fae7a", fogDensity: 0.014, ambientColor: "#c9f0c0", ambientIntensity: 0.85, sunColor: "#fff8d0", sunIntensity: 1.0, groundTint: "#3c6b2f" },
-  desert: { skyColor: "#f5d98a", fogColor: "#f0dca0", fogDensity: 0.01, ambientColor: "#fff2c0", ambientIntensity: 0.95, sunColor: "#fff0b0", sunIntensity: 1.2, groundTint: "#ffffff" },
-  arctic: { skyColor: "#c9e3f5", fogColor: "#e8f4fb", fogDensity: 0.012, ambientColor: "#eaf6ff", ambientIntensity: 1.0, sunColor: "#fdfdff", sunIntensity: 1.15, groundTint: "#ffffff" },
-  swamp: { skyColor: "#7d8a73", fogColor: "#6d7a63", fogDensity: 0.02, ambientColor: "#aab89a", ambientIntensity: 0.55, sunColor: "#d8dcc0", sunIntensity: 0.6, groundTint: "#515f3a" },
-  volcanic: { skyColor: "#3a1f1a", fogColor: "#5c2a1e", fogDensity: 0.018, ambientColor: "#ff8a5c", ambientIntensity: 0.5, sunColor: "#ff6a3c", sunIntensity: 0.9, groundTint: "#6a4432" },
-  alien: { skyColor: "#2a1a4a", fogColor: "#4a2a6a", fogDensity: 0.016, ambientColor: "#c08aff", ambientIntensity: 0.6, sunColor: "#8affea", sunIntensity: 0.8, groundTint: "#8a6fd6" },
-  underground: { skyColor: "#0d0d14", fogColor: "#1a1a24", fogDensity: 0.03, ambientColor: "#6a7aa0", ambientIntensity: 0.35, sunColor: "#8a9ac0", sunIntensity: 0.4, groundTint: "#5a6a8a" },
-  cosmic: { skyColor: "#160a2e", fogColor: "#301a5a", fogDensity: 0.014, ambientColor: "#b0a0ff", ambientIntensity: 0.55, sunColor: "#ffd0f0", sunIntensity: 0.7, groundTint: "#a090e0" },
+  grassland: { skyColor: "#8fc7ff", fogColor: "#bcd9f0", fogDensity: 0.006, ambientColor: "#ffffff", ambientIntensity: 0.9, sunColor: "#fff3d6", sunIntensity: 1.1, groundTint: "#8aa04f", skyPreset: "sunny" },
+  forest: { skyColor: "#6fa8d8", fogColor: "#9fc2a8", fogDensity: 0.01, ambientColor: "#dcefe0", ambientIntensity: 0.8, sunColor: "#fff0c8", sunIntensity: 0.95, groundTint: "#4d7a3a", skyPreset: "overcast" },
+  jungle: { skyColor: "#5c9bd1", fogColor: "#7fae7a", fogDensity: 0.014, ambientColor: "#c9f0c0", ambientIntensity: 0.85, sunColor: "#fff8d0", sunIntensity: 1.0, groundTint: "#3c6b2f", skyPreset: "sunny" },
+  desert: { skyColor: "#f5d98a", fogColor: "#f0dca0", fogDensity: 0.01, ambientColor: "#fff2c0", ambientIntensity: 0.95, sunColor: "#fff0b0", sunIntensity: 1.2, groundTint: "#ffffff", skyPreset: "sunny" },
+  arctic: { skyColor: "#c9e3f5", fogColor: "#e8f4fb", fogDensity: 0.012, ambientColor: "#eaf6ff", ambientIntensity: 1.0, sunColor: "#fdfdff", sunIntensity: 1.15, groundTint: "#ffffff", skyPreset: "overcast" },
+  swamp: { skyColor: "#7d8a73", fogColor: "#6d7a63", fogDensity: 0.02, ambientColor: "#aab89a", ambientIntensity: 0.55, sunColor: "#d8dcc0", sunIntensity: 0.6, groundTint: "#515f3a", skyPreset: "overcast" },
+  volcanic: { skyColor: "#3a1f1a", fogColor: "#5c2a1e", fogDensity: 0.018, ambientColor: "#ff8a5c", ambientIntensity: 0.5, sunColor: "#ff6a3c", sunIntensity: 0.9, groundTint: "#6a4432", skyPreset: "stormy" },
+  alien: { skyColor: "#2a1a4a", fogColor: "#4a2a6a", fogDensity: 0.016, ambientColor: "#c08aff", ambientIntensity: 0.6, sunColor: "#8affea", sunIntensity: 0.8, groundTint: "#8a6fd6", skyPreset: "mystical" },
+  underground: { skyColor: "#0d0d14", fogColor: "#1a1a24", fogDensity: 0.03, ambientColor: "#6a7aa0", ambientIntensity: 0.35, sunColor: "#8a9ac0", sunIntensity: 0.4, groundTint: "#5a6a8a", skyPreset: "stormy" },
+  cosmic: { skyColor: "#160a2e", fogColor: "#301a5a", fogDensity: 0.014, ambientColor: "#b0a0ff", ambientIntensity: 0.55, sunColor: "#ffd0f0", sunIntensity: 0.7, groundTint: "#a090e0", skyPreset: "mystical" },
 };
 
 function pick<T>(arr: readonly T[], rng: () => number): T {
@@ -1616,6 +2130,7 @@ export function generateRandomRegionBlueprint(
     waterHeights: Array.from(waterHeights),
     assets: [],
     mobSpawns: [],
+    resourceNodes: [],
     villages: [],
     roads: [],
     portals: [],

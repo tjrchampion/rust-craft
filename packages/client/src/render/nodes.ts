@@ -1,8 +1,21 @@
 import * as THREE from "three";
-import { generateNodes, dist2D, TREE_VISIBLE_RADIUS, type WorldNode } from "@rustcraft/shared";
+import {
+  generateNodes,
+  dist2D,
+  TREE_VISIBLE_RADIUS,
+  type WorldNode,
+  type Biome,
+} from "@rustcraft/shared";
 import { buildRock, buildOreRock, buildBerryBush, buildBiomeTree, enableFogOnObject } from "./models";
+import { buildGltfTree, type TreeKey } from "./natureAssets";
 import { load } from "./gltf";
 import * as SkeletonUtils from "three/examples/jsm/utils/SkeletonUtils.js";
+
+function foliageFileToTreeKey(model: string | undefined): TreeKey | null {
+  if (!model) return null;
+  const key = model.replace(/\.(glb|gltf)$/i, "") as TreeKey;
+  return key || null;
+}
 
 /** Match terrain ADT ring — trees/rocks beyond this are culled, not fog-hidden. */
 const VISIBLE_RADIUS = TREE_VISIBLE_RADIUS;
@@ -43,6 +56,47 @@ interface Chip {
   born: number;
 }
 
+/** Build a gather-node mesh for gameplay or the region editor preview. */
+export function buildGatherNodeMesh(
+  type: string,
+  variant = 0,
+  biome: Biome = "forest",
+  model?: string,
+): THREE.Group {
+  let mesh: THREE.Group;
+  const ore = ORE_TINTS[type];
+  if (type === "dungeon_chest_common" || type === "dungeon_chest_rare") {
+    mesh = new THREE.Group();
+    const chestModel = type === "dungeon_chest_rare" ? "chest_gold.gltf" : "chest.gltf";
+    load(`/assets/models/props/${chestModel}`).then((gltf) => {
+      const clone = SkeletonUtils.clone(gltf.scene);
+      clone.scale.set(1.2, 1.2, 1.2);
+      clone.traverse((o) => {
+        if ((o as THREE.Mesh).isMesh) {
+          o.castShadow = true;
+          o.receiveShadow = true;
+        }
+      });
+      enableFogOnObject(clone);
+      mesh.add(clone);
+    });
+  } else if (type === "tree") {
+    const key = foliageFileToTreeKey(model);
+    mesh = (key ? buildGltfTree(key, variant) : null) ?? buildBiomeTree(biome, variant);
+    enableFogOnObject(mesh);
+  } else if (ore) {
+    mesh = buildOreRock(variant, ore.tint, ore.glow);
+    enableFogOnObject(mesh);
+  } else if (type === "rock") {
+    mesh = buildRock(variant);
+    enableFogOnObject(mesh);
+  } else {
+    mesh = buildBerryBush(variant);
+    enableFogOnObject(mesh);
+  }
+  return mesh;
+}
+
 export class NodeManager {
   readonly nodes = new Map<string, NodeEntry>();
   private scene: THREE.Scene;
@@ -78,6 +132,44 @@ export class NodeManager {
           baseZ: node.z,
         });
       }
+    }
+  }
+
+  /** Drop nodes whose ids start with `prefix` (e.g. `region_`). */
+  removeByIdPrefix(prefix: string): void {
+    for (const [id, entry] of [...this.nodes.entries()]) {
+      if (!id.startsWith(prefix)) continue;
+      if (entry.inScene && entry.mesh) this.scene.remove(entry.mesh);
+      this.nodes.delete(id);
+    }
+  }
+
+  /** Drop authored region gather nodes (`region_*_node_*`). */
+  removeRegionResourceNodes(): void {
+    for (const [id, entry] of [...this.nodes.entries()]) {
+      if (!id.startsWith("region_") || !id.includes("_node")) continue;
+      if (entry.inScene && entry.mesh) this.scene.remove(entry.mesh);
+      this.nodes.delete(id);
+    }
+  }
+
+  /** Replace all nodes (keeps depleted flags for ids that persist). */
+  replaceAll(nodesList: WorldNode[], depletedIds: Iterable<string> = []): void {
+    const depleted = new Set(depletedIds);
+    const keepDepleted = new Map<string, boolean>();
+    for (const [id, entry] of this.nodes) keepDepleted.set(id, entry.depleted);
+    this.clearScene();
+    this.nodes.clear();
+    for (const node of nodesList) {
+      this.nodes.set(node.id, {
+        node,
+        mesh: null,
+        inScene: false,
+        depleted: depleted.has(node.id) || keepDepleted.get(node.id) === true,
+        shakeUntil: 0,
+        baseX: node.x,
+        baseZ: node.z,
+      });
     }
   }
 
@@ -199,36 +291,7 @@ export class NodeManager {
   }
 
   private buildMesh(node: WorldNode): THREE.Group {
-    let mesh: THREE.Group;
-    const ore = ORE_TINTS[node.type];
-    if (node.type === "dungeon_chest_common" || node.type === "dungeon_chest_rare") {
-      mesh = new THREE.Group();
-      const model = node.type === "dungeon_chest_rare" ? "chest_gold.gltf" : "chest.gltf";
-      load(`/assets/models/props/${model}`).then((gltf) => {
-        const clone = SkeletonUtils.clone(gltf.scene);
-        clone.scale.set(1.2, 1.2, 1.2);
-        clone.traverse((o) => {
-          if ((o as THREE.Mesh).isMesh) {
-            o.castShadow = true;
-            o.receiveShadow = true;
-          }
-        });
-        enableFogOnObject(clone);
-        mesh.add(clone);
-      });
-    } else if (node.type === "tree") {
-      mesh = buildBiomeTree(node.biome, node.variant);
-      enableFogOnObject(mesh);
-    } else if (ore) {
-      mesh = buildOreRock(node.variant, ore.tint, ore.glow);
-      enableFogOnObject(mesh);
-    } else if (node.type === "rock") {
-      mesh = buildRock(node.variant);
-      enableFogOnObject(mesh);
-    } else {
-      mesh = buildBerryBush(node.variant);
-      enableFogOnObject(mesh);
-    }
+    const mesh = buildGatherNodeMesh(node.type, node.variant, node.biome, node.model);
     mesh.position.set(node.x, node.y, node.z);
     return mesh;
   }

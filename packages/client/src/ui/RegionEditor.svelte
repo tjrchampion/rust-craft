@@ -7,43 +7,90 @@
     REGION_COLOR_PRESETS,
     REGION_MUSIC_TRACKS,
     REGION_FOG_DENSITY_MIN,
+    SKY_PRESET_IDS,
+    SKY_PRESET_LABELS,
     generateRandomRegionBlueprint,
+    regionsAdjacentTo,
     MOBS,
+    PLACEABLE_REGION_NODE_TYPES,
+    REGION_TREE_BRUSH,
+    nodeTypeDef,
+    DEFAULT_QUICK_GRASS_SETTINGS,
+    QUICK_GRASS_PRESETS,
     type RegionBiome,
     type RegionBlueprint,
     type RegionColorGrading,
+    type SkyPresetId,
     type RegionQuest,
     type RegionQuestObjectiveKind,
     type RegionNPC,
+    type QuickGrassSettings,
   } from "@rustcraft/shared";
   import {
     RegionEditorScene,
     type EditorSelection,
     type EditorTransformMode,
     type EditorMarkerKind,
+    type EditorContextMenuState,
     type SculptMode,
     type WaterBrushMode,
   } from "../render/RegionEditorScene";
-  import { REGION_PROP_PALETTE } from "../render/regionPropPalette";
+  import {
+    REGION_PROP_PALETTE,
+    REGION_PALETTE_PACKS,
+    regionAssetDisplayName,
+    regionGroupPack,
+  } from "../render/regionPropPalette";
   import { HOUSE_TYPE_OPTIONS, type HouseType } from "../render/houseGen";
+  import {
+    CASTLE_SIZE_OPTIONS,
+    CASTLE_HEIGHT_OPTIONS,
+    CASTLE_STYLE_OPTIONS,
+    type CastleSize,
+    type CastleHeight,
+    type CastleStyle,
+  } from "../render/castleGen";
   import {
     TERRAIN_VOLUME_SHAPES,
     TERRAIN_VOLUME_MATERIALS,
+    CLAY_SCULPT_SHAPES,
   } from "../render/terrainVolumes";
   import type { TerrainVolumeShape, TerrainVolumeMaterial } from "@rustcraft/shared";
+  import ContinentLayoutMap from "./ContinentLayoutMap.svelte";
+  import type { LayoutTile } from "./continentLayout";
+  import AssetExplorer from "./AssetExplorer.svelte";
 
   let canvas: HTMLCanvasElement;
   let fileInput: HTMLInputElement;
   let scene: RegionEditorScene | null = null;
 
-  let regionList = $state<{ id: string; name: string; biome: RegionBiome }[]>([]);
+  let regionList = $state<
+    {
+      id: string;
+      name: string;
+      biome: RegionBiome;
+      gridSize: number;
+      pitch: number;
+      worldOriginX: number;
+      worldOriginZ: number;
+    }[]
+  >([]);
   let regionId = $state<string>("");
   let regionName = $state("New Region");
   let biome = $state<RegionBiome>("grassland");
   let portalWorldX = $state(0);
   let portalWorldZ = $state(0);
+  let worldOriginX = $state(0);
+  let worldOriginZ = $state(0);
   let isStartingRegion = $state(false);
   let musicTrack = $state<string | null>(null);
+  let showContinentMap = $state(false);
+  let layoutTiles = $state<LayoutTile[]>([]);
+  let layoutSaving = $state(false);
+  /** Load edge-adjacent regions into the 3D view (read-only) for seam moulding. */
+  let showNeighborRegions = $state(false);
+  let neighborLoading = $state(false);
+  let neighborCount = $state(0);
 
   let selection = $state<EditorSelection[]>([]);
   let marqueeBox = $state<{ startX: number; startY: number; endX: number; endY: number } | null>(null);
@@ -52,6 +99,8 @@
   let sculptMode = $state<SculptMode>(null);
   let volumeStampShape = $state<TerrainVolumeShape | null>(null);
   let volumeSculptBrushActive = $state(false);
+  let volumeClaySculptActive = $state(false);
+  let volumeSculptOp = $state<"add" | "sub">("add");
   let volumeMaterial = $state<TerrainVolumeMaterial>("rock");
   let waterBrushMode = $state<WaterBrushMode>(null);
   let waterPhysicsSimulating = $state(true);
@@ -59,23 +108,185 @@
   let brushStrength = $state(1);
   let armedModel = $state<string | null>(null);
   let armedMarker = $state<EditorMarkerKind | null>(null);
+  let mobSpawnDifficulty = $state(1);
+  let mobSpawnType = $state("");
+  let resourceNodeType = $state<string>("rock");
+  let contextMenu = $state<EditorContextMenuState | null>(null);
+  let paletteSearch = $state("");
+  let palettePack = $state<string>("all");
+  let showAssetExplorer = $state(false);
   let roadPaintActive = $state(false);
   let roadWidth = $state(4);
   let heightScale = $state(1);
   let treeDensity = $state(1);
   let worldSize = $state(282);
   let playtestActive = $state(false);
+  /** Default editor nav — Minecraft creative fly. Orbit is opt-in via World menu. */
+  let flyNav = $state(true);
   let openGroups = $state<Set<string>>(new Set([REGION_PROP_PALETTE[0]?.label ?? ""]));
   let colorGrading = $state<RegionColorGrading>({ ...REGION_COLOR_PRESETS.grassland });
   let grassColor = $state<{ bottom: string; top: string }>({ bottom: "#4f7c13", top: "#79a01c" });
   let grassLength = $state(1);
+  let grassSway = $state(1);
+  let grassSettings = $state<QuickGrassSettings>({ ...DEFAULT_QUICK_GRASS_SETTINGS });
+  let showGrassPanel = $state(false);
   let wind = $state<{ direction: number; strength: number }>({ direction: 0, strength: 1 });
   let showColorPanel = $state(false);
   let status = $state<string | null>(null);
-  let activeDropdown = $state<"sculpt" | "water" | "textures" | "lights" | "fog" | "markers" | "env" | "file" | null>(null);
+  let deleteConfirmOpen = $state(false);
+  let deleteInProgress = $state(false);
+  type MenuId = "file" | "edit" | "region" | "tools" | "world";
+  let activeDropdown = $state<MenuId | null>(null);
 
-  function toggleDropdown(name: "sculpt" | "water" | "textures" | "lights" | "fog" | "markers" | "env" | "file"): void {
+  function toggleDropdown(name: MenuId): void {
     activeDropdown = activeDropdown === name ? null : name;
+  }
+
+  function closeMenus(): void {
+    activeDropdown = null;
+  }
+
+  function menuAction(fn: () => void): void {
+    fn();
+    closeMenus();
+  }
+
+  function buildLayoutTiles(): LayoutTile[] {
+    const span = scene?.getLayoutSpan();
+    const byId = new Map<string, LayoutTile>();
+    for (const r of regionList) {
+      byId.set(r.id, {
+        id: r.id,
+        name: r.name,
+        biome: r.biome,
+        gridSize: r.gridSize,
+        pitch: r.pitch,
+        worldOriginX: r.worldOriginX,
+        worldOriginZ: r.worldOriginZ,
+      });
+    }
+    // Overlay the currently open region (may be unsaved / locally moved).
+    if (regionId || regionName) {
+      const id = regionId || "__draft__";
+      byId.set(id, {
+        id,
+        name: regionName || "Draft",
+        biome,
+        gridSize: span?.gridSize ?? byId.get(id)?.gridSize ?? 80,
+        pitch: span?.pitch ?? byId.get(id)?.pitch ?? 2.5,
+        worldOriginX,
+        worldOriginZ,
+      });
+    }
+    return [...byId.values()];
+  }
+
+  async function openContinentMap(): Promise<void> {
+    activeDropdown = null;
+    await refreshRegionList();
+    layoutTiles = buildLayoutTiles();
+    showContinentMap = true;
+  }
+
+  async function syncNeighborRegions(): Promise<void> {
+    if (!scene) return;
+    if (!showNeighborRegions) {
+      scene.clearNeighborReferences();
+      neighborCount = 0;
+      return;
+    }
+    neighborLoading = true;
+    try {
+      await refreshRegionList();
+      const edit = {
+        id: regionId || "__draft__",
+        gridSize: scene.getLayoutSpan().gridSize,
+        pitch: scene.getLayoutSpan().pitch,
+        worldOriginX,
+        worldOriginZ,
+      };
+      const adjacent = regionsAdjacentTo(edit, regionList);
+      const bps: RegionBlueprint[] = [];
+      await Promise.all(
+        adjacent.map(async (r) => {
+          try {
+            const res = await fetch(app.apiUrl(`/api/regions/${encodeURIComponent(r.id)}`), {
+              credentials: "include",
+            });
+            if (!res.ok) return;
+            const data = (await res.json()) as { blueprint: RegionBlueprint };
+            if (data.blueprint?.heights?.length) bps.push(data.blueprint);
+          } catch {
+            /* skip failed neighbor */
+          }
+        }),
+      );
+      scene.setNeighborReferences(bps);
+      neighborCount = scene.neighborReferenceCount;
+      status =
+        neighborCount > 0
+          ? `Showing ${neighborCount} neighbor region${neighborCount === 1 ? "" : "s"} (read-only).`
+          : "No edge-adjacent regions found. Snap tiles on the Continent Layout Map first.";
+    } finally {
+      neighborLoading = false;
+    }
+  }
+
+  function onLayoutTilesChange(next: LayoutTile[]): void {
+    layoutTiles = next;
+    const cur = next.find((t) => t.id === (regionId || "__draft__"));
+    if (cur) {
+      worldOriginX = cur.worldOriginX;
+      worldOriginZ = cur.worldOriginZ;
+      scene?.setMeta({ worldOriginX, worldOriginZ });
+    }
+  }
+
+  async function saveContinentLayout(): Promise<void> {
+    const dirty = layoutTiles.filter((t) => t.dirty && t.id !== "__draft__");
+    // Always push current open region into its next full save meta.
+    scene?.setMeta({ worldOriginX, worldOriginZ });
+    if (dirty.length === 0) {
+      // Only the draft/current tile moved — persist via normal region save.
+      if (regionId) await saveToServer();
+      layoutTiles = layoutTiles.map((t) => ({ ...t, dirty: false }));
+      status = "Layout origin updated on current region.";
+      return;
+    }
+    layoutSaving = true;
+    status = "Saving continent layout…";
+    try {
+      const res = await fetch(app.apiUrl("/api/debug/region-origins"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          origins: dirty.map((t) => ({
+            id: t.id,
+            worldOriginX: t.worldOriginX,
+            worldOriginZ: t.worldOriginZ,
+          })),
+        }),
+      });
+      if (!res.ok) {
+        status = "Layout save failed.";
+        return;
+      }
+      // If the open region was in the dirty set, keep meta in sync; also
+      // write it through the normal save path so autosave doesn't overwrite.
+      if (regionId && dirty.some((t) => t.id === regionId)) {
+        scene?.setMeta({ worldOriginX, worldOriginZ });
+        await saveToServer();
+      }
+      layoutTiles = layoutTiles.map((t) => ({ ...t, dirty: false }));
+      await refreshRegionList();
+      status = `Saved layout for ${dirty.length} region${dirty.length === 1 ? "" : "s"}.`;
+      if (showNeighborRegions) await syncNeighborRegions();
+    } catch {
+      status = "Layout save failed.";
+    } finally {
+      layoutSaving = false;
+    }
   }
 
   let saveTimeout: number | null = null;
@@ -102,7 +313,13 @@
       (enabled) => {
         transformSnap = enabled;
       },
+      (active) => {
+        flyNav = active;
+      },
     );
+    scene.setContextMenuHandler((menu) => {
+      contextMenu = menu;
+    });
     const urlParams = new URLSearchParams(window.location.search);
     const initialId = urlParams.get("region") || localStorage.getItem("rustcraft_last_region_id");
     void refreshRegionList().then(() => {
@@ -116,17 +333,46 @@
     });
     const onResize = () => scene?.resize();
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") cancelArmed();
+      if (e.key === "Escape") {
+        if (deleteConfirmOpen) {
+          if (!deleteInProgress) deleteConfirmOpen = false;
+          return;
+        }
+        if (showAssetExplorer) {
+          showAssetExplorer = false;
+          return;
+        }
+        if (contextMenu) {
+          contextMenu = null;
+          scene?.dismissContextMenu();
+          return;
+        }
+        if (activeDropdown) {
+          closeMenus();
+          return;
+        }
+        cancelArmed();
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
+        e.preventDefault();
+        void saveToServer();
+      }
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") {
         if (e.shiftKey) scene?.redo();
         else scene?.undo();
       }
     };
+    const onPointerDownCapture = (e: PointerEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (!t?.closest?.(".menubar-shell")) closeMenus();
+    };
     window.addEventListener("resize", onResize);
     window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("pointerdown", onPointerDownCapture, true);
     return () => {
       window.removeEventListener("resize", onResize);
       window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("pointerdown", onPointerDownCapture, true);
       scene?.dispose();
     };
   });
@@ -138,16 +384,50 @@
     openGroups = next;
   }
 
+  const filteredPalette = $derived.by(() => {
+    const q = paletteSearch.trim().toLowerCase();
+    return REGION_PROP_PALETTE.map((g) => {
+      if (palettePack !== "all" && regionGroupPack(g) !== palettePack) {
+        return { ...g, models: [] as string[] };
+      }
+      if (!q) return g;
+      return {
+        ...g,
+        models: g.models.filter((m) => {
+          const name = regionAssetDisplayName(m).toLowerCase();
+          const pack = regionGroupPack(g).toLowerCase();
+          return (
+            name.includes(q) ||
+            m.toLowerCase().includes(q) ||
+            g.label.toLowerCase().includes(q) ||
+            pack.includes(q)
+          );
+        }),
+      };
+    }).filter((g) => g.models.length > 0);
+  });
+
+  function shortPaletteGroupLabel(label: string): string {
+    return label.replace(/^(FV|CP|KH|MV|SN) · /, "");
+  }
+
   function pickModel(model: string, category: "building" | "foliage" | "prop"): void {
     armedMarker = null;
     sculptMode = null;
     volumeStampShape = null;
     volumeSculptBrushActive = false;
+    volumeClaySculptActive = false;
     waterBrushMode = null;
     roadPaintActive = false;
     houseToolActive = false;
+    castleToolActive = false;
     armedModel = model;
     scene?.armPlacement(model, category);
+  }
+
+  function pickModelFromExplorer(model: string, category: "building" | "foliage" | "prop"): void {
+    pickModel(model, category);
+    showAssetExplorer = false;
   }
 
   function pickMarker(kind: EditorMarkerKind): void {
@@ -155,11 +435,27 @@
     sculptMode = null;
     volumeStampShape = null;
     volumeSculptBrushActive = false;
+    volumeClaySculptActive = false;
     waterBrushMode = null;
     roadPaintActive = false;
     houseToolActive = false;
+    castleToolActive = false;
     armedMarker = kind;
     scene?.armMarkerPlacement(kind);
+    if (kind === "mobSpawn") {
+      scene?.setMobSpawnDefaults(mobSpawnDifficulty, mobSpawnType || null);
+    }
+    if (kind === "resourceNode") {
+      scene?.setResourceNodeDefaults(resourceNodeType);
+    }
+  }
+
+  function applyMobSpawnDefaults(): void {
+    scene?.setMobSpawnDefaults(mobSpawnDifficulty, mobSpawnType || null);
+  }
+
+  function applyResourceNodeDefaults(): void {
+    scene?.setResourceNodeDefaults(resourceNodeType);
   }
 
   function pickSculpt(mode: SculptMode): void {
@@ -168,8 +464,10 @@
     waterBrushMode = null;
     roadPaintActive = false;
     houseToolActive = false;
+    castleToolActive = false;
     volumeStampShape = null;
     volumeSculptBrushActive = false;
+    volumeClaySculptActive = false;
     sculptMode = sculptMode === mode ? null : mode;
     scene?.setSculptMode(sculptMode);
   }
@@ -182,6 +480,7 @@
     waterBrushMode = null;
     roadPaintActive = false;
     houseToolActive = false;
+    castleToolActive = false;
     randomTreeBrushActive = false;
     grassBrushActive = false;
     grassEraseBrushActive = false;
@@ -189,7 +488,10 @@
     texturePaintMode = null;
     armedLightColor = null;
     armedFogColor = null;
+    armedBarrier = false;
+    armedCloudShape = null;
     volumeSculptBrushActive = false;
+    volumeClaySculptActive = false;
     volumeStampShape = volumeStampShape === shape ? null : shape;
     if (volumeStampShape) scene?.armVolumeStamp(volumeStampShape, volumeMaterial, "place");
     else scene?.disarm();
@@ -203,6 +505,7 @@
     waterBrushMode = null;
     roadPaintActive = false;
     houseToolActive = false;
+    castleToolActive = false;
     randomTreeBrushActive = false;
     grassBrushActive = false;
     grassEraseBrushActive = false;
@@ -210,11 +513,52 @@
     texturePaintMode = null;
     armedLightColor = null;
     armedFogColor = null;
+    armedBarrier = false;
+    armedCloudShape = null;
+    volumeClaySculptActive = false;
     const next = !volumeSculptBrushActive;
     volumeSculptBrushActive = next;
     volumeStampShape = next ? (volumeStampShape ?? "boulder") : null;
     if (next) scene?.armVolumeStamp(volumeStampShape ?? "boulder", volumeMaterial, "sculpt");
     else scene?.disarm();
+  }
+
+  /** Blender-style 3D clay: Add piles boulder/block on the surface; Sub carves holes. */
+  function pickVolumeClaySculpt(): void {
+    armedModel = null;
+    armedMarker = null;
+    sculptMode = null;
+    waterBrushMode = null;
+    roadPaintActive = false;
+    houseToolActive = false;
+    castleToolActive = false;
+    randomTreeBrushActive = false;
+    grassBrushActive = false;
+    grassEraseBrushActive = false;
+    eraseBrushActive = false;
+    texturePaintMode = null;
+    armedLightColor = null;
+    armedFogColor = null;
+    armedBarrier = false;
+    armedCloudShape = null;
+    volumeSculptBrushActive = false;
+    const next = !volumeClaySculptActive;
+    volumeClaySculptActive = next;
+    const shape =
+      volumeStampShape === "block" || volumeStampShape === "boulder" ? volumeStampShape : "boulder";
+    volumeStampShape = next ? shape : null;
+    volumeSculptOp = "add";
+    if (next) {
+      scene?.armVolumeStamp(shape, volumeMaterial, "clay");
+      scene?.setVolumeSculptOp("add");
+    } else {
+      scene?.disarm();
+    }
+  }
+
+  function setVolumeSculptOp(op: "add" | "sub"): void {
+    volumeSculptOp = op;
+    scene?.setVolumeSculptOp(op);
   }
 
   function pickVolumeMaterial(mat: TerrainVolumeMaterial): void {
@@ -233,8 +577,10 @@
     sculptMode = null;
     volumeStampShape = null;
     volumeSculptBrushActive = false;
+    volumeClaySculptActive = false;
     roadPaintActive = false;
     houseToolActive = false;
+    castleToolActive = false;
     waterBrushMode = waterBrushMode === mode ? null : mode;
     scene?.setWaterBrushMode(waterBrushMode);
   }
@@ -254,8 +600,10 @@
     sculptMode = null;
     volumeStampShape = null;
     volumeSculptBrushActive = false;
+    volumeClaySculptActive = false;
     waterBrushMode = null;
     houseToolActive = false;
+    castleToolActive = false;
     roadPaintActive = !roadPaintActive;
     if (roadPaintActive) scene?.armRoadPainting();
     else scene?.disarm();
@@ -272,6 +620,10 @@
   let eraseBrushActive = $state(false);
   let houseToolActive = $state(false);
   let houseType = $state<HouseType>("random");
+  let castleToolActive = $state(false);
+  let castleStyle = $state<CastleStyle>("random");
+  let castleSize = $state<CastleSize>(2);
+  let castleHeight = $state<CastleHeight>(2);
 
   function pickRandomTreeBrush(): void {
     armedModel = null;
@@ -279,12 +631,14 @@
     sculptMode = null;
     volumeStampShape = null;
     volumeSculptBrushActive = false;
+    volumeClaySculptActive = false;
     waterBrushMode = null;
     roadPaintActive = false;
     grassBrushActive = false;
     grassEraseBrushActive = false;
     eraseBrushActive = false;
     houseToolActive = false;
+    castleToolActive = false;
     randomTreeBrushActive = !randomTreeBrushActive;
     scene?.setRandomTreeBrush(randomTreeBrushActive);
   }
@@ -301,6 +655,7 @@
     sculptMode = null;
     volumeStampShape = null;
     volumeSculptBrushActive = false;
+    volumeClaySculptActive = false;
     waterBrushMode = null;
     roadPaintActive = false;
     randomTreeBrushActive = false;
@@ -310,9 +665,13 @@
     texturePaintMode = null;
     armedLightColor = null;
     armedFogColor = null;
+    armedBarrier = false;
+    armedCloudShape = null;
+    castleToolActive = false;
     // Re-clicking the same type disarms; picking a different type switches.
     if (houseToolActive && houseType === type) {
       houseToolActive = false;
+      castleToolActive = false;
       scene?.disarm();
       return;
     }
@@ -321,18 +680,61 @@
     scene?.armHousePlacement(type);
   }
 
+  function pickCastleTool(): void {
+    armedModel = null;
+    armedMarker = null;
+    sculptMode = null;
+    volumeStampShape = null;
+    volumeSculptBrushActive = false;
+    volumeClaySculptActive = false;
+    waterBrushMode = null;
+    roadPaintActive = false;
+    randomTreeBrushActive = false;
+    grassBrushActive = false;
+    grassEraseBrushActive = false;
+    eraseBrushActive = false;
+    texturePaintMode = null;
+    armedLightColor = null;
+    armedFogColor = null;
+    armedBarrier = false;
+    armedCloudShape = null;
+    houseToolActive = false;
+    if (castleToolActive) {
+      castleToolActive = false;
+      scene?.disarm();
+      return;
+    }
+    castleToolActive = true;
+    scene?.armCastlePlacement({
+      style: castleStyle,
+      size: castleSize,
+      height: castleHeight,
+    });
+  }
+
+  function syncCastleToolOptions(): void {
+    if (!castleToolActive) return;
+    scene?.armCastlePlacement({
+      style: castleStyle,
+      size: castleSize,
+      height: castleHeight,
+    });
+  }
+
   function pickGrassBrush(): void {
     armedModel = null;
     armedMarker = null;
     sculptMode = null;
     volumeStampShape = null;
     volumeSculptBrushActive = false;
+    volumeClaySculptActive = false;
     waterBrushMode = null;
     roadPaintActive = false;
     randomTreeBrushActive = false;
     grassEraseBrushActive = false;
     eraseBrushActive = false;
     houseToolActive = false;
+    castleToolActive = false;
     grassBrushActive = !grassBrushActive;
     scene?.setGrassBrush(grassBrushActive);
   }
@@ -343,12 +745,14 @@
     sculptMode = null;
     volumeStampShape = null;
     volumeSculptBrushActive = false;
+    volumeClaySculptActive = false;
     waterBrushMode = null;
     roadPaintActive = false;
     randomTreeBrushActive = false;
     grassBrushActive = false;
     eraseBrushActive = false;
     houseToolActive = false;
+    castleToolActive = false;
     grassEraseBrushActive = !grassEraseBrushActive;
     scene?.setGrassEraseBrush(grassEraseBrushActive);
   }
@@ -359,6 +763,7 @@
     sculptMode = null;
     volumeStampShape = null;
     volumeSculptBrushActive = false;
+    volumeClaySculptActive = false;
     waterBrushMode = null;
     roadPaintActive = false;
     randomTreeBrushActive = false;
@@ -367,7 +772,10 @@
     texturePaintMode = null;
     armedLightColor = null;
     armedFogColor = null;
+    armedBarrier = false;
+    armedCloudShape = null;
     houseToolActive = false;
+    castleToolActive = false;
     eraseBrushActive = !eraseBrushActive;
     scene?.setEraseBrush(eraseBrushActive);
   }
@@ -376,6 +784,8 @@
   let armedLightColor = $state<string | null>(null);
   let armedFogColor = $state<string | null>(null);
   let armedFogShape = $state<"sphere" | "box">("sphere");
+  let armedBarrier = $state(false);
+  let armedCloudShape = $state<"cumulus" | "wispy" | "flat" | null>(null);
 
   function pickTexture(mode: number | null): void {
     armedModel = null;
@@ -383,6 +793,7 @@
     sculptMode = null;
     volumeStampShape = null;
     volumeSculptBrushActive = false;
+    volumeClaySculptActive = false;
     waterBrushMode = null;
     roadPaintActive = false;
     randomTreeBrushActive = false;
@@ -391,7 +802,10 @@
     eraseBrushActive = false;
     armedLightColor = null;
     armedFogColor = null;
+    armedBarrier = false;
+    armedCloudShape = null;
     houseToolActive = false;
+    castleToolActive = false;
     texturePaintMode = texturePaintMode === mode ? null : mode;
     scene?.setTexturePaintMode(texturePaintMode);
   }
@@ -402,6 +816,7 @@
     sculptMode = null;
     volumeStampShape = null;
     volumeSculptBrushActive = false;
+    volumeClaySculptActive = false;
     waterBrushMode = null;
     roadPaintActive = false;
     randomTreeBrushActive = false;
@@ -410,7 +825,10 @@
     eraseBrushActive = false;
     texturePaintMode = null;
     houseToolActive = false;
+    castleToolActive = false;
     armedFogColor = null;
+    armedBarrier = false;
+    armedCloudShape = null;
     armedLightColor = armedLightColor === color ? null : color;
     if (armedLightColor) scene?.armLightPlacement(armedLightColor);
     else scene?.disarm();
@@ -422,6 +840,7 @@
     sculptMode = null;
     volumeStampShape = null;
     volumeSculptBrushActive = false;
+    volumeClaySculptActive = false;
     waterBrushMode = null;
     roadPaintActive = false;
     randomTreeBrushActive = false;
@@ -430,11 +849,63 @@
     eraseBrushActive = false;
     texturePaintMode = null;
     houseToolActive = false;
+    castleToolActive = false;
     armedLightColor = null;
+    armedBarrier = false;
+    armedCloudShape = null;
     const same = armedFogColor === color && armedFogShape === shape;
     armedFogColor = same ? null : color;
     armedFogShape = shape;
     if (armedFogColor) scene?.armFogPlacement(armedFogColor, armedFogShape);
+    else scene?.disarm();
+  }
+
+  function pickBarrierTool(): void {
+    armedModel = null;
+    armedMarker = null;
+    sculptMode = null;
+    volumeStampShape = null;
+    volumeSculptBrushActive = false;
+    volumeClaySculptActive = false;
+    waterBrushMode = null;
+    roadPaintActive = false;
+    randomTreeBrushActive = false;
+    grassBrushActive = false;
+    grassEraseBrushActive = false;
+    eraseBrushActive = false;
+    texturePaintMode = null;
+    houseToolActive = false;
+    castleToolActive = false;
+    armedLightColor = null;
+    armedFogColor = null;
+    armedCloudShape = null;
+    armedBarrier = !armedBarrier;
+    if (armedBarrier) scene?.armBarrierPlacement();
+    else scene?.disarm();
+  }
+
+  function pickCloudTool(shape: "cumulus" | "wispy" | "flat"): void {
+    armedModel = null;
+    armedMarker = null;
+    sculptMode = null;
+    volumeStampShape = null;
+    volumeSculptBrushActive = false;
+    volumeClaySculptActive = false;
+    waterBrushMode = null;
+    roadPaintActive = false;
+    randomTreeBrushActive = false;
+    grassBrushActive = false;
+    grassEraseBrushActive = false;
+    eraseBrushActive = false;
+    texturePaintMode = null;
+    houseToolActive = false;
+    castleToolActive = false;
+    armedLightColor = null;
+    armedFogColor = null;
+    armedBarrier = false;
+    const same = armedCloudShape === shape;
+    armedCloudShape = same ? null : shape;
+    if (armedCloudShape) scene?.armCloudPlacement(armedCloudShape);
     else scene?.disarm();
   }
 
@@ -444,6 +915,7 @@
     sculptMode = null;
     volumeStampShape = null;
     volumeSculptBrushActive = false;
+    volumeClaySculptActive = false;
     waterBrushMode = null;
     roadPaintActive = false;
     randomTreeBrushActive = false;
@@ -453,7 +925,10 @@
     texturePaintMode = null;
     armedLightColor = null;
     armedFogColor = null;
+    armedBarrier = false;
+    armedCloudShape = null;
     houseToolActive = false;
+    castleToolActive = false;
     scene?.setRandomTreeBrush(false);
     scene?.setGrassBrush(false);
     scene?.setGrassEraseBrush(false);
@@ -481,6 +956,12 @@
     if (!scene) return;
     cancelArmed();
     playtestActive = scene.togglePlaytest();
+  }
+
+  function setNavMode(mode: "fly" | "orbit"): void {
+    if (!scene) return;
+    scene.setNavigationMode(mode);
+    flyNav = mode === "fly";
   }
 
   function updateBrushRadius(v: number): void {
@@ -562,10 +1043,36 @@
 
   function applyGrassColor(): void {
     scene?.applyGrassColor(grassColor);
+    grassSettings = { ...grassSettings, baseColour: grassColor.bottom, tipColour: grassColor.top };
   }
 
   function applyGrassLength(): void {
     scene?.setGrassLength(grassLength);
+  }
+
+  function applyGrassSway(): void {
+    scene?.setGrassSway(grassSway);
+    grassSettings = { ...grassSettings, windStrength: grassSway };
+  }
+
+  function applyGrassSettingsPatch(partial: Partial<QuickGrassSettings>): void {
+    grassSettings = { ...grassSettings, ...partial };
+    if (partial.baseColour) grassColor = { ...grassColor, bottom: partial.baseColour };
+    if (partial.tipColour) grassColor = { ...grassColor, top: partial.tipColour };
+    if (partial.windStrength !== undefined) grassSway = partial.windStrength;
+    scene?.applyGrassSettings(partial);
+    scheduleSave();
+  }
+
+  function applyGrassPreset(name: string): void {
+    const preset = name === "__reset__" ? DEFAULT_QUICK_GRASS_SETTINGS : QUICK_GRASS_PRESETS[name];
+    if (!preset) return;
+    const next = name === "__reset__" ? { ...DEFAULT_QUICK_GRASS_SETTINGS } : { ...grassSettings, ...preset };
+    grassSettings = next;
+    grassColor = { bottom: next.baseColour, top: next.tipColour };
+    grassSway = next.windStrength;
+    scene?.applyGrassSettings(next);
+    scheduleSave();
   }
 
   function applyWind(): void {
@@ -581,8 +1088,26 @@
     try {
       const res = await fetch(app.apiUrl("/api/regions"), { credentials: "include" });
       if (!res.ok) return;
-      const data = (await res.json()) as { regions: { id: string; name: string; biome: RegionBiome }[] };
-      regionList = data.regions;
+      const data = (await res.json()) as {
+        regions: {
+          id: string;
+          name: string;
+          biome: RegionBiome;
+          gridSize: number;
+          pitch: number;
+          worldOriginX: number;
+          worldOriginZ: number;
+        }[];
+      };
+      regionList = data.regions.map((r) => ({
+        id: r.id,
+        name: r.name,
+        biome: r.biome,
+        gridSize: r.gridSize ?? 80,
+        pitch: r.pitch ?? 2.5,
+        worldOriginX: r.worldOriginX ?? 0,
+        worldOriginZ: r.worldOriginZ ?? 0,
+      }));
     } catch {
       // Region list is a convenience for the editor's dropdown
     }
@@ -605,16 +1130,21 @@
       biome = data.blueprint.biome;
       portalWorldX = data.blueprint.portalWorldX;
       portalWorldZ = data.blueprint.portalWorldZ;
+      worldOriginX = data.blueprint.worldOriginX ?? 0;
+      worldOriginZ = data.blueprint.worldOriginZ ?? 0;
       isStartingRegion = data.blueprint.isStartingRegion ?? false;
       musicTrack = data.blueprint.musicTrack ?? null;
       colorGrading = scene.getColorGrading();
       grassColor = scene.getGrassColor();
       wind = scene.getWind();
+      grassSway = scene.getGrassSway();
+      grassSettings = scene.getGrassSettings();
       status = `Loaded "${data.blueprint.name}".`;
       localStorage.setItem("rustcraft_last_region_id", data.blueprint.id);
       const url = new URL(window.location.href);
       url.searchParams.set("region", data.blueprint.id);
       window.history.replaceState({}, "", url.toString());
+      if (showNeighborRegions) await syncNeighborRegions();
     } catch {
       status = "Failed to load region.";
     }
@@ -628,13 +1158,18 @@
     bp.id = regionId;
     bp.portalWorldX = portalWorldX;
     bp.portalWorldZ = portalWorldZ;
+    bp.worldOriginX = worldOriginX;
+    bp.worldOriginZ = worldOriginZ;
     bp.musicTrack = musicTrack;
     await scene.loadBlueprint(bp);
     scene.initHistory();
     colorGrading = scene.getColorGrading();
     grassColor = scene.getGrassColor();
     wind = scene.getWind();
+    grassSway = scene.getGrassSway();
+    grassSettings = scene.getGrassSettings();
     status = "Generated a random region -- review, tweak, then Save.";
+    if (showNeighborRegions) await syncNeighborRegions();
   }
 
   function newRegion(): void {
@@ -642,6 +1177,16 @@
     regionName = "New Region";
     portalWorldX = 0;
     portalWorldZ = 0;
+    // Place new regions to the right of the current furthest tile.
+    let maxX = 0;
+    for (const r of regionList) {
+      const half = ((r.gridSize - 1) * r.pitch) / 2;
+      maxX = Math.max(maxX, r.worldOriginX + half);
+    }
+    const span = scene?.getLayoutSpan();
+    const half = span ? ((span.gridSize - 1) * span.pitch) / 2 : 100;
+    worldOriginX = maxX + half;
+    worldOriginZ = 0;
     musicTrack = null;
     void generateDraft();
   }
@@ -653,7 +1198,17 @@
 
   async function saveToServer(): Promise<void> {
     if (!scene) return;
-    scene.setMeta({ id: regionId, name: regionName, biome, portalWorldX, portalWorldZ, isStartingRegion, musicTrack });
+    scene.setMeta({
+      id: regionId,
+      name: regionName,
+      biome,
+      portalWorldX,
+      portalWorldZ,
+      worldOriginX,
+      worldOriginZ,
+      isStartingRegion,
+      musicTrack,
+    });
     status = "Saving...";
     const blueprint = scene.exportBlueprint();
     try {
@@ -680,9 +1235,72 @@
     }
   }
 
+  function requestDeleteRegion(): void {
+    if (!regionId) {
+      status = "Save the region before deleting, or discard via New Region.";
+      return;
+    }
+    if (regionList.length <= 1) {
+      status = "Cannot delete the last remaining region.";
+      return;
+    }
+    if (document.pointerLockElement) document.exitPointerLock();
+    deleteConfirmOpen = true;
+  }
+
+  async function confirmDeleteRegion(): Promise<void> {
+    if (!regionId || deleteInProgress) return;
+    const deletingId = regionId;
+    const deletingName = regionName;
+    deleteInProgress = true;
+    status = `Deleting "${deletingName}"…`;
+    try {
+      const res = await fetch(app.apiUrl("/api/debug/region-blueprint-delete"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ id: deletingId }),
+      });
+      const data = (await res.json().catch(() => null)) as
+        | { ok?: boolean; statusMessage?: string; message?: string; cleanedPortalRefs?: string[] }
+        | null;
+      if (!res.ok) {
+        status = data?.statusMessage ?? data?.message ?? `Delete failed (${res.status}).`;
+        return;
+      }
+      deleteConfirmOpen = false;
+      if (localStorage.getItem("rustcraft_last_region_id") === deletingId) {
+        localStorage.removeItem("rustcraft_last_region_id");
+      }
+      await refreshRegionList();
+      const next = regionList[0];
+      if (next) {
+        await loadRegion(next.id);
+        status = `Deleted "${deletingName}". Opened "${next.name}".`;
+      } else {
+        newRegion();
+        status = `Deleted "${deletingName}".`;
+      }
+    } catch {
+      status = "Delete failed.";
+    } finally {
+      deleteInProgress = false;
+    }
+  }
+
   function exportJson(): void {
     if (!scene) return;
-    scene.setMeta({ id: regionId, name: regionName, biome, portalWorldX, portalWorldZ, isStartingRegion, musicTrack });
+    scene.setMeta({
+      id: regionId,
+      name: regionName,
+      biome,
+      portalWorldX,
+      portalWorldZ,
+      worldOriginX,
+      worldOriginZ,
+      isStartingRegion,
+      musicTrack,
+    });
     const blueprint = scene.exportBlueprint();
     const blob = new Blob([JSON.stringify(blueprint, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
@@ -710,10 +1328,14 @@
       biome = blueprint.biome;
       portalWorldX = blueprint.portalWorldX;
       portalWorldZ = blueprint.portalWorldZ;
+      worldOriginX = blueprint.worldOriginX ?? 0;
+      worldOriginZ = blueprint.worldOriginZ ?? 0;
       musicTrack = blueprint.musicTrack ?? null;
       colorGrading = scene?.getColorGrading() ?? colorGrading;
       grassColor = scene?.getGrassColor() ?? grassColor;
       wind = scene?.getWind() ?? wind;
+      grassSway = scene?.getGrassSway() ?? grassSway;
+      grassSettings = scene?.getGrassSettings() ?? grassSettings;
       status = `Imported "${blueprint.name}".`;
     } catch {
       status = "Import failed -- invalid JSON.";
@@ -727,267 +1349,245 @@
 </script>
 
 <div class="editor">
-  <div class="header-bar">
-    <div class="left-section">
-      <button class="exit-btn" onclick={exitEditor} title="Leave editor">&larr; Exit</button>
+  <div class="menubar-shell">
+    <!-- App menu bar -->
+    <div class="menubar">
+      <span class="app-brand">Region Editor</span>
 
-      <div class="field-inline">
-        <select value={regionId} onchange={(e) => loadRegion((e.target as HTMLSelectElement).value)}>
-          {#each regionList as r (r.id)}
-            <option value={r.id}>{r.name}</option>
-          {/each}
-          {#if !regionList.some((r) => r.id === regionId)}
-            <option value={regionId}>{regionName} (unsaved)</option>
-          {/if}
-        </select>
-        <button class="icon-btn" onclick={newRegion} title="New Region">+</button>
+      <div class="menu-group">
+        <button class="menu-top" class:open={activeDropdown === "file"} onclick={() => toggleDropdown("file")}>File</button>
+        {#if activeDropdown === "file"}
+          <div class="menu-panel">
+            <button onclick={() => menuAction(newRegion)}>New Region</button>
+            <div class="menu-sep"></div>
+            <button onclick={() => menuAction(() => { void saveToServer(); })}>Save<span class="accel">⌘S</span></button>
+            <button
+              class="danger"
+              disabled={!regionId || regionList.length <= 1}
+              onclick={() => menuAction(requestDeleteRegion)}
+            >Delete Region…</button>
+            <button onclick={() => menuAction(importJson)}>Import JSON…</button>
+            <button onclick={() => menuAction(exportJson)}>Export JSON…</button>
+            <div class="menu-sep"></div>
+            <button onclick={() => menuAction(exitEditor)}>Exit Editor</button>
+          </div>
+        {/if}
       </div>
 
-      <input type="text" class="name-input" bind:value={regionName} placeholder="Region Name" />
-
-      <select class="biome-select" bind:value={biome} onchange={applyBiomePreset}>
-        {#each REGION_BIOMES as b (b)}
-          <option value={b}>{REGION_BIOME_LABELS[b]}</option>
-        {/each}
-      </select>
-    </div>
-
-    <div class="center-tools">
-      <!-- Transform Mode Segmented Controls -->
-      <div class="segmented-control">
-        <button class:active={transformMode === "translate"} onclick={() => setMode("translate")} title="Move (T)">
-          ✢ Move
-        </button>
-        <button class:active={transformMode === "rotate"} onclick={() => setMode("rotate")} title="Rotate (R)">
-          ↻ Rotate
-        </button>
-        <button class:active={transformMode === "scale"} onclick={() => setMode("scale")} title="Scale (S)">
-          ⤢ Scale
-        </button>
+      <div class="menu-group">
+        <button class="menu-top" class:open={activeDropdown === "edit"} onclick={() => toggleDropdown("edit")}>Edit</button>
+        {#if activeDropdown === "edit"}
+          <div class="menu-panel">
+            <button onclick={() => menuAction(() => scene?.undo())}>Undo<span class="accel">⌘Z</span></button>
+            <button onclick={() => menuAction(() => scene?.redo())}>Redo<span class="accel">⇧⌘Z</span></button>
+            <div class="menu-sep"></div>
+            <button class:active={transformSnap} onclick={() => menuAction(toggleSnap)}>
+              Snap to Grid
+            </button>
+            <button disabled={selection.length === 0} onclick={() => menuAction(dropToGround)}>Drop to Ground<span class="accel">G</span></button>
+            <button
+              disabled={selection.filter((s) => s.kind === "asset").length < 2}
+              onclick={() => menuAction(() => scene?.groupSelectedAssets())}
+            >Group<span class="accel">⌘G</span></button>
+            <button
+              disabled={!selection.some((s) => s.kind === "asset" && s.groupId)}
+              onclick={() => menuAction(() => scene?.ungroupSelectedAssets())}
+            >Ungroup<span class="accel">⇧⌘G</span></button>
+          </div>
+        {/if}
       </div>
 
-      <button
-        class="tool-chip"
-        class:active={transformSnap}
-        onclick={toggleSnap}
-        title="Snap to 0.5m / 15° (X)"
-      >
-        ⊞ Snap
-      </button>
-      <button
-        class="tool-chip"
-        onclick={dropToGround}
-        disabled={selection.length === 0}
-        title="Drop selection onto terrain (G)"
-      >
-        ⬇ Ground
-      </button>
+      <div class="menu-group">
+        <button class="menu-top" class:open={activeDropdown === "region"} onclick={() => toggleDropdown("region")}>Region</button>
+        {#if activeDropdown === "region"}
+          <div class="menu-panel wide">
+            <label class="menu-field">
+              Open
+              <select
+                value={regionId}
+                onchange={(e) => {
+                  const id = (e.target as HTMLSelectElement).value;
+                  closeMenus();
+                  void loadRegion(id);
+                }}
+              >
+                {#each regionList as r (r.id)}
+                  <option value={r.id}>{r.name}</option>
+                {/each}
+                {#if !regionList.some((r) => r.id === regionId)}
+                  <option value={regionId}>{regionName} (unsaved)</option>
+                {/if}
+              </select>
+            </label>
+            <label class="menu-field">
+              Name
+              <input type="text" bind:value={regionName} placeholder="Region name" />
+            </label>
+            <label class="menu-field">
+              Biome
+              <select bind:value={biome} onchange={applyBiomePreset}>
+                {#each REGION_BIOMES as b (b)}
+                  <option value={b}>{REGION_BIOME_LABELS[b]}</option>
+                {/each}
+              </select>
+            </label>
+            <label class="menu-field checkbox-field">
+              <input
+                type="checkbox"
+                bind:checked={isStartingRegion}
+                onchange={(e) => scene?.setMeta({ isStartingRegion: (e.target as HTMLInputElement).checked })}
+              />
+              <span>Starting Town</span>
+            </label>
+          </div>
+        {/if}
+      </div>
 
-      <div class="v-divider"></div>
+      <div class="menu-group">
+        <button
+          class="menu-top"
+          class:open={activeDropdown === "tools"}
+          class:lit={sculptMode !== null || volumeStampShape !== null || volumeSculptBrushActive || volumeClaySculptActive || waterBrushMode !== null || texturePaintMode !== null || armedLightColor !== null || armedFogColor !== null || armedBarrier || armedCloudShape !== null || roadPaintActive || armedMarker !== null || randomTreeBrushActive || grassBrushActive || grassEraseBrushActive || eraseBrushActive || houseToolActive || castleToolActive}
+          onclick={() => toggleDropdown("tools")}
+        >Tools</button>
+        {#if activeDropdown === "tools"}
+          <div class="menu-panel tools-panel">
+            <div class="menu-section">Assets</div>
+            <button onclick={() => menuAction(() => { showAssetExplorer = true; })}>Asset Explorer…</button>
 
-      <!-- Sculpt Dropdown Menu -->
-      <div class="dropdown-wrapper">
-        <button class="dropdown-trigger" class:active={sculptMode !== null || volumeStampShape !== null || volumeSculptBrushActive} onclick={() => toggleDropdown("sculpt")}>
-          🏔️ Sculpt <span class="caret">▾</span>
-        </button>
-        {#if activeDropdown === "sculpt"}
-          <div class="dropdown-menu">
-            <button class:active={sculptMode === "raise"} onclick={() => { pickSculpt("raise"); activeDropdown = null; }}>
-              ⛰️ Raise Terrain
-            </button>
-            <button class:active={sculptMode === "lower"} onclick={() => { pickSculpt("lower"); activeDropdown = null; }}>
-              🕳️ Lower Terrain
-            </button>
-            <button class:active={sculptMode === "mold"} onclick={() => { pickSculpt("mold"); activeDropdown = null; }}>
-              📐 Mould / Flatten
-            </button>
-            <button class:active={sculptMode === "smooth"} onclick={() => { pickSculpt("smooth"); activeDropdown = null; }}>
-              🌊 Smooth Terrain
-            </button>
-            <button class:active={sculptMode === "carve"} onclick={() => { pickSculpt("carve"); activeDropdown = null; }}>
-              🕳️ Carve Hole
-            </button>
-            <div class="dropdown-divider"></div>
-            <div class="dropdown-section-label">Add Terrain Volumes</div>
-            <button class:active={volumeSculptBrushActive} onclick={() => { pickVolumeSculptBrush(); activeDropdown = null; }}>
-              🖌️ Drag Sculpt Brush
-            </button>
+            <div class="menu-section">Terrain</div>
+            <button class:active={sculptMode === "raise"} onclick={() => menuAction(() => pickSculpt("raise"))}>Raise</button>
+            <button class:active={sculptMode === "lower"} onclick={() => menuAction(() => pickSculpt("lower"))}>Lower</button>
+            <button class:active={sculptMode === "mold"} onclick={() => menuAction(() => pickSculpt("mold"))}>Mould / Flatten</button>
+            <button class:active={sculptMode === "smooth"} onclick={() => menuAction(() => pickSculpt("smooth"))}>Smooth</button>
+            <button class:active={sculptMode === "carve"} onclick={() => menuAction(() => pickSculpt("carve"))}>Carve Hole</button>
+            <button class:active={volumeSculptBrushActive} onclick={() => menuAction(pickVolumeSculptBrush)}>Volume Drag Brush</button>
+            <button class:active={volumeClaySculptActive} onclick={() => menuAction(pickVolumeClaySculpt)} title="Blender-style add/sub on the 3D surface">Clay Sculpt (3D)</button>
             {#each TERRAIN_VOLUME_SHAPES as shape}
-              <button class:active={volumeStampShape === shape.id && !volumeSculptBrushActive} onclick={() => { pickVolumeStamp(shape.id); activeDropdown = null; }}>
-                {shape.label}
-              </button>
+              <button class:active={volumeStampShape === shape.id && !volumeSculptBrushActive && !volumeClaySculptActive} onclick={() => menuAction(() => pickVolumeStamp(shape.id))}>{shape.label}</button>
             {/each}
-          </div>
-        {/if}
-      </div>
 
-      <!-- Water Physics Dropdown Menu -->
-      <div class="dropdown-wrapper">
-        <button class="dropdown-trigger" class:active={waterBrushMode !== null} onclick={() => toggleDropdown("water")}>
-          💧 Water <span class="caret">▾</span>
-        </button>
-        {#if activeDropdown === "water"}
-          <div class="dropdown-menu">
-            <button class:active={waterBrushMode === "add"} onclick={() => { pickWaterBrush("add"); activeDropdown = null; }}>
-              💧 Drop Water Brush
-            </button>
-            <button class:active={waterBrushMode === "remove"} onclick={() => { pickWaterBrush("remove"); activeDropdown = null; }}>
-              🧽 Drain Water Brush
-            </button>
-            <div class="dropdown-divider"></div>
-            <button class:active={waterPhysicsSimulating} onclick={toggleWaterPhysics}>
-              🌊 Physics: {waterPhysicsSimulating ? "Flowing" : "Paused"}
-            </button>
-            <button onclick={() => { clearWater(); activeDropdown = null; }}>
-              🧹 Clear All Water
-            </button>
-          </div>
-        {/if}
-      </div>
+            <div class="menu-section">Water</div>
+            <button class:active={waterBrushMode === "add"} onclick={() => menuAction(() => pickWaterBrush("add"))}>Drop Water</button>
+            <button class:active={waterBrushMode === "remove"} onclick={() => menuAction(() => pickWaterBrush("remove"))}>Drain Water</button>
+            <button class:active={waterPhysicsSimulating} onclick={() => toggleWaterPhysics()}>Physics: {waterPhysicsSimulating ? "On" : "Off"}</button>
+            <button onclick={() => menuAction(clearWater)}>Clear All Water</button>
 
-      <!-- Texture Paint Dropdown Menu -->
-      <div class="dropdown-wrapper">
-        <button class="dropdown-trigger" class:active={texturePaintMode !== null} onclick={() => toggleDropdown("textures")}>
-          🎨 Textures <span class="caret">▾</span>
-        </button>
-        {#if activeDropdown === "textures"}
-          <div class="dropdown-menu">
-            <button class:active={texturePaintMode === 0} onclick={() => { pickTexture(0); activeDropdown = null; }}>
-              ✨ Auto / Biome Blend
-            </button>
-            <button class:active={texturePaintMode === 1} onclick={() => { pickTexture(1); activeDropdown = null; }}>
-              🌿 Grass Texture
-            </button>
-            <button class:active={texturePaintMode === 2} onclick={() => { pickTexture(2); activeDropdown = null; }}>
-              🤎 Dirt Texture
-            </button>
-            <button class:active={texturePaintMode === 3} onclick={() => { pickTexture(3); activeDropdown = null; }}>
-              🧱 Cobblestone Road
-            </button>
-            <button class:active={texturePaintMode === 4} onclick={() => { pickTexture(4); activeDropdown = null; }}>
-              ❄️ Snow Texture
-            </button>
-            <button class:active={texturePaintMode === 5} onclick={() => { pickTexture(5); activeDropdown = null; }}>
-              🪨 Rock Texture
-            </button>
-            <button class:active={texturePaintMode === 6} onclick={() => { pickTexture(6); activeDropdown = null; }}>
-              ⏳ Sand Texture
-            </button>
-          </div>
-        {/if}
-      </div>
+            <div class="menu-section">Paint</div>
+            <button class:active={texturePaintMode === 0} onclick={() => menuAction(() => pickTexture(0))}>Auto / Biome</button>
+            <button class:active={texturePaintMode === 1} onclick={() => menuAction(() => pickTexture(1))}>Grass</button>
+            <button class:active={texturePaintMode === 2} onclick={() => menuAction(() => pickTexture(2))}>Dirt</button>
+            <button class:active={texturePaintMode === 3} onclick={() => menuAction(() => pickTexture(3))}>Cobble</button>
+            <button class:active={texturePaintMode === 4} onclick={() => menuAction(() => pickTexture(4))}>Snow</button>
+            <button class:active={texturePaintMode === 5} onclick={() => menuAction(() => pickTexture(5))}>Rock</button>
+            <button class:active={texturePaintMode === 6} onclick={() => menuAction(() => pickTexture(6))}>Sand</button>
 
-      <!-- Light Sources Dropdown Menu -->
-      <div class="dropdown-wrapper">
-        <button class="dropdown-trigger" class:active={armedLightColor !== null} onclick={() => toggleDropdown("lights")}>
-          💡 Lights <span class="caret">▾</span>
-        </button>
-        {#if activeDropdown === "lights"}
-          <div class="dropdown-menu">
-            <button class:active={armedLightColor === "#ff9933"} onclick={() => { pickLightColor("#ff9933"); activeDropdown = null; }}>
-              🔥 Torch Amber
-            </button>
-            <button class:active={armedLightColor === "#ffffff"} onclick={() => { pickLightColor("#ffffff"); activeDropdown = null; }}>
-              ☀️ Daylight White
-            </button>
-            <button class:active={armedLightColor === "#00d4ff"} onclick={() => { pickLightColor("#00d4ff"); activeDropdown = null; }}>
-              💙 Mystic Cyan
-            </button>
-            <button class:active={armedLightColor === "#a055ff"} onclick={() => { pickLightColor("#a055ff"); activeDropdown = null; }}>
-              🔮 Arcane Violet
-            </button>
-            <button class:active={armedLightColor === "#33ff77"} onclick={() => { pickLightColor("#33ff77"); activeDropdown = null; }}>
-              🌲 Emerald Green
-            </button>
-          </div>
-        {/if}
-      </div>
+            <div class="menu-section">Lights</div>
+            <button class:active={armedLightColor === "#ff9933"} onclick={() => menuAction(() => pickLightColor("#ff9933"))}>Torch Amber</button>
+            <button class:active={armedLightColor === "#ffffff"} onclick={() => menuAction(() => pickLightColor("#ffffff"))}>Daylight</button>
+            <button class:active={armedLightColor === "#00d4ff"} onclick={() => menuAction(() => pickLightColor("#00d4ff"))}>Mystic Cyan</button>
+            <button class:active={armedLightColor === "#a055ff"} onclick={() => menuAction(() => pickLightColor("#a055ff"))}>Arcane Violet</button>
+            <button class:active={armedLightColor === "#33ff77"} onclick={() => menuAction(() => pickLightColor("#33ff77"))}>Emerald</button>
 
-      <!-- Fog Volumes -->
-      <div class="dropdown-wrapper">
-        <button class="dropdown-trigger" class:active={armedFogColor !== null} onclick={() => toggleDropdown("fog")}>
-          🌫️ Fog Volumes <span class="caret">▾</span>
-        </button>
-        {#if activeDropdown === "fog"}
-          <div class="dropdown-menu">
-            <button class:active={armedFogColor === "#c8dce8" && armedFogShape === "sphere"} onclick={() => { pickFogTool("#c8dce8", "sphere"); activeDropdown = null; }}>
-              ⚪ Mist Sphere
-            </button>
-            <button class:active={armedFogColor === "#c8dce8" && armedFogShape === "box"} onclick={() => { pickFogTool("#c8dce8", "box"); activeDropdown = null; }}>
-              ▢ Mist Box
-            </button>
-            <button class:active={armedFogColor === "#9bb8a0" && armedFogShape === "sphere"} onclick={() => { pickFogTool("#9bb8a0", "sphere"); activeDropdown = null; }}>
-              🌿 Swamp Haze
-            </button>
-            <button class:active={armedFogColor === "#d4a878" && armedFogShape === "sphere"} onclick={() => { pickFogTool("#d4a878", "sphere"); activeDropdown = null; }}>
-              🏜️ Dust Cloud
-            </button>
-            <button class:active={armedFogColor === "#b090e0" && armedFogShape === "sphere"} onclick={() => { pickFogTool("#b090e0", "sphere"); activeDropdown = null; }}>
-              🔮 Arcane Fog
-            </button>
-          </div>
-        {/if}
-      </div>
+            <div class="menu-section">Fog</div>
+            <button class:active={armedFogColor === "#c8dce8" && armedFogShape === "sphere"} onclick={() => menuAction(() => pickFogTool("#c8dce8", "sphere"))}>Mist Sphere</button>
+            <button class:active={armedFogColor === "#c8dce8" && armedFogShape === "box"} onclick={() => menuAction(() => pickFogTool("#c8dce8", "box"))}>Mist Box</button>
+            <button class:active={armedFogColor === "#9bb8a0" && armedFogShape === "sphere"} onclick={() => menuAction(() => pickFogTool("#9bb8a0", "sphere"))}>Swamp Haze</button>
+            <button class:active={armedFogColor === "#d4a878" && armedFogShape === "sphere"} onclick={() => menuAction(() => pickFogTool("#d4a878", "sphere"))}>Dust Cloud</button>
+            <button class:active={armedFogColor === "#b090e0" && armedFogShape === "sphere"} onclick={() => menuAction(() => pickFogTool("#b090e0", "sphere"))}>Arcane Fog</button>
 
-      <!-- Roads & Spawns Dropdown Menu -->
-      <div class="dropdown-wrapper">
-        <button class="dropdown-trigger" class:active={roadPaintActive || armedMarker !== null || randomTreeBrushActive || grassBrushActive || grassEraseBrushActive || eraseBrushActive || houseToolActive} onclick={() => toggleDropdown("markers")}>
-          📍 Roads & Nature <span class="caret">▾</span>
-        </button>
-        {#if activeDropdown === "markers"}
-          <div class="dropdown-menu">
-            <button class:active={roadPaintActive} onclick={() => { pickRoadTool(); activeDropdown = null; }}>
-              🛣️ Paint Dirt Road
-            </button>
-            <div class="dropdown-divider"></div>
+            <div class="menu-section">Place</div>
+            <button class:active={armedBarrier} onclick={() => menuAction(pickBarrierTool)}>Invisible Barrier</button>
+            <button class:active={armedCloudShape === "cumulus"} onclick={() => menuAction(() => pickCloudTool("cumulus"))}>Cloud: Cumulus</button>
+            <button class:active={armedCloudShape === "wispy"} onclick={() => menuAction(() => pickCloudTool("wispy"))}>Cloud: Wispy</button>
+            <button class:active={armedCloudShape === "flat"} onclick={() => menuAction(() => pickCloudTool("flat"))}>Cloud: Flat</button>
+            <button class:active={roadPaintActive} onclick={() => menuAction(pickRoadTool)}>Dirt Road</button>
             {#each HOUSE_TYPE_OPTIONS as opt}
-              <button class:active={houseToolActive && houseType === opt.id} onclick={() => { pickHouseTool(opt.id); activeDropdown = null; }}>
-                {opt.label}
-              </button>
+              <button class:active={houseToolActive && houseType === opt.id} onclick={() => menuAction(() => pickHouseTool(opt.id))}>{opt.label}</button>
             {/each}
-            <div class="dropdown-divider"></div>
-            <button class:active={randomTreeBrushActive} onclick={() => { pickRandomTreeBrush(); activeDropdown = null; }}>
-              🌲 Random Tree Brush
+            <div class="menu-section">Castle</div>
+            <label class="menu-field">
+              Style
+              <select
+                bind:value={castleStyle}
+                onchange={() => syncCastleToolOptions()}
+              >
+                {#each CASTLE_STYLE_OPTIONS as opt}
+                  <option value={opt.id}>{opt.label}</option>
+                {/each}
+              </select>
+            </label>
+            <label class="menu-field">
+              Size
+              <select
+                bind:value={castleSize}
+                onchange={() => {
+                  castleSize = Number(castleSize) as CastleSize;
+                  syncCastleToolOptions();
+                }}
+              >
+                {#each CASTLE_SIZE_OPTIONS as opt}
+                  <option value={opt.id}>{opt.label}</option>
+                {/each}
+              </select>
+            </label>
+            <label class="menu-field">
+              Height
+              <select
+                bind:value={castleHeight}
+                onchange={() => {
+                  castleHeight = Number(castleHeight) as CastleHeight;
+                  syncCastleToolOptions();
+                }}
+              >
+                {#each CASTLE_HEIGHT_OPTIONS as opt}
+                  <option value={opt.id}>{opt.label}</option>
+                {/each}
+              </select>
+            </label>
+            <button class:active={castleToolActive} onclick={() => menuAction(pickCastleTool)}>
+              {castleToolActive ? "Castle tool armed — click terrain" : "Generate Castle"}
             </button>
-            <button class:active={grassBrushActive} onclick={() => { pickGrassBrush(); activeDropdown = null; }}>
-              🌿 Grass Brush
-            </button>
-            <button class:active={grassEraseBrushActive} onclick={() => { pickGrassEraseBrush(); activeDropdown = null; }}>
-              🌾✂️ Erase Grass
-            </button>
-            <button class:active={eraseBrushActive} onclick={() => { pickEraseBrush(); activeDropdown = null; }}>
-              🧹 Erase Brush
-            </button>
-            <div class="dropdown-divider"></div>
-            <button class:active={armedMarker === "mobSpawn"} onclick={() => { pickMarker("mobSpawn"); activeDropdown = null; }}>
-              👾 + Mob Spawn
-            </button>
-            <button class:active={armedMarker === "village"} onclick={() => { pickMarker("village"); activeDropdown = null; }}>
-              🏰 + Village Marker
-            </button>
-            <button class:active={armedMarker === "entry"} onclick={() => { pickMarker("entry"); activeDropdown = null; }}>
-              🚪 + Entry Spawn Point
-            </button>
-            <button class:active={armedMarker === "portal"} onclick={() => { pickMarker("portal"); activeDropdown = null; }}>
-              🌀 + Region Portal Link
-            </button>
-            <button class:active={armedMarker === "npc"} onclick={() => { pickMarker("npc"); activeDropdown = null; }}>
-              📜 + Quest Giver NPC
-            </button>
-            <button class:active={armedMarker === "worldEvent"} onclick={() => { pickMarker("worldEvent"); activeDropdown = null; }}>
-              ⚔️ + World Event
-            </button>
+            <button class:active={randomTreeBrushActive} onclick={() => menuAction(pickRandomTreeBrush)}>Tree Brush</button>
+            <button class:active={grassBrushActive} onclick={() => menuAction(pickGrassBrush)}>Grass Brush</button>
+            <button class:active={grassEraseBrushActive} onclick={() => menuAction(pickGrassEraseBrush)}>Erase Grass</button>
+            <button class:active={eraseBrushActive} onclick={() => menuAction(pickEraseBrush)}>Erase Brush</button>
+            <button class:active={armedMarker === "mobSpawn"} onclick={() => menuAction(() => pickMarker("mobSpawn"))}>Mob Spawn</button>
+            <button class:active={armedMarker === "resourceNode"} onclick={() => menuAction(() => pickMarker("resourceNode"))}>Resource Node</button>
+            <button class:active={armedMarker === "village"} onclick={() => menuAction(() => pickMarker("village"))}>Village Marker</button>
+            <button class:active={armedMarker === "entry"} onclick={() => menuAction(() => pickMarker("entry"))}>Entry Spawn</button>
+            <button class:active={armedMarker === "portal"} onclick={() => menuAction(() => pickMarker("portal"))}>Region Portal</button>
+            <button class:active={armedMarker === "npc"} onclick={() => menuAction(() => pickMarker("npc"))}>Quest Giver</button>
+            <button class:active={armedMarker === "worldEvent"} onclick={() => menuAction(() => pickMarker("worldEvent"))}>World Event</button>
           </div>
         {/if}
       </div>
 
-      <!-- World & Settings Dropdown Menu -->
-      <div class="dropdown-wrapper">
-        <button class="dropdown-trigger" class:active={showColorPanel} onclick={() => toggleDropdown("env")}>
-          ⚙️ World Settings <span class="caret">▾</span>
-        </button>
-        {#if activeDropdown === "env"}
-          <div class="dropdown-menu settings-panel">
+      <div class="menu-group">
+        <button class="menu-top" class:open={activeDropdown === "world"} class:lit={showColorPanel || showGrassPanel} onclick={() => toggleDropdown("world")}>World</button>
+        {#if activeDropdown === "world"}
+          <div class="menu-panel settings-panel">
+            <button class="menu-action" onclick={() => menuAction(() => { void openContinentMap(); })}>Continent Layout Map…</button>
+            <label class="menu-field checkbox-field">
+              <input
+                type="checkbox"
+                checked={showNeighborRegions}
+                disabled={neighborLoading}
+                onchange={(e) => {
+                  showNeighborRegions = (e.currentTarget as HTMLInputElement).checked;
+                  void syncNeighborRegions();
+                }}
+              />
+              Show neighbor regions{neighborLoading ? "…" : neighborCount > 0 ? ` (${neighborCount})` : ""}
+            </label>
+            {#if showNeighborRegions}
+              <button
+                class="menu-action"
+                disabled={neighborLoading}
+                onclick={() => menuAction(() => { void syncNeighborRegions(); })}
+              >Refresh neighbors</button>
+            {/if}
+            <div class="menu-sep"></div>
             <label class="menu-field">
               Terrain Height
               <input type="range" min="0.25" max="2.5" step="0.05" bind:value={heightScale} />
@@ -1001,22 +1601,41 @@
               <input type="range" min="140" max="700" step="20" bind:value={worldSize} />
               <span class="readout">{worldSize}m</span>
             </label>
-            <button class="menu-action" onclick={() => { generateDraft(); activeDropdown = null; }}>🎲 Re-Generate World</button>
-            <div class="dropdown-divider"></div>
-            <label class="menu-field checkbox-field">
-              <input type="checkbox" bind:checked={isStartingRegion} onchange={(e) => scene?.setMeta({ isStartingRegion: (e.target as HTMLInputElement).checked })} />
-              <span>⭐ Set as Starting Town (New Player Spawn)</span>
-            </label>
-            <div class="dropdown-divider"></div>
+            <button class="menu-action" onclick={() => menuAction(() => { void generateDraft(); })}>Re-Generate World</button>
+            <div class="menu-sep"></div>
             <label class="menu-field">
               Portal X <input type="number" step="1" bind:value={portalWorldX} />
             </label>
             <label class="menu-field">
               Portal Z <input type="number" step="1" bind:value={portalWorldZ} />
             </label>
-            <div class="dropdown-divider"></div>
             <label class="menu-field">
-              🎵 Music
+              Origin X
+              <input
+                type="number"
+                step="1"
+                bind:value={worldOriginX}
+                onchange={() => {
+                  scene?.setMeta({ worldOriginX, worldOriginZ });
+                  scheduleSave();
+                }}
+              />
+            </label>
+            <label class="menu-field">
+              Origin Z
+              <input
+                type="number"
+                step="1"
+                bind:value={worldOriginZ}
+                onchange={() => {
+                  scene?.setMeta({ worldOriginX, worldOriginZ });
+                  scheduleSave();
+                }}
+              />
+            </label>
+            <div class="menu-sep"></div>
+            <label class="menu-field">
+              Music
               <select value={musicTrack ?? "__none__"} onchange={(e) => pickMusicTrack((e.target as HTMLSelectElement).value === "__none__" ? null : (e.target as HTMLSelectElement).value)}>
                 <option value="__none__">None</option>
                 <optgroup label="Action">
@@ -1041,55 +1660,100 @@
                 </optgroup>
               </select>
             </label>
-            <div class="dropdown-divider"></div>
             <label class="menu-field">
-              🍃 Wind Direction
+              Wind °
               <input type="range" min="0" max="360" step="5" bind:value={wind.direction} oninput={applyWind} />
               <span class="readout">{wind.direction}°</span>
             </label>
             <label class="menu-field">
-              🍃 Wind Strength
+              Wind Strength
               <input type="range" min="0" max="3" step="0.1" bind:value={wind.strength} oninput={applyWind} />
               <span class="readout">{wind.strength.toFixed(1)}x</span>
             </label>
-            <div class="dropdown-divider"></div>
-            <button class="menu-action" class:active={showColorPanel} onclick={() => { showColorPanel = !showColorPanel; activeDropdown = null; }}>
-              🎨 Toggle Color Grading
+            <label class="menu-field">
+              Grass Movement
+              <input type="range" min="0" max="3" step="0.1" bind:value={grassSway} oninput={applyGrassSway} />
+              <span class="readout">{grassSway.toFixed(1)}x</span>
+            </label>
+            <button class="menu-action" class:active={showGrassPanel} onclick={() => menuAction(() => { showGrassPanel = !showGrassPanel; })}>
+              {showGrassPanel ? "Hide" : "Show"} Grass Settings
+            </button>
+            <div class="menu-sep"></div>
+            <div class="menu-section">Camera</div>
+            <button class="menu-action" class:active={flyNav} onclick={() => menuAction(() => setNavMode("fly"))}>
+              Fly (Minecraft) — default
+            </button>
+            <button class="menu-action" class:active={!flyNav} onclick={() => menuAction(() => setNavMode("orbit"))}>
+              Orbit (legacy)
+            </button>
+            <div class="menu-sep"></div>
+            <button class="menu-action" class:active={showColorPanel} onclick={() => menuAction(() => { showColorPanel = !showColorPanel; })}>
+              {showColorPanel ? "Hide" : "Show"} Color Grading
             </button>
           </div>
         {/if}
       </div>
+
+      <div class="menubar-spacer"></div>
+
+      {#if status}<span class="status" title={status}>{status}</span>{/if}
+
+      <button class="save-btn" onclick={() => { void saveToServer(); }} title="Save (⌘S)">Save</button>
+      <button class="playtest-btn" class:active={playtestActive} onclick={togglePlaytest} title="Walk around the region">
+        {playtestActive ? "Exit Playtest" : "Playtest"}
+      </button>
+      <input bind:this={fileInput} type="file" accept="application/json" class="hidden-file" onchange={onFileSelected} />
     </div>
 
-    <div class="right-section">
-      {#if status}<span class="status">{status}</span>{/if}
-
-      <!-- File Dropdown -->
-      <div class="dropdown-wrapper">
-        <button class="dropdown-trigger file-btn" onclick={() => toggleDropdown("file")}>
-          📁 File <span class="caret">▾</span>
-        </button>
-        {#if activeDropdown === "file"}
-          <div class="dropdown-menu right-aligned">
-            <button onclick={() => { void saveToServer(); activeDropdown = null; }}>💾 Save Region</button>
-            <button onclick={() => { exportJson(); activeDropdown = null; }}>📤 Export JSON</button>
-            <button onclick={() => { importJson(); activeDropdown = null; }}>📥 Import JSON</button>
-          </div>
-        {/if}
+    <!-- Compact transform / document toolbar -->
+    <div class="toolbar">
+      <div class="segmented-control">
+        <button class:active={transformMode === "translate"} onclick={() => setMode("translate")} title="Move (T)">Move</button>
+        <button class:active={transformMode === "rotate"} onclick={() => setMode("rotate")} title="Rotate (R)">Rotate</button>
+        <button class:active={transformMode === "scale"} onclick={() => setMode("scale")} title="Scale (S)">Scale</button>
       </div>
-      <input bind:this={fileInput} type="file" accept="application/json" class="hidden-file" onchange={onFileSelected} />
 
-      <button class="playtest-btn" class:active={playtestActive} onclick={togglePlaytest} title="Walk around the region">
-        {playtestActive ? "⏹ Exit Playtest" : "▶ Playtest"}
-      </button>
+      <button class="tool-chip" class:active={transformSnap} onclick={toggleSnap} title="Snap (X)">Snap</button>
+      <button class="tool-chip" onclick={dropToGround} disabled={selection.length === 0} title="Ground (G)">Ground</button>
+
+      <div class="v-divider"></div>
+
+      <select
+        class="doc-select"
+        value={regionId}
+        onchange={(e) => loadRegion((e.target as HTMLSelectElement).value)}
+        title="Open region"
+      >
+        {#each regionList as r (r.id)}
+          <option value={r.id}>{r.name}</option>
+        {/each}
+        {#if !regionList.some((r) => r.id === regionId)}
+          <option value={regionId}>{regionName} (unsaved)</option>
+        {/if}
+      </select>
+      <input type="text" class="name-input" bind:value={regionName} placeholder="Name" title="Region name" />
+      <select class="biome-select" bind:value={biome} onchange={applyBiomePreset} title="Biome">
+        {#each REGION_BIOMES as b (b)}
+          <option value={b}>{REGION_BIOME_LABELS[b]}</option>
+        {/each}
+      </select>
     </div>
   </div>
 
   <!-- Active Context Sub-Bar (only shown when a sculpt, water, texture, light, tree, or road tool is active) -->
-  {#if sculptMode || volumeSculptBrushActive || volumeStampShape || waterBrushMode || texturePaintMode !== null || armedLightColor !== null || armedFogColor !== null || randomTreeBrushActive || grassBrushActive || grassEraseBrushActive || eraseBrushActive || roadPaintActive}
+  {#if sculptMode || volumeSculptBrushActive || volumeClaySculptActive || volumeStampShape || waterBrushMode || texturePaintMode !== null || armedLightColor !== null || armedFogColor !== null || armedBarrier || armedCloudShape !== null || randomTreeBrushActive || grassBrushActive || grassEraseBrushActive || eraseBrushActive || roadPaintActive || armedMarker === "mobSpawn" || armedMarker === "resourceNode"}
     <div class="context-bar">
       <span class="context-title">
-        {#if volumeSculptBrushActive}
+        {#if armedMarker === "resourceNode"}
+          ⛏️ Resource Node: <strong>PLACE</strong>
+          <span class="context-hint"> — pick type, then click terrain</span>
+        {:else if armedMarker === "mobSpawn"}
+          👹 Mob Spawn: <strong>PLACE</strong>
+          <span class="context-hint"> — set difficulty/type for each click</span>
+        {:else if volumeClaySculptActive}
+          🧱 Clay Sculpt: <strong>{volumeSculptOp === "add" ? "ADD" : "SUBTRACT"}</strong>
+          <span class="context-hint"> — drag on terrain/volumes in 3D (boulder/block)</span>
+        {:else if volumeSculptBrushActive}
           🖌️ Volume Sculpt Brush: <strong>DRAG ONE CONTINUOUS MESH</strong>
         {:else if volumeStampShape}
           🗿 Place Volume: <strong>{volumeStampShape.toUpperCase()}</strong>
@@ -1108,6 +1772,10 @@
           💡 Light Placement: <strong>PLACE LIGHT SOURCE</strong>
         {:else if armedFogColor !== null}
           🌫️ Fog Placement: <strong>{armedFogShape === "box" ? "MIST BOX" : "MIST SPHERE"}</strong>
+        {:else if armedBarrier}
+          🚧 Barrier Placement: <strong>INVISIBLE WALL</strong>
+        {:else if armedCloudShape !== null}
+          ☁️ Cloud Placement: <strong>{armedCloudShape.toUpperCase()}</strong>
         {:else if randomTreeBrushActive}
           🌲 Nature Mode: <strong>RANDOM TREE BRUSH</strong>
         {:else if grassBrushActive}
@@ -1122,13 +1790,66 @@
       </span>
 
       <div class="context-fields">
-        {#if sculptMode || volumeSculptBrushActive || volumeStampShape || waterBrushMode || texturePaintMode !== null || randomTreeBrushActive || grassBrushActive || grassEraseBrushActive || eraseBrushActive}
+        {#if armedMarker === "resourceNode"}
+          <label class="context-field">
+            Node Type
+            <select bind:value={resourceNodeType} onchange={applyResourceNodeDefaults}>
+              {#each PLACEABLE_REGION_NODE_TYPES as typeId}
+                <option value={typeId}>{nodeTypeDef(typeId).name}</option>
+              {/each}
+            </select>
+          </label>
+        {:else if armedMarker === "mobSpawn"}
+          <label class="context-field">
+            Difficulty
+            <input type="range" min="0.5" max="3" step="0.1" bind:value={mobSpawnDifficulty} oninput={applyMobSpawnDefaults} />
+            <span>{mobSpawnDifficulty.toFixed(1)}x</span>
+          </label>
+          <label class="context-field">
+            Mob Type
+            <select bind:value={mobSpawnType} onchange={applyMobSpawnDefaults}>
+              <option value="">Biome random</option>
+              {#each Object.values(MOBS) as mob}
+                <option value={mob.id}>{mob.name}</option>
+              {/each}
+            </select>
+          </label>
+        {:else if sculptMode || volumeSculptBrushActive || volumeClaySculptActive || volumeStampShape || waterBrushMode || texturePaintMode !== null || randomTreeBrushActive || grassBrushActive || grassEraseBrushActive || eraseBrushActive}
           <label class="context-field">
             Radius
             <input type="range" min="2" max="30" value={brushRadius} oninput={(e) => updateBrushRadius(Number((e.target as HTMLInputElement).value))} />
             <span>{brushRadius}m</span>
           </label>
-          {#if volumeSculptBrushActive || volumeStampShape}
+          {#if volumeClaySculptActive}
+            <label class="context-field">
+              Mode
+              <select value={volumeSculptOp} onchange={(e) => setVolumeSculptOp((e.target as HTMLSelectElement).value as "add" | "sub")}>
+                <option value="add">Add (Draw)</option>
+                <option value="sub">Subtract (Carve)</option>
+              </select>
+            </label>
+            <label class="context-field">
+              Shape
+              <select value={volumeStampShape ?? "boulder"} onchange={(e) => pickVolumeShapeForBrush((e.target as HTMLSelectElement).value as TerrainVolumeShape)}>
+                {#each CLAY_SCULPT_SHAPES as shape}
+                  <option value={shape.id}>{shape.label}</option>
+                {/each}
+              </select>
+            </label>
+            <label class="context-field">
+              Material
+              <select value={volumeMaterial} onchange={(e) => pickVolumeMaterial((e.target as HTMLSelectElement).value as TerrainVolumeMaterial)}>
+                {#each TERRAIN_VOLUME_MATERIALS as mat}
+                  <option value={mat.id}>{mat.label}</option>
+                {/each}
+              </select>
+            </label>
+            <label class="context-field">
+              Strength
+              <input type="range" min="0.2" max="3" step="0.1" value={brushStrength} oninput={(e) => updateBrushStrength(Number((e.target as HTMLInputElement).value))} />
+              <span>{brushStrength}x</span>
+            </label>
+          {:else if volumeSculptBrushActive || volumeStampShape}
             <label class="context-field">
               Shape
               <select value={volumeStampShape ?? "boulder"} onchange={(e) => pickVolumeShapeForBrush((e.target as HTMLSelectElement).value as TerrainVolumeShape)}>
@@ -1167,6 +1888,9 @@
               <input type="range" min="0.4" max="2.5" step="0.05" bind:value={grassLength} oninput={applyGrassLength} />
               <span>{grassLength.toFixed(2)}x</span>
             </label>
+            <button class="menu-action" type="button" onclick={() => { showGrassPanel = true; }}>
+              Open Grass Settings…
+            </button>
           {/if}
         {:else if roadPaintActive}
           <label class="context-field">
@@ -1181,19 +1905,110 @@
     </div>
   {/if}
 
+  {#if showContinentMap}
+    <ContinentLayoutMap
+      tiles={layoutTiles}
+      currentRegionId={regionId || "__draft__"}
+      saving={layoutSaving}
+      onTilesChange={onLayoutTilesChange}
+      onClose={() => {
+        showContinentMap = false;
+      }}
+      onSave={() => {
+        void saveContinentLayout();
+      }}
+      onOpenRegion={(id) => {
+        showContinentMap = false;
+        void loadRegion(id);
+      }}
+    />
+  {/if}
+
+  {#if deleteConfirmOpen}
+    <!-- Overlay dismiss uses target===currentTarget (not child stopPropagation):
+         Svelte 5's delegated clicks break when a parent calls stopPropagation. -->
+    <div
+      class="delete-modal-overlay"
+      role="presentation"
+      onclick={(e) => {
+        if (e.target === e.currentTarget && !deleteInProgress) deleteConfirmOpen = false;
+      }}
+    >
+      <div
+        class="delete-modal"
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="delete-region-title"
+      >
+        <h3 id="delete-region-title">Delete region?</h3>
+        <p>
+          Permanently delete <strong>{regionName}</strong>
+          <span class="mono">({regionId})</span>?
+        </p>
+        <ul>
+          <li>The region file is removed from disk and the live game catalog.</li>
+          <li>Mobs, NPCs, gather nodes, and portal links targeting this region are cleaned up.</li>
+          <li>Players currently inside are moved to another region.</li>
+          {#if isStartingRegion}
+            <li class="warn">This is marked as the Starting Town — a different region will be used for new characters.</li>
+          {/if}
+        </ul>
+        <p class="warn-line">This cannot be undone.</p>
+        <div class="delete-modal-actions">
+          <button
+            type="button"
+            class="cancel"
+            disabled={deleteInProgress}
+            onclick={() => (deleteConfirmOpen = false)}
+          >Cancel</button>
+          <button
+            type="button"
+            class="confirm-delete"
+            disabled={deleteInProgress}
+            onclick={() => { void confirmDeleteRegion(); }}
+          >{deleteInProgress ? "Deleting…" : "Delete Region"}</button>
+        </div>
+      </div>
+    </div>
+  {/if}
+
   <div class="body">
     <div class="palette">
-      <div class="palette-tools-title">📦 Asset Palette</div>
-      {#each REGION_PROP_PALETTE as group (group.label)}
+      <div class="palette-tools-title">Asset Palette</div>
+      <button type="button" class="palette-explorer-btn" onclick={() => (showAssetExplorer = true)}>
+        Open Asset Explorer
+      </button>
+      <div class="palette-packs">
+        {#each REGION_PALETTE_PACKS as pack}
+          <button
+            type="button"
+            class="palette-pack-chip"
+            class:active={palettePack === pack.id}
+            onclick={() => (palettePack = pack.id)}
+          >
+            {pack.label}
+          </button>
+        {/each}
+      </div>
+      <label class="palette-search">
+        <span class="sr-only">Search palette</span>
+        <input type="search" placeholder="Search assets…" bind:value={paletteSearch} />
+      </label>
+      {#if filteredPalette.length === 0}
+        <p class="palette-empty">No matches</p>
+      {/if}
+      {#each filteredPalette as group (group.label)}
         <div class="palette-group">
           <button class="palette-group-header" onclick={() => toggleGroup(group.label)}>
-            {openGroups.has(group.label) ? "▾" : "▸"} {group.label}
+            {openGroups.has(group.label) || paletteSearch.trim() ? "▾" : "▸"}
+            {palettePack === "all" ? group.label : shortPaletteGroupLabel(group.label)}
+            <span class="palette-count">{group.models.length}</span>
           </button>
-          {#if openGroups.has(group.label)}
+          {#if openGroups.has(group.label) || paletteSearch.trim()}
             <div class="palette-items">
               {#each group.models as model (model)}
                 <button class:active={armedModel === model} onclick={() => pickModel(model, group.category)}>
-                  {model.replace(/\.(gltf|glb)$/, "")}
+                  {regionAssetDisplayName(model)}
                 </button>
               {/each}
             </div>
@@ -1203,6 +2018,13 @@
     </div>
 
     <canvas bind:this={canvas} class="viewport"></canvas>
+
+    <AssetExplorer
+      open={showAssetExplorer}
+      armedModel={armedModel}
+      onClose={() => (showAssetExplorer = false)}
+      onPick={pickModelFromExplorer}
+    />
 
     {#if marqueeBox}
       {@const left = Math.min(marqueeBox.startX, marqueeBox.endX)}
@@ -1215,14 +2037,88 @@
       ></div>
     {/if}
 
+    {#if contextMenu}
+      <div
+        class="editor-context-menu"
+        style="left: {contextMenu.x}px; top: {contextMenu.y}px;"
+        role="menu"
+      >
+        <div class="editor-context-title">{contextMenu.title}</div>
+        {#each contextMenu.actions as action (action.id)}
+          <button
+            type="button"
+            class="editor-context-action"
+            role="menuitem"
+            onclick={() => scene?.runContextMenuAction(action.id)}
+          >
+            {action.label}
+          </button>
+        {/each}
+      </div>
+    {/if}
+
     {#if playtestActive}
       <div class="playtest-hint">WASD to move &middot; Mouse to look &middot; Shift to run &middot; Esc to exit</div>
+    {:else if flyNav}
+      <div class="playtest-hint">
+        Move to look (auto-lock) &middot; Esc / stop to free cursor &middot; Space up / Shift down &middot; Ctrl sprint
+      </div>
     {/if}
 
     {#if showColorPanel}
       <div class="color-panel">
         <h3>Color Grading</h3>
+        <label>Sky Preset
+          <select
+            value={colorGrading.skyPreset ?? "sunny"}
+            onchange={(e) => {
+              // Drop zenith/mid/horizon overrides so the new preset's timeline
+              // actually shows (saved overrides were pinning the old look).
+              const { zenithColor: _z, skyMidColor: _m, horizonSkyColor: _h, ...rest } = colorGrading;
+              colorGrading = {
+                ...rest,
+                skyPreset: (e.target as HTMLSelectElement).value as SkyPresetId,
+              };
+              applyColorGrading();
+              scheduleSave();
+            }}
+          >
+            {#each SKY_PRESET_IDS as id}
+              <option value={id}>{SKY_PRESET_LABELS[id]}</option>
+            {/each}
+          </select>
+        </label>
         <label>Sky <input type="color" bind:value={colorGrading.skyColor} oninput={applyColorGrading} /></label>
+        <label>Zenith
+          <input
+            type="color"
+            value={colorGrading.zenithColor ?? colorGrading.skyColor}
+            oninput={(e) => {
+              colorGrading.zenithColor = (e.target as HTMLInputElement).value;
+              applyColorGrading();
+            }}
+          />
+        </label>
+        <label>Sky Mid
+          <input
+            type="color"
+            value={colorGrading.skyMidColor ?? colorGrading.skyColor}
+            oninput={(e) => {
+              colorGrading.skyMidColor = (e.target as HTMLInputElement).value;
+              applyColorGrading();
+            }}
+          />
+        </label>
+        <label>Horizon Sky
+          <input
+            type="color"
+            value={colorGrading.horizonSkyColor ?? colorGrading.fogColor}
+            oninput={(e) => {
+              colorGrading.horizonSkyColor = (e.target as HTMLInputElement).value;
+              applyColorGrading();
+            }}
+          />
+        </label>
         <label>Fog <input type="color" bind:value={colorGrading.fogColor} oninput={applyColorGrading} /></label>
         <label>Fog Density
           <input type="range" min={REGION_FOG_DENSITY_MIN} max="0.05" step="0.001" bind:value={colorGrading.fogDensity} oninput={applyColorGrading} />
@@ -1281,22 +2177,274 @@
             }}
           />
         </label>
+        <label class="checkbox-field">
+          <input
+            type="checkbox"
+            checked={colorGrading.horizonEnabled ?? false}
+            onchange={(e) => {
+              colorGrading.horizonEnabled = (e.currentTarget as HTMLInputElement).checked;
+              applyColorGrading();
+            }}
+          />
+          Distant horizon ring
+        </label>
+        {#if colorGrading.horizonEnabled}
+          <label>Horizon Tint
+            <input
+              type="color"
+              value={colorGrading.horizonTint ?? "#8d97a8"}
+              oninput={(e) => {
+                colorGrading.horizonTint = (e.target as HTMLInputElement).value;
+                applyColorGrading();
+              }}
+            />
+          </label>
+          <label>Peak Scale
+            <input
+              type="range"
+              min="0.4"
+              max="2"
+              step="0.05"
+              value={colorGrading.horizonPeakScale ?? 1}
+              oninput={(e) => {
+                colorGrading.horizonPeakScale = Number((e.target as HTMLInputElement).value);
+                applyColorGrading();
+              }}
+            />
+            <span>{(colorGrading.horizonPeakScale ?? 1).toFixed(2)}×</span>
+          </label>
+        {/if}
+      </div>
+    {/if}
+
+    {#if showGrassPanel}
+      <div class="color-panel grass-settings-panel">
+        <div class="grass-panel-head">
+          <h3>Grass Settings</h3>
+          <button type="button" class="grass-close" onclick={() => { showGrassPanel = false; }}>✕</button>
+        </div>
+        <p class="hint">Quick Grass — paint with Grass Brush / Erase Grass. Settings apply region-wide.</p>
+        <div class="grass-presets">
+          {#each Object.keys(QUICK_GRASS_PRESETS) as name}
+            <button type="button" class="chip" onclick={() => applyGrassPreset(name)}>{name}</button>
+          {/each}
+          <button type="button" class="chip reset" onclick={() => applyGrassPreset("__reset__")}>Reset</button>
+        </div>
+
+        <div class="menu-section">Field</div>
+        <label>Blades / patch
+          <input type="range" min="256" max="8192" step="256" value={grassSettings.bladesPerPatch} oninput={(e) => applyGrassSettingsPatch({ bladesPerPatch: Number((e.target as HTMLInputElement).value) })} />
+          <span>{grassSettings.bladesPerPatch}</span>
+        </label>
+        <label>Patch size
+          <input type="range" min="4" max="24" step="1" value={grassSettings.patchSize} oninput={(e) => applyGrassSettingsPatch({ patchSize: Number((e.target as HTMLInputElement).value) })} />
+          <span>{grassSettings.patchSize} m</span>
+        </label>
+        <label>Draw distance
+          <input type="range" min="20" max="180" step="5" value={grassSettings.drawDistance} oninput={(e) => applyGrassSettingsPatch({ drawDistance: Number((e.target as HTMLInputElement).value) })} />
+          <span>{grassSettings.drawDistance} m</span>
+        </label>
+        <label>Detail distance
+          <input type="range" min="4" max="70" step="1" value={grassSettings.detailDistance} oninput={(e) => applyGrassSettingsPatch({ detailDistance: Number((e.target as HTMLInputElement).value) })} />
+          <span>{grassSettings.detailDistance} m</span>
+        </label>
+        <label>Segments
+          <input type="range" min="2" max="9" step="1" value={grassSettings.segments} oninput={(e) => applyGrassSettingsPatch({ segments: Number((e.target as HTMLInputElement).value) })} />
+          <span>{grassSettings.segments}</span>
+        </label>
+
+        <div class="menu-section">Blade</div>
+        <label>Width
+          <input type="range" min="0.02" max="0.4" step="0.005" value={grassSettings.bladeWidth} oninput={(e) => applyGrassSettingsPatch({ bladeWidth: Number((e.target as HTMLInputElement).value) })} />
+          <span>{grassSettings.bladeWidth.toFixed(3)} m</span>
+        </label>
+        <label>Height
+          <input type="range" min="0.2" max="4" step="0.05" value={grassSettings.bladeHeight} oninput={(e) => applyGrassSettingsPatch({ bladeHeight: Number((e.target as HTMLInputElement).value) })} />
+          <span>{grassSettings.bladeHeight.toFixed(2)} m</span>
+        </label>
+        <label>Height variation
+          <input type="range" min="0" max="1.2" step="0.02" value={grassSettings.heightVariation} oninput={(e) => applyGrassSettingsPatch({ heightVariation: Number((e.target as HTMLInputElement).value) })} />
+          <span>{Math.round(grassSettings.heightVariation * 100)}%</span>
+        </label>
+        <label>Curve
+          <input type="range" min="0" max="1.4" step="0.02" value={grassSettings.curvature} oninput={(e) => applyGrassSettingsPatch({ curvature: Number((e.target as HTMLInputElement).value) })} />
+          <span>{grassSettings.curvature.toFixed(2)}</span>
+        </label>
+        <label>Tip taper
+          <input type="range" min="1" max="6" step="0.1" value={grassSettings.tipTaper} oninput={(e) => applyGrassSettingsPatch({ tipTaper: Number((e.target as HTMLInputElement).value) })} />
+          <span>{grassSettings.tipTaper.toFixed(1)}</span>
+        </label>
+        <label>Normal spread
+          <input type="range" min="0" max="0.5" step="0.01" value={grassSettings.roundness} oninput={(e) => applyGrassSettingsPatch({ roundness: Number((e.target as HTMLInputElement).value) })} />
+          <span>{Math.round(grassSettings.roundness * 180)}°</span>
+        </label>
+        <label>Edge thickening
+          <input type="range" min="0" max="2.5" step="0.05" value={grassSettings.thickening} oninput={(e) => applyGrassSettingsPatch({ thickening: Number((e.target as HTMLInputElement).value) })} />
+          <span>{grassSettings.thickening.toFixed(2)}</span>
+        </label>
+
+        <div class="menu-section">Wind</div>
+        <label>Strength
+          <input type="range" min="0" max="2.5" step="0.05" value={grassSettings.windStrength} oninput={(e) => applyGrassSettingsPatch({ windStrength: Number((e.target as HTMLInputElement).value) })} />
+          <span>{grassSettings.windStrength.toFixed(2)}</span>
+        </label>
+        <label>Speed
+          <input type="range" min="0" max="4" step="0.05" value={grassSettings.windSpeed} oninput={(e) => applyGrassSettingsPatch({ windSpeed: Number((e.target as HTMLInputElement).value) })} />
+          <span>{grassSettings.windSpeed.toFixed(2)}</span>
+        </label>
+        <label>Gust size
+          <input type="range" min="0.02" max="1" step="0.01" value={grassSettings.gustScale} oninput={(e) => applyGrassSettingsPatch({ gustScale: Number((e.target as HTMLInputElement).value) })} />
+          <span>{(1 / Math.max(0.02, grassSettings.gustScale)).toFixed(0)} m</span>
+        </label>
+        <label>Direction drift
+          <input type="range" min="0.005" max="0.3" step="0.005" value={grassSettings.windDrift} oninput={(e) => applyGrassSettingsPatch({ windDrift: Number((e.target as HTMLInputElement).value) })} />
+          <span>{grassSettings.windDrift.toFixed(3)}</span>
+        </label>
+        <label>Player push radius
+          <input type="range" min="0" max="8" step="0.1" value={grassSettings.pushRadius} oninput={(e) => applyGrassSettingsPatch({ pushRadius: Number((e.target as HTMLInputElement).value) })} />
+          <span>{grassSettings.pushRadius.toFixed(1)} m</span>
+        </label>
+        <label>Player push force
+          <input type="range" min="0" max="1.5" step="0.02" value={grassSettings.pushStrength} oninput={(e) => applyGrassSettingsPatch({ pushStrength: Number((e.target as HTMLInputElement).value) })} />
+          <span>{grassSettings.pushStrength.toFixed(2)}</span>
+        </label>
+
+        <div class="menu-section">Light & colour</div>
+        <label>Root colour <input type="color" value={grassSettings.baseColour} oninput={(e) => applyGrassSettingsPatch({ baseColour: (e.target as HTMLInputElement).value })} /></label>
+        <label>Tip colour <input type="color" value={grassSettings.tipColour} oninput={(e) => applyGrassSettingsPatch({ tipColour: (e.target as HTMLInputElement).value })} /></label>
+        <label>Colour variation
+          <input type="range" min="0" max="1.5" step="0.02" value={grassSettings.colourVariation} oninput={(e) => applyGrassSettingsPatch({ colourVariation: Number((e.target as HTMLInputElement).value) })} />
+          <span>{Math.round(grassSettings.colourVariation * 100)}%</span>
+        </label>
+        <label>Sun elevation
+          <input type="range" min="-4" max="88" step="1" value={grassSettings.sunElevation} oninput={(e) => applyGrassSettingsPatch({ sunElevation: Number((e.target as HTMLInputElement).value) })} />
+          <span>{grassSettings.sunElevation}°</span>
+        </label>
+        <label>Sun azimuth
+          <input type="range" min="0" max="360" step="2" value={grassSettings.sunAzimuth} oninput={(e) => applyGrassSettingsPatch({ sunAzimuth: Number((e.target as HTMLInputElement).value) })} />
+          <span>{grassSettings.sunAzimuth}°</span>
+        </label>
+        <label>Sun intensity
+          <input type="range" min="0" max="3.5" step="0.05" value={grassSettings.sunIntensity} oninput={(e) => applyGrassSettingsPatch({ sunIntensity: Number((e.target as HTMLInputElement).value) })} />
+          <span>{grassSettings.sunIntensity.toFixed(2)}</span>
+        </label>
+        <label>Sky ambient
+          <input type="range" min="0" max="2.5" step="0.05" value={grassSettings.ambient} oninput={(e) => applyGrassSettingsPatch({ ambient: Number((e.target as HTMLInputElement).value) })} />
+          <span>{grassSettings.ambient.toFixed(2)}</span>
+        </label>
+        <label>Backscatter
+          <input type="range" min="0" max="2.5" step="0.05" value={grassSettings.translucency} oninput={(e) => applyGrassSettingsPatch({ translucency: Number((e.target as HTMLInputElement).value) })} />
+          <span>{grassSettings.translucency.toFixed(2)}</span>
+        </label>
+        <label>Normals toward up
+          <input type="range" min="0" max="1" step="0.02" value={grassSettings.normalFlatten} oninput={(e) => applyGrassSettingsPatch({ normalFlatten: Number((e.target as HTMLInputElement).value) })} />
+          <span>{Math.round(grassSettings.normalFlatten * 100)}%</span>
+        </label>
+        <label>Haze
+          <input type="range" min="0" max="3" step="0.05" value={grassSettings.haze} oninput={(e) => applyGrassSettingsPatch({ haze: Number((e.target as HTMLInputElement).value) })} />
+          <span>{grassSettings.haze.toFixed(2)}</span>
+        </label>
+        <label>Exposure
+          <input type="range" min="0.3" max="3.5" step="0.05" value={grassSettings.exposure} oninput={(e) => applyGrassSettingsPatch({ exposure: Number((e.target as HTMLInputElement).value) })} />
+          <span>{grassSettings.exposure.toFixed(2)}</span>
+        </label>
+
+        <div class="menu-section">Render</div>
+        <label class="checkbox-field">
+          <input type="checkbox" checked={grassSettings.showLod} onchange={(e) => applyGrassSettingsPatch({ showLod: (e.currentTarget as HTMLInputElement).checked })} />
+          Tint by detail level
+        </label>
+        <label class="checkbox-field">
+          <input type="checkbox" checked={grassSettings.wireframe} onchange={(e) => applyGrassSettingsPatch({ wireframe: (e.currentTarget as HTMLInputElement).checked })} />
+          Wireframe
+        </label>
+        <label class="checkbox-field">
+          <input type="checkbox" checked={grassSettings.freezeWind} onchange={(e) => applyGrassSettingsPatch({ freezeWind: (e.currentTarget as HTMLInputElement).checked })} />
+          Freeze wind
+        </label>
       </div>
     {/if}
 
     {#if selection.length === 1}
       {@const sel = selection[0]!}
       <div class="properties">
-        <h3>{sel.kind === "asset" ? sel.model?.replace(/\.(gltf|glb)$/, "") : sel.kind === "house" ? `House (${sel.houseType ?? "cottage"})` : sel.kind === "light" ? "Point Light Source" : sel.kind === "fog" ? "Fog Volume" : sel.kind === "volume" ? `${sel.volumeShape ?? "volume"} (${sel.volumeMaterial ?? "rock"})` : sel.markerKind}</h3>
+        <h3>{sel.kind === "asset" ? sel.model?.replace(/\.(gltf|glb)$/, "") : sel.kind === "house" ? `House (${sel.houseType ?? "cottage"})` : sel.kind === "light" ? "Point Light Source" : sel.kind === "fog" ? "Fog Volume" : sel.kind === "barrier" ? "Invisible Barrier" : sel.kind === "cloud" ? `${sel.cloudShape ?? "cumulus"} Cloud` : sel.kind === "volume" ? `${sel.volumeShape ?? "volume"} (${sel.volumeMaterial ?? "rock"})` : sel.markerKind}</h3>
         <label>X <input type="number" step="0.1" value={sel.x} onchange={(e) => applyPatch({ x: Number((e.target as HTMLInputElement).value) })} /></label>
         <label>Y <input type="number" step="0.1" value={sel.y} onchange={(e) => applyPatch({ y: Number((e.target as HTMLInputElement).value) })} /></label>
         <label>Z <input type="number" step="0.1" value={sel.z} onchange={(e) => applyPatch({ z: Number((e.target as HTMLInputElement).value) })} /></label>
         <p class="hint">Arrows nudge · Shift = fine · G = ground · X = snap · Alt+Arrows = pan camera</p>
         {#if sel.kind === "asset" || sel.kind === "volume" || sel.kind === "house"}
           <label>Yaw <input type="number" step="0.01" value={sel.yaw} onchange={(e) => applyPatch({ yaw: Number((e.target as HTMLInputElement).value) })} /></label>
-          <label>Scale <input type="number" step="0.05" value={sel.scale} onchange={(e) => applyPatch({ scale: Number((e.target as HTMLInputElement).value) })} /></label>
+          {#if sel.kind === "asset"}
+            <label>Scale X <input type="number" step="0.05" value={sel.scaleX ?? sel.scale} onchange={(e) => applyPatch({ scaleX: Number((e.target as HTMLInputElement).value) })} /></label>
+            <label>Scale Y <input type="number" step="0.05" value={sel.scaleY ?? sel.scale} onchange={(e) => applyPatch({ scaleY: Number((e.target as HTMLInputElement).value) })} /></label>
+            <label>Scale Z <input type="number" step="0.05" value={sel.scaleZ ?? sel.scale} onchange={(e) => applyPatch({ scaleZ: Number((e.target as HTMLInputElement).value) })} /></label>
+            <p class="hint">S = scale gizmo (stretch per axis). Uniform: set all three equal.</p>
+          {:else}
+            <label>Scale <input type="number" step="0.05" value={sel.scale} onchange={(e) => applyPatch({ scale: Number((e.target as HTMLInputElement).value) })} /></label>
+          {/if}
+          {#if sel.kind === "asset"}
+            <label>
+              <input
+                type="checkbox"
+                checked={!!sel.solid}
+                onchange={(e) => applyPatch({ solid: (e.target as HTMLInputElement).checked })}
+              />
+              Solid (walkable)
+            </label>
+            {#if sel.solid && sel.solidBox}
+              <p class="hint">
+                Mesh box { (sel.solidBox.halfX * 2 * (sel.scaleX ?? sel.scale)).toFixed(1) }
+                × { (sel.solidBox.halfY * 2 * (sel.scaleY ?? sel.scale)).toFixed(1) }
+                × { (sel.solidBox.halfZ * 2 * (sel.scaleZ ?? sel.scale)).toFixed(1) } m
+                · walk on top · follows position / yaw / scale
+              </p>
+            {:else if sel.solid}
+              <p class="hint">Solid on — using model radius (no mesh measure yet).</p>
+            {:else}
+              <p class="hint">On = measure mesh → walkable collision (bridges/rocks). Rocks auto-enable on place.</p>
+            {/if}
+          {/if}
           {#if sel.kind === "house"}
             <p class="hint">One house asset — walls/floors/roof move together. Walkable in playtest.</p>
+          {/if}
+          {#if sel.kind === "asset" && sel.lightEnabled !== undefined}
+            <label>
+              <input
+                type="checkbox"
+                checked={sel.lightEnabled}
+                onchange={(e) => applyPatch({ lightEnabled: (e.target as HTMLInputElement).checked })}
+              />
+              Emit light
+            </label>
+            {#if sel.lightEnabled}
+              <label>Light Color <input type="color" value={sel.color ?? "#ffb060"} onchange={(e) => applyPatch({ color: (e.target as HTMLInputElement).value })} /></label>
+              <label>Brightness
+                <input type="range" min="0" max="40" step="0.2" value={sel.intensity ?? 6} oninput={(e) => applyPatch({ intensity: Number((e.target as HTMLInputElement).value) })} />
+                <span>{(sel.intensity ?? 6).toFixed(1)}</span>
+              </label>
+              <label>Range
+                <input type="range" min="5" max="120" step="1" value={sel.distance ?? 32} oninput={(e) => applyPatch({ distance: Number((e.target as HTMLInputElement).value) })} />
+                <span>{sel.distance ?? 32}m</span>
+              </label>
+              <label>Decay
+                <input type="range" min="0.5" max="2" step="0.1" value={sel.decay ?? 2} oninput={(e) => applyPatch({ decay: Number((e.target as HTMLInputElement).value) })} />
+                <span>{(sel.decay ?? 2).toFixed(1)}</span>
+              </label>
+              <p class="hint">Bulb position (local to lantern — moves with yaw)</p>
+              <label>Bulb X
+                <input type="range" min="-3" max="3" step="0.05" value={sel.lightOffsetX ?? 0} oninput={(e) => applyPatch({ lightOffsetX: Number((e.target as HTMLInputElement).value) })} />
+                <input type="number" step="0.05" value={sel.lightOffsetX ?? 0} onchange={(e) => applyPatch({ lightOffsetX: Number((e.target as HTMLInputElement).value) })} />
+              </label>
+              <label>Bulb Y
+                <input type="range" min="0" max="5" step="0.05" value={sel.lightOffsetY ?? 2.55} oninput={(e) => applyPatch({ lightOffsetY: Number((e.target as HTMLInputElement).value) })} />
+                <input type="number" step="0.05" value={sel.lightOffsetY ?? 2.55} onchange={(e) => applyPatch({ lightOffsetY: Number((e.target as HTMLInputElement).value) })} />
+              </label>
+              <label>Bulb Z
+                <input type="range" min="-3" max="3" step="0.05" value={sel.lightOffsetZ ?? 0} oninput={(e) => applyPatch({ lightOffsetZ: Number((e.target as HTMLInputElement).value) })} />
+                <input type="number" step="0.05" value={sel.lightOffsetZ ?? 0} onchange={(e) => applyPatch({ lightOffsetZ: Number((e.target as HTMLInputElement).value) })} />
+              </label>
+            {/if}
           {/if}
         {:else if sel.kind === "light"}
           <label>Color <input type="color" value={sel.color ?? "#ff9933"} onchange={(e) => applyPatch({ color: (e.target as HTMLInputElement).value })} /></label>
@@ -1343,8 +2491,86 @@
             <input type="range" min="0" max="1" step="0.05" value={sel.fogFeather ?? 0.7} oninput={(e) => applyPatch({ fogFeather: Number((e.target as HTMLInputElement).value) })} />
           </label>
           <p class="hint">Delete removes the volume. Move with the gizmo like any other asset.</p>
+        {:else if sel.kind === "barrier"}
+          <label>Yaw <input type="number" step="0.01" value={sel.yaw} onchange={(e) => applyPatch({ yaw: Number((e.target as HTMLInputElement).value) })} /></label>
+          <label>Size X
+            <input type="range" min="0.5" max="80" step="0.5" value={sel.sizeX ?? 6} oninput={(e) => applyPatch({ sizeX: Number((e.target as HTMLInputElement).value) })} />
+            <span>{sel.sizeX ?? 6}m</span>
+          </label>
+          <label>Size Y
+            <input type="range" min="0.5" max="40" step="0.5" value={sel.sizeY ?? 4} oninput={(e) => applyPatch({ sizeY: Number((e.target as HTMLInputElement).value) })} />
+            <span>{sel.sizeY ?? 4}m</span>
+          </label>
+          <label>Size Z
+            <input type="range" min="0.5" max="40" step="0.5" value={sel.sizeZ ?? 1.25} oninput={(e) => applyPatch({ sizeZ: Number((e.target as HTMLInputElement).value) })} />
+            <span>{sel.sizeZ ?? 1.25}m</span>
+          </label>
+          <p class="hint">Invisible in-game — blocks player movement. Drag the yellow corner / side handles to reshape; Move/Rotate gizmos still reposition it.</p>
+        {:else if sel.kind === "cloud"}
+          <label>Yaw <input type="number" step="0.01" value={sel.yaw} onchange={(e) => applyPatch({ yaw: Number((e.target as HTMLInputElement).value) })} /></label>
+          <label>Color <input type="color" value={sel.color ?? "#eef2f8"} onchange={(e) => applyPatch({ color: (e.target as HTMLInputElement).value })} /></label>
+          <label>Shape
+            <select value={sel.cloudShape ?? "cumulus"} onchange={(e) => applyPatch({ cloudShape: (e.target as HTMLSelectElement).value as "cumulus" | "wispy" | "flat" })}>
+              <option value="cumulus">Cumulus</option>
+              <option value="wispy">Wispy</option>
+              <option value="flat">Flat</option>
+            </select>
+          </label>
+          <label>Opacity
+            <input type="range" min="0.05" max="1" step="0.05" value={sel.cloudOpacity ?? 0.85} oninput={(e) => applyPatch({ cloudOpacity: Number((e.target as HTMLInputElement).value) })} />
+          </label>
+          <label>Scale X
+            <input type="range" min="0.2" max="4" step="0.05" value={sel.scaleX ?? 1} oninput={(e) => applyPatch({ scaleX: Number((e.target as HTMLInputElement).value) })} />
+          </label>
+          <label>Scale Y
+            <input type="range" min="0.1" max="3" step="0.05" value={sel.scaleY ?? 1} oninput={(e) => applyPatch({ scaleY: Number((e.target as HTMLInputElement).value) })} />
+          </label>
+          <label>Scale Z
+            <input type="range" min="0.2" max="4" step="0.05" value={sel.scaleZ ?? 1} oninput={(e) => applyPatch({ scaleZ: Number((e.target as HTMLInputElement).value) })} />
+          </label>
+          <label>Drift Speed
+            <input type="range" min="0" max="4" step="0.1" value={sel.driftSpeed ?? 1.2} oninput={(e) => applyPatch({ driftSpeed: Number((e.target as HTMLInputElement).value) })} />
+            <span>{(sel.driftSpeed ?? 1.2).toFixed(1)} m/s</span>
+          </label>
+          <label>Bob Amplitude
+            <input type="range" min="0" max="2" step="0.05" value={sel.bobAmp ?? 0.4} oninput={(e) => applyPatch({ bobAmp: Number((e.target as HTMLInputElement).value) })} />
+            <span>{(sel.bobAmp ?? 0.4).toFixed(2)}m</span>
+          </label>
+          <p class="hint">Clouds drift with region wind in playtest and at runtime.</p>
         {/if}
-        {#if sel.markerKind === "village"}
+        {#if sel.markerKind === "resourceNode"}
+          <label>Node Type
+            <select value={sel.nodeType ?? "rock"} onchange={(e) => applyPatch({ nodeType: (e.target as HTMLSelectElement).value })}>
+              {#each PLACEABLE_REGION_NODE_TYPES as typeId}
+                <option value={typeId}>{nodeTypeDef(typeId).name}</option>
+              {/each}
+            </select>
+          </label>
+          {#if (sel.nodeType ?? "rock") === "tree"}
+            <label>Tree Model
+              <select value={sel.nodeModel ?? ""} onchange={(e) => applyPatch({ nodeModel: (e.target as HTMLSelectElement).value })}>
+                {#each (REGION_TREE_BRUSH[biome] ?? REGION_TREE_BRUSH.grassland) as model}
+                  <option value={model}>{model.replace(/\.(glb|gltf)$/i, "")}</option>
+                {/each}
+              </select>
+            </label>
+          {/if}
+          <p class="hint">Trees use real foliage models (random when placed). Right-click a placed tree to assign it as a resource.</p>
+        {:else if sel.markerKind === "mobSpawn"}
+          <label>Difficulty
+            <input type="range" min="0.5" max="3" step="0.1" value={sel.difficulty ?? 1} oninput={(e) => applyPatch({ difficulty: Number((e.target as HTMLInputElement).value) })} />
+            <span>{(sel.difficulty ?? 1).toFixed(1)}x</span>
+          </label>
+          <label>Mob Type
+            <select value={sel.mobType ?? ""} onchange={(e) => applyPatch({ mobType: (e.target as HTMLSelectElement).value })}>
+              <option value="">Biome random</option>
+              {#each Object.values(MOBS) as mob}
+                <option value={mob.id}>{mob.name}</option>
+              {/each}
+            </select>
+          </label>
+          <p class="hint">Difficulty scales mob HP and damage at runtime.</p>
+        {:else if sel.markerKind === "village"}
           <label>Name <input type="text" value={sel.name} onchange={(e) => applyPatch({ name: (e.target as HTMLInputElement).value })} /></label>
           <label>Radius <input type="number" step="1" value={sel.radius} onchange={(e) => applyPatch({ radius: Number((e.target as HTMLInputElement).value) })} /></label>
           <button class="build-village-btn" onclick={() => scene?.buildVillageAroundMarker(sel.id)}>🏰 Build Village Here</button>
@@ -1388,9 +2614,9 @@
         {:else if sel.markerKind === "portal"}
           <label>Portal Label <input type="text" value={sel.name ?? "Portal to Region"} onchange={(e) => applyPatch({ name: (e.target as HTMLInputElement).value })} /></label>
           <label>Destination
-            <select value={sel.targetRegionId ?? "overworld"} onchange={(e) => applyPatch({ targetRegionId: (e.target as HTMLSelectElement).value })}>
-              <option value="overworld">Main Open World</option>
-              {#each regionList as r}
+            <select value={sel.targetRegionId ?? ""} onchange={(e) => applyPatch({ targetRegionId: (e.target as HTMLSelectElement).value })}>
+              <option value="">— pick a region —</option>
+              {#each regionList.filter((r) => r.id !== regionId) as r}
                 <option value={r.id}>{r.name}</option>
               {/each}
             </select>
@@ -1477,6 +2703,11 @@
             {/each}
           </div>
         {/if}
+        {#if sel.kind === "asset" && sel.category === "foliage"}
+          <button class="build-village-btn" onclick={() => scene?.convertSelectedFoliageToResourceNodes()}>
+            Assign as Resource Node
+          </button>
+        {/if}
         {#if sel.markerKind !== "entry"}
           <button class="delete" onclick={deleteSelected}>Delete</button>
         {/if}
@@ -1484,10 +2715,38 @@
     {:else if selection.length > 1}
       <div class="properties">
         {#if selection.every((s) => s.groupId && s.groupId === selection[0]?.groupId)}
-          <h3>🏠 House ({selection.length} pieces)</h3>
-          <p class="hint">Move / rotate / scale moves the whole house. Delete removes all pieces.</p>
+          <h3>Group ({selection.length} pieces)</h3>
+          <p class="hint">Move / rotate / scale moves the whole group. ⌘G group · ⇧⌘G ungroup.</p>
         {:else}
           <h3>{selection.length} Items Selected</h3>
+          {#if selection.filter((s) => s.kind === "asset").length >= 2}
+            <p class="hint">⌘G groups selected assets so they select and move together.</p>
+          {/if}
+        {/if}
+        {#if selection.some((s) => s.kind === "asset")}
+          <label>
+            <input
+              type="checkbox"
+              checked={selection.filter((s) => s.kind === "asset").every((s) => s.solid)}
+              onchange={(e) => applyPatch({ solid: (e.target as HTMLInputElement).checked })}
+            />
+            Solid (walkable)
+          </label>
+        {/if}
+        {#if selection.some((s) => s.kind === "asset" && s.category === "foliage")}
+          <button class="build-village-btn" onclick={() => scene?.convertSelectedFoliageToResourceNodes()}>
+            Assign Trees as Resources
+          </button>
+        {/if}
+        {#if selection.filter((s) => s.kind === "asset").length >= 2}
+          <button class="build-village-btn" onclick={() => scene?.groupSelectedAssets()}>
+            Group (⌘G)
+          </button>
+        {/if}
+        {#if selection.some((s) => s.kind === "asset" && s.groupId)}
+          <button class="build-village-btn" onclick={() => scene?.ungroupSelectedAssets()}>
+            Ungroup (⇧⌘G)
+          </button>
         {/if}
         <button class="delete" onclick={deleteSelected}>Delete All</button>
       </div>
@@ -1506,65 +2765,260 @@
     font-size: 13px;
     pointer-events: auto;
   }
-  .header-bar {
+  .menubar-shell {
     display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    padding: 8px 16px;
+    flex-direction: column;
     background: #181b22;
     border-bottom: 1px solid #2a2f3d;
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
     z-index: 100;
+    flex-shrink: 0;
   }
-  .left-section, .center-tools, .right-section {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-  .exit-btn {
-    background: #282d3b;
-    border: 1px solid #3d4559;
-    color: #e2e8f0;
-    border-radius: 5px;
-    padding: 5px 12px;
-    cursor: pointer;
-    font-weight: 500;
-    transition: background 0.15s, border-color 0.15s;
-  }
-  .exit-btn:hover {
-    background: #333a4d;
-    border-color: #525d78;
-  }
-  .field-inline {
+  .menubar {
     display: flex;
     align-items: center;
     gap: 2px;
+    padding: 2px 8px;
+    min-height: 28px;
+    background: #151820;
+    border-bottom: 1px solid #242936;
+    flex-wrap: wrap;
   }
-  .field-inline select, .biome-select, .name-input {
+  .app-brand {
+    font-size: 12px;
+    font-weight: 650;
+    color: #94a3b8;
+    padding: 0 10px 0 4px;
+    margin-right: 4px;
+    border-right: 1px solid #2a3140;
+    white-space: nowrap;
+  }
+  .menu-group {
+    position: relative;
+  }
+  .menu-top {
+    background: transparent;
+    border: none;
+    color: #cbd5e1;
+    border-radius: 4px;
+    padding: 4px 10px;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+  }
+  .menu-top:hover,
+  .menu-top.open,
+  .menu-top.lit {
+    background: #2a3244;
+    color: #f8fafc;
+  }
+  .menu-top.lit {
+    color: #f0d060;
+  }
+  .menu-panel {
+    position: absolute;
+    top: calc(100% + 2px);
+    left: 0;
+    min-width: 200px;
+    max-height: min(70vh, 520px);
+    overflow-y: auto;
+    background: #1a1e27;
+    border: 1px solid #333d52;
+    border-radius: 8px;
+    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.55);
+    padding: 4px;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    z-index: 300;
+  }
+  .menu-panel.wide {
+    min-width: 260px;
+    padding: 8px;
+    gap: 6px;
+  }
+  .menu-panel.tools-panel {
+    min-width: 220px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 2px;
+    padding: 6px;
+  }
+  .menu-panel.tools-panel .menu-section {
+    grid-column: 1 / -1;
+  }
+  .menu-panel.tools-panel button {
+    font-size: 12px;
+    padding: 5px 8px;
+  }
+  .menu-panel button {
+    text-align: left;
+    background: transparent;
+    border: none;
+    color: #cbd5e1;
+    border-radius: 5px;
+    padding: 6px 10px;
+    cursor: pointer;
+    font-size: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .menu-panel button:hover:not(:disabled) {
+    background: #2a3244;
+    color: #f8fafc;
+  }
+  .menu-panel button.active {
+    background: #3a6ea8;
+    color: #fff;
+  }
+  .menu-panel button:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+  .menu-panel button.danger {
+    color: #ff8a7a;
+  }
+  .menu-panel button.danger:hover:not(:disabled) {
+    background: rgba(224, 68, 68, 0.2);
+    color: #ffb0a4;
+  }
+  .delete-modal-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 20000;
+    background: rgba(0, 0, 0, 0.65);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+  }
+  .delete-modal {
+    width: min(440px, 100%);
+    background: #1a1e28;
+    border: 1px solid #3a4152;
+    border-radius: 8px;
+    padding: 20px 22px;
+    box-shadow: 0 16px 48px rgba(0, 0, 0, 0.7);
+    color: #dce6f2;
+  }
+  .delete-modal h3 {
+    margin: 0 0 10px;
+    font-size: 16px;
+    color: #ffb0a4;
+  }
+  .delete-modal p {
+    margin: 0 0 10px;
+    line-height: 1.45;
+  }
+  .delete-modal .mono {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+    color: #9aa8bc;
+    margin-left: 4px;
+  }
+  .delete-modal ul {
+    margin: 0 0 12px;
+    padding-left: 18px;
+    color: #b7c3d4;
+    line-height: 1.5;
+  }
+  .delete-modal li.warn,
+  .delete-modal .warn-line {
+    color: #f0c040;
+  }
+  .delete-modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 16px;
+  }
+  .delete-modal-actions .cancel {
+    background: #2a303c;
+    color: #dce6f2;
+    border: 1px solid #3a4152;
+    border-radius: 4px;
+    padding: 8px 14px;
+    cursor: pointer;
+  }
+  .delete-modal-actions .confirm-delete {
+    background: #e04444;
+    color: #fff;
+    border: none;
+    border-radius: 4px;
+    padding: 8px 14px;
+    cursor: pointer;
+    font-weight: 600;
+  }
+  .delete-modal-actions button:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
+  .delete-modal-actions .cancel:hover:not(:disabled) {
+    background: #343b4a;
+  }
+  .delete-modal-actions .confirm-delete:hover:not(:disabled) {
+    background: #c93636;
+  }
+  .menu-sep {
+    height: 1px;
+    background: #2a3140;
+    margin: 4px 2px;
+    grid-column: 1 / -1;
+  }
+  .menu-section {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: #64748b;
+    padding: 8px 8px 2px;
+  }
+  .accel {
+    color: #64748b;
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+  }
+  .menubar-spacer {
+    flex: 1;
+    min-width: 8px;
+  }
+  .toolbar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 10px;
+    flex-wrap: wrap;
+    min-height: 36px;
+  }
+  .doc-select,
+  .biome-select,
+  .name-input {
     background: #0f1218;
     border: 1px solid #2d3445;
     color: #e2e8f0;
     border-radius: 5px;
-    padding: 5px 8px;
-    font-size: 13px;
+    padding: 4px 8px;
+    font-size: 12px;
+    max-width: 160px;
   }
   .name-input {
-    width: 120px;
+    width: 110px;
     font-weight: 500;
   }
-  .icon-btn {
-    background: #282d3b;
-    border: 1px solid #3d4559;
-    color: #e2e8f0;
+  .save-btn {
+    background: #2f5d3a;
+    border: 1px solid #4a8f55;
+    color: #f0fdf4;
     border-radius: 5px;
-    padding: 5px 9px;
+    padding: 4px 12px;
+    font-size: 12px;
+    font-weight: 600;
     cursor: pointer;
-    font-weight: bold;
   }
-  .icon-btn:hover {
-    background: #3a6ea8;
-    border-color: #5c8fc9;
+  .save-btn:hover {
+    background: #3a7348;
   }
   .segmented-control {
     display: flex;
@@ -1623,90 +3077,12 @@
     background: #2a2f3d;
     margin: 0 4px;
   }
-  .dropdown-wrapper {
-    position: relative;
-  }
-  .dropdown-trigger {
-    background: #202531;
-    border: 1px solid #323a4d;
-    color: #cbd5e1;
-    border-radius: 6px;
-    padding: 5px 12px;
-    cursor: pointer;
-    font-size: 13px;
-    font-weight: 500;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    transition: all 0.15s;
-  }
-  .dropdown-trigger:hover, .dropdown-trigger.active {
-    background: #2d3546;
-    border-color: #4a5673;
-    color: #f8fafc;
-  }
-  .dropdown-trigger.file-btn {
-    background: #252c3b;
-    border-color: #3b465e;
-  }
-  .caret {
-    font-size: 10px;
-    color: #64748b;
-  }
-  .dropdown-menu {
-    position: absolute;
-    top: calc(100% + 6px);
-    left: 0;
-    min-width: 180px;
-    background: #1a1e27;
-    border: 1px solid #333d52;
-    border-radius: 8px;
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
-    padding: 6px;
+  .menu-panel.settings-panel {
+    min-width: 240px;
+    padding: 10px;
     display: flex;
     flex-direction: column;
-    gap: 3px;
-    z-index: 200;
-    backdrop-filter: blur(8px);
-  }
-  .dropdown-menu.right-aligned {
-    left: auto;
-    right: 0;
-  }
-  .dropdown-menu.settings-panel {
-    min-width: 220px;
-    padding: 10px;
-  }
-  .dropdown-menu button {
-    text-align: left;
-    background: transparent;
-    border: none;
-    color: #cbd5e1;
-    border-radius: 5px;
-    padding: 7px 10px;
-    cursor: pointer;
-    font-size: 13px;
-    transition: background 0.15s, color 0.15s;
-  }
-  .dropdown-menu button:hover {
-    background: #2a3244;
-    color: #f8fafc;
-  }
-  .dropdown-menu button.active {
-    background: #3a6ea8;
-    color: #ffffff;
-  }
-  .dropdown-divider {
-    height: 1px;
-    background: #2d3546;
-    margin: 4px 0;
-  }
-  .dropdown-section-label {
-    font-size: 10px;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    color: #64748b;
-    padding: 6px 10px 2px;
+    gap: 6px;
   }
   .menu-field {
     display: flex;
@@ -1717,16 +3093,23 @@
     color: #94a3b8;
     padding: 4px 0;
   }
+  .menu-field.checkbox-field {
+    justify-content: flex-start;
+  }
   .menu-field input[type="range"] {
     width: 90px;
   }
-  .menu-field input[type="number"] {
-    width: 60px;
+  .menu-field input[type="number"],
+  .menu-field input[type="text"],
+  .menu-field select {
+    width: 120px;
+    max-width: 55%;
     background: #0f1218;
     border: 1px solid #2d3445;
     color: #e2e8f0;
     border-radius: 4px;
-    padding: 2px 4px;
+    padding: 3px 6px;
+    font-size: 12px;
   }
   .menu-field .readout {
     font-size: 11px;
@@ -1739,16 +3122,19 @@
     border: 1px solid #3b4760 !important;
     text-align: center !important;
     font-weight: 500;
+    justify-content: center !important;
   }
   .playtest-btn {
     background: #16a34a;
     border: 1px solid #22c55e;
     color: #ffffff;
-    border-radius: 6px;
-    padding: 5px 14px;
+    border-radius: 5px;
+    padding: 4px 12px;
+    font-size: 12px;
     font-weight: 600;
     cursor: pointer;
     transition: all 0.15s;
+    white-space: nowrap;
   }
   .playtest-btn:hover {
     background: #15803d;
@@ -1815,7 +3201,22 @@
   }
   .status {
     color: #8fa3ba;
-    font-size: 12px;
+    font-size: 11px;
+    max-width: 220px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  @media (max-width: 900px) {
+    .app-brand {
+      display: none;
+    }
+    .status {
+      display: none;
+    }
+    .name-input {
+      width: 80px;
+    }
   }
   .body {
     flex: 1;
@@ -1824,12 +3225,15 @@
     position: relative;
   }
   .palette {
-    width: 220px;
+    width: 240px;
     flex-shrink: 0;
     overflow-y: auto;
     background: #1a1d24;
     border-right: 1px solid #333a48;
     padding: 6px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
   }
   .palette-tools-title {
     font-size: 12px;
@@ -1838,6 +3242,61 @@
     letter-spacing: 0.5px;
     color: #38bdf8;
     padding: 4px 4px 2px;
+  }
+  .palette-explorer-btn {
+    width: 100%;
+    text-align: center;
+    background: #243044;
+    border: 1px solid #3a5478;
+    color: #d7e7ff;
+    border-radius: 5px;
+    padding: 7px 8px;
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 600;
+  }
+  .palette-explorer-btn:hover {
+    background: #2d3d56;
+  }
+  .palette-packs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    padding: 2px 0 4px;
+  }
+  .palette-pack-chip {
+    background: #222836;
+    border: 1px solid #323a4a;
+    color: #c5d0e0;
+    border-radius: 999px;
+    padding: 3px 8px;
+    font-size: 10px;
+    cursor: pointer;
+    line-height: 1.3;
+  }
+  .palette-pack-chip.active {
+    background: #2f6fad;
+    border-color: #5c8fc9;
+    color: #fff;
+  }
+  .palette-search input {
+    width: 100%;
+    box-sizing: border-box;
+    background: #0e141d;
+    border: 1px solid #3a4152;
+    color: #dce6f2;
+    border-radius: 4px;
+    padding: 6px 8px;
+    font-size: 12px;
+  }
+  .palette-search input:focus {
+    outline: none;
+    border-color: #5c8fc9;
+  }
+  .palette-empty {
+    margin: 8px 4px;
+    font-size: 12px;
+    color: #8fa3ba;
   }
   .palette-group-header {
     width: 100%;
@@ -1848,6 +3307,15 @@
     padding: 6px 4px;
     cursor: pointer;
     font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .palette-count {
+    margin-left: auto;
+    font-size: 10px;
+    font-weight: 500;
+    color: #6b7a90;
   }
   .palette-items {
     display: flex;
@@ -1864,10 +3332,23 @@
     padding: 4px 8px;
     cursor: pointer;
     font-size: 12px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .palette-items button.active {
     background: #3a6ea8;
     border-color: #5c8fc9;
+  }
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    border: 0;
   }
   .viewport {
     flex: 1;
@@ -1904,6 +3385,53 @@
     top: 16px;
     left: 236px;
     right: auto;
+  }
+  .grass-settings-panel {
+    width: 300px;
+    max-height: calc(100% - 32px);
+    overflow-y: auto;
+    left: auto;
+    right: 16px;
+    top: 56px;
+  }
+  .grass-panel-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .grass-panel-head h3 {
+    flex: 1;
+    margin: 0;
+  }
+  .grass-close {
+    background: none;
+    border: none;
+    color: #9aa3b2;
+    cursor: pointer;
+    font-size: 14px;
+  }
+  .grass-presets {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 4px;
+  }
+  .grass-presets .chip {
+    font-size: 11px;
+    padding: 4px 8px;
+    border-radius: 12px;
+    border: 1px solid #3a4250;
+    background: rgba(255, 255, 255, 0.05);
+    color: #dce6f2;
+    cursor: pointer;
+  }
+  .grass-presets .chip:hover {
+    border-color: #8fd48f;
+    color: #8fd48f;
+  }
+  .grass-presets .chip.reset {
+    margin-left: auto;
+    color: #9aa3b2;
   }
   .properties h3,
   .color-panel h3 {
@@ -1955,6 +3483,44 @@
     border: none;
     border-radius: 4px;
     cursor: pointer;
+  }
+  .editor-context-menu {
+    position: fixed;
+    z-index: 10000;
+    min-width: 180px;
+    background: rgba(16, 20, 28, 0.98);
+    border: 1px solid #3a4152;
+    border-radius: 6px;
+    padding: 4px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.65);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .editor-context-title {
+    font-size: 11px;
+    letter-spacing: 0.4px;
+    color: #8ec07c;
+    padding: 6px 10px 4px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    margin-bottom: 2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 220px;
+  }
+  .editor-context-action {
+    background: transparent;
+    border: none;
+    color: #dce6f2;
+    text-align: left;
+    font-size: 13px;
+    padding: 8px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+  }
+  .editor-context-action:hover {
+    background: #2a3344;
   }
   .quest-section {
     margin-top: 12px;

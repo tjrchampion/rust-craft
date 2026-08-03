@@ -6,6 +6,8 @@ import { SkeletonUtils } from "three/examples/jsm/Addons.js";
 import { load, AnimatedModel, PLAYER_ANIMS, logicalFromState } from "./gltf";
 import { GENDER_MODEL_URLS, CLASS_GENDER } from "./classModels";
 import { buildNameplate } from "./models";
+import { buildGatherNodeMesh } from "./nodes";
+import { measureObjectSolidBox } from "./measureSolidBox";
 import {
   type RegionBlueprint,
   type RegionAssetCategory,
@@ -15,10 +17,16 @@ import {
   type RegionPointLight,
   type RegionFogVolume,
   type RegionFogShape,
+  type RegionBarrierVolume,
+  type RegionCloud,
+  type RegionCloudShape,
   type RegionHouse,
   type RegionNPC,
   type RegionQuest,
   type RegionWorldEvent,
+  type RegionResourceNode,
+  nodeTypeDef,
+  isPlaceableRegionNodeType,
   type ClassId,
   type GrassPatch,
   type GrassExclusion,
@@ -27,26 +35,34 @@ import {
   type RegionTerrainVolume,
   type TerrainVolumeShape,
   type TerrainVolumeMaterial,
+  type RegionAssetLight,
+  type RegionAssetSolidBox,
   sampleRegionWaterDepth,
   REGION_COLOR_PRESETS,
-  REGION_TREE_BRUSH,
+  REGION_ASSET_LIGHT_DEFAULTS,
+  isRegionAssetLightModel,
+  resolveRegionAssetLight,
+  resolveAssetCollision,
+  solidBoxColliderFields,
+  regionAssetScale,
+  regionAssetScaleFields,
   REGION_ASSET_COLLISION_RADIUS,
   REGION_ASSET_COLLISION_HEIGHT,
-  REGION_ASSET_CLIMBABLE,
-  ASSET_COLLISION_OVERRIDES,
+  isRockLikeAssetModel,
+  REGION_TREE_BRUSH,
+  pickRandomRegionTreeModel,
+  foliageModelToResourceType,
   CLASS_IDS,
   WALK_SPEED,
   SPRINT_SPEED,
   JUMP_VELOCITY,
   GRAVITY,
   MAX_STEP_DOWN,
-  SWIM_SPEED_MULT,
   WADE_DEPTH,
-  WADE_SPEED_MULT,
   SWIM_BODY_OFFSET,
-  SWIM_FLOAT_OFFSET,
   regionMusicTrackUrl,
   hashString,
+  regionBiomeToWorldBiome,
   terrainVolumeRadius,
   terrainVolumeTopY,
   isTerrainStroke,
@@ -56,10 +72,37 @@ import {
   type TerrainVolumeCarve,
   clampRegionFogDensity,
   REGION_FOG_DENSITY_MIN,
+  regionWorldOrigin,
+  regionBarrierColliders,
+  regionAssetColliders,
+  regionVolumeColliders,
+  pointInColliderXZ,
+  segmentHitsColliderXZ,
+  PLAYER_BODY_RADIUS,
+  stepMovement,
+  TICK_DT,
+  mergeQuickGrassSettings,
+  DEFAULT_QUICK_GRASS_SETTINGS,
+  type QuickGrassSettings,
 } from "@rustcraft/shared";
-import { applyGroundBlendShader, regionGroundWeights, regionRoadBlendAt, buildRegionWaterMesh, applyWaterEnvironment, type RegionWaterMeshField } from "./terrain";
-import { buildGrassInstances, grassKeysOverlapping, type GrassField } from "./grassField";
+import {
+  applyGroundBlendShader,
+  regionGroundWeights,
+  regionRoadBlendAt,
+  buildRegionBlueprintTerrain,
+  buildRegionWaterMesh,
+  applyWaterEnvironment,
+  type RegionWaterMeshField,
+} from "./terrain";
+import { createQuickGrassField, type QuickGrassField } from "./quickGrass/field";
 import { generateHouseAssets, resolveHouseType, expandHousesToAssets, type HouseType } from "./houseGen";
+import {
+  generateCastleAssets,
+  resolveCastleStyle,
+  type CastleStyle,
+  type CastleSize,
+  type CastleHeight,
+} from "./castleGen";
 import type { RegionAsset } from "@rustcraft/shared";
 import {
   createTerrainVolumeMesh,
@@ -70,10 +113,31 @@ import {
   strokeSizeFromBrush,
 } from "./terrainVolumes";
 import { createFogVolumeMesh, syncFogVolumeMesh } from "./fogVolumes";
+import {
+  createBarrierMesh,
+  syncBarrierMesh,
+  setBarrierSelected,
+  setBarrierHandleHover,
+  barrierHandleMeshes,
+  applyBarrierHandleResize,
+  worldToBarrierLocalMeters,
+  type BarrierHandleId,
+} from "./regionBarriers";
+import { createRegionCloudMesh, syncRegionCloudMesh } from "./regionClouds";
+import { buildRegionHorizon } from "./regionHorizon";
+import { atmosphereFromGrading } from "./regionAtmosphere";
+import { SkyDome } from "./skyDome";
 import { music } from "../game/music";
 
 export type EditorTransformMode = "translate" | "rotate" | "scale";
-export type EditorMarkerKind = "mobSpawn" | "village" | "entry" | "portal" | "npc" | "worldEvent";
+export type EditorMarkerKind =
+  | "mobSpawn"
+  | "resourceNode"
+  | "village"
+  | "entry"
+  | "portal"
+  | "npc"
+  | "worldEvent";
 export type SculptMode = "raise" | "lower" | "mold" | "smooth" | "carve" | null;
 export type WaterBrushMode = "add" | "remove" | null;
 
@@ -107,6 +171,7 @@ function getGlowTexture(): THREE.CanvasTexture {
 
 const MARKER_COLORS: Record<EditorMarkerKind, number> = {
   mobSpawn: 0xff5533,
+  resourceNode: 0x66cc44,
   village: 0xffd23f,
   entry: 0x44dd66,
   portal: 0x9944ff,
@@ -133,7 +198,7 @@ function yawFromQuaternion(q: THREE.Quaternion): number {
 }
 
 export interface EditorSelection {
-  kind: "asset" | "marker" | "light" | "volume" | "fog" | "house";
+  kind: "asset" | "marker" | "light" | "volume" | "fog" | "house" | "barrier" | "cloud";
   id: string;
   model?: string;
   category?: RegionAssetCategory;
@@ -150,10 +215,22 @@ export interface EditorSelection {
   intensity?: number;
   distance?: number;
   decay?: number;
+  /** Asset-attached light (lanterns). Absent on non-emitter props unless toggled on. */
+  lightEnabled?: boolean;
+  lightOffsetX?: number;
+  lightOffsetY?: number;
+  lightOffsetZ?: number;
   fogShape?: RegionFogShape;
   fogDensity?: number;
   fogOpacity?: number;
   fogFeather?: number;
+  cloudShape?: RegionCloudShape;
+  cloudOpacity?: number;
+  driftSpeed?: number;
+  bobAmp?: number;
+  scaleX?: number;
+  scaleY?: number;
+  scaleZ?: number;
   sizeX?: number;
   sizeY?: number;
   sizeZ?: number;
@@ -165,13 +242,32 @@ export interface EditorSelection {
   difficulty?: number;
   lootAmount?: number;
   mobTypes?: string[];
+  /** Pinned mob type for a mobSpawn marker (biome roll when absent). */
+  mobType?: string;
+  /** Gather node type for a resourceNode marker. */
+  nodeType?: string;
+  /** Foliage model filename for tree resource nodes (e.g. pine_1.glb). */
+  nodeModel?: string;
   bossType?: string;
   durationSec?: number;
+  /** Hard-block walking through this asset placement. */
+  solid?: boolean;
+  /** Mesh-measured local collision box when solid. */
+  solidBox?: RegionAssetSolidBox;
   x: number;
   y: number;
   z: number;
   yaw: number;
   scale: number;
+}
+
+export type EditorContextMenuActionId = "assignResource" | "delete";
+
+export interface EditorContextMenuState {
+  x: number;
+  y: number;
+  title: string;
+  actions: { id: EditorContextMenuActionId; label: string }[];
 }
 
 interface AssetEntry {
@@ -181,6 +277,15 @@ interface AssetEntry {
   obj: THREE.Object3D;
   /** Shared across every piece of a generated house -- see RegionAsset.groupId. */
   groupId?: string;
+  /** Authored / default attached light for emitter props. */
+  light?: RegionAssetLight;
+  pointLight?: THREE.PointLight;
+  /** Editor-only marker so the bulb offset is visible while adjusting. */
+  lightMarker?: THREE.Sprite;
+  /** Hard-block walking; persisted on RegionAsset.solid. */
+  solid?: boolean;
+  /** Mesh AABB in model-local space; used with solid for oriented collision. */
+  solidBox?: RegionAssetSolidBox;
 }
 
 interface VolumeEntry {
@@ -205,6 +310,12 @@ interface MarkerEntry {
   difficulty?: number;
   lootAmount?: number;
   mobTypes?: string[];
+  /** Single pinned type for mobSpawn markers. */
+  mobType?: string;
+  /** Gather node type for resourceNode markers. */
+  nodeType?: string;
+  /** Foliage model filename for tree resource nodes. */
+  nodeModel?: string;
   bossType?: string;
   durationSec?: number;
 }
@@ -224,6 +335,33 @@ interface FogEntry {
   id: string;
   data: RegionFogVolume;
   mesh: THREE.Mesh;
+}
+
+interface BarrierEntry {
+  id: string;
+  data: RegionBarrierVolume;
+  group: THREE.Group;
+}
+
+interface BarrierResizeDrag {
+  id: string;
+  handle: BarrierHandleId;
+  planeY: number;
+  start: {
+    sizeX: number;
+    sizeY: number;
+    sizeZ: number;
+    localX: number;
+    localY: number;
+    localZ: number;
+    yaw: number;
+  };
+}
+
+interface CloudEntry {
+  id: string;
+  data: RegionCloud;
+  group: THREE.Group;
 }
 
 interface HouseEntry {
@@ -258,19 +396,36 @@ export class RegionEditorScene {
   private fillLight = new THREE.HemisphereLight(0xffffff, 0x3a4a2a, 0);
   private sunLight = new THREE.DirectionalLight(0xffffff, 1.0);
   private colorGrading: RegionColorGrading = { ...REGION_COLOR_PRESETS.grassland };
-  private meta = { id: "", name: "New Region", biome: "grassland" as RegionBiome, portalWorldX: 0, portalWorldZ: 0, isStartingRegion: false, musicTrack: null as string | null };
+  private meta = {
+    id: "",
+    name: "New Region",
+    biome: "grassland" as RegionBiome,
+    portalWorldX: 0,
+    portalWorldZ: 0,
+    worldOriginX: undefined as number | undefined,
+    worldOriginZ: undefined as number | undefined,
+    isStartingRegion: false,
+    musicTrack: null as string | null,
+  };
 
   private gridSize = DEFAULT_GRID_SIZE;
   private pitch = DEFAULT_PITCH;
   private heights: number[] = new Array(DEFAULT_GRID_SIZE * DEFAULT_GRID_SIZE).fill(0);
   private customTextures: number[] = new Array(DEFAULT_GRID_SIZE * DEFAULT_GRID_SIZE).fill(0);
   private terrainMesh: THREE.Mesh;
+  /** Read-only adjacent regions (terrain/volumes/water) for seam moulding. */
+  private neighborGroups = new Map<string, THREE.Group>();
+  private static readonly CAMERA_FAR_DEFAULT = 800;
+  private static readonly CAMERA_FAR_NEIGHBORS = 2800;
 
   private assets = new Map<string, AssetEntry>();
   private volumes = new Map<string, VolumeEntry>();
   private markers = new Map<string, MarkerEntry>();
   private lights = new Map<string, LightEntry>();
   private fogVolumes = new Map<string, FogEntry>();
+  private barrierVolumes = new Map<string, BarrierEntry>();
+  private clouds = new Map<string, CloudEntry>();
+  private horizonGroup: THREE.Group | null = null;
   /** Procedural houses — one Group each (not dozens of loose assets). */
   private houses = new Map<string, HouseEntry>();
   /** Expanded house pieces for playtest collision (rebuilt on house edits). */
@@ -279,9 +434,16 @@ export class RegionEditorScene {
 
   private armedModel: { model: string; category: RegionAssetCategory } | null = null;
   private armedMarkerKind: EditorMarkerKind | null = null;
+  /** Defaults applied to each newly placed mobSpawn marker. */
+  private mobSpawnDifficulty = 1;
+  private mobSpawnType: string | null = null;
+  /** Default type for newly placed resourceNode markers. */
+  private resourceNodeType = "rock";
   private armedLightColor: string | null = null;
   private armedFogColor: string | null = null;
   private armedFogShape: RegionFogShape = "sphere";
+  private armedBarrier = false;
+  private armedCloudShape: RegionCloudShape | null = null;
   /** House-placement tool armed -- next click generates a procedural house
    *  (see houseGen.ts's generateHouseAssets) centered on the clicked ground
    *  point, placed as ordinary building-category assets. Single-click only
@@ -289,11 +451,19 @@ export class RegionEditorScene {
    *  pieces, so dragging would spam-generate overlapping houses. */
   private armedHouse = false;
   private armedHouseType: HouseType = "random";
+  /** Procedural castle tool — next click drops a full curtain-wall keep. */
+  private armedCastle = false;
+  private armedCastleStyle: CastleStyle = "random";
+  private armedCastleSize: CastleSize = 2;
+  private armedCastleHeight: CastleHeight = 2;
   /** Volume-sculpt brush -- stamps real 3D primitives into the world instead
    *  of deforming the heightmap. `place` drops one shape at a time; `sculpt`
-   *  is a continuous drag brush that sprays overlapping stamps along the stroke. */
+   *  is a continuous drag brush that sprays overlapping stamps along the stroke;
+   *  `clay` is Blender-style add/sub on the 3D surface (boulder/block). */
   private volumeStampActive = false;
-  private volumeBrushStyle: "place" | "sculpt" = "place";
+  private volumeBrushStyle: "place" | "sculpt" | "clay" = "place";
+  /** Clay brush polarity — add piles blobs; sub punches carve spheres. */
+  private volumeSculptOp: "add" | "sub" = "add";
   private volumeShape: TerrainVolumeShape = "boulder";
   private volumeMaterial: TerrainVolumeMaterial = "rock";
   private volumeGhost: THREE.Mesh | null = null;
@@ -335,13 +505,16 @@ export class RegionEditorScene {
   private grassColor: GrassColor = { bottom: "#4f7c13", top: "#79a01c" };
   private wind: RegionWind = { direction: 0, strength: 1 };
   private grassLength = 1;
-  /** Live grass preview -- streamed ADT tiles around the camera, rebuilt
-   *  incrementally for brush-touched tiles on mouseup. */
-  private grassField: GrassField | null = null;
+  private grassSway = 1;
+  private grassSettings: QuickGrassSettings = { ...DEFAULT_QUICK_GRASS_SETTINGS };
+  /** Quick Grass field — patch-streamed procedural blades (see quickGrass/). */
+  private grassField: QuickGrassField | null = null;
   private grassPreviewGroup = new THREE.Group();
+  private skyDome = new SkyDome();
   private grassPreviewDirty = false;
-  /** ADT keys dirtied by the current grass paint/erase stroke. */
-  private grassDirtyKeys = new Set<string>();
+  /** True after any grass paint/erase dab this pointer gesture (for one history push). */
+  private grassStrokeDirty = false;
+  private lastGrassStrokePos: { x: number; z: number } | null = null;
 
   private roads: RegionRoad[] = [];
   private roadPaintArmed = false;
@@ -375,6 +548,8 @@ export class RegionEditorScene {
   private eraseBrushActive = false;
   private lastPlaceTime = 0;
   private dragStart: { x: number; y: number } | null = null;
+  private barrierResizeDrag: BarrierResizeDrag | null = null;
+  private barrierHoverHandle: { id: string; handle: BarrierHandleId } | null = null;
   private isRestoring = false;
   private dragStartPos = new THREE.Vector3();
   private dragStartRot = new THREE.Euler();
@@ -409,8 +584,43 @@ export class RegionEditorScene {
   private lastFrameTime = performance.now();
   private static readonly PLAYTEST_AVATAR_HEIGHT = 1.75;
   private static readonly PLAYTEST_CAMERA_DISTANCE = 6.5;
+  private static readonly PLAYTEST_CAMERA_DISTANCE_MIN = 2.4;
+  private static readonly PLAYTEST_CAMERA_DISTANCE_MAX = RegionEditorScene.PLAYTEST_CAMERA_DISTANCE;
+  private static readonly PLAYTEST_CAMERA_ZOOM_STEP = 0.35;
   private static readonly PLAYTEST_CAMERA_HEIGHT = 2.2;
+  private playtestCameraDistance = RegionEditorScene.PLAYTEST_CAMERA_DISTANCE;
   private static readonly PLAYTEST_MOUSE_SENSITIVITY = 0.0024;
+
+  // ============================ navigation (default = Minecraft creative fly) ============================
+  private navMode: "fly" | "orbit" = "fly";
+  /** True while in creative flight; false = walking on ground. */
+  private flyFlying = true;
+  private flyKeys = new Set<string>();
+  private flyPos = new THREE.Vector3();
+  private flyYaw = 0;
+  private flyPitch = -0.35;
+  private flyVelocityY = 0;
+  private flyGrounded = false;
+  private flyLastSpaceAt = 0;
+  /** RMB held — look while stationary (no movement keys). */
+  private flyLookDragging = false;
+  /** Debounce unlock so key transitions don't flicker pointer lock. */
+  private flyUnlockTimer: number | null = null;
+  private readonly flyLookDir = new THREE.Vector3();
+  private readonly flyMoveVec = new THREE.Vector3();
+  private readonly flyRightVec = new THREE.Vector3();
+  private static readonly FLY_EYE_HEIGHT = 1.62;
+  private static readonly FLY_UNLOCK_DELAY_MS = 140;
+  private static readonly FLY_WALK_SPEED = 12;
+  private static readonly FLY_SPRINT_SPEED = 22;
+  private static readonly FLY_SNEAK_SPEED = 4;
+  /** Editor fly — much faster than Minecraft so continents are traversable. */
+  private static readonly FLY_FLY_SPEED = 55;
+  private static readonly FLY_FLY_SPRINT_SPEED = 110;
+  private static readonly FLY_DOUBLE_TAP_MS = 300;
+  private static readonly FLY_MOUSE_SENSITIVITY = 0.0024;
+
+  private onContextMenuUi: ((state: EditorContextMenuState | null) => void) | null = null;
 
   constructor(
     private canvas: HTMLCanvasElement,
@@ -419,6 +629,7 @@ export class RegionEditorScene {
     private onPlaytestChange?: (active: boolean) => void,
     onMarquee?: (box: { startX: number; startY: number; endX: number; endY: number } | null) => void,
     private onSnapChange?: (enabled: boolean) => void,
+    private onFlyChange?: (active: boolean) => void,
   ) {
     // Guard against two live instances ever listening on the same canvas at
     // once (e.g. a leftover instance from a Vite HMR reload that never got
@@ -432,7 +643,7 @@ export class RegionEditorScene {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 
-    this.camera = new THREE.PerspectiveCamera(55, 1, 0.1, 800);
+    this.camera = new THREE.PerspectiveCamera(55, 1, 0.1, RegionEditorScene.CAMERA_FAR_DEFAULT);
     this.camera.position.set(60, 60, 60);
 
     this.scene.add(this.ambientLight);
@@ -459,6 +670,8 @@ export class RegionEditorScene {
     this.scene.add(this.selectionGroup);
     this.grassPreviewGroup.name = "grass-preview";
     this.scene.add(this.grassPreviewGroup);
+    this.scene.background = new THREE.Color(0x02040a);
+    this.scene.add(this.skyDome.group);
     this.scene.add(this.waterParticlesGroup);
     this.scene.add(this.escortPathGroup);
     this.applyColorGrading(this.colorGrading);
@@ -477,12 +690,16 @@ export class RegionEditorScene {
     this.scene.add(this.transform.getHelper());
     this.transform.addEventListener("dragging-changed", (e) => {
       const isDragging = (e as unknown as { value: boolean }).value;
-      this.orbit.enabled = !isDragging;
+      this.orbit.enabled = this.navMode === "orbit" && !isDragging && !this.playtestActive;
       if (isDragging) {
         this.dragStartPos.copy(this.selectionGroup.position);
         this.dragStartRot.copy(this.selectionGroup.rotation);
       } else {
         this.bakeSelectionYaw();
+        for (const id of this.selectedIds) {
+          const a = this.assets.get(id);
+          if (a?.solid) a.solidBox = measureObjectSolidBox(a.obj) ?? a.solidBox;
+        }
         this.emitSelection();
         this.triggerChange();
       }
@@ -494,9 +711,13 @@ export class RegionEditorScene {
     canvas.addEventListener("mouseup", this.onMouseUp);
     canvas.addEventListener("mouseleave", this.onMouseUp);
     canvas.addEventListener("click", this.onClick);
+    canvas.addEventListener("contextmenu", this.onContextMenu);
     window.addEventListener("keydown", this.onKeyDown);
 
     this.resize();
+    // Default navigation is Minecraft creative fly (not orbit).
+    this.initFlyPoseFromCamera();
+    this.applyNavMode("fly");
     requestAnimationFrame(this.frame);
   }
 
@@ -577,6 +798,13 @@ export class RegionEditorScene {
     if (weightsB) weightsB.needsUpdate = true;
     if (tints) tints.needsUpdate = true;
     mesh.geometry.computeVertexNormals();
+    if (this.grassField) {
+      this.grassField.setHeightmap({
+        gridSize: this.gridSize,
+        pitch: this.pitch,
+        heights: this.heights,
+      });
+    }
   }
 
   private heightAt(x: number, z: number): number {
@@ -953,12 +1181,12 @@ export class RegionEditorScene {
   }
 
   /** Arms the freeform volume tool. `place` = drop one primitive (click or
-   *  light drag). `sculpt` = continuous drag brush that sprays a cluster of
-   *  overlapping stamps along the stroke path (distance-spaced). */
+   *  light drag). `sculpt` = continuous ridge along a locked-Y plane.
+   *  `clay` = Blender-style add/sub following the 3D surface (boulder/block). */
   armVolumeStamp(
     shape: TerrainVolumeShape,
     material: TerrainVolumeMaterial = this.volumeMaterial,
-    style: "place" | "sculpt" = "place",
+    style: "place" | "sculpt" | "clay" = "place",
   ): void {
     this.armedModel = null;
     this.armedMarkerKind = null;
@@ -975,9 +1203,10 @@ export class RegionEditorScene {
     this.roadPaintArmed = false;
     this.volumeStampActive = true;
     this.volumeBrushStyle = style;
-    this.volumeShape = shape;
+    this.volumeShape = style === "clay" && shape !== "block" ? "boulder" : shape;
     this.volumeMaterial = material;
     this.lastVolumeStrokePos = null;
+    this.lastCarvePos = null;
     this.rebuildVolumeGhost();
     this.transform.detach();
     this.deselect();
@@ -990,12 +1219,26 @@ export class RegionEditorScene {
   }
 
   setVolumeShape(shape: TerrainVolumeShape): void {
+    if (this.volumeBrushStyle === "clay" && shape !== "boulder" && shape !== "block") {
+      shape = "boulder";
+    }
     this.volumeShape = shape;
     if (this.volumeStampActive) this.rebuildVolumeGhost();
   }
 
-  get volumeBrushStyleActive(): "place" | "sculpt" | null {
+  setVolumeSculptOp(op: "add" | "sub"): void {
+    this.volumeSculptOp = op;
+    if (this.volumeStampActive && this.volumeBrushStyle === "clay") {
+      this.rebuildVolumeGhost();
+    }
+  }
+
+  get volumeBrushStyleActive(): "place" | "sculpt" | "clay" | null {
     return this.volumeStampActive ? this.volumeBrushStyle : null;
+  }
+
+  get volumeSculptOpActive(): "add" | "sub" {
+    return this.volumeSculptOp;
   }
 
   private clearVolumeStamp(): void {
@@ -1031,21 +1274,24 @@ export class RegionEditorScene {
     }
     if (!this.volumeStampActive) return;
     this.volumeGhost = createTerrainVolumeGhost(this.volumeShape, this.volumeMaterial);
-    const s = defaultVolumeScale(
-      this.volumeShape,
-      this.volumeBrushStyle === "sculpt" ? this.brushRadius * 0.45 : this.brushRadius,
-    );
+    const ghostR =
+      this.volumeBrushStyle === "sculpt" || this.volumeBrushStyle === "clay"
+        ? this.brushRadius * 0.45
+        : this.brushRadius;
+    const s = defaultVolumeScale(this.volumeShape, ghostR);
     this.volumeGhost.scale.set(s.scaleX, s.scaleY, s.scaleZ);
     this.volumeGhost.visible = false;
     this.scene.add(this.volumeGhost);
 
-    if (this.volumeBrushStyle === "sculpt") {
+    if (this.volumeBrushStyle === "sculpt" || this.volumeBrushStyle === "clay") {
       const ringGeo = new THREE.RingGeometry(this.brushRadius * 0.92, this.brushRadius, 48);
       ringGeo.rotateX(-Math.PI / 2);
+      const ringColor =
+        this.volumeBrushStyle === "clay" && this.volumeSculptOp === "sub" ? 0xf07178 : 0x7dd3a0;
       this.volumeBrushRing = new THREE.Mesh(
         ringGeo,
         new THREE.MeshBasicMaterial({
-          color: 0x7dd3a0,
+          color: ringColor,
           transparent: true,
           opacity: 0.55,
           depthWrite: false,
@@ -1064,6 +1310,8 @@ export class RegionEditorScene {
     this.armedHouse = false;
     this.clearVolumeStamp();
     this.armedFogColor = null;
+    this.armedBarrier = false;
+    this.armedCloudShape = null;
     this.armedLightColor = color;
     this.sculptMode = null;
     this.texturePaintMode = null;
@@ -1084,8 +1332,54 @@ export class RegionEditorScene {
     this.armedHouse = false;
     this.clearVolumeStamp();
     this.armedLightColor = null;
+    this.armedBarrier = false;
+    this.armedCloudShape = null;
     this.armedFogColor = color;
     this.armedFogShape = shape;
+    this.sculptMode = null;
+    this.texturePaintMode = null;
+    this.waterBrushMode = null;
+    this.randomTreeBrushActive = false;
+    this.grassBrushActive = false;
+    this.grassEraseBrushActive = false;
+    this.eraseBrushActive = false;
+    this.roadPaintArmed = false;
+    this.transform.detach();
+    this.deselect();
+    this.orbit.enablePan = false;
+  }
+
+  armBarrierPlacement(): void {
+    this.armedModel = null;
+    this.armedMarkerKind = null;
+    this.armedHouse = false;
+    this.clearVolumeStamp();
+    this.armedLightColor = null;
+    this.armedFogColor = null;
+    this.armedCloudShape = null;
+    this.armedBarrier = true;
+    this.sculptMode = null;
+    this.texturePaintMode = null;
+    this.waterBrushMode = null;
+    this.randomTreeBrushActive = false;
+    this.grassBrushActive = false;
+    this.grassEraseBrushActive = false;
+    this.eraseBrushActive = false;
+    this.roadPaintArmed = false;
+    this.transform.detach();
+    this.deselect();
+    this.orbit.enablePan = false;
+  }
+
+  armCloudPlacement(shape: RegionCloudShape = "cumulus"): void {
+    this.armedModel = null;
+    this.armedMarkerKind = null;
+    this.armedHouse = false;
+    this.clearVolumeStamp();
+    this.armedLightColor = null;
+    this.armedFogColor = null;
+    this.armedBarrier = false;
+    this.armedCloudShape = shape;
     this.sculptMode = null;
     this.texturePaintMode = null;
     this.waterBrushMode = null;
@@ -1161,6 +1455,70 @@ export class RegionEditorScene {
     return id;
   }
 
+  public placeBarrierVolume(
+    x: number,
+    y: number,
+    z: number,
+    sizeX = 8,
+    sizeY = 6,
+    sizeZ = 1.25,
+    yaw = 0,
+  ): string {
+    const id = `barrier_${this.nextId++}`;
+    // Center the box so it sits on the ground and rises upward.
+    const data: RegionBarrierVolume = {
+      id,
+      localX: x,
+      localY: y + sizeY,
+      localZ: z,
+      yaw,
+      sizeX,
+      sizeY,
+      sizeZ,
+    };
+    const group = createBarrierMesh(data);
+    group.userData.editorKind = "barrier";
+    group.userData.editorId = id;
+    this.scene.add(group);
+    this.barrierVolumes.set(id, { id, data, group });
+    this.select("barrier", id, false);
+    this.triggerChange();
+    return id;
+  }
+
+  public placeCloud(
+    x: number,
+    y: number,
+    z: number,
+    shape: RegionCloudShape = "cumulus",
+    color = "#eef2f8",
+  ): string {
+    const id = `cloud_${this.nextId++}`;
+    const data: RegionCloud = {
+      id,
+      localX: x,
+      localY: y + 28,
+      localZ: z,
+      yaw: 0,
+      scaleX: 1,
+      scaleY: 1,
+      scaleZ: 1,
+      color,
+      opacity: 0.85,
+      shape,
+      driftSpeed: 1.2,
+      bobAmp: 0.4,
+    };
+    const group = createRegionCloudMesh(data);
+    group.userData.editorKind = "cloud";
+    group.userData.editorId = id;
+    this.scene.add(group);
+    this.clouds.set(id, { id, data, group });
+    this.select("cloud", id, false);
+    this.triggerChange();
+    return id;
+  }
+
   setBrushRadius(r: number): void {
     this.brushRadius = Math.max(1, r);
     if (this.volumeStampActive) {
@@ -1171,6 +1529,9 @@ export class RegionEditorScene {
 
   setBrushStrength(s: number): void {
     this.brushStrength = Math.max(0.1, s);
+    if (this.volumeStampActive && this.volumeBrushStyle === "clay") {
+      this.rebuildVolumeGhost();
+    }
   }
 
   // ============================ road painting ============================
@@ -1376,42 +1737,53 @@ export class RegionEditorScene {
     }
   }
 
-  /** Appends one compact GrassPatch record per brush tick (same throttle
-   *  shape as the tree-scatter brush it replaces) instead of scattering
-   *  discrete assets -- see GrassPatch's doc comment. The live preview mesh
-   *  is NOT rebuilt here (potentially hundreds of blade transforms per
-   *  patch, and a long drag would re-walk every prior patch each tick) --
-   *  it's rebuilt once on mouseup, see the pointerup handler. */
+  /** Spacing between grass dabs while dragging (fraction of brush radius). */
+  private static readonly GRASS_STROKE_SPACING = 0.35;
+
+  private grassStrokeSpacing(): number {
+    return Math.max(0.45, this.brushRadius * RegionEditorScene.GRASS_STROKE_SPACING);
+  }
+
+  private acceptGrassStrokeSample(hitX: number, hitZ: number): boolean {
+    if (this.lastGrassStrokePos) {
+      const dist = Math.hypot(hitX - this.lastGrassStrokePos.x, hitZ - this.lastGrassStrokePos.z);
+      if (dist < this.grassStrokeSpacing()) return false;
+    }
+    this.lastGrassStrokePos = { x: hitX, z: hitZ };
+    return true;
+  }
+
+  /** Appends one GrassPatch dab; density texture refreshes on the frame loop / mouseup. */
   private paintGrassPatchAt(hitX: number, hitZ: number): void {
-    const now = performance.now();
-    if (now - this.lastPlaceTime < 240) return;
-    this.lastPlaceTime = now;
+    if (!this.acceptGrassStrokeSample(hitX, hitZ)) return;
 
     const waterDepth = this.sampleWaterDepth(hitX, hitZ);
     if (waterDepth > 0.05) return;
+
+    // Paint wins over erase: drop exclusions that overlap this dab so grass can
+    // grow again in previously erased / empty-looking ground.
+    const brushR = this.brushRadius;
+    this.grassExclusions = this.grassExclusions.filter((ex) => {
+      return Math.hypot(ex.localX - hitX, ex.localZ - hitZ) >= brushR + ex.radius;
+    });
 
     const id = `grass_${this.nextId++}`;
     this.grassPatches.push({
       id,
       localX: hitX,
       localZ: hitZ,
-      radius: this.brushRadius,
+      radius: brushR,
       density: Math.min(1, Math.max(0.1, this.brushStrength / 3)),
       seed: hashString(id),
       lengthScale: this.grassLength,
     });
-    for (const key of grassKeysOverlapping(hitX, hitZ, this.brushRadius)) this.grassDirtyKeys.add(key);
     this.grassPreviewDirty = true;
+    this.grassStrokeDirty = true;
   }
 
-  /** Fine-grained grass removal: carves a small exclusion circle out of the
-   *  blade field at the brush position instead of deleting whole GrassPatch
-   *  records (see eraseAssetsAt) -- lets a large painted patch be thinned out
-   *  in one spot without losing the rest of it. */
+  /** Fine-grained grass removal while dragging — exclusion circles, live preview. */
   private eraseGrassAt(hitX: number, hitZ: number): void {
-    const now = performance.now();
-    if (now - this.lastPlaceTime < 240) return;
-    this.lastPlaceTime = now;
+    if (!this.acceptGrassStrokeSample(hitX, hitZ)) return;
 
     const id = `grasserase_${this.nextId++}`;
     this.grassExclusions.push({
@@ -1421,44 +1793,42 @@ export class RegionEditorScene {
       strength: Math.min(1, Math.max(0.05, this.brushStrength / 3)),
       seed: hashString(id),
     });
-    for (const key of grassKeysOverlapping(hitX, hitZ, this.brushRadius)) this.grassDirtyKeys.add(key);
     this.grassPreviewDirty = true;
+    this.grassStrokeDirty = true;
   }
 
-  /** Rebuilds grass preview InstancedMeshes. Brush strokes only recollect the
-   *  ADT tiles they touched (CPU win); meshes for those tiles are built
-   *  eagerly so paint under the cursor always shows up. Runtime regions still
-   *  stream; the editor preview does not. */
-  private rebuildGrassPreview(forceFull = false): void {
-    const heightmap = { gridSize: this.gridSize, pitch: this.pitch, heights: this.heights };
+  private ensureQuickGrassField(): QuickGrassField {
+    if (!this.grassField) {
+      this.grassField = createQuickGrassField(this.grassPreviewGroup, this.grassSettings);
+      this.grassField.setHeightmap({
+        gridSize: this.gridSize,
+        pitch: this.pitch,
+        heights: this.heights,
+      });
+    }
+    return this.grassField;
+  }
+
+  /** Sync Quick Grass coverage (+ heightmap) from authored strokes. */
+  private rebuildGrassPreview(_forceFull = false): void {
     if (this.grassPatches.length === 0) {
       if (this.grassField) {
-        this.grassField.dispose();
-        this.grassField = null;
+        this.grassField.setCoverage([], this.grassExclusions);
       }
-      this.grassDirtyKeys.clear();
       this.grassPreviewDirty = false;
       return;
     }
-
-    if (!this.grassField) {
-      // Eager (stream:false): every painted tile gets a mesh immediately.
-      // Streaming hid strokes that weren't near orbit.target.
-      this.grassField = buildGrassInstances(this.grassPatches, this.grassExclusions, heightmap, {
-        color: this.grassColor,
-        wind: this.wind,
-        stream: false,
-        parent: this.grassPreviewGroup,
-      });
-      this.grassDirtyKeys.clear();
-      this.grassPreviewDirty = false;
-      return;
-    }
-
-    const onlyKeys = !forceFull && this.grassDirtyKeys.size > 0 ? [...this.grassDirtyKeys] : undefined;
-    this.grassField.rebuild(this.grassPatches, this.grassExclusions, heightmap, onlyKeys);
-    this.grassDirtyKeys.clear();
+    const field = this.ensureQuickGrassField();
+    field.setHeightmap({ gridSize: this.gridSize, pitch: this.pitch, heights: this.heights });
+    field.setCoverage(this.grassPatches, this.grassExclusions);
+    field.setSettings(this.grassSettings);
     this.grassPreviewDirty = false;
+  }
+
+  /** Refresh density while brushing so paint/erase appear under the cursor. */
+  private flushGrassPreviewWhileBrushing(): void {
+    if (!this.grassPreviewDirty) return;
+    this.rebuildGrassPreview(true);
   }
 
   clearWater(): void {
@@ -1683,15 +2053,154 @@ export class RegionEditorScene {
     this.pushHistory();
   }
 
-  setMeta(patch: Partial<{ id: string; name: string; biome: RegionBiome; portalWorldX: number; portalWorldZ: number; isStartingRegion: boolean; musicTrack: string | null }>): void {
+  setMeta(
+    patch: Partial<{
+      id: string;
+      name: string;
+      biome: RegionBiome;
+      portalWorldX: number;
+      portalWorldZ: number;
+      worldOriginX: number | undefined;
+      worldOriginZ: number | undefined;
+      isStartingRegion: boolean;
+      musicTrack: string | null;
+    }>,
+  ): void {
+    const originChanged =
+      (patch.worldOriginX !== undefined && patch.worldOriginX !== this.meta.worldOriginX) ||
+      (patch.worldOriginZ !== undefined && patch.worldOriginZ !== this.meta.worldOriginZ);
     this.meta = { ...this.meta, ...patch };
     if (patch.musicTrack !== undefined && this.playtestActive) {
       music.play(regionMusicTrackUrl(this.meta.musicTrack), 3000);
     }
+    if (originChanged) this.updateNeighborReferenceOffsets();
   }
 
-  getMeta(): { id: string; name: string; biome: RegionBiome; portalWorldX: number; portalWorldZ: number; isStartingRegion: boolean; musicTrack: string | null } {
+  getMeta(): {
+    id: string;
+    name: string;
+    biome: RegionBiome;
+    portalWorldX: number;
+    portalWorldZ: number;
+    worldOriginX: number | undefined;
+    worldOriginZ: number | undefined;
+    isStartingRegion: boolean;
+    musicTrack: string | null;
+  } {
     return { ...this.meta };
+  }
+
+  /** Heightmap span for continent layout map tiles. */
+  getLayoutSpan(): { gridSize: number; pitch: number; worldOriginX: number; worldOriginZ: number } {
+    return {
+      gridSize: this.gridSize,
+      pitch: this.pitch,
+      worldOriginX: this.meta.worldOriginX ?? 0,
+      worldOriginZ: this.meta.worldOriginZ ?? 0,
+    };
+  }
+
+  get neighborReferenceCount(): number {
+    return this.neighborGroups.size;
+  }
+
+  /**
+   * Mount adjacent regions as dimmed, non-editable reference geometry so you
+   * can mould the local seam against their terrain. Groups are offset by
+   * world-origin delta into the editor's local frame.
+   */
+  setNeighborReferences(neighbors: RegionBlueprint[]): void {
+    this.clearNeighborReferences();
+    const editO = regionWorldOrigin(this.meta);
+    for (const bp of neighbors) {
+      if (!bp.heights?.length || bp.gridSize < 2) continue;
+      if (bp.id && bp.id === this.meta.id) continue;
+      const group = new THREE.Group();
+      group.name = `region-reference:${bp.id || "anon"}`;
+      group.userData.referenceRegionId = bp.id;
+      const o = regionWorldOrigin(bp);
+      group.userData.worldOriginX = o.x;
+      group.userData.worldOriginZ = o.z;
+      // Slight Y bias reduces seam z-fighting with the editable mesh.
+      group.position.set(o.x - editO.x, -0.04, o.z - editO.z);
+
+      const terrain = buildRegionBlueprintTerrain(bp);
+      terrain.name = `region-reference-terrain:${bp.id}`;
+      this.stylizeReferenceObject(terrain, 0.72);
+      group.add(terrain);
+
+      for (const vol of bp.terrainVolumes ?? []) {
+        const mesh = createTerrainVolumeMesh(vol);
+        delete mesh.userData.editorId;
+        delete mesh.userData.editorKind;
+        this.stylizeReferenceObject(mesh, 0.65);
+        group.add(mesh);
+      }
+
+      if (bp.waterHeights && bp.waterHeights.length === bp.gridSize * bp.gridSize) {
+        const water = buildRegionWaterMesh(bp.gridSize, bp.pitch, bp.heights, bp.waterHeights);
+        applyWaterEnvironment(water.mesh.material as THREE.MeshLambertMaterial, {
+          skyColor: bp.colorGrading.skyColor,
+          fogColor: bp.colorGrading.fogColor,
+          groundTint: bp.colorGrading.groundTint,
+        });
+        this.stylizeReferenceObject(water.mesh, 0.55);
+        group.add(water.mesh);
+      }
+
+      this.scene.add(group);
+      this.neighborGroups.set(bp.id || group.uuid, group);
+    }
+    this.camera.far =
+      this.neighborGroups.size > 0
+        ? RegionEditorScene.CAMERA_FAR_NEIGHBORS
+        : RegionEditorScene.CAMERA_FAR_DEFAULT;
+    this.camera.updateProjectionMatrix();
+  }
+
+  clearNeighborReferences(): void {
+    for (const group of this.neighborGroups.values()) {
+      this.scene.remove(group);
+      this.disposeObject(group);
+    }
+    this.neighborGroups.clear();
+    this.camera.far = RegionEditorScene.CAMERA_FAR_DEFAULT;
+    this.camera.updateProjectionMatrix();
+  }
+
+  /** Re-offset references after the open region's world origin changes. */
+  updateNeighborReferenceOffsets(): void {
+    if (this.neighborGroups.size === 0) return;
+    const editO = regionWorldOrigin(this.meta);
+    for (const group of this.neighborGroups.values()) {
+      const nOx = group.userData.worldOriginX as number | undefined;
+      const nOz = group.userData.worldOriginZ as number | undefined;
+      if (nOx === undefined || nOz === undefined) continue;
+      group.position.set(nOx - editO.x, -0.04, nOz - editO.z);
+    }
+  }
+
+  private stylizeReferenceObject(obj: THREE.Object3D, opacity: number): void {
+    obj.traverse((child) => {
+      const mesh = child as THREE.Mesh;
+      if (!mesh.isMesh) return;
+      delete mesh.userData.editorId;
+      delete mesh.userData.editorKind;
+      const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+      const cloned = mats.map((m) => {
+        const c = (m as THREE.Material).clone();
+        c.transparent = true;
+        c.opacity = opacity;
+        c.depthWrite = opacity >= 0.9;
+        if ("polygonOffset" in c) {
+          (c as THREE.MeshLambertMaterial).polygonOffset = true;
+          (c as THREE.MeshLambertMaterial).polygonOffsetFactor = 1;
+          (c as THREE.MeshLambertMaterial).polygonOffsetUnits = 1;
+        }
+        return c;
+      });
+      mesh.material = Array.isArray(mesh.material) ? cloned : cloned[0]!;
+    });
   }
 
   private pushHistory(): void {
@@ -1840,12 +2349,23 @@ export class RegionEditorScene {
     return this.playtestActive;
   }
 
+  get navigationMode(): "fly" | "orbit" {
+    return this.navMode;
+  }
+
+  /** Switch editor camera: Minecraft creative fly (default) or classic orbit. */
+  setNavigationMode(mode: "fly" | "orbit"): void {
+    if (this.playtestActive) this.exitPlaytest();
+    this.applyNavMode(mode);
+  }
+
   private setMarkersVisible(visible: boolean): void {
     for (const m of this.markers.values()) m.obj.visible = visible;
     if (this.entryMarker) this.entryMarker.obj.visible = visible;
   }
 
   private enterPlaytest(): void {
+    this.suspendFlyNavListeners();
     this.disarm();
     this.deselect();
     this.setMarkersVisible(false);
@@ -1859,6 +2379,8 @@ export class RegionEditorScene {
     this.playtestPos.set(startX, this.heightAt(startX, startZ), startZ);
     this.cameraYaw = 0;
     this.cameraPitch = -0.35;
+    this.playtestCameraDistance = RegionEditorScene.PLAYTEST_CAMERA_DISTANCE;
+    this.playtestWheelAccum = 0;
     this.playtestAnimSpeed = 0;
     this.playtestVelocityY = 0;
     this.playtestGrounded = true;
@@ -1877,6 +2399,7 @@ export class RegionEditorScene {
     window.addEventListener("keydown", this.onPlaytestKeyDown);
     window.addEventListener("keyup", this.onPlaytestKeyUp);
     this.canvas.addEventListener("mousemove", this.onPlaytestMouseMove);
+    this.canvas.addEventListener("wheel", this.onPlaytestWheel, { passive: false });
     document.addEventListener("pointerlockchange", this.onPointerLockChange);
     this.canvas.requestPointerLock();
 
@@ -1920,6 +2443,7 @@ export class RegionEditorScene {
     window.removeEventListener("keydown", this.onPlaytestKeyDown);
     window.removeEventListener("keyup", this.onPlaytestKeyUp);
     this.canvas.removeEventListener("mousemove", this.onPlaytestMouseMove);
+    this.canvas.removeEventListener("wheel", this.onPlaytestWheel);
     document.removeEventListener("pointerlockchange", this.onPointerLockChange);
     if (document.pointerLockElement === this.canvas) document.exitPointerLock();
 
@@ -1929,23 +2453,334 @@ export class RegionEditorScene {
     }
 
     this.setMarkersVisible(true);
-    this.camera.rotation.set(0, 0, 0);
+    // Resume whatever navigation mode was active before playtest.
     this.camera.position.copy(this.playtestSavedCameraPos);
     this.orbit.target.copy(this.playtestSavedTarget);
-    this.orbit.enabled = true;
-    this.orbit.update();
+    this.applyNavMode(this.navMode);
     this.onPlaytestChange?.(false);
     music.stop();
   }
 
   private onPointerLockChange = (): void => {
-    // The browser exits pointer lock on its own (native Escape, tab switch,
-    // etc.) without going through togglePlaytest -- follow suit so the UI
-    // toggle button doesn't stay stuck "active" with the mouse un-captured.
+    // Playtest still exits when the browser drops pointer lock (Esc / tab away).
     if (this.playtestActive && document.pointerLockElement !== this.canvas) {
       this.exitPlaytest();
     }
   };
+
+  // ============================ fly navigation (default) ============================
+
+  private applyNavMode(mode: "fly" | "orbit"): void {
+    this.navMode = mode;
+    this.flyLookDragging = false;
+    if (mode === "fly") {
+      // Hard-disable orbit so damping / RMB rotate can't fight the fly camera.
+      this.orbit.enabled = false;
+      this.orbit.enableDamping = false;
+      this.initFlyPoseFromCamera();
+      this.flyFlying = true;
+      this.flyVelocityY = 0;
+      this.flyGrounded = false;
+      this.applyFlyCamera();
+      this.bindFlyNavListeners();
+    } else {
+      this.suspendFlyNavListeners();
+      if (document.pointerLockElement === this.canvas) document.exitPointerLock();
+      // Point orbit target ahead of the fly camera so the handoff feels natural.
+      this.orbit.target.set(
+        this.flyPos.x - Math.sin(this.flyYaw) * 20,
+        this.flyPos.y + Math.sin(this.flyPitch) * 20,
+        this.flyPos.z - Math.cos(this.flyYaw) * 20,
+      );
+      this.camera.rotation.order = "XYZ";
+      this.camera.rotation.set(0, 0, 0);
+      this.camera.position.copy(this.flyPos);
+      this.orbit.enableDamping = true;
+      this.orbit.enabled = true;
+      this.orbit.update();
+    }
+    this.onFlyChange?.(mode === "fly");
+  }
+
+  private initFlyPoseFromCamera(): void {
+    this.flyPos.copy(this.camera.position);
+    const ground = this.heightAt(this.flyPos.x, this.flyPos.z);
+    if (this.flyPos.y < ground + RegionEditorScene.FLY_EYE_HEIGHT) {
+      this.flyPos.y = ground + RegionEditorScene.FLY_EYE_HEIGHT;
+    }
+    const to = new THREE.Vector3().subVectors(this.orbit.target, this.camera.position);
+    if (to.lengthSq() > 1e-6) {
+      this.flyYaw = Math.atan2(-to.x, -to.z);
+      const flat = Math.hypot(to.x, to.z);
+      this.flyPitch = flat > 1e-4 ? Math.atan2(to.y, flat) : -0.35;
+    }
+    this.flyPitch = Math.max(-1.55, Math.min(1.55, this.flyPitch));
+  }
+
+  private bindFlyNavListeners(): void {
+    this.suspendFlyNavListeners();
+    window.addEventListener("keydown", this.onFlyKeyDown);
+    window.addEventListener("keyup", this.onFlyKeyUp);
+  }
+
+  private suspendFlyNavListeners(): void {
+    window.removeEventListener("keydown", this.onFlyKeyDown);
+    window.removeEventListener("keyup", this.onFlyKeyUp);
+    this.flyKeys.clear();
+    this.flyLookDragging = false;
+    this.clearFlyUnlockTimer();
+    if (document.pointerLockElement === this.canvas) document.exitPointerLock();
+  }
+
+  private isFlyMoveCode(code: string): boolean {
+    return (
+      code === "KeyW" ||
+      code === "KeyA" ||
+      code === "KeyS" ||
+      code === "KeyD" ||
+      code === "ArrowUp" ||
+      code === "ArrowDown" ||
+      code === "ArrowLeft" ||
+      code === "ArrowRight" ||
+      code === "ShiftLeft" ||
+      code === "ShiftRight" ||
+      code === "ControlLeft" ||
+      code === "ControlRight" ||
+      code === "Space"
+    );
+  }
+
+  /** True while WASD / Space / arrows are steering — not Shift alone (that's select). */
+  private flyIsNavigating(): boolean {
+    return (
+      this.flyKeyDown("KeyW") ||
+      this.flyKeyDown("KeyA") ||
+      this.flyKeyDown("KeyS") ||
+      this.flyKeyDown("KeyD") ||
+      this.flyKeyDown("ArrowUp") ||
+      this.flyKeyDown("ArrowDown") ||
+      this.flyKeyDown("ArrowLeft") ||
+      this.flyKeyDown("ArrowRight") ||
+      this.flyKeys.has("space")
+    );
+  }
+
+  /** Keys that mean "I'm flying" — auto pointer-lock while any are held.
+   *  Shift alone must NOT lock: cursor stays visible for Shift+marquee select. */
+  private flyWantsLookLock(): boolean {
+    if (this.navMode !== "fly" || this.playtestActive) return false;
+    return this.flyIsNavigating();
+  }
+
+  private clearFlyUnlockTimer(): void {
+    if (this.flyUnlockTimer !== null) {
+      window.clearTimeout(this.flyUnlockTimer);
+      this.flyUnlockTimer = null;
+    }
+  }
+
+  private syncFlyPointerLock(): void {
+    if (this.navMode !== "fly" || this.playtestActive) return;
+    if (this.flyWantsLookLock()) {
+      this.clearFlyUnlockTimer();
+      if (document.pointerLockElement !== this.canvas) {
+        void this.canvas.requestPointerLock();
+      }
+      return;
+    }
+    // Stay locked while RMB look is held; otherwise release after a short debounce.
+    if (this.flyLookDragging) {
+      this.clearFlyUnlockTimer();
+      return;
+    }
+    if (document.pointerLockElement !== this.canvas) {
+      this.clearFlyUnlockTimer();
+      return;
+    }
+    if (this.flyUnlockTimer !== null) return;
+    this.flyUnlockTimer = window.setTimeout(() => {
+      this.flyUnlockTimer = null;
+      if (
+        !this.flyWantsLookLock() &&
+        !this.flyLookDragging &&
+        document.pointerLockElement === this.canvas
+      ) {
+        document.exitPointerLock();
+      }
+    }, RegionEditorScene.FLY_UNLOCK_DELAY_MS);
+  }
+
+  private onFlyKeyDown = (e: KeyboardEvent): void => {
+    if (this.playtestActive || this.navMode !== "fly") return;
+    const tag = (document.activeElement?.tagName ?? "").toLowerCase();
+    if (tag === "input" || tag === "textarea" || tag === "select") return;
+
+    if (e.key === "Escape") {
+      // Unlock cursor for UI — stay in fly nav (unlike playtest exit).
+      this.clearFlyUnlockTimer();
+      if (document.pointerLockElement === this.canvas) document.exitPointerLock();
+      this.flyKeys.clear();
+      return;
+    }
+    if (e.code === "Space") {
+      e.preventDefault();
+      // keydown auto-repeats while held — must not count as double-tap or
+      // fly/walk toggles every ~50ms and gravity makes movement feel choppy.
+      if (!e.repeat) {
+        const now = performance.now();
+        if (now - this.flyLastSpaceAt < RegionEditorScene.FLY_DOUBLE_TAP_MS) {
+          this.flyFlying = !this.flyFlying;
+          this.flyVelocityY = 0;
+          if (!this.flyFlying) this.flyGrounded = false;
+          this.flyLastSpaceAt = 0;
+        } else {
+          this.flyLastSpaceAt = now;
+          if (!this.flyFlying && this.flyGrounded) {
+            this.flyVelocityY = JUMP_VELOCITY;
+            this.flyGrounded = false;
+          }
+        }
+      }
+      this.flyKeys.add("space");
+      this.syncFlyPointerLock();
+      return;
+    }
+    if (e.repeat) return;
+    // Cmd/Ctrl+D is duplicate — never treat D as strafe while the chord is held.
+    if ((e.metaKey || e.ctrlKey) && e.code === "KeyD") return;
+    // Cmd+letter never drives fly (Mac); Ctrl+WASD still sprints on W/A/S.
+    if (e.metaKey && e.code.startsWith("Key")) return;
+    // Allow Ctrl+WASD (sprint) / Shift+WASD; still ignore unrelated ctrl/meta shortcuts.
+    if ((e.metaKey || e.ctrlKey) && !this.isFlyMoveCode(e.code)) return;
+    this.flyKeys.add(e.code);
+    this.syncFlyPointerLock();
+  };
+
+  private onFlyKeyUp = (e: KeyboardEvent): void => {
+    if (e.code === "Space") {
+      e.preventDefault();
+      this.flyKeys.delete("space");
+      this.syncFlyPointerLock();
+      return;
+    }
+    this.flyKeys.delete(e.code);
+    this.syncFlyPointerLock();
+  };
+
+  private onFlyLookMove(e: MouseEvent): void {
+    if (this.navMode !== "fly" || this.playtestActive) return;
+    const looking =
+      this.flyLookDragging || document.pointerLockElement === this.canvas;
+    if (!looking) return;
+    this.flyYaw -= e.movementX * RegionEditorScene.FLY_MOUSE_SENSITIVITY;
+    this.flyPitch -= e.movementY * RegionEditorScene.FLY_MOUSE_SENSITIVITY;
+    this.flyPitch = Math.max(-1.55, Math.min(1.55, this.flyPitch));
+  }
+
+  private flyKeyDown(code: string): boolean {
+    return this.flyKeys.has(code);
+  }
+
+  /** Unit look vector — must stay in lockstep with applyFlyCamera(). */
+  private flyLookVector(out: THREE.Vector3): THREE.Vector3 {
+    const cosP = Math.cos(this.flyPitch);
+    const sinP = Math.sin(this.flyPitch);
+    const sinY = Math.sin(this.flyYaw);
+    const cosY = Math.cos(this.flyYaw);
+    return out.set(-sinY * cosP, sinP, -cosY * cosP);
+  }
+
+  private updateFly(dt: number): void {
+    const forward =
+      (this.flyKeyDown("KeyW") || this.flyKeyDown("ArrowUp") ? 1 : 0) -
+      (this.flyKeyDown("KeyS") || this.flyKeyDown("ArrowDown") ? 1 : 0);
+    const strafe =
+      (this.flyKeyDown("KeyD") || this.flyKeyDown("ArrowRight") ? 1 : 0) -
+      (this.flyKeyDown("KeyA") || this.flyKeyDown("ArrowLeft") ? 1 : 0);
+    const sprint = this.flyKeyDown("ControlLeft") || this.flyKeyDown("ControlRight");
+    // Shift = descend only while actually flying; idle + visible cursor → Shift+select.
+    const sneak =
+      this.flyIsNavigating() &&
+      (this.flyKeyDown("ShiftLeft") || this.flyKeyDown("ShiftRight"));
+    const upHeld = this.flyKeys.has("space");
+
+    const sinY = Math.sin(this.flyYaw);
+    const cosY = Math.cos(this.flyYaw);
+    // Horizontal strafe (level with the ground).
+    const rightX = cosY;
+    const rightZ = -sinY;
+
+    if (this.flyFlying) {
+      const speed = sprint
+        ? RegionEditorScene.FLY_FLY_SPRINT_SPEED
+        : RegionEditorScene.FLY_FLY_SPEED;
+      // W/S fly along the look ray (look up → climb forward; look at a hill → go there).
+      this.flyLookVector(this.flyLookDir);
+      this.flyRightVec.set(rightX, 0, rightZ);
+      this.flyMoveVec
+        .copy(this.flyLookDir)
+        .multiplyScalar(forward)
+        .addScaledVector(this.flyRightVec, strafe);
+      if (upHeld) this.flyMoveVec.y += 1;
+      if (sneak) this.flyMoveVec.y -= 1;
+      if (this.flyMoveVec.lengthSq() > 1e-8) {
+        this.flyMoveVec.normalize().multiplyScalar(speed * dt);
+        this.flyPos.add(this.flyMoveVec);
+      }
+      this.flyVelocityY = 0;
+      this.flyGrounded = false;
+    } else {
+      // Ground walk: horizontal only.
+      let moveX = -forward * sinY + strafe * rightX;
+      let moveZ = -forward * cosY + strafe * rightZ;
+      const mag = Math.hypot(moveX, moveZ);
+      if (mag > 1) {
+        moveX /= mag;
+        moveZ /= mag;
+      }
+      const speed = sneak
+        ? RegionEditorScene.FLY_SNEAK_SPEED
+        : sprint
+          ? RegionEditorScene.FLY_SPRINT_SPEED
+          : RegionEditorScene.FLY_WALK_SPEED;
+      this.flyPos.x += moveX * speed * dt;
+      this.flyPos.z += moveZ * speed * dt;
+
+      const ground = this.heightAt(this.flyPos.x, this.flyPos.z);
+      const footY = this.flyPos.y - RegionEditorScene.FLY_EYE_HEIGHT;
+      if (this.flyGrounded) {
+        if (ground >= footY - MAX_STEP_DOWN) {
+          this.flyPos.y = ground + RegionEditorScene.FLY_EYE_HEIGHT;
+          this.flyVelocityY = 0;
+          this.flyGrounded = true;
+        } else {
+          this.flyGrounded = false;
+          this.flyVelocityY -= GRAVITY * dt;
+          this.flyPos.y += this.flyVelocityY * dt;
+        }
+      } else {
+        this.flyVelocityY -= GRAVITY * dt;
+        this.flyPos.y += this.flyVelocityY * dt;
+        const newFoot = this.flyPos.y - RegionEditorScene.FLY_EYE_HEIGHT;
+        if (newFoot <= ground) {
+          this.flyPos.y = ground + RegionEditorScene.FLY_EYE_HEIGHT;
+          this.flyVelocityY = 0;
+          this.flyGrounded = true;
+        }
+      }
+    }
+
+    this.applyFlyCamera();
+  }
+
+  private applyFlyCamera(): void {
+    this.camera.position.copy(this.flyPos);
+    // YXZ: rotation.x = +pitch matches look vector / lookAt (not negated).
+    this.camera.rotation.order = "YXZ";
+    this.camera.rotation.y = this.flyYaw;
+    this.camera.rotation.x = this.flyPitch;
+    this.camera.rotation.z = 0;
+  }
 
   private onPlaytestKeyDown = (e: KeyboardEvent): void => {
     if (e.key === "Escape") {
@@ -1985,6 +2820,26 @@ export class RegionEditorScene {
     this.cameraPitch = Math.max(-1.2, Math.min(0.5, this.cameraPitch));
   };
 
+  private playtestWheelAccum = 0;
+  private onPlaytestWheel = (e: WheelEvent): void => {
+    if (!this.playtestActive) return;
+    e.preventDefault();
+    const dy = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaMode === 2 ? e.deltaY * 40 : e.deltaY;
+    this.playtestWheelAccum += dy;
+    const stepPx = 48;
+    if (Math.abs(this.playtestWheelAccum) < stepPx) return;
+    const dir = Math.sign(this.playtestWheelAccum);
+    this.playtestWheelAccum -= dir * stepPx;
+    if (Math.abs(this.playtestWheelAccum) > stepPx * 2) this.playtestWheelAccum = dir * stepPx;
+    this.playtestCameraDistance = Math.max(
+      RegionEditorScene.PLAYTEST_CAMERA_DISTANCE_MIN,
+      Math.min(
+        RegionEditorScene.PLAYTEST_CAMERA_DISTANCE_MAX,
+        this.playtestCameraDistance + dir * RegionEditorScene.PLAYTEST_CAMERA_ZOOM_STEP,
+      ),
+    );
+  };
+
   private updatePlaytest(dt: number): void {
     // Camera-relative WASD -> world-space movement, identical to Game.ts's
     // stepLocal(): forward = (sin yaw, cos yaw), screen-right = (-cos, sin).
@@ -2001,86 +2856,43 @@ export class RegionEditorScene {
     }
 
     const sprint = this.playtestKeys.has("shift");
+    // Same sim as live gameplay: terrain(+volumes) via groundAt, asset decks
+    // via regionAssets — don't fold asset tops into groundAt (that used a
+    // stale playtest Y and fought stepMovement's own climbable snap).
+    const regionAssets = this.playtestColliders();
+    const groundAt = (x: number, z: number) => this.terrainVolumeGroundAt(x, z);
+    const waterDepthAt = (x: number, z: number) => this.sampleWaterDepth(x, z);
+    let state = {
+      x: this.playtestPos.x,
+      y: this.playtestPos.y,
+      z: this.playtestPos.z,
+      vy: this.playtestVelocityY,
+      grounded: this.playtestGrounded,
+    };
+    let remaining = Math.max(0, dt);
+    while (remaining > 1e-6) {
+      const step = Math.min(TICK_DT, remaining);
+      state = stepMovement(
+        state,
+        { moveX, moveZ, jump: false, sprint, groundAt, waterDepthAt, regionAssets },
+        step,
+      );
+      remaining -= step;
+    }
+    this.playtestPos.x = state.x;
+    this.playtestPos.y = state.y;
+    this.playtestPos.z = state.z;
+    this.playtestVelocityY = state.vy;
+    this.playtestGrounded = state.grounded;
+
     const terrainY = this.heightAt(this.playtestPos.x, this.playtestPos.z);
     const waterDepth = this.sampleWaterDepth(this.playtestPos.x, this.playtestPos.z);
     const waterSurface = waterDepth > 0.05 ? terrainY + waterDepth : -Infinity;
-    const swimming =
+    const swimmingNow =
       waterSurface > -Infinity &&
       waterDepth >= WADE_DEPTH &&
       this.playtestPos.y < waterSurface - SWIM_BODY_OFFSET;
-    const wading =
-      !swimming && waterDepth > 0.05 && this.playtestPos.y < waterSurface - 0.05;
-    const waterMult = swimming ? SWIM_SPEED_MULT : wading ? WADE_SPEED_MULT : 1;
-    const speed = (sprint ? SPRINT_SPEED : WALK_SPEED) * waterMult;
-    const oldGroundHeight = this.groundHeightAt(this.playtestPos.x, this.playtestPos.z);
-    const nextX = this.playtestPos.x + moveX * speed * dt;
-    const nextZ = this.playtestPos.z + moveZ * speed * dt;
-    // Same per-step slope block shared stepMovement() applies for regions --
-    // a step that would change ground height by more than 2.5 units is
-    // rejected outright, which is what makes the boundary mountain ring (and
-    // any other steep terrain) an actual wall instead of just a tall prop.
-    const slopeBlocked = Math.abs(this.groundHeightAt(nextX, nextZ) - oldGroundHeight) > 2.5;
-    // Same collision-circle check shared stepMovement() applies against
-    // regionAssets -- placed trees/rocks/buildings block walking through
-    // them here too, matching real gameplay, except climbable ones (rocks)
-    // once the player is already up at/above their own top surface.
-    const collided = !slopeBlocked && this.collidesWithAsset(nextX, nextZ, this.playtestPos.x, this.playtestPos.z, this.playtestPos.y);
-    if (!slopeBlocked && !collided) {
-      this.playtestPos.x = nextX;
-      this.playtestPos.z = nextZ;
-    }
-
-    const ground = this.groundHeightAt(this.playtestPos.x, this.playtestPos.z);
-    const nextTerrainY = this.heightAt(this.playtestPos.x, this.playtestPos.z);
-    const nextWaterDepth = this.sampleWaterDepth(this.playtestPos.x, this.playtestPos.z);
-    const nextSurface = nextWaterDepth > 0.05 ? nextTerrainY + nextWaterDepth : -Infinity;
-    const swimmingNow =
-      nextSurface > -Infinity &&
-      nextWaterDepth >= WADE_DEPTH &&
-      this.playtestPos.y < nextSurface - SWIM_BODY_OFFSET;
-
-    if (swimmingNow) {
-      this.playtestVelocityY = 0;
-      const floatY = Math.max(ground, nextSurface - SWIM_FLOAT_OFFSET);
-      this.playtestPos.y = Math.max(this.playtestPos.y, floatY);
-      this.playtestGrounded = false;
-      if (ground > this.playtestPos.y) this.playtestPos.y = ground;
-    } else {
-      // Stick-to-ground + gravity, matching shared stepMovement().
-      if (this.playtestGrounded) {
-        if (ground >= this.playtestPos.y - MAX_STEP_DOWN) {
-          this.playtestPos.y = ground;
-          this.playtestVelocityY = 0;
-          this.playtestGrounded = true;
-        } else {
-          this.playtestGrounded = false;
-          this.playtestVelocityY -= GRAVITY * dt;
-          this.playtestPos.y += this.playtestVelocityY * dt;
-          if (this.playtestPos.y <= ground) {
-            this.playtestPos.y = ground;
-            this.playtestVelocityY = 0;
-            this.playtestGrounded = true;
-          }
-        }
-      } else {
-        this.playtestVelocityY -= GRAVITY * dt;
-        this.playtestPos.y += this.playtestVelocityY * dt;
-        if (this.playtestPos.y <= ground) {
-          this.playtestPos.y = ground;
-          this.playtestVelocityY = 0;
-          this.playtestGrounded = true;
-        }
-      }
-      if (
-        nextSurface > -Infinity &&
-        nextWaterDepth >= WADE_DEPTH &&
-        this.playtestPos.y < nextSurface - SWIM_FLOAT_OFFSET &&
-        ground < nextSurface - SWIM_FLOAT_OFFSET
-      ) {
-        this.playtestPos.y = nextSurface - SWIM_FLOAT_OFFSET;
-        this.playtestVelocityY = 0;
-      }
-    }
+    const speed = sprint ? SPRINT_SPEED : WALK_SPEED;
 
     if (this.playtestAvatar) {
       // Smoothed input magnitude -> anim speed, same shape as Game.ts's
@@ -2103,23 +2915,96 @@ export class RegionEditorScene {
     this.updatePlaytestCamera();
   }
 
+  /** Live editor colliders for playtest — same bake as client/server movement. */
+  private playtestColliders() {
+    const assets: RegionAsset[] = [...this.assets.values()].map((a) => {
+      const s = regionAssetScaleFields(a.obj.scale.x || 1, a.obj.scale.y || 1, a.obj.scale.z || 1);
+      return {
+        model: a.model,
+        category: a.category,
+        localX: a.obj.position.x,
+        localY: a.obj.position.y,
+        localZ: a.obj.position.z,
+        yaw: a.obj.rotation.y,
+        ...s,
+        ...(a.solid ? { solid: true } : {}),
+        ...(a.solid && a.solidBox ? { solidBox: { ...a.solidBox } } : {}),
+      };
+    });
+    const volumes = [...this.volumes.values()].map((v) => {
+      this.syncVolumeDataFromMesh(v);
+      return v.data;
+    });
+    const barriers = [...this.barrierVolumes.values()].map((b) => {
+      this.syncBarrierDataFromGroup(b);
+      return b.data;
+    });
+    return [
+      ...regionAssetColliders([...assets, ...this.houseCollisionAssets]),
+      ...regionVolumeColliders(volumes),
+      ...regionBarrierColliders(barriers),
+    ];
+  }
+
   /** Returns resolved collision data for a placed asset entry, mirroring the
    *  shared resolveCollisionOverride() logic so playtest matches the game.
    *  Returns null if the model explicitly has no collision. */
   private resolveCollisionForAsset(a: AssetEntry): {
     radius: number; height: number; climbable: boolean;
     stairHalfLength?: number;
+    solid?: boolean;
+    halfX?: number;
+    halfZ?: number;
+    yaw?: number;
+    baseY?: number;
+    topY?: number;
+    x?: number;
+    z?: number;
   } | null {
-    const category = a.category;
-    if (a.model in ASSET_COLLISION_OVERRIDES) {
-      const ov = ASSET_COLLISION_OVERRIDES[a.model];
-      return ov ?? null;
+    if (a.solid && a.solidBox) {
+      const box = solidBoxColliderFields({
+        localX: a.obj.position.x,
+        localY: a.obj.position.y,
+        localZ: a.obj.position.z,
+        yaw: a.obj.rotation.y,
+        ...regionAssetScaleFields(a.obj.scale.x || 1, a.obj.scale.y || 1, a.obj.scale.z || 1),
+        solidBox: a.solidBox,
+      });
+      if (box) {
+        return {
+          radius: box.radius,
+          height: box.topY - box.baseY,
+          climbable: true,
+          solid: true,
+          halfX: box.halfX,
+          halfZ: box.halfZ,
+          yaw: box.yaw,
+          baseY: box.baseY,
+          topY: box.topY,
+          x: box.x,
+          z: box.z,
+        };
+      }
     }
-    return {
-      radius: REGION_ASSET_COLLISION_RADIUS[category],
-      height: REGION_ASSET_COLLISION_HEIGHT[category],
-      climbable: REGION_ASSET_CLIMBABLE[category],
-    };
+    const ov = resolveAssetCollision(a.model, a.category);
+    if (a.solid) {
+      return ov
+        ? { radius: Math.max(ov.radius, 0.35), height: ov.height, climbable: true, solid: true }
+        : {
+            radius: REGION_ASSET_COLLISION_RADIUS[a.category],
+            height: REGION_ASSET_COLLISION_HEIGHT[a.category],
+            climbable: true,
+            solid: true,
+          };
+    }
+    return ov;
+  }
+
+  /** Measure mesh AABB into model-local solidBox (and enable solid). */
+  private applyMeasuredSolid(a: AssetEntry): void {
+    const box = measureObjectSolidBox(a.obj);
+    a.solid = true;
+    a.solidBox = box ?? undefined;
   }
 
   /** Circle-collides (x,z) against every currently-placed asset, using the
@@ -2144,15 +3029,13 @@ export class RegionEditorScene {
     for (const a of this.assets.values()) {
       const ov = this.resolveCollisionForAsset(a);
       if (!ov) continue;
-      const scale = a.obj.scale.x || 1;
-      if (blockAt(a.obj.position.x, a.obj.position.z, ov.radius * scale, ov.climbable, ov.stairHalfLength !== undefined)) {
+      const scaleXZ = Math.max(a.obj.scale.x || 1, a.obj.scale.z || 1);
+      if (blockAt(a.obj.position.x, a.obj.position.z, ov.radius * scaleXZ, ov.climbable, ov.stairHalfLength !== undefined)) {
         return true;
       }
     }
     for (const piece of this.houseCollisionAssets) {
-      const ov = piece.model in ASSET_COLLISION_OVERRIDES
-        ? ASSET_COLLISION_OVERRIDES[piece.model]
-        : { radius: REGION_ASSET_COLLISION_RADIUS.building, height: REGION_ASSET_COLLISION_HEIGHT.building, climbable: false };
+      const ov = resolveAssetCollision(piece.model, "building");
       if (!ov) continue;
       const scale = piece.scale ?? 1;
       if (blockAt(piece.localX, piece.localZ, ov.radius * scale, ov.climbable, ov.stairHalfLength !== undefined)) {
@@ -2192,6 +3075,16 @@ export class RegionEditorScene {
         if (!alreadyInside) return true;
       }
     }
+    const headY = playerY + 1.7;
+    const barrierData = [...this.barrierVolumes.values()].map((b) => {
+      this.syncBarrierDataFromGroup(b);
+      return b.data;
+    });
+    for (const c of regionBarrierColliders(barrierData)) {
+      if (headY <= c.baseY || playerY >= c.topY) continue;
+      if (pointInColliderXZ(oldX, oldZ, c, PLAYER_BODY_RADIUS)) return true;
+      if (segmentHitsColliderXZ(oldX, oldZ, x, z, c, PLAYER_BODY_RADIUS)) return true;
+    }
     return false;
   }
 
@@ -2201,49 +3094,31 @@ export class RegionEditorScene {
    *  so a player who's jumped onto a rock rests on top of it, and stairs
    *  are smoothly walkable rather than solid walls. */
   private groundHeightAt(x: number, z: number, playerY = this.playtestPos.y): number {
-    let ground = this.heightAt(x, z);
-    const maxSurface = playerY + 0.45;
+    let ground = this.terrainVolumeGroundAt(x, z);
+    const maxSurface = playerY + 1.15;
 
-    const consider = (
-      ax: number,
-      az: number,
-      baseY: number,
-      yaw: number,
-      scale: number,
-      ov: { radius: number; height: number; climbable: boolean; stairHalfLength?: number },
-    ) => {
-      const radius = ov.radius * scale;
-      if (radius <= 0 && !ov.climbable) return;
-      const dx = x - ax;
-      const dz = z - az;
-      if (dx * dx + dz * dz >= Math.max(radius, 0.01) * Math.max(radius, 0.01)) return;
-      if (ov.stairHalfLength !== undefined) {
-        const sin = Math.sin(yaw);
-        const cos = Math.cos(yaw);
-        const halfLength = ov.stairHalfLength * scale;
-        const rise = ov.height * scale;
-        const proj = (dx * -sin + dz * -cos) / halfLength;
+    // Same bake as playtest movement — OBB solids standable via climbable tops.
+    for (const asset of this.playtestColliders()) {
+      if (!pointInColliderXZ(x, z, asset, 0)) continue;
+      if (asset.stairRamp) {
+        const dx = x - asset.x;
+        const dz = z - asset.z;
+        const { dx: rdx, dz: rdz, halfLength, rise } = asset.stairRamp;
+        const proj = (dx * rdx + dz * rdz) / halfLength;
         const t = Math.max(0, Math.min(1, (proj + 1) / 2));
-        const rampY = baseY + t * rise;
+        const rampY = asset.topY - rise + t * rise;
         if (rampY <= maxSurface && rampY > ground) ground = rampY;
-      } else if (ov.climbable) {
-        const topY = baseY + ov.height * scale;
-        if (topY <= maxSurface && topY > ground) ground = topY;
+      } else if (asset.climbable) {
+        if (asset.topY <= maxSurface && asset.topY > ground) ground = asset.topY;
       }
-    };
+    }
+    return ground;
+  }
 
-    for (const a of this.assets.values()) {
-      const ov = this.resolveCollisionForAsset(a);
-      if (!ov) continue;
-      consider(a.obj.position.x, a.obj.position.z, a.obj.position.y, a.obj.rotation.y, a.obj.scale.x || 1, ov);
-    }
-    for (const piece of this.houseCollisionAssets) {
-      const ov = piece.model in ASSET_COLLISION_OVERRIDES
-        ? ASSET_COLLISION_OVERRIDES[piece.model]
-        : null;
-      if (!ov) continue;
-      consider(piece.localX, piece.localZ, piece.localY, piece.yaw, piece.scale ?? 1, ov);
-    }
+  /** Heightmap + stamped volume tops only (no asset decks). */
+  private terrainVolumeGroundAt(x: number, z: number): number {
+    let ground = this.heightAt(x, z);
+
     for (const v of this.volumes.values()) {
       this.syncVolumeDataFromMesh(v);
       if (isTerrainStroke(v.data) && v.data.path) {
@@ -2292,9 +3167,10 @@ export class RegionEditorScene {
     const pz = this.playtestPos.z;
     const cy = this.cameraYaw;
     const cp = this.cameraPitch;
-    let distance = RegionEditorScene.PLAYTEST_CAMERA_DISTANCE;
+    let distance = this.playtestCameraDistance;
 
     // Pull camera in when the arm hits a solid wall (indoors / tight yards).
+    // Invisible barriers are intentionally ignored — same as live Game camera.
     const headY = py + 1.5;
     for (let t = 0.6; t < distance; t += 0.35) {
       const sx = px - Math.sin(cy) * (t * Math.cos(cp));
@@ -2325,15 +3201,32 @@ export class RegionEditorScene {
       return y >= baseY - 0.2 && y <= baseY + height + 0.2;
     };
     for (const a of this.assets.values()) {
+      if (a.solid && a.solidBox) {
+        const box = solidBoxColliderFields({
+          localX: a.obj.position.x,
+          localY: a.obj.position.y,
+          localZ: a.obj.position.z,
+          yaw: a.obj.rotation.y,
+          ...regionAssetScaleFields(a.obj.scale.x || 1, a.obj.scale.y || 1, a.obj.scale.z || 1),
+          solidBox: a.solidBox,
+        });
+        if (!box) continue;
+        if (y < box.baseY - 0.2 || y > box.topY + 0.2) continue;
+        if (pointInColliderXZ(x, z, { ...box, climbable: false, solid: true }, 0)) return true;
+        continue;
+      }
       const ov = this.resolveCollisionForAsset(a);
       if (!ov) continue;
-      const scale = a.obj.scale.x || 1;
-      if (hit(a.obj.position.x, a.obj.position.z, a.obj.position.y, ov.radius * scale, ov.height * scale, ov.climbable)) {
+      const sx = a.obj.scale.x || 1;
+      const sy = a.obj.scale.y || 1;
+      const sz = a.obj.scale.z || 1;
+      const scaleXZ = Math.max(sx, sz);
+      if (hit(a.obj.position.x, a.obj.position.z, a.obj.position.y, ov.radius * scaleXZ, ov.height * sy, ov.climbable)) {
         return true;
       }
     }
     for (const piece of this.houseCollisionAssets) {
-      const ov = piece.model in ASSET_COLLISION_OVERRIDES ? ASSET_COLLISION_OVERRIDES[piece.model] : null;
+      const ov = resolveAssetCollision(piece.model, "building");
       if (!ov) continue;
       const scale = piece.scale ?? 1;
       if (hit(piece.localX, piece.localZ, piece.localY, ov.radius * scale, ov.height * scale, ov.climbable)) {
@@ -2347,19 +3240,27 @@ export class RegionEditorScene {
 
   applyColorGrading(cg: RegionColorGrading): void {
     this.colorGrading = { ...cg };
-    const sky = new THREE.Color(cg.skyColor);
-    this.scene.background = sky;
+    const atm = atmosphereFromGrading(cg, 0.5);
+    this.scene.background = new THREE.Color(0x02040a);
+    this.skyDome.setAtmosphere(atm);
     this.scene.fog = new THREE.FogExp2(
-      new THREE.Color(cg.fogColor).getHex(),
+      atm.fogColor.getHex(),
       clampRegionFogDensity(cg.fogDensity),
     );
-    this.ambientLight.color = new THREE.Color(cg.ambientColor);
-    this.ambientLight.intensity = cg.ambientIntensity;
-    this.sunLight.color = new THREE.Color(cg.sunColor);
-    this.sunLight.intensity = cg.sunIntensity;
+    this.ambientLight.color = atm.ambientColor.clone();
+    this.ambientLight.intensity = atm.ambientIntensity;
+    this.sunLight.color = atm.sunColor.clone();
+    this.sunLight.intensity = atm.sunIntensity;
+    const elevRad = (atm.layers.sunElevation * Math.PI) / 180;
+    const dist = 120;
+    this.sunLight.position.set(
+      Math.cos(0.6) * dist * Math.cos(elevRad),
+      Math.max(20, Math.sin(elevRad) * dist),
+      Math.sin(0.6) * dist * Math.cos(elevRad) + 40,
+    );
     const fillColor = cg.fillColor ?? cg.ambientColor;
     const fillIntensity = cg.fillIntensity ?? 0;
-    this.fillLight.color = new THREE.Color(cg.skyColor);
+    this.fillLight.color = atm.skyMidColor.clone();
     this.fillLight.groundColor = new THREE.Color(fillColor);
     this.fillLight.intensity = fillIntensity;
     this.renderer.toneMappingExposure = cg.exposure ?? 1;
@@ -2369,12 +3270,191 @@ export class RegionEditorScene {
     const waterMat = this.waterMeshField?.mesh.material;
     if (waterMat instanceof THREE.MeshLambertMaterial) {
       applyWaterEnvironment(waterMat, {
-        skyColor: cg.skyColor,
-        fogColor: cg.fogColor,
+        skyColor: atm.skyMidColor,
+        fogColor: atm.fogColor,
         groundTint: cg.groundTint,
       });
     }
+    this.rebuildHorizon();
     this.triggerChange();
+  }
+
+  private rebuildHorizon(): void {
+    if (this.horizonGroup) {
+      this.scene.remove(this.horizonGroup);
+      this.horizonGroup.traverse((o) => {
+        const mesh = o as THREE.Mesh;
+        if (mesh.isMesh) {
+          mesh.geometry?.dispose();
+          (mesh.material as THREE.Material)?.dispose?.();
+        }
+      });
+      this.horizonGroup = null;
+    }
+    if (!this.colorGrading.horizonEnabled) return;
+    const halfSpan = ((this.gridSize - 1) * this.pitch) / 2;
+    const cg = this.colorGrading;
+    this.horizonGroup = buildRegionHorizon({
+      innerRadius: cg.horizonInnerRadius ?? halfSpan * 0.85,
+      outerRadius: cg.horizonOuterRadius ?? halfSpan * 1.35,
+      peakScale: cg.horizonPeakScale ?? 1,
+      tint: cg.horizonTint ?? "#8d97a8",
+      seed: hashString(this.meta.id || this.meta.name),
+    });
+    this.scene.add(this.horizonGroup);
+  }
+
+  private syncBarrierDataFromGroup(entry: BarrierEntry): void {
+    // Must use world transform — selected objects are parented under
+    // selectionGroup, so local position is near 0 and must not be persisted.
+    const worldPos = new THREE.Vector3();
+    const worldQuat = new THREE.Quaternion();
+    const worldScale = new THREE.Vector3();
+    entry.group.getWorldPosition(worldPos);
+    entry.group.getWorldQuaternion(worldQuat);
+    entry.group.getWorldScale(worldScale);
+    entry.data.localX = worldPos.x;
+    entry.data.localY = worldPos.y;
+    entry.data.localZ = worldPos.z;
+    entry.data.yaw = yawFromQuaternion(worldQuat);
+    entry.data.sizeX = Math.max(0.1, worldScale.x);
+    entry.data.sizeY = Math.max(0.1, worldScale.y);
+    entry.data.sizeZ = Math.max(0.1, worldScale.z);
+  }
+
+  private barrierHandleHitAt(e: MouseEvent): { id: string; handle: BarrierHandleId } | null {
+    const pickable: THREE.Object3D[] = [];
+    for (const id of this.selectedIds) {
+      const b = this.barrierVolumes.get(id);
+      if (b) pickable.push(...barrierHandleMeshes(b.group));
+    }
+    if (pickable.length === 0) return null;
+    this.raycaster.setFromCamera(this.ndcFromEvent(e), this.camera);
+    const hits = this.raycaster.intersectObjects(pickable, false);
+    if (hits.length === 0) return null;
+    let obj: THREE.Object3D | null = hits[0]!.object;
+    const handle = obj.userData.barrierHandle as BarrierHandleId | undefined;
+    while (obj && !obj.userData.editorId) obj = obj.parent;
+    if (!obj || !handle) return null;
+    return { id: obj.userData.editorId as string, handle };
+  }
+
+  private beginBarrierResize(id: string, handle: BarrierHandleId): void {
+    const entry = this.barrierVolumes.get(id);
+    if (!entry) return;
+    // Detach so resize writes world-space coords cleanly.
+    for (const obj of [...this.selectionGroup.children]) this.scene.attach(obj);
+    this.transform.detach();
+    this.syncBarrierDataFromGroup(entry);
+    this.orbit.enabled = false;
+    this.barrierResizeDrag = {
+      id,
+      handle,
+      planeY: entry.data.localY,
+      start: {
+        sizeX: entry.data.sizeX,
+        sizeY: entry.data.sizeY,
+        sizeZ: entry.data.sizeZ,
+        localX: entry.data.localX,
+        localY: entry.data.localY,
+        localZ: entry.data.localZ,
+        yaw: entry.data.yaw,
+      },
+    };
+    setBarrierHandleHover(entry.group, handle);
+  }
+
+  private updateBarrierResize(e: MouseEvent): void {
+    const drag = this.barrierResizeDrag;
+    if (!drag) return;
+    const entry = this.barrierVolumes.get(drag.id);
+    if (!entry) return;
+    const hit = this.planeHitAt(e, drag.planeY);
+    if (!hit) return;
+    const local = worldToBarrierLocalMeters(
+      hit.x,
+      hit.z,
+      drag.start.localX,
+      drag.start.localZ,
+      drag.start.yaw,
+    );
+    entry.data = applyBarrierHandleResize(entry.data, drag.handle, local.x, local.z, drag.start);
+    entry.data.localY = drag.start.localY;
+    entry.data.sizeY = drag.start.sizeY;
+    syncBarrierMesh(entry.group, entry.data);
+    const helper = this.selectionHelpers.get(drag.id);
+    if (helper) helper.update();
+    this.emitSelection();
+  }
+
+  private endBarrierResize(): void {
+    const drag = this.barrierResizeDrag;
+    if (!drag) return;
+    this.barrierResizeDrag = null;
+    this.orbit.enabled = this.navMode === "orbit";
+    this.canvas.style.cursor = "";
+    const entry = this.barrierVolumes.get(drag.id);
+    if (entry) setBarrierHandleHover(entry.group, null);
+    this.updateSelectionGroup();
+    this.triggerChange();
+  }
+
+  private updateBarrierHandleHover(e: MouseEvent): void {
+    const hit = this.barrierHandleHitAt(e);
+    const prev = this.barrierHoverHandle;
+    if (prev && (!hit || prev.id !== hit.id || prev.handle !== hit.handle)) {
+      const b = this.barrierVolumes.get(prev.id);
+      if (b) setBarrierHandleHover(b.group, null);
+      this.barrierHoverHandle = null;
+      this.canvas.style.cursor = "";
+    }
+    if (hit) {
+      const b = this.barrierVolumes.get(hit.id);
+      if (b) setBarrierHandleHover(b.group, hit.handle);
+      this.barrierHoverHandle = hit;
+      this.canvas.style.cursor = "nwse-resize";
+    }
+  }
+
+  private syncCloudDataFromGroup(entry: CloudEntry): void {
+    const worldPos = new THREE.Vector3();
+    const worldQuat = new THREE.Quaternion();
+    const worldScale = new THREE.Vector3();
+    entry.group.getWorldPosition(worldPos);
+    entry.group.getWorldQuaternion(worldQuat);
+    entry.group.getWorldScale(worldScale);
+    entry.data.localX = worldPos.x;
+    entry.data.localY = worldPos.y;
+    entry.data.localZ = worldPos.z;
+    entry.data.yaw = yawFromQuaternion(worldQuat);
+    entry.data.scaleX = Math.max(0.15, worldScale.x);
+    entry.data.scaleY = Math.max(0.1, worldScale.y);
+    entry.data.scaleZ = Math.max(0.15, worldScale.z);
+  }
+
+  private tickEditorClouds(dt: number): void {
+    const windRad = ((this.wind.direction ?? 0) * Math.PI) / 180;
+    const windStr = this.wind.strength ?? 1;
+    for (const entry of this.clouds.values()) {
+      const m = entry.group;
+      const data = entry.data;
+      const speed = (data.driftSpeed ?? 1.2) * (0.65 + 0.35 * windStr);
+      const dir = this.wind != null ? windRad : data.yaw;
+      m.position.x += Math.cos(dir) * speed * dt;
+      m.position.z += Math.sin(dir) * speed * dt;
+      const baseX = m.userData.cloudBaseX as number ?? data.localX;
+      const baseZ = m.userData.cloudBaseZ as number ?? data.localZ;
+      const wrap = 220;
+      if (m.position.x - baseX > wrap) m.position.x -= wrap * 2;
+      if (m.position.x - baseX < -wrap) m.position.x += wrap * 2;
+      if (m.position.z - baseZ > wrap) m.position.z -= wrap * 2;
+      if (m.position.z - baseZ < -wrap) m.position.z += wrap * 2;
+      const phase = ((m.userData.cloudPhase as number) ?? 0) + dt * 0.35;
+      m.userData.cloudPhase = phase;
+      const bob = data.bobAmp ?? 0.4;
+      const baseY = m.userData.cloudBaseY as number ?? data.localY;
+      m.position.y = baseY + Math.sin(phase) * bob;
+    }
   }
 
   getColorGrading(): RegionColorGrading {
@@ -2383,27 +3463,43 @@ export class RegionEditorScene {
 
   // ============================ grass color ============================
 
-  /** Updates the grass blade bottom/tip gradient colors -- mutates the
-   *  already-built preview's shader uniforms directly (they're shared
-   *  THREE.Color uniforms, not per-instance data) so the change previews
-   *  instantly without rebuilding any blade InstancedMeshes. */
+  /** Updates Quick Grass root/tip colours (and legacy grassColor for export). */
   applyGrassColor(gc: GrassColor): void {
     this.grassColor = { ...gc };
-    if (this.grassField) {
-      this.grassField.uniforms.uGrassBottom.value.set(gc.bottom);
-      this.grassField.uniforms.uGrassTop.value.set(gc.top);
-    }
+    this.grassSettings = {
+      ...this.grassSettings,
+      baseColour: gc.bottom,
+      tipColour: gc.top,
+    };
+    this.grassField?.setSettings({ baseColour: gc.bottom, tipColour: gc.top });
     this.triggerChange();
   }
 
   getGrassColor(): GrassColor {
-    return { ...this.grassColor };
+    return {
+      bottom: this.grassSettings.baseColour,
+      top: this.grassSettings.tipColour,
+    };
   }
 
-  /** Brush setting, same shape as setBrushRadius/setBrushStrength -- baked
-   *  into each patch's own lengthScale at paint time (see
-   *  paintGrassPatchAt), not a region-wide value, so different brush strokes
-   *  can paint different grass lengths side by side. */
+  applyGrassSettings(partial: Partial<QuickGrassSettings>): void {
+    this.grassSettings = { ...this.grassSettings, ...partial };
+    if (partial.baseColour || partial.tipColour) {
+      this.grassColor = {
+        bottom: this.grassSettings.baseColour,
+        top: this.grassSettings.tipColour,
+      };
+    }
+    if (partial.windStrength !== undefined) this.grassSway = partial.windStrength;
+    this.grassField?.setSettings(partial);
+    this.triggerChange();
+  }
+
+  getGrassSettings(): QuickGrassSettings {
+    return { ...this.grassSettings };
+  }
+
+  /** Brush setting — baked into each patch's lengthScale at paint time. */
   setGrassLength(length: number): void {
     this.grassLength = Math.max(0.2, length);
   }
@@ -2412,16 +3508,23 @@ export class RegionEditorScene {
     return this.grassLength;
   }
 
-  /** Region-wide wind, affecting grass sway here and tree sway at runtime
-   *  (see RegionInteriorRenderer -- the editor places foliage as individual,
-   *  non-instanced objects, so trees don't sway in this preview, only grass
-   *  does). Live-updates the already-built grass uniforms directly, same as
-   *  applyGrassColor, no rebuild needed. */
+  /** Maps to Quick Grass windStrength for legacy UI. */
+  setGrassSway(amount: number): void {
+    this.grassSway = Math.max(0, amount);
+    this.applyGrassSettings({ windStrength: this.grassSway });
+  }
+
+  getGrassSway(): number {
+    return this.grassSettings.windStrength;
+  }
+
+  /** Region-wide wind for trees/clouds; also nudges grass wind direction. */
   applyWind(w: RegionWind): void {
     this.wind = { ...w };
-    if (this.grassField) {
-      this.grassField.applyWind(this.wind);
-    }
+    // Map degrees → a gentle drift so trees and grass share a breeze feel.
+    this.grassField?.setSettings({
+      windStrength: this.grassSettings.windStrength * Math.max(0.05, w.strength),
+    });
     this.triggerChange();
   }
 
@@ -2434,6 +3537,7 @@ export class RegionEditorScene {
   armPlacement(model: string, category: RegionAssetCategory): void {
     this.armedMarkerKind = null;
     this.armedHouse = false;
+    this.armedCastle = false;
     this.clearVolumeStamp();
     this.sculptMode = null;
     this.roadPaintArmed = false;
@@ -2445,12 +3549,95 @@ export class RegionEditorScene {
   armMarkerPlacement(kind: EditorMarkerKind): void {
     this.armedModel = null;
     this.armedHouse = false;
+    this.armedCastle = false;
     this.clearVolumeStamp();
     this.sculptMode = null;
     this.roadPaintArmed = false;
     this.armedMarkerKind = kind;
     this.orbit.enablePan = false;
     this.transform.detach();
+  }
+
+  /** Defaults for the next mobSpawn placements (and context-bar while armed). */
+  setMobSpawnDefaults(difficulty: number, type: string | null): void {
+    this.mobSpawnDifficulty = Math.max(0.25, Math.min(5, difficulty));
+    this.mobSpawnType = type && type.length > 0 ? type : null;
+  }
+
+  getMobSpawnDefaults(): { difficulty: number; type: string | null } {
+    return { difficulty: this.mobSpawnDifficulty, type: this.mobSpawnType };
+  }
+
+  setResourceNodeDefaults(type: string): void {
+    this.resourceNodeType = isPlaceableRegionNodeType(type) ? type : "rock";
+  }
+
+  getResourceNodeDefaults(): { type: string } {
+    return { type: this.resourceNodeType };
+  }
+
+  setContextMenuHandler(handler: (state: EditorContextMenuState | null) => void): void {
+    this.onContextMenuUi = handler;
+  }
+
+  dismissContextMenu(): void {
+    this.onContextMenuUi?.(null);
+  }
+
+  runContextMenuAction(actionId: EditorContextMenuActionId): void {
+    this.onContextMenuUi?.(null);
+    if (actionId === "assignResource") {
+      this.convertSelectedFoliageToResourceNodes();
+      return;
+    }
+    if (actionId === "delete") {
+      this.deleteSelected();
+    }
+  }
+
+  /** Convert selected foliage props into gatherable resource nodes (keeps model). */
+  convertSelectedFoliageToResourceNodes(): number {
+    const ids = [...this.selectedIds];
+    let converted = 0;
+    const created: string[] = [];
+    for (const id of ids) {
+      const a = this.assets.get(id);
+      if (!a || a.category !== "foliage") continue;
+      const nodeType = foliageModelToResourceType(a.model);
+      if (!nodeType || !isPlaceableRegionNodeType(nodeType)) continue;
+      const x = a.obj.position.x;
+      const y = a.obj.position.y;
+      const z = a.obj.position.z;
+      const model = a.model;
+      // Remove decorative asset first so we don't double-draw.
+      this.scene.remove(a.obj);
+      this.disposeObject(a.obj);
+      this.assets.delete(id);
+      const helper = this.selectionHelpers.get(id);
+      if (helper) {
+        this.scene.remove(helper);
+        helper.dispose();
+        this.selectionHelpers.delete(id);
+      }
+      this.resourceNodeType = nodeType;
+      const markerId = this.placeMarkerAt("resourceNode", x, y, z);
+      const m = this.markers.get(markerId);
+      if (m) {
+        m.nodeType = nodeType;
+        m.nodeModel = model;
+        this.rebuildResourceNodeMarkerVisual(m);
+        created.push(markerId);
+        converted++;
+      }
+    }
+    if (converted > 0) {
+      for (const obj of [...this.selectionGroup.children]) this.scene.attach(obj);
+      this.selectedIds = new Set(created);
+      this.updateSelectionGroup();
+      this.emitSelection();
+      this.triggerChange();
+    }
+    return converted;
   }
 
   /** Arms the procedural-house tool -- the next click on the terrain
@@ -2471,8 +3658,37 @@ export class RegionEditorScene {
     this.eraseBrushActive = false;
     this.roadPaintArmed = false;
     this.clearVolumeStamp();
+    this.armedCastle = false;
     this.armedHouse = true;
     this.armedHouseType = type;
+    this.orbit.enablePan = false;
+    this.transform.detach();
+    this.deselect();
+  }
+
+  /** Arms the procedural-castle tool — next terrain click drops a full keep
+   *  (curtain walls + corner towers) as grouped building assets. */
+  armCastlePlacement(opts?: {
+    style?: CastleStyle;
+    size?: CastleSize;
+    height?: CastleHeight;
+  }): void {
+    this.armedModel = null;
+    this.armedMarkerKind = null;
+    this.sculptMode = null;
+    this.waterBrushMode = null;
+    this.texturePaintMode = null;
+    this.randomTreeBrushActive = false;
+    this.grassBrushActive = false;
+    this.grassEraseBrushActive = false;
+    this.eraseBrushActive = false;
+    this.roadPaintArmed = false;
+    this.clearVolumeStamp();
+    this.armedHouse = false;
+    this.armedCastle = true;
+    this.armedCastleStyle = opts?.style ?? "random";
+    this.armedCastleSize = opts?.size ?? 2;
+    this.armedCastleHeight = opts?.height ?? 2;
     this.orbit.enablePan = false;
     this.transform.detach();
     this.deselect();
@@ -2482,9 +3698,12 @@ export class RegionEditorScene {
     this.armedModel = null;
     this.armedMarkerKind = null;
     this.armedHouse = false;
+    this.armedCastle = false;
     this.clearVolumeStamp();
     this.armedLightColor = null;
     this.armedFogColor = null;
+    this.armedBarrier = false;
+    this.armedCloudShape = null;
     this.sculptMode = null;
     this.waterBrushMode = null;
     this.texturePaintMode = null;
@@ -2507,7 +3726,10 @@ export class RegionEditorScene {
       this.armedModel !== null ||
       this.armedMarkerKind !== null ||
       this.armedLightColor !== null || this.armedFogColor !== null ||
+      this.armedBarrier ||
+      this.armedCloudShape !== null ||
       this.armedHouse ||
+      this.armedCastle ||
       this.volumeStampActive ||
       this.sculptMode !== null ||
       this.waterBrushMode !== null ||
@@ -2539,10 +3761,25 @@ export class RegionEditorScene {
   /** Raycast against the heightmap AND stamped volumes so the volume brush
    *  can stack stamps on top of previously sculpted features. */
   private volumeSurfaceHitAt(e: MouseEvent): THREE.Vector3 | null {
+    return this.volumeSurfaceHitDetailAt(e)?.point ?? null;
+  }
+
+  /** Surface hit with world normal — used by clay sculpt to grow along the face. */
+  private volumeSurfaceHitDetailAt(
+    e: MouseEvent,
+  ): { point: THREE.Vector3; normal: THREE.Vector3 } | null {
     this.raycaster.setFromCamera(this.ndcFromEvent(e), this.camera);
     const targets: THREE.Object3D[] = [this.terrainMesh, ...[...this.volumes.values()].map((v) => v.obj)];
-    const hits = this.raycaster.intersectObjects(targets, false);
-    return hits[0]?.point ?? null;
+    const hit = this.raycaster.intersectObjects(targets, false)[0];
+    if (!hit) return null;
+    const normal = (hit.face?.normal.clone() ?? new THREE.Vector3(0, 1, 0));
+    if (hit.object) {
+      const nMat = new THREE.Matrix3().getNormalMatrix(hit.object.matrixWorld);
+      normal.applyMatrix3(nMat).normalize();
+    }
+    // Prefer outward-facing normal relative to the camera.
+    if (normal.dot(this.raycaster.ray.direction) > 0) normal.negate();
+    return { point: hit.point.clone(), normal };
   }
 
   /** Cursor hit on the infinite horizontal plane at `y` -- used by the drag
@@ -2561,12 +3798,63 @@ export class RegionEditorScene {
       this.sculptVolumeStroke(hit);
       return;
     }
+    if (this.volumeBrushStyle === "clay") {
+      this.sculptClayAt(hit, new THREE.Vector3(0, 1, 0));
+      return;
+    }
     const now = performance.now();
     // Place mode: light drag still works, but throttle so one click ≠ a pile.
     if (now - this.lastPlaceTime < 90) return;
     this.lastPlaceTime = now;
     this.placeOneVolume(hit.x, hit.y, hit.z, this.brushRadius, 0.35);
     this.triggerChange();
+  }
+
+  /**
+   * Blender-style clay brush in 3D: Add piles boulder/block blobs along the
+   * surface normal; Sub punches carve spheres into hit volumes.
+   */
+  private sculptClayAt(hit: THREE.Vector3, normal: THREE.Vector3): void {
+    if (this.volumeSculptOp === "sub") {
+      this.carveAt(hit.x, hit.y, hit.z);
+      return;
+    }
+    const spacing = Math.max(0.22, this.brushRadius * 0.32);
+    if (this.lastVolumeStrokePos) {
+      if (hit.distanceTo(this.lastVolumeStrokePos) < spacing) return;
+    }
+    this.lastVolumeStrokePos = hit.clone();
+    this.placeClayBlob(hit, normal);
+    this.triggerChange();
+  }
+
+  /** One clay dab centered on the surface, nudged outward along the normal. */
+  private placeClayBlob(hit: THREE.Vector3, normal: THREE.Vector3): void {
+    const shape: TerrainVolumeShape = this.volumeShape === "block" ? "block" : "boulder";
+    const r = Math.max(0.4, this.brushRadius * 0.42 * this.brushStrength);
+    const scale = defaultVolumeScale(shape, r);
+    const jitter = r * 0.12;
+    const jx = (Math.random() - 0.5) * jitter;
+    const jy = (Math.random() - 0.5) * jitter;
+    const jz = (Math.random() - 0.5) * jitter;
+    // Grow outward from the surface (Draw brush), not planted on the ground plane.
+    const push = Math.min(scale.scaleX, scale.scaleY, scale.scaleZ) * 0.55;
+    const id = `volume_${this.nextId++}`;
+    const data: RegionTerrainVolume = {
+      id,
+      shape,
+      material: this.volumeMaterial,
+      localX: hit.x + normal.x * push + jx,
+      localY: hit.y + normal.y * push + jy,
+      localZ: hit.z + normal.z * push + jz,
+      yaw: Math.random() * Math.PI * 2,
+      scaleX: scale.scaleX * (0.85 + Math.random() * 0.3),
+      scaleY: scale.scaleY * (0.85 + Math.random() * 0.3),
+      scaleZ: scale.scaleZ * (0.85 + Math.random() * 0.3),
+    };
+    const mesh = createTerrainVolumeMesh(data);
+    this.scene.add(mesh);
+    this.volumes.set(id, { id, data, obj: mesh });
   }
 
   /** Continuous drag-sculpt: grow ONE extruded mesh that follows the mouse
@@ -2768,19 +4056,35 @@ export class RegionEditorScene {
 
   private updateVolumeGhost(e: MouseEvent): void {
     if (!this.volumeGhost || !this.volumeStampActive) return;
-    const hit =
+    const detail =
       this.volumeBrushStyle === "sculpt" && this.activeStroke
-        ? this.planeHitAt(e, this.activeStroke.start.y)
-        : this.volumeSurfaceHitAt(e) ?? this.terrainHitAt(e);
-    if (!hit) {
+        ? (() => {
+            const p = this.planeHitAt(e, this.activeStroke!.start.y);
+            return p ? { point: p, normal: new THREE.Vector3(0, 1, 0) } : null;
+          })()
+        : this.volumeSurfaceHitDetailAt(e);
+    if (!detail) {
       this.volumeGhost.visible = false;
       if (this.volumeBrushRing) this.volumeBrushRing.visible = false;
       return;
     }
-    const ghostR = this.volumeBrushStyle === "sculpt" ? this.brushRadius * 0.45 : this.brushRadius;
+    const { point: hit, normal } = detail;
+    const ghostR =
+      this.volumeBrushStyle === "sculpt" || this.volumeBrushStyle === "clay"
+        ? this.brushRadius * 0.45 * (this.volumeBrushStyle === "clay" ? this.brushStrength : 1)
+        : this.brushRadius;
     const s = defaultVolumeScale(this.volumeShape, ghostR);
-    this.volumeGhost.visible = true;
-    this.volumeGhost.position.set(hit.x, hit.y + s.scaleY * 0.7, hit.z);
+    this.volumeGhost.visible = this.volumeBrushStyle !== "clay" || this.volumeSculptOp === "add";
+    if (this.volumeBrushStyle === "clay") {
+      const push = Math.min(s.scaleX, s.scaleY, s.scaleZ) * 0.55;
+      this.volumeGhost.position.set(
+        hit.x + normal.x * push,
+        hit.y + normal.y * push,
+        hit.z + normal.z * push,
+      );
+    } else {
+      this.volumeGhost.position.set(hit.x, hit.y + s.scaleY * 0.7, hit.z);
+    }
     this.volumeGhost.scale.set(s.scaleX, s.scaleY, s.scaleZ);
     if (this.volumeBrushRing) {
       this.volumeBrushRing.visible = true;
@@ -2788,9 +4092,77 @@ export class RegionEditorScene {
     }
   }
 
+  private onContextMenu = (e: MouseEvent): void => {
+    if (this.playtestActive) return;
+    e.preventDefault();
+    const hit = this.pickEditorIdAt(e);
+    if (!hit) {
+      this.onContextMenuUi?.(null);
+      return;
+    }
+    this.select(hit.kind, hit.id, false);
+    const actions: EditorContextMenuState["actions"] = [];
+    const a = this.assets.get(hit.id);
+    if (a?.category === "foliage" && foliageModelToResourceType(a.model)) {
+      const nodeType = foliageModelToResourceType(a.model)!;
+      let typeLabel = nodeType;
+      try {
+        typeLabel = nodeTypeDef(nodeType).name;
+      } catch {
+        /* keep id */
+      }
+      actions.push({
+        id: "assignResource",
+        label: `Assign as Resource (${typeLabel})`,
+      });
+    }
+    // Also allow assign when selection contains convertible foliage.
+    if (actions.length === 0) {
+      for (const id of this.selectedIds) {
+        const sel = this.assets.get(id);
+        if (sel?.category === "foliage" && foliageModelToResourceType(sel.model)) {
+          actions.push({ id: "assignResource", label: "Assign as Resource Node" });
+          break;
+        }
+      }
+    }
+    actions.push({ id: "delete", label: "Delete" });
+    const title = a ? a.model.replace(/\.(glb|gltf)$/i, "") : hit.kind;
+    this.onContextMenuUi?.({
+      x: e.clientX,
+      y: e.clientY,
+      title,
+      actions,
+    });
+  };
+
   private onMouseDown = (e: MouseEvent): void => {
     if (this.playtestActive) return;
+    if (e.button === 0) this.onContextMenuUi?.(null);
+    // Optional RMB look while stationary (movement keys auto-lock instead).
+    // Right-click on a selectable entity opens the context menu instead.
+    if (this.navMode === "fly" && e.button === 2 && !this.escortPathTracingActive) {
+      if (this.pickEditorIdAt(e)) {
+        e.preventDefault();
+        return;
+      }
+      this.onContextMenuUi?.(null);
+      this.flyLookDragging = true;
+      this.orbit.enabled = false;
+      if (document.pointerLockElement !== this.canvas) void this.canvas.requestPointerLock();
+      e.preventDefault();
+      return;
+    }
     if (this.transform.dragging) return; // grabbing the gizmo, not placing/sculpting/painting
+    if (e.button === 0 && !this.isArmed) {
+      const handleHit = this.barrierHandleHitAt(e);
+      if (handleHit) {
+        this.beginBarrierResize(handleHit.id, handleHit.handle);
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
+    }
     if (this.escortPathTracingActive && this.activeEscortQuest) {
       if (e.button === 2) {
         const wpHit = this.waypointHitAt(e);
@@ -2830,19 +4202,32 @@ export class RegionEditorScene {
       e.preventDefault();
       e.stopPropagation();
     } else if (this.volumeStampActive) {
-      const hit =
-        this.volumeBrushStyle === "sculpt"
-          ? this.volumeSurfaceHitAt(e) ?? this.terrainHitAt(e)
-          : this.volumeSurfaceHitAt(e);
-      if (!hit) return;
       this.isVolumeStamping = true;
       this.dragStart = { x: e.clientX, y: e.clientY };
       this.lastPlaceTime = 0;
       this.lastVolumeStrokePos = null;
-      if (this.volumeBrushStyle === "sculpt") {
+      this.lastCarvePos = null;
+      if (this.volumeBrushStyle === "clay") {
+        const detail = this.volumeSurfaceHitDetailAt(e);
+        if (!detail) {
+          this.isVolumeStamping = false;
+          return;
+        }
+        this.sculptClayAt(detail.point, detail.normal);
+      } else if (this.volumeBrushStyle === "sculpt") {
+        const hit = this.volumeSurfaceHitAt(e) ?? this.terrainHitAt(e);
+        if (!hit) {
+          this.isVolumeStamping = false;
+          return;
+        }
         this.cancelActiveStroke();
         this.sculptVolumeStroke(hit);
       } else {
+        const hit = this.volumeSurfaceHitAt(e);
+        if (!hit) {
+          this.isVolumeStamping = false;
+          return;
+        }
         this.stampVolumeAt(hit);
       }
       e.preventDefault();
@@ -2869,8 +4254,10 @@ export class RegionEditorScene {
       if (!hit) return;
       this.isGrassBrushing = true;
       this.dragStart = { x: e.clientX, y: e.clientY };
-      this.lastPlaceTime = 0;
+      this.lastGrassStrokePos = null;
+      this.grassStrokeDirty = false;
       this.paintGrassPatchAt(hit.x, hit.z);
+      this.flushGrassPreviewWhileBrushing();
       e.preventDefault();
       e.stopPropagation();
     } else if (this.grassEraseBrushActive) {
@@ -2878,8 +4265,10 @@ export class RegionEditorScene {
       if (!hit) return;
       this.isErasingGrass = true;
       this.dragStart = { x: e.clientX, y: e.clientY };
-      this.lastPlaceTime = 0;
+      this.lastGrassStrokePos = null;
+      this.grassStrokeDirty = false;
       this.eraseGrassAt(hit.x, hit.z);
+      this.flushGrassPreviewWhileBrushing();
       e.preventDefault();
       e.stopPropagation();
     } else if (this.eraseBrushActive) {
@@ -2905,7 +4294,14 @@ export class RegionEditorScene {
       this.paintTextureAt(hit.x, hit.z, this.texturePaintMode);
       e.preventDefault();
       e.stopPropagation();
-    } else if (this.armedModel || this.armedMarkerKind || this.armedLightColor || this.armedFogColor) {
+    } else if (
+      this.armedModel ||
+      this.armedMarkerKind ||
+      this.armedLightColor ||
+      this.armedFogColor ||
+      this.armedBarrier ||
+      this.armedCloudShape
+    ) {
       this.isDraggingToPlace = true;
       this.dragStart = { x: e.clientX, y: e.clientY };
       this.lastPlaceTime = performance.now();
@@ -2920,8 +4316,13 @@ export class RegionEditorScene {
       if (hit) void this.placeHouseAt(hit.x, hit.y, hit.z);
       e.preventDefault();
       e.stopPropagation();
-    } else if (e.shiftKey) {
-      // Shift+drag marquee multi-select (disabled while any paint/place tool is armed).
+    } else if (this.armedCastle) {
+      const hit = this.terrainHitAt(e);
+      if (hit) void this.placeCastleAt(hit.x, hit.y, hit.z);
+      e.preventDefault();
+      e.stopPropagation();
+    } else if (e.shiftKey && document.pointerLockElement !== this.canvas) {
+      // Shift+drag marquee multi-select when the cursor is free (not fly-steering).
       this.marqueeStart = { x: e.clientX, y: e.clientY };
       this.orbit.enabled = false;
       e.preventDefault();
@@ -2937,6 +4338,20 @@ export class RegionEditorScene {
 
   private onMouseMove = (e: MouseEvent): void => {
     if (this.playtestActive) return;
+    if (this.navMode === "fly") this.onFlyLookMove(e);
+    if (this.flyLookDragging) {
+      e.preventDefault();
+      return;
+    }
+    if (this.barrierResizeDrag) {
+      this.updateBarrierResize(e);
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
+    if (!this.isArmed && !this.transform.dragging) {
+      this.updateBarrierHandleHover(e);
+    }
     if (this.isDraggingWaypoint && this.selectedWaypointIndex !== null && this.activeEscortQuest) {
       const hit = this.terrainHitAt(e);
       if (hit) {
@@ -2963,7 +4378,10 @@ export class RegionEditorScene {
       e.preventDefault();
       e.stopPropagation();
     } else if (this.isVolumeStamping && this.volumeStampActive) {
-      if (this.volumeBrushStyle === "sculpt" && this.activeStroke) {
+      if (this.volumeBrushStyle === "clay") {
+        const detail = this.volumeSurfaceHitDetailAt(e);
+        if (detail) this.sculptClayAt(detail.point, detail.normal);
+      } else if (this.volumeBrushStyle === "sculpt" && this.activeStroke) {
         const hit = this.planeHitAt(e, this.activeStroke.start.y);
         if (hit) this.sculptVolumeStroke(hit);
       } else {
@@ -2989,12 +4407,18 @@ export class RegionEditorScene {
       e.stopPropagation();
     } else if (this.isGrassBrushing && this.grassBrushActive) {
       const hit = this.terrainHitAt(e);
-      if (hit) this.paintGrassPatchAt(hit.x, hit.z);
+      if (hit) {
+        this.paintGrassPatchAt(hit.x, hit.z);
+        this.flushGrassPreviewWhileBrushing();
+      }
       e.preventDefault();
       e.stopPropagation();
     } else if (this.isErasingGrass && this.grassEraseBrushActive) {
       const hit = this.terrainHitAt(e);
-      if (hit) this.eraseGrassAt(hit.x, hit.z);
+      if (hit) {
+        this.eraseGrassAt(hit.x, hit.z);
+        this.flushGrassPreviewWhileBrushing();
+      }
       e.preventDefault();
       e.stopPropagation();
     } else if (this.isErasing && this.eraseBrushActive) {
@@ -3036,16 +4460,23 @@ export class RegionEditorScene {
   };
 
   private onMouseUp = (e?: MouseEvent): void => {
+    if (this.flyLookDragging) {
+      this.flyLookDragging = false;
+      this.syncFlyPointerLock();
+    }
+    if (this.barrierResizeDrag) {
+      this.endBarrierResize();
+    }
     if (this.isDraggingWaypoint) {
       this.isDraggingWaypoint = false;
-      this.orbit.enabled = true;
+      this.orbit.enabled = this.navMode === "orbit";
     }
 
     if (this.marqueeStart) {
       const start = this.marqueeStart;
       this.marqueeStart = null;
       this.onMarqueeUpdate?.(null);
-      this.orbit.enabled = true;
+      this.orbit.enabled = this.navMode === "orbit";
 
       if (e && e.type === "mouseup") {
         const end = { x: e.clientX, y: e.clientY };
@@ -3070,12 +4501,21 @@ export class RegionEditorScene {
     this.isWatering = false;
     this.isTexturePainting = false;
     this.isTreeBrushing = false;
+    const finishedGrassStroke =
+      this.isGrassBrushing || this.isErasingGrass || this.grassStrokeDirty;
     this.isGrassBrushing = false;
     this.isErasingGrass = false;
     this.isErasing = false;
     this.moldTargetHeight = null;
     this.dragStart = null;
-    if (this.grassPreviewDirty) this.rebuildGrassPreview();
+    this.lastGrassStrokePos = null;
+    if (this.grassPreviewDirty) {
+      this.rebuildGrassPreview(true);
+    }
+    if (finishedGrassStroke && this.grassStrokeDirty) {
+      this.grassStrokeDirty = false;
+      this.triggerChange();
+    }
     if (this.paintingRoad) {
       if (this.paintingRoad.length >= 2) {
         this.roads.push({ points: this.paintingRoad, width: this.roadWidth });
@@ -3146,10 +4586,19 @@ export class RegionEditorScene {
       this.placeLight(x, hit.y, z, this.armedLightColor);
     } else if (this.armedFogColor) {
       this.placeFogVolume(x, hit.y, z, this.armedFogColor, this.armedFogShape);
+    } else if (this.armedBarrier) {
+      this.placeBarrierVolume(x, hit.y, z);
+    } else if (this.armedCloudShape) {
+      this.placeCloud(x, hit.y, z, this.armedCloudShape);
     }
   }
 
-  private handleSelectClick(e: MouseEvent): void {
+  private pickEditorIdAt(
+    e: MouseEvent,
+  ): {
+    kind: "asset" | "marker" | "light" | "volume" | "fog" | "house" | "barrier" | "cloud";
+    id: string;
+  } | null {
     this.raycaster.setFromCamera(this.ndcFromEvent(e), this.camera);
     const pickable: THREE.Object3D[] = [
       ...[...this.assets.values()].map((a) => a.obj),
@@ -3157,21 +4606,57 @@ export class RegionEditorScene {
       ...[...this.markers.values()].map((m) => m.obj),
       ...[...this.lights.values()].map((l) => l.obj),
       ...[...this.fogVolumes.values()].map((f) => f.mesh),
+      ...[...this.barrierVolumes.values()].map((b) => b.group),
+      ...[...this.clouds.values()].map((c) => c.group),
       ...[...this.houses.values()].map((h) => h.group),
     ];
     if (this.entryMarker) pickable.push(this.entryMarker.obj);
     const hits = this.raycaster.intersectObjects(pickable, true);
-    if (hits.length > 0) {
-      let obj: THREE.Object3D | null = hits[0]!.object;
-      while (obj && !obj.userData.editorId) obj = obj.parent;
-      if (obj) this.select(obj.userData.editorKind, obj.userData.editorId, e.shiftKey);
-    } else if (!e.shiftKey) {
-      this.deselect();
-    }
+    if (hits.length === 0) return null;
+    let obj: THREE.Object3D | null = hits[0]!.object;
+    while (obj && !obj.userData.editorId) obj = obj.parent;
+    if (!obj?.userData.editorId) return null;
+    const kind = obj.userData.editorKind as
+      | "asset"
+      | "marker"
+      | "light"
+      | "volume"
+      | "fog"
+      | "house"
+      | "barrier"
+      | "cloud";
+    return { kind, id: String(obj.userData.editorId) };
+  }
+
+  private handleSelectClick(e: MouseEvent): void {
+    const hit = this.pickEditorIdAt(e);
+    if (hit) this.select(hit.kind, hit.id, e.shiftKey);
+    else if (!e.shiftKey) this.deselect();
   }
 
   private onKeyDown = (e: KeyboardEvent): void => {
     if (this.playtestActive) return;
+    // Fly nav owns WASD / Space / arrows — don't also fire editor binds.
+    // Chorded shortcuts (Cmd/Ctrl+C/V/D) must still reach the handlers below;
+    // otherwise Cmd+D is swallowed here and only strafes the fly camera.
+    if (this.navMode === "fly" && !e.metaKey && !e.ctrlKey) {
+      const code = e.code;
+      if (
+        code === "KeyW" ||
+        code === "KeyA" ||
+        code === "KeyS" ||
+        code === "KeyD" ||
+        code === "Space" ||
+        code === "ShiftLeft" ||
+        code === "ShiftRight" ||
+        code === "ArrowUp" ||
+        code === "ArrowDown" ||
+        code === "ArrowLeft" ||
+        code === "ArrowRight"
+      ) {
+        return;
+      }
+    }
     const tag = (document.activeElement?.tagName ?? "").toLowerCase();
     if (tag === "input" || tag === "textarea") return;
 
@@ -3223,7 +4708,13 @@ export class RegionEditorScene {
       this.nudgeSelection(0, e.key === "PageUp" ? step : -step, 0, fine);
       return;
     }
-    if (e.key.toLowerCase() === "g" && this.selectedIds.size > 0) {
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "g") {
+      e.preventDefault();
+      if (e.shiftKey) this.ungroupSelectedAssets();
+      else this.groupSelectedAssets();
+      return;
+    }
+    if (e.key.toLowerCase() === "g" && this.selectedIds.size > 0 && !e.metaKey && !e.ctrlKey && !e.altKey) {
       e.preventDefault();
       this.dropSelectionToGround();
       return;
@@ -3254,6 +4745,39 @@ export class RegionEditorScene {
     this.triggerChange();
   }
 
+  /** Assign a shared groupId to every currently selected asset (≥2), so a
+   *  later click on any piece selects/moves the whole set together. */
+  groupSelectedAssets(): void {
+    const assets = [...this.selectedIds]
+      .map((id) => this.assets.get(id))
+      .filter((a): a is AssetEntry => !!a);
+    if (assets.length < 2) return;
+    const groupId = `group_${this.nextId++}`;
+    for (const a of assets) a.groupId = groupId;
+    // Expand selection to the full new group (in case only a subset was
+    // selected that already belonged to other groups).
+    this.selectedIds = new Set(assets.map((a) => a.id));
+    this.updateSelectionGroup();
+    this.emitSelection();
+    this.triggerChange();
+  }
+
+  /** Clear groupId on selected assets so they select independently again. */
+  ungroupSelectedAssets(): void {
+    let changed = false;
+    for (const id of this.selectedIds) {
+      const a = this.assets.get(id);
+      if (a?.groupId) {
+        a.groupId = undefined;
+        changed = true;
+      }
+    }
+    if (!changed) return;
+    this.updateSelectionGroup();
+    this.emitSelection();
+    this.triggerChange();
+  }
+
   private cloneEntities(ids: string[]): string[] {
     const newIds: string[] = [];
     // Remap groupIds so a duplicated house becomes its own independent group
@@ -3264,6 +4788,12 @@ export class RegionEditorScene {
       if (asset) {
         const newId = `asset_${this.nextId++}`;
         const newObj = SkeletonUtils.clone(asset.obj);
+        // Drop cloned light nodes — syncAssetPointLight recreates a clean one.
+        for (const child of [...newObj.children]) {
+          if ((child as THREE.PointLight).isPointLight || child.name === "asset-light-marker") {
+            newObj.remove(child);
+          }
+        }
         newObj.userData.editorKind = "asset";
         newObj.userData.editorId = newId;
         this.scene.add(newObj);
@@ -3276,7 +4806,18 @@ export class RegionEditorScene {
           if (!groupRemap.has(asset.groupId)) groupRemap.set(asset.groupId, `house_${this.nextId++}`);
           newGroupId = groupRemap.get(asset.groupId);
         }
-        this.assets.set(newId, { id: newId, model: asset.model, category: asset.category, obj: newObj, groupId: newGroupId });
+        const entry: AssetEntry = {
+          id: newId,
+          model: asset.model,
+          category: asset.category,
+          obj: newObj,
+          groupId: newGroupId,
+          light: asset.light ? { ...asset.light } : undefined,
+          solid: asset.solid,
+          solidBox: asset.solidBox ? { ...asset.solidBox } : undefined,
+        };
+        this.syncAssetPointLight(entry);
+        this.assets.set(newId, entry);
         newIds.push(newId);
       } else {
         const volume = this.volumes.get(id);
@@ -3313,6 +4854,7 @@ export class RegionEditorScene {
             difficulty: marker.difficulty,
             lootAmount: marker.lootAmount,
             mobTypes: marker.mobTypes ? [...marker.mobTypes] : undefined,
+            mobType: marker.mobType,
             bossType: marker.bossType,
             durationSec: marker.durationSec,
             npcData: marker.npcData ? { ...marker.npcData, id: newId } : undefined,
@@ -3342,6 +4884,38 @@ export class RegionEditorScene {
                 syncFogVolumeMesh(entry.mesh, entry.data);
               }
               newIds.push(newId);
+            } else {
+              const barrier = this.barrierVolumes.get(id);
+              if (barrier) {
+                const d = barrier.data;
+                const newId = this.placeBarrierVolume(
+                  d.localX + 4,
+                  d.localY - d.sizeY,
+                  d.localZ,
+                  d.sizeX,
+                  d.sizeY,
+                  d.sizeZ,
+                  d.yaw,
+                );
+                const entry = this.barrierVolumes.get(newId);
+                if (entry) {
+                  entry.data = { ...d, id: newId, localX: d.localX + 4 };
+                  syncBarrierMesh(entry.group, entry.data);
+                }
+                newIds.push(newId);
+              } else {
+                const cloud = this.clouds.get(id);
+                if (cloud) {
+                  const d = cloud.data;
+                  const newId = this.placeCloud(d.localX + 4, d.localY - 28, d.localZ, d.shape, d.color);
+                  const entry = this.clouds.get(newId);
+                  if (entry) {
+                    entry.data = { ...d, id: newId, localX: d.localX + 4 };
+                    syncRegionCloudMesh(entry.group, entry.data);
+                  }
+                  newIds.push(newId);
+                }
+              }
             }
           }
         }
@@ -3361,12 +4935,13 @@ export class RegionEditorScene {
     z: number,
     yaw: number,
     scaleOverride?: number,
-    opts?: { groupId?: string; skipSelect?: boolean },
+    opts?: { groupId?: string; skipSelect?: boolean; light?: RegionAssetLight },
   ): Promise<string> {
     const id = `asset_${this.nextId++}`;
     const gltf = await load(`/assets/models/${ASSET_DIR[category]}/${model}`);
     const obj = SkeletonUtils.clone(gltf.scene);
-    const defaultScale = category === "building" ? (model.startsWith("building_") || model.includes("Wall_") || model.includes("Corner_") || model.includes("Door_") || model.includes("Roof_") || model.includes("Tower_") || model.includes("House_") ? 3.8 : 1.5) : 1.0;
+    const baseName = model.split("/").pop() ?? model;
+    const defaultScale = category === "building" ? (baseName.startsWith("building_") || model.includes("Wall_") || model.includes("Corner_") || model.includes("Door_") || model.includes("Roof_") || model.includes("Tower_") || model.includes("House_") ? 3.8 : 1.5) : 1.0;
     const scale = scaleOverride ?? defaultScale;
     obj.scale.setScalar(scale);
     obj.position.set(x, y, z);
@@ -3374,12 +4949,69 @@ export class RegionEditorScene {
     obj.userData.editorKind = "asset";
     obj.userData.editorId = id;
     this.scene.add(obj);
-    this.assets.set(id, { id, model, category, obj, groupId: opts?.groupId });
+    const light =
+      opts?.light ??
+      (isRegionAssetLightModel(model) ? { enabled: true, ...REGION_ASSET_LIGHT_DEFAULTS[model]! } : undefined);
+    const entry: AssetEntry = { id, model, category, obj, groupId: opts?.groupId, light };
+    this.syncAssetPointLight(entry);
+    if (isRockLikeAssetModel(model)) this.applyMeasuredSolid(entry);
+    this.assets.set(id, entry);
     if (!opts?.skipSelect) {
       this.select("asset", id, false);
       this.triggerChange();
     }
     return id;
+  }
+
+  /** Attach / update / remove the PointLight child for an asset entry. */
+  private syncAssetPointLight(entry: AssetEntry): void {
+    const resolved = resolveRegionAssetLight({ model: entry.model, light: entry.light });
+    if (!resolved) {
+      if (entry.pointLight) {
+        entry.obj.remove(entry.pointLight);
+        entry.pointLight.dispose();
+        entry.pointLight = undefined;
+      }
+      if (entry.lightMarker) {
+        entry.obj.remove(entry.lightMarker);
+        entry.lightMarker.material.dispose();
+        entry.lightMarker = undefined;
+      }
+      return;
+    }
+    if (!entry.pointLight) {
+      entry.pointLight = new THREE.PointLight(resolved.color, resolved.intensity, resolved.distance, resolved.decay);
+      entry.pointLight.name = "asset-point-light";
+      entry.obj.add(entry.pointLight);
+    }
+    if (!entry.lightMarker) {
+      entry.lightMarker = new THREE.Sprite(
+        new THREE.SpriteMaterial({
+          map: getGlowTexture(),
+          color: new THREE.Color(resolved.color),
+          transparent: true,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      entry.lightMarker.name = "asset-light-marker";
+      entry.lightMarker.scale.setScalar(0.55);
+      entry.obj.add(entry.lightMarker);
+    }
+    entry.pointLight.color.set(resolved.color);
+    entry.pointLight.intensity = resolved.intensity;
+    entry.pointLight.distance = resolved.distance;
+    entry.pointLight.decay = resolved.decay;
+    (entry.lightMarker.material as THREE.SpriteMaterial).color.set(resolved.color);
+    // Counter asset scale so offsets stay in world meters.
+    const sx = entry.obj.scale.x || 1;
+    const sy = entry.obj.scale.y || 1;
+    const sz = entry.obj.scale.z || 1;
+    const lx = resolved.offsetX / sx;
+    const ly = resolved.offsetY / sy;
+    const lz = resolved.offsetZ / sz;
+    entry.pointLight.position.set(lx, ly, lz);
+    entry.lightMarker.position.set(lx, ly, lz);
   }
 
   /** Places one procedural house as a single selectable Group (not N assets). */
@@ -3395,6 +5027,45 @@ export class RegionEditorScene {
     this.select("house", id, false);
     this.triggerChange();
     return id;
+  }
+
+  /** Places a procedural castle as grouped building assets (walls + towers). */
+  private async placeCastleAt(x: number, y: number, z: number): Promise<string[]> {
+    const seed = (Math.random() * 0xffffffff) >>> 0;
+    const style = resolveCastleStyle(this.armedCastleStyle, seed);
+    const groupId = `castle_${this.nextId++}`;
+    const pieces = generateCastleAssets(x, z, y, {
+      seed,
+      style,
+      size: this.armedCastleSize,
+      height: this.armedCastleHeight,
+      groupId,
+    });
+    const ids: string[] = [];
+    for (const piece of pieces) {
+      try {
+        const id = await this.placeAsset(
+          piece.model,
+          piece.category,
+          piece.localX,
+          piece.localY,
+          piece.localZ,
+          piece.yaw,
+          piece.scale ?? 1,
+          { groupId, skipSelect: true },
+        );
+        ids.push(id);
+      } catch (err) {
+        console.warn(`[regionEditor] castle piece failed: ${piece.model}`, err);
+      }
+    }
+    if (ids.length > 0) {
+      this.selectedIds = new Set(ids);
+      this.updateSelectionGroup();
+      this.emitSelection();
+    }
+    this.triggerChange();
+    return ids;
   }
 
   private async buildHouseGroup(data: RegionHouse): Promise<THREE.Group> {
@@ -3434,11 +5105,17 @@ export class RegionEditorScene {
   }
 
   private syncHouseDataFromGroup(h: HouseEntry): void {
-    h.data.localX = h.group.position.x;
-    h.data.localY = h.group.position.y;
-    h.data.localZ = h.group.position.z;
-    h.data.yaw = h.group.rotation.y;
-    h.data.scale = h.group.scale.x;
+    const worldPos = new THREE.Vector3();
+    const worldQuat = new THREE.Quaternion();
+    const worldScale = new THREE.Vector3();
+    h.group.getWorldPosition(worldPos);
+    h.group.getWorldQuaternion(worldQuat);
+    h.group.getWorldScale(worldScale);
+    h.data.localX = worldPos.x;
+    h.data.localY = worldPos.y;
+    h.data.localZ = worldPos.z;
+    h.data.yaw = yawFromQuaternion(worldQuat);
+    h.data.scale = worldScale.x;
   }
 
   private buildVillageRing(radius: number, color = MARKER_COLORS.village): THREE.Mesh {
@@ -3509,11 +5186,59 @@ export class RegionEditorScene {
       entry.ring = this.buildVillageRing(entry.radius, MARKER_COLORS.worldEvent);
       group.add(entry.ring);
       this.markers.set(id, entry);
+    } else if (kind === "mobSpawn") {
+      entry.difficulty = this.mobSpawnDifficulty;
+      entry.mobType = this.mobSpawnType ?? undefined;
+      this.markers.set(id, entry);
+    } else if (kind === "resourceNode") {
+      entry.nodeType = this.resourceNodeType;
+      if (entry.nodeType === "tree") {
+        const roll = (hashString(id) % 1000) / 1000;
+        entry.nodeModel = pickRandomRegionTreeModel(this.meta.biome, roll);
+      }
+      this.markers.set(id, entry);
+      this.rebuildResourceNodeMarkerVisual(entry);
     } else {
       this.markers.set(id, entry);
     }
     this.triggerChange();
     return id;
+  }
+
+  /** Swap the placeholder sphere for a real gather-node mesh preview. */
+  public rebuildResourceNodeMarkerVisual(entry: MarkerEntry): void {
+    if (!entry || entry.kind !== "resourceNode") return;
+    for (let i = entry.obj.children.length - 1; i >= 0; i--) {
+      entry.obj.remove(entry.obj.children[i]!);
+    }
+    const type = isPlaceableRegionNodeType(entry.nodeType ?? "") ? entry.nodeType! : "rock";
+    entry.nodeType = type;
+    const variant = (hashString(entry.id) % 1000) / 1000;
+    if (type === "tree" && !entry.nodeModel) {
+      entry.nodeModel = pickRandomRegionTreeModel(this.meta.biome, variant);
+    }
+    if (type !== "tree") entry.nodeModel = undefined;
+    const preview = buildGatherNodeMesh(
+      type,
+      variant,
+      regionBiomeToWorldBiome(this.meta.biome),
+      entry.nodeModel,
+    );
+    preview.position.set(0, 0, 0);
+    entry.obj.add(preview);
+    let label = type;
+    try {
+      label = nodeTypeDef(type).name;
+    } catch {
+      /* keep id */
+    }
+    if (entry.nodeModel) {
+      label = `${label} (${entry.nodeModel.replace(/\.(glb|gltf)$/i, "")})`;
+    }
+    const nameplate = buildNameplate(label, "#66cc44");
+    nameplate.position.set(0, 2.4, 0);
+    nameplate.scale.set(3.2, 0.9, 1);
+    entry.obj.add(nameplate);
   }
 
   public rebuildNPCMarkerVisual(entry: MarkerEntry): void {
@@ -3776,7 +5501,7 @@ export class RegionEditorScene {
     this.triggerChange();
   }
 
-  private select(kind: "asset" | "marker" | "light" | "volume" | "fog" | "house", id: string, additive: boolean): void {
+  private select(kind: "asset" | "marker" | "light" | "volume" | "fog" | "house" | "barrier" | "cloud", id: string, additive: boolean): void {
     const ids = this.idsForSelection(kind, id);
     if (!additive) this.selectedIds.clear();
     const allSelected = ids.length > 0 && ids.every((i) => this.selectedIds.has(i));
@@ -3792,7 +5517,7 @@ export class RegionEditorScene {
    *  carries a groupId -- so clicking any wall/roof/floor of a generated
    *  house selects (and therefore moves) every piece together. Markers and
    *  lights, and ungrouped hand-placed assets, stay single-id. */
-  private idsForSelection(kind: "asset" | "marker" | "light" | "volume" | "fog" | "house", id: string): string[] {
+  private idsForSelection(kind: "asset" | "marker" | "light" | "volume" | "fog" | "house" | "barrier" | "cloud", id: string): string[] {
     if (kind === "asset") {
       const asset = this.assets.get(id);
       if (asset?.groupId) {
@@ -3810,8 +5535,13 @@ export class RegionEditorScene {
   private updateSelectionGroup(): void {
     for (const obj of [...this.selectionGroup.children]) this.scene.attach(obj);
 
+    // Clear barrier selection chrome before rebuilding.
+    for (const b of this.barrierVolumes.values()) setBarrierSelected(b.group, false);
+
     if (this.selectedIds.size === 0) {
       this.transform.detach();
+      this.barrierHoverHandle = null;
+      this.canvas.style.cursor = "";
       this.emitSelection();
       return;
     }
@@ -3829,6 +5559,18 @@ export class RegionEditorScene {
       if (fog) {
         objs.push(fog.mesh);
         center.add(fog.mesh.position);
+        continue;
+      }
+      const barrier = this.barrierVolumes.get(id);
+      if (barrier) {
+        objs.push(barrier.group);
+        center.add(barrier.group.position);
+        continue;
+      }
+      const cloud = this.clouds.get(id);
+      if (cloud) {
+        objs.push(cloud.group);
+        center.add(cloud.group.position);
         continue;
       }
       const entry =
@@ -3864,15 +5606,29 @@ export class RegionEditorScene {
     }
     for (const obj of objs) {
       this.selectionGroup.attach(obj);
-      if (!this.selectionHelpers.has(obj.userData.editorId)) {
-        const helper = new THREE.BoxHelper(obj, 0x00ffaa);
+      const id = obj.userData.editorId as string;
+      if (!this.selectionHelpers.has(id)) {
+        const isBarrier = this.barrierVolumes.has(id);
+        const helper = new THREE.BoxHelper(obj, isBarrier ? 0xffe066 : 0x00ffaa);
         this.scene.add(helper);
-        this.selectionHelpers.set(obj.userData.editorId, helper);
+        this.selectionHelpers.set(id, helper);
       }
     }
     for (const helper of this.selectionHelpers.values()) helper.update();
 
+    // Barriers: bright outline always; corner/side handles only for single-select.
+    const singleBarrier =
+      this.selectedIds.size === 1 && this.barrierVolumes.has([...this.selectedIds][0]!);
+    for (const id of this.selectedIds) {
+      const b = this.barrierVolumes.get(id);
+      if (b) setBarrierSelected(b.group, true, singleBarrier);
+    }
+
+    // Keep TransformControls for move/rotate; footprint sizing uses handles.
     this.transform.attach(this.selectionGroup);
+    if (singleBarrier && this.transform.mode === "scale") {
+      this.transform.setMode("translate");
+    }
     this.emitSelection();
   }
 
@@ -3917,6 +5673,10 @@ export class RegionEditorScene {
       const a = this.assets.get(id);
       if (a) {
         const t = worldTransform(a.obj);
+        const resolved = resolveRegionAssetLight({ model: a.model, light: a.light });
+        const defaults = REGION_ASSET_LIGHT_DEFAULTS[a.model];
+        const canLight = !!defaults || a.light !== undefined;
+        a.obj.getWorldScale(worldScale);
         selItems.push({
           kind: "asset",
           id,
@@ -3928,6 +5688,27 @@ export class RegionEditorScene {
           z: t.z,
           yaw: t.yaw,
           scale: t.scale,
+          scaleX: worldScale.x,
+          scaleY: worldScale.y,
+          scaleZ: worldScale.z,
+          solid: !!a.solid,
+          ...(a.solidBox
+            ? {
+                solidBox: { ...a.solidBox },
+              }
+            : {}),
+          ...(canLight
+            ? {
+                lightEnabled: resolved !== null,
+                color: resolved?.color ?? a.light?.color ?? defaults?.color ?? "#ffb060",
+                intensity: resolved?.intensity ?? a.light?.intensity ?? defaults?.intensity ?? 6,
+                distance: resolved?.distance ?? a.light?.distance ?? defaults?.distance ?? 32,
+                decay: resolved?.decay ?? a.light?.decay ?? defaults?.decay ?? 2,
+                lightOffsetX: resolved?.offsetX ?? a.light?.offsetX ?? defaults?.offsetX ?? 0,
+                lightOffsetY: resolved?.offsetY ?? a.light?.offsetY ?? defaults?.offsetY ?? 2.55,
+                lightOffsetZ: resolved?.offsetZ ?? a.light?.offsetZ ?? defaults?.offsetZ ?? 0,
+              }
+            : {}),
         });
         continue;
       }
@@ -3970,6 +5751,9 @@ export class RegionEditorScene {
           difficulty: m.difficulty,
           lootAmount: m.lootAmount,
           mobTypes: m.mobTypes ? [...m.mobTypes] : undefined,
+          mobType: m.mobType,
+          nodeType: m.nodeType,
+          nodeModel: m.nodeModel,
           bossType: m.bossType,
           durationSec: m.durationSec,
         });
@@ -4003,6 +5787,47 @@ export class RegionEditorScene {
         });
         continue;
       }
+      const b = this.barrierVolumes.get(id);
+      if (b) {
+        this.syncBarrierDataFromGroup(b);
+        const t = worldTransform(b.group);
+        selItems.push({
+          kind: "barrier",
+          id,
+          sizeX: b.data.sizeX,
+          sizeY: b.data.sizeY,
+          sizeZ: b.data.sizeZ,
+          x: t.x,
+          y: t.y,
+          z: t.z,
+          yaw: t.yaw,
+          scale: 1,
+        });
+        continue;
+      }
+      const c = this.clouds.get(id);
+      if (c) {
+        this.syncCloudDataFromGroup(c);
+        const t = worldTransform(c.group);
+        selItems.push({
+          kind: "cloud",
+          id,
+          color: c.data.color,
+          cloudShape: c.data.shape,
+          cloudOpacity: c.data.opacity,
+          scaleX: c.data.scaleX,
+          scaleY: c.data.scaleY,
+          scaleZ: c.data.scaleZ,
+          driftSpeed: c.data.driftSpeed,
+          bobAmp: c.data.bobAmp,
+          x: t.x,
+          y: t.y,
+          z: t.z,
+          yaw: t.yaw,
+          scale: t.scale,
+        });
+        continue;
+      }
       const h = this.houses.get(id);
       if (h) {
         this.syncHouseDataFromGroup(h);
@@ -4027,13 +5852,33 @@ export class RegionEditorScene {
     this.selectionGroup.updateMatrixWorld(true);
     for (const helper of this.selectionHelpers.values()) helper.update();
     for (const id of this.selectedIds) {
+      const a = this.assets.get(id);
+      if (a?.pointLight) this.syncAssetPointLight(a);
       const v = this.volumes.get(id);
       if (v) this.syncVolumeDataFromMesh(v);
       const f = this.fogVolumes.get(id);
       if (f) {
-        f.data.localX = f.mesh.position.x;
-        f.data.localY = f.mesh.position.y;
-        f.data.localZ = f.mesh.position.z;
+        // World-space only — mesh is under selectionGroup while dragging.
+        const worldPos = new THREE.Vector3();
+        const worldScale = new THREE.Vector3();
+        f.mesh.getWorldPosition(worldPos);
+        f.mesh.getWorldScale(worldScale);
+        f.data.localX = worldPos.x;
+        f.data.localY = worldPos.y;
+        f.data.localZ = worldPos.z;
+        f.data.sizeX = Math.max(0.5, worldScale.x);
+        f.data.sizeY = Math.max(0.5, worldScale.y);
+        f.data.sizeZ = Math.max(0.5, worldScale.z);
+      }
+      const b = this.barrierVolumes.get(id);
+      if (b) {
+        // Do not syncBarrierMesh here: writing world coords into local
+        // position while parented under selectionGroup jumps the mesh.
+        this.syncBarrierDataFromGroup(b);
+      }
+      const c = this.clouds.get(id);
+      if (c) {
+        this.syncCloudDataFromGroup(c);
       }
       const h = this.houses.get(id);
       if (h) {
@@ -4066,6 +5911,13 @@ export class RegionEditorScene {
       fogDensity: number;
       fogOpacity: number;
       fogFeather: number;
+      cloudShape: RegionCloudShape;
+      cloudOpacity: number;
+      driftSpeed: number;
+      bobAmp: number;
+      scaleX: number;
+      scaleY: number;
+      scaleZ: number;
       sizeX: number;
       sizeY: number;
       sizeZ: number;
@@ -4073,8 +5925,16 @@ export class RegionEditorScene {
       difficulty: number;
       lootAmount: number;
       mobTypes: string[];
+      mobType: string;
+      nodeType: string;
+      nodeModel: string;
       bossType: string;
       durationSec: number;
+      lightEnabled: boolean;
+      lightOffsetX: number;
+      lightOffsetY: number;
+      lightOffsetZ: number;
+      solid: boolean;
     }>,
   ): void {
     if (this.selectedIds.size === 0) return;
@@ -4086,7 +5946,54 @@ export class RegionEditorScene {
         if (patch.y !== undefined) a.obj.position.y = patch.y;
         if (patch.z !== undefined) a.obj.position.z = patch.z;
         if (patch.yaw !== undefined) a.obj.rotation.y = patch.yaw;
-        if (patch.scale !== undefined) a.obj.scale.setScalar(patch.scale);
+        if (patch.scale !== undefined) {
+          a.obj.scale.setScalar(patch.scale);
+          this.syncAssetPointLight(a);
+          if (a.solid) {
+            a.solidBox = measureObjectSolidBox(a.obj) ?? a.solidBox;
+          }
+        }
+        if (patch.scaleX !== undefined || patch.scaleY !== undefined || patch.scaleZ !== undefined) {
+          if (patch.scaleX !== undefined) a.obj.scale.x = Math.max(0.05, patch.scaleX);
+          if (patch.scaleY !== undefined) a.obj.scale.y = Math.max(0.05, patch.scaleY);
+          if (patch.scaleZ !== undefined) a.obj.scale.z = Math.max(0.05, patch.scaleZ);
+          this.syncAssetPointLight(a);
+          if (a.solid) {
+            a.solidBox = measureObjectSolidBox(a.obj) ?? a.solidBox;
+          }
+        }
+        if (patch.solid !== undefined) {
+          if (patch.solid) this.applyMeasuredSolid(a);
+          else {
+            a.solid = undefined;
+            a.solidBox = undefined;
+          }
+        }
+        const lightPatch =
+          patch.lightEnabled !== undefined ||
+          patch.color !== undefined ||
+          patch.intensity !== undefined ||
+          patch.distance !== undefined ||
+          patch.decay !== undefined ||
+          patch.lightOffsetX !== undefined ||
+          patch.lightOffsetY !== undefined ||
+          patch.lightOffsetZ !== undefined;
+        if (lightPatch) {
+          const defaults = REGION_ASSET_LIGHT_DEFAULTS[a.model];
+          const prev = a.light ?? (defaults ? { enabled: true, ...defaults } : { enabled: true });
+          a.light = {
+            ...prev,
+            ...(patch.lightEnabled !== undefined ? { enabled: patch.lightEnabled } : {}),
+            ...(patch.color !== undefined ? { color: patch.color } : {}),
+            ...(patch.intensity !== undefined ? { intensity: patch.intensity } : {}),
+            ...(patch.distance !== undefined ? { distance: patch.distance } : {}),
+            ...(patch.decay !== undefined ? { decay: patch.decay } : {}),
+            ...(patch.lightOffsetX !== undefined ? { offsetX: patch.lightOffsetX } : {}),
+            ...(patch.lightOffsetY !== undefined ? { offsetY: patch.lightOffsetY } : {}),
+            ...(patch.lightOffsetZ !== undefined ? { offsetZ: patch.lightOffsetZ } : {}),
+          };
+          this.syncAssetPointLight(a);
+        }
         continue;
       }
       const v = this.volumes.get(id);
@@ -4137,6 +6044,24 @@ export class RegionEditorScene {
           if (patch.bossType !== undefined) m.bossType = patch.bossType;
           if (patch.durationSec !== undefined) m.durationSec = patch.durationSec;
         }
+        if (m.kind === "mobSpawn") {
+          if (patch.difficulty !== undefined) m.difficulty = patch.difficulty;
+          if (patch.mobType !== undefined) {
+            m.mobType = patch.mobType || undefined;
+          }
+        }
+        if (m.kind === "resourceNode") {
+          let dirty = false;
+          if (patch.nodeType !== undefined && isPlaceableRegionNodeType(patch.nodeType)) {
+            m.nodeType = patch.nodeType;
+            dirty = true;
+          }
+          if (patch.nodeModel !== undefined) {
+            m.nodeModel = patch.nodeModel || undefined;
+            dirty = true;
+          }
+          if (dirty) this.rebuildResourceNodeMarkerVisual(m);
+        }
         continue;
       }
       const l = this.lights.get(id);
@@ -4179,6 +6104,56 @@ export class RegionEditorScene {
         syncFogVolumeMesh(f.mesh, f.data);
         continue;
       }
+      const b = this.barrierVolumes.get(id);
+      if (b) {
+        if (patch.x !== undefined) { b.group.position.x = patch.x; b.data.localX = patch.x; }
+        if (patch.y !== undefined) { b.group.position.y = patch.y; b.data.localY = patch.y; }
+        if (patch.z !== undefined) { b.group.position.z = patch.z; b.data.localZ = patch.z; }
+        if (patch.yaw !== undefined) { b.group.rotation.y = patch.yaw; b.data.yaw = patch.yaw; }
+        if (patch.sizeX !== undefined) { b.data.sizeX = patch.sizeX; b.group.scale.x = patch.sizeX; }
+        if (patch.sizeY !== undefined) { b.data.sizeY = patch.sizeY; b.group.scale.y = patch.sizeY; }
+        if (patch.sizeZ !== undefined) { b.data.sizeZ = patch.sizeZ; b.group.scale.z = patch.sizeZ; }
+        syncBarrierMesh(b.group, b.data);
+        continue;
+      }
+      const c = this.clouds.get(id);
+      if (c) {
+        if (patch.x !== undefined) { c.group.position.x = patch.x; c.data.localX = patch.x; }
+        if (patch.y !== undefined) { c.group.position.y = patch.y; c.data.localY = patch.y; }
+        if (patch.z !== undefined) { c.group.position.z = patch.z; c.data.localZ = patch.z; }
+        if (patch.yaw !== undefined) { c.group.rotation.y = patch.yaw; c.data.yaw = patch.yaw; }
+        if (patch.color !== undefined) c.data.color = patch.color;
+        const shapeChanged = patch.cloudShape !== undefined && patch.cloudShape !== c.data.shape;
+        if (patch.cloudShape !== undefined) c.data.shape = patch.cloudShape;
+        if (patch.cloudOpacity !== undefined) c.data.opacity = patch.cloudOpacity;
+        if (patch.driftSpeed !== undefined) c.data.driftSpeed = patch.driftSpeed;
+        if (patch.bobAmp !== undefined) c.data.bobAmp = patch.bobAmp;
+        if (patch.scaleX !== undefined) { c.data.scaleX = patch.scaleX; c.group.scale.x = patch.scaleX; }
+        if (patch.scaleY !== undefined) { c.data.scaleY = patch.scaleY; c.group.scale.y = patch.scaleY; }
+        if (patch.scaleZ !== undefined) { c.data.scaleZ = patch.scaleZ; c.group.scale.z = patch.scaleZ; }
+        if (patch.scale !== undefined) {
+          c.group.scale.setScalar(patch.scale);
+          c.data.scaleX = patch.scale;
+          c.data.scaleY = patch.scale;
+          c.data.scaleZ = patch.scale;
+        }
+        if (shapeChanged) {
+          // Rebuild puff geometry for the new silhouette.
+          const parent = c.group.parent;
+          const selected = this.selectedIds.has(id);
+          this.scene.remove(c.group);
+          this.disposeObject(c.group);
+          const fresh = createRegionCloudMesh(c.data);
+          fresh.userData.editorKind = "cloud";
+          fresh.userData.editorId = id;
+          parent?.add(fresh) ?? this.scene.add(fresh);
+          c.group = fresh;
+          if (selected) this.updateSelectionGroup();
+        } else {
+          syncRegionCloudMesh(c.group, c.data);
+        }
+        continue;
+      }
       const h = this.houses.get(id);
       if (h) {
         if (patch.x !== undefined) h.group.position.x = patch.x;
@@ -4191,6 +6166,7 @@ export class RegionEditorScene {
       }
     }
     this.updateSelectionGroup();
+    this.emitSelection();
     this.triggerChange();
   }
 
@@ -4241,6 +6217,34 @@ export class RegionEditorScene {
         f.mesh.geometry.dispose();
         (f.mesh.material as THREE.Material).dispose();
         this.fogVolumes.delete(id);
+        continue;
+      }
+      const b = this.barrierVolumes.get(id);
+      if (b) {
+        this.scene.remove(b.group);
+        b.group.traverse((o) => {
+          const mesh = o as THREE.Mesh;
+          if (mesh.isMesh) {
+            mesh.geometry?.dispose();
+            const mat = mesh.material as THREE.Material;
+            if (Array.isArray(mat)) mat.forEach((m) => m.dispose());
+            else mat?.dispose?.();
+          }
+        });
+        this.barrierVolumes.delete(id);
+        continue;
+      }
+      const c = this.clouds.get(id);
+      if (c) {
+        this.scene.remove(c.group);
+        c.group.traverse((o) => {
+          const mesh = o as THREE.Mesh;
+          if (mesh.isMesh) {
+            mesh.geometry?.dispose();
+            (mesh.material as THREE.Material)?.dispose?.();
+          }
+        });
+        this.clouds.delete(id);
         continue;
       }
       const h = this.houses.get(id);
@@ -4322,6 +6326,7 @@ export class RegionEditorScene {
   // ============================ load / export ============================
 
   clear(): void {
+    this.clearNeighborReferences();
     this.transform.detach();
     for (const helper of this.selectionHelpers.values()) {
       this.scene.remove(helper);
@@ -4344,6 +6349,41 @@ export class RegionEditorScene {
       (f.mesh.material as THREE.Material).dispose();
     }
     this.fogVolumes.clear();
+    for (const b of this.barrierVolumes.values()) {
+      this.scene.remove(b.group);
+      b.group.traverse((o) => {
+        const mesh = o as THREE.Mesh;
+        if (mesh.isMesh) {
+          mesh.geometry?.dispose();
+          const mat = mesh.material as THREE.Material;
+          if (Array.isArray(mat)) mat.forEach((m) => m.dispose());
+          else mat?.dispose?.();
+        }
+      });
+    }
+    this.barrierVolumes.clear();
+    for (const c of this.clouds.values()) {
+      this.scene.remove(c.group);
+      c.group.traverse((o) => {
+        const mesh = o as THREE.Mesh;
+        if (mesh.isMesh) {
+          mesh.geometry?.dispose();
+          (mesh.material as THREE.Material)?.dispose?.();
+        }
+      });
+    }
+    this.clouds.clear();
+    if (this.horizonGroup) {
+      this.scene.remove(this.horizonGroup);
+      this.horizonGroup.traverse((o) => {
+        const mesh = o as THREE.Mesh;
+        if (mesh.isMesh) {
+          mesh.geometry?.dispose();
+          (mesh.material as THREE.Material)?.dispose?.();
+        }
+      });
+      this.horizonGroup = null;
+    }
     for (const h of this.houses.values()) {
       this.scene.remove(h.group);
       this.disposeObject(h.group);
@@ -4370,6 +6410,8 @@ export class RegionEditorScene {
     this.clearVolumeStamp();
     this.armedLightColor = null;
     this.armedFogColor = null;
+    this.armedBarrier = false;
+    this.armedCloudShape = null;
     this.texturePaintMode = null;
     this.waterBrushMode = null;
     this.customTextures = new Array(this.gridSize * this.gridSize).fill(0);
@@ -4386,12 +6428,15 @@ export class RegionEditorScene {
       this.grassField.dispose();
       this.grassField = null;
     }
-    this.grassDirtyKeys.clear();
     this.grassPreviewDirty = false;
+    this.lastGrassStrokePos = null;
+    this.grassStrokeDirty = false;
     this.grassPatches = [];
     this.grassExclusions = [];
     this.grassColor = { bottom: "#4f7c13", top: "#79a01c" };
+    this.grassSettings = { ...DEFAULT_QUICK_GRASS_SETTINGS };
     this.wind = { direction: 0, strength: 1 };
+    this.grassSway = 1;
     this.nextId = 1;
     this.onSelectionChange([]);
   }
@@ -4400,7 +6445,17 @@ export class RegionEditorScene {
     this.isRestoring = true;
     try {
       this.clear();
-      this.meta = { id: bp.id, name: bp.name, biome: bp.biome, portalWorldX: bp.portalWorldX, portalWorldZ: bp.portalWorldZ, isStartingRegion: bp.isStartingRegion ?? false, musicTrack: bp.musicTrack ?? null };
+      this.meta = {
+        id: bp.id,
+        name: bp.name,
+        biome: bp.biome,
+        portalWorldX: bp.portalWorldX,
+        portalWorldZ: bp.portalWorldZ,
+        worldOriginX: bp.worldOriginX,
+        worldOriginZ: bp.worldOriginZ,
+        isStartingRegion: bp.isStartingRegion ?? false,
+        musicTrack: bp.musicTrack ?? null,
+      };
       this.gridSize = bp.gridSize;
       this.pitch = bp.pitch;
       this.heights = [...bp.heights];
@@ -4417,6 +6472,15 @@ export class RegionEditorScene {
       this.grassExclusions = (bp.grassExclusions ?? []).map((ex) => ({ ...ex }));
       this.grassColor = bp.grassColor ? { ...bp.grassColor } : { bottom: "#4f7c13", top: "#79a01c" };
       this.wind = bp.wind ? { ...bp.wind } : { direction: 0, strength: 1 };
+      this.grassSway = typeof bp.grassSway === "number" ? Math.max(0, bp.grassSway) : 1;
+      this.grassSettings = mergeQuickGrassSettings(bp.grassSettings, {
+        grassColor: this.grassColor,
+        grassSway: this.grassSway,
+      });
+      this.grassColor = {
+        bottom: this.grassSettings.baseColour,
+        top: this.grassSettings.tipColour,
+      };
       this.rebuildGrassPreview(true);
       this.scene.remove(this.terrainMesh);
       this.terrainMesh.geometry.dispose();
@@ -4429,14 +6493,46 @@ export class RegionEditorScene {
         const obj = SkeletonUtils.clone(gltf.scene);
         obj.position.set(asset.localX, asset.localY, asset.localZ);
         obj.rotation.y = asset.yaw;
-        const rawScale = asset.scale ?? 1;
-        const scale = (rawScale === 1 && asset.category === "building" && (asset.model.startsWith("building_") || asset.model.includes("Wall_") || asset.model.includes("House_") || asset.model.includes("Tower_"))) ? 3.8 : rawScale;
-        obj.scale.setScalar(scale);
+        const axes = regionAssetScale(asset);
+        const baseName = asset.model.split("/").pop() ?? asset.model;
+        // Legacy buildings saved at scale 1 before the editor defaulted them to 3.8.
+        const needsBuildingDefault =
+          axes.x === 1 &&
+          axes.y === 1 &&
+          axes.z === 1 &&
+          asset.scaleX === undefined &&
+          asset.scaleY === undefined &&
+          asset.scaleZ === undefined &&
+          asset.category === "building" &&
+          (baseName.startsWith("building_") ||
+            asset.model.includes("Wall_") ||
+            asset.model.includes("House_") ||
+            asset.model.includes("Tower_"));
+        if (needsBuildingDefault) obj.scale.setScalar(3.8);
+        else obj.scale.set(axes.x, axes.y, axes.z);
         const id = asset.id ?? `asset_${this.nextId++}`;
         obj.userData.editorKind = "asset";
         obj.userData.editorId = id;
         this.scene.add(obj);
-        this.assets.set(id, { id, model: asset.model, category: asset.category, obj, groupId: asset.groupId });
+        const light =
+          asset.light ??
+          (isRegionAssetLightModel(asset.model)
+            ? { enabled: true, ...REGION_ASSET_LIGHT_DEFAULTS[asset.model]! }
+            : undefined);
+        const entry: AssetEntry = {
+          id,
+          model: asset.model,
+          category: asset.category,
+          obj,
+          groupId: asset.groupId,
+          light,
+          solid: asset.solid || undefined,
+          solidBox: asset.solidBox ? { ...asset.solidBox } : undefined,
+        };
+        this.syncAssetPointLight(entry);
+        if (entry.solid && !entry.solidBox) this.applyMeasuredSolid(entry);
+        else if (!entry.solid && isRockLikeAssetModel(asset.model)) this.applyMeasuredSolid(entry);
+        this.assets.set(id, entry);
       }
 
       // Advance nextId past every loaded asset id BEFORE anything below can
@@ -4460,7 +6556,41 @@ export class RegionEditorScene {
       }
 
       for (const spawn of bp.mobSpawns) {
-        this.placeMarkerAt("mobSpawn", spawn.localX, this.heightAt(spawn.localX, spawn.localZ), spawn.localZ);
+        const id = this.placeMarkerAt(
+          "mobSpawn",
+          spawn.localX,
+          this.heightAt(spawn.localX, spawn.localZ),
+          spawn.localZ,
+        );
+        const m = this.markers.get(id);
+        if (m) {
+          m.difficulty = spawn.difficulty ?? 1;
+          m.mobType = spawn.type;
+        }
+      }
+      for (const node of bp.resourceNodes ?? []) {
+        if (!isPlaceableRegionNodeType(node.type)) continue;
+        this.resourceNodeType = node.type;
+        const id = this.placeMarkerAt(
+          "resourceNode",
+          node.localX,
+          this.heightAt(node.localX, node.localZ),
+          node.localZ,
+        );
+        const m = this.markers.get(id);
+        if (m) {
+          m.nodeType = node.type;
+          m.nodeModel =
+            node.model ??
+            (node.type === "tree"
+              ? pickRandomRegionTreeModel(this.meta.biome, (hashString(id) % 1000) / 1000)
+              : undefined);
+          if (node.id) {
+            // Prefer authored id on export by stashing on the marker.
+            m.name = node.id;
+          }
+          this.rebuildResourceNodeMarkerVisual(m);
+        }
       }
       for (const village of bp.villages) {
         // skipVillageGen: this village's buildings are already present in
@@ -4489,6 +6619,28 @@ export class RegionEditorScene {
           entry.data = { ...fog, id };
           syncFogVolumeMesh(entry.mesh, entry.data);
         }
+      }
+      for (const barrier of bp.barrierVolumes ?? []) {
+        const id = barrier.id ?? `barrier_${this.nextId++}`;
+        const data: RegionBarrierVolume = { ...barrier, id };
+        const group = createBarrierMesh(data);
+        group.userData.editorKind = "barrier";
+        group.userData.editorId = id;
+        this.scene.add(group);
+        this.barrierVolumes.set(id, { id, data, group });
+        const match = /^barrier_(\d+)$/.exec(id);
+        if (match) this.nextId = Math.max(this.nextId, Number(match[1]) + 1);
+      }
+      for (const cloud of bp.clouds ?? []) {
+        const id = cloud.id ?? `cloud_${this.nextId++}`;
+        const data: RegionCloud = { ...cloud, id };
+        const group = createRegionCloudMesh(data);
+        group.userData.editorKind = "cloud";
+        group.userData.editorId = id;
+        this.scene.add(group);
+        this.clouds.set(id, { id, data, group });
+        const match = /^cloud_(\d+)$/.exec(id);
+        if (match) this.nextId = Math.max(this.nextId, Number(match[1]) + 1);
       }
       for (const house of bp.houses ?? []) {
         const id = house.id ?? `house_${this.nextId++}`;
@@ -4550,6 +6702,20 @@ export class RegionEditorScene {
         }
       }
       this.placeMarkerAt("entry", bp.entryLocal.x, this.heightAt(bp.entryLocal.x, bp.entryLocal.z), bp.entryLocal.z);
+      // Drop the fly camera near the entry so loading a region feels immediate.
+      const ex = bp.entryLocal.x;
+      const ez = bp.entryLocal.z;
+      const ey = this.heightAt(ex, ez) + RegionEditorScene.FLY_EYE_HEIGHT + 4;
+      this.flyPos.set(ex, ey, ez);
+      this.flyYaw = 0;
+      this.flyPitch = -0.35;
+      this.flyFlying = true;
+      this.orbit.target.set(ex, this.heightAt(ex, ez), ez);
+      if (this.navMode === "fly" && !this.playtestActive) this.applyFlyCamera();
+      else {
+        this.camera.position.set(ex + 40, ey + 30, ez + 40);
+        this.orbit.update();
+      }
     } finally {
       this.isRestoring = false;
     }
@@ -4564,11 +6730,48 @@ export class RegionEditorScene {
       obj.getWorldPosition(worldPos);
       obj.getWorldQuaternion(worldQuat);
       obj.getWorldScale(worldScale);
-      return { x: worldPos.x, y: worldPos.y, z: worldPos.z, yaw: yawFromQuaternion(worldQuat), scale: worldScale.x };
+      return {
+        x: worldPos.x,
+        y: worldPos.y,
+        z: worldPos.z,
+        yaw: yawFromQuaternion(worldQuat),
+        scaleX: worldScale.x,
+        scaleY: worldScale.y,
+        scaleZ: worldScale.z,
+      };
     };
 
     const assets = [...this.assets.values()].map((a) => {
       const t = getTransform(a.obj);
+      // Persist light only when non-default or explicitly disabled on an emitter.
+      let lightOut: RegionAssetLight | undefined;
+      if (a.light?.enabled === false) {
+        lightOut = { enabled: false };
+      } else if (a.light) {
+        const defaults = REGION_ASSET_LIGHT_DEFAULTS[a.model];
+        if (defaults) {
+          const color = a.light.color ?? defaults.color;
+          const intensity = a.light.intensity ?? defaults.intensity;
+          const distance = a.light.distance ?? defaults.distance;
+          const decay = a.light.decay ?? defaults.decay;
+          const offsetX = a.light.offsetX ?? defaults.offsetX;
+          const offsetY = a.light.offsetY ?? defaults.offsetY;
+          const offsetZ = a.light.offsetZ ?? defaults.offsetZ;
+          if (
+            color !== defaults.color ||
+            intensity !== defaults.intensity ||
+            distance !== defaults.distance ||
+            decay !== defaults.decay ||
+            offsetX !== defaults.offsetX ||
+            offsetY !== defaults.offsetY ||
+            offsetZ !== defaults.offsetZ
+          ) {
+            lightOut = { enabled: true, color, intensity, distance, decay, offsetX, offsetY, offsetZ };
+          }
+        } else {
+          lightOut = { ...a.light };
+        }
+      }
       return {
         id: a.id,
         model: a.model,
@@ -4577,15 +6780,43 @@ export class RegionEditorScene {
         localY: t.y,
         localZ: t.z,
         yaw: t.yaw,
-        scale: t.scale,
+        ...regionAssetScaleFields(t.scaleX, t.scaleY, t.scaleZ),
         ...(a.groupId ? { groupId: a.groupId } : {}),
+        ...(lightOut ? { light: lightOut } : {}),
+        ...(a.solid ? { solid: true } : {}),
+        ...(a.solid && a.solidBox ? { solidBox: { ...a.solidBox } } : {}),
       };
     });
     const mobSpawns = [...this.markers.values()]
       .filter((m) => m.kind === "mobSpawn")
       .map((m) => {
         const t = getTransform(m.obj);
-        return { localX: t.x, localZ: t.z };
+        return {
+          localX: t.x,
+          localZ: t.z,
+          difficulty: m.difficulty ?? 1,
+          ...(m.mobType ? { type: m.mobType } : {}),
+        };
+      });
+    const resourceNodes: RegionResourceNode[] = [...this.markers.values()]
+      .filter((m) => m.kind === "resourceNode")
+      .map((m, i) => {
+        const t = getTransform(m.obj);
+        const type = isPlaceableRegionNodeType(m.nodeType ?? "") ? m.nodeType! : "rock";
+        const id = m.name?.startsWith("region_") || m.name?.startsWith("node_") ? m.name : `node_${m.id}`;
+        const variant = (hashString(m.id) % 1000) / 1000;
+        const model =
+          type === "tree"
+            ? m.nodeModel ?? pickRandomRegionTreeModel(this.meta.biome, variant)
+            : undefined;
+        return {
+          id: id || `node_${i}`,
+          type,
+          localX: t.x,
+          localZ: t.z,
+          variant,
+          ...(model ? { model } : {}),
+        };
       });
     const villages = [...this.markers.values()]
       .filter((m) => m.kind === "village")
@@ -4602,7 +6833,7 @@ export class RegionEditorScene {
           name: m.name ?? "Portal to Region",
           localX: t.x,
           localZ: t.z,
-          targetRegionId: m.targetRegionId ?? "overworld",
+          targetRegionId: m.targetRegionId ?? "",
           targetLocalX: m.targetLocalX,
           targetLocalZ: m.targetLocalZ,
         };
@@ -4655,7 +6886,18 @@ export class RegionEditorScene {
         localX: t.x,
         localY: t.y,
         localZ: t.z,
+        sizeX: f.data.sizeX,
+        sizeY: f.data.sizeY,
+        sizeZ: f.data.sizeZ,
       };
+    });
+    const barrierVolumes = [...this.barrierVolumes.values()].map((b) => {
+      this.syncBarrierDataFromGroup(b);
+      return { ...b.data, id: b.id };
+    });
+    const clouds = [...this.clouds.values()].map((c) => {
+      this.syncCloudDataFromGroup(c);
+      return { ...c.data, id: c.id };
     });
     const houses = [...this.houses.values()].map((h) => {
       this.syncHouseDataFromGroup(h);
@@ -4683,22 +6925,32 @@ export class RegionEditorScene {
       assets,
       houses: houses.length > 0 ? houses : undefined,
       mobSpawns,
+      resourceNodes: resourceNodes.length > 0 ? resourceNodes : undefined,
       villages,
       roads: this.roads.length > 0 ? this.roads : undefined,
       grassPatches: this.grassPatches.length > 0 ? this.grassPatches : undefined,
       grassExclusions: this.grassExclusions.length > 0 ? this.grassExclusions : undefined,
-      grassColor: { ...this.grassColor },
+      grassColor: {
+        bottom: this.grassSettings.baseColour,
+        top: this.grassSettings.tipColour,
+      },
+      grassSway: this.grassSettings.windStrength,
+      grassSettings: { ...this.grassSettings },
       wind: { ...this.wind },
       colorGrading: { ...this.colorGrading },
       entryLocal,
       portalWorldX: meta.portalWorldX,
       portalWorldZ: meta.portalWorldZ,
+      worldOriginX: meta.worldOriginX,
+      worldOriginZ: meta.worldOriginZ,
       isStartingRegion: meta.isStartingRegion ? true : undefined,
       portals: portals.length > 0 ? portals : undefined,
       npcs: npcs.length > 0 ? npcs : undefined,
       worldEvents: worldEvents.length > 0 ? worldEvents : undefined,
       lights: lights.length > 0 ? lights : undefined,
       fogVolumes: fogVolumes.length > 0 ? fogVolumes : undefined,
+      barrierVolumes: barrierVolumes.length > 0 ? barrierVolumes : undefined,
+      clouds: clouds.length > 0 ? clouds : undefined,
       terrainVolumes: terrainVolumes.length > 0 ? terrainVolumes : undefined,
       musicTrack: meta.musicTrack,
     };
@@ -4712,6 +6964,14 @@ export class RegionEditorScene {
     this.lastFrameTime = now;
     if (this.playtestActive) {
       this.updatePlaytest(dt);
+    } else if (this.navMode === "fly") {
+      this.updateFly(dt);
+      // Keep orbit target synced so other systems (grass focus, framing) stay coherent.
+      this.orbit.target.set(
+        this.flyPos.x - Math.sin(this.flyYaw) * 12,
+        this.flyPos.y + Math.sin(this.flyPitch) * 12,
+        this.flyPos.z - Math.cos(this.flyYaw) * 12,
+      );
     } else {
       this.orbit.update();
     }
@@ -4723,26 +6983,33 @@ export class RegionEditorScene {
     this.stepWaterPhysics(dt);
     this.updateWaterParticles(dt);
     this.waterMeshField?.update(dt);
-    if (this.grassField) {
-      const focus = this.playtestActive ? this.playtestPos : this.orbit.target;
-      this.grassField.update(focus.x, focus.z);
-      this.grassField.drain(2);
-      this.grassField.tickWind(dt);
-      this.grassField.uniforms.uTime.value += dt;
-      this.grassField.uniforms.uSunDir.value.copy(this.sunLight.position).sub(this.sunLight.target.position).normalize();
-      this.grassField.uniforms.uSunColor.value.copy(this.sunLight.color).multiplyScalar(this.sunLight.intensity);
-      if (this.playtestActive) {
-        this.grassField.setTramplers([{ x: this.playtestPos.x, z: this.playtestPos.z, radius: 0.9 }]);
-      } else {
-        this.grassField.setTramplers([]);
-      }
+    if (this.clouds.size > 0) this.tickEditorClouds(dt);
+    // Live grass paint/erase: refresh density texture under the brush.
+    if (this.isGrassBrushing || this.isErasingGrass || this.grassPreviewDirty) {
+      this.flushGrassPreviewWhileBrushing();
     }
+    if (this.grassField) {
+      const sunDir = new THREE.Vector3()
+        .copy(this.sunLight.position)
+        .sub(this.sunLight.target.position)
+        .normalize();
+      this.grassField.setSunFromLight(sunDir, this.sunLight.color, this.sunLight.intensity);
+      if (this.playtestActive) {
+        this.grassField.setPlayer(this.playtestPos.x, this.playtestPos.y, this.playtestPos.z);
+      } else {
+        this.grassField.setPlayer(this.camera.position.x, this.camera.position.y, this.camera.position.z);
+      }
+      this.grassField.update(this.camera, dt);
+    }
+    this.skyDome.update(dt, this.camera);
     this.renderer.render(this.scene, this.camera);
   };
 
   dispose(): void {
     this.running = false;
     if (this.playtestActive) this.exitPlaytest();
+    this.suspendFlyNavListeners();
+    this.clearNeighborReferences();
     if ((this.canvas as CanvasWithScene).__regionEditorScene === this) {
       (this.canvas as CanvasWithScene).__regionEditorScene = undefined;
     }
@@ -4751,10 +7018,13 @@ export class RegionEditorScene {
     this.canvas.removeEventListener("mouseup", this.onMouseUp);
     this.canvas.removeEventListener("mouseleave", this.onMouseUp);
     this.canvas.removeEventListener("click", this.onClick);
+    this.canvas.removeEventListener("contextmenu", this.onContextMenu);
     window.removeEventListener("keydown", this.onKeyDown);
     this.transform.removeEventListener("objectChange", this.onTransformChange);
     this.transform.dispose();
     this.orbit.dispose();
+    this.skyDome.dispose();
+    this.scene.remove(this.skyDome.group);
     this.renderer.dispose();
   }
 }

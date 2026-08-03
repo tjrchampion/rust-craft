@@ -16,6 +16,10 @@ import {
   HUNGER_DECAY_PER_S,
   THIRST_DECAY_PER_S,
   STARVATION_DPS,
+  MAX_OXYGEN,
+  OXYGEN_DRAIN_PER_S,
+  OXYGEN_REGEN_PER_S,
+  DROWN_DPS,
   UNARMED_DAMAGE,
   UNARMED_GATHER_POWER,
   MELEE_RANGE,
@@ -55,6 +59,7 @@ import {
   TIER_NAMES,
   stepMovement,
   isSwimmingAt,
+  isUnderwaterAt,
   isNearWaterAt,
   waterAt,
   dist2D,
@@ -72,7 +77,11 @@ import {
   questDef,
   questsForVillage,
   QUEST_IDS,
+  ACHIEVEMENTS,
+  ACHIEVEMENT_IDS,
+  achievementTarget,
   classDef,
+  startingHotbarLoadout,
   computeActorStats,
   armorMitigation,
   applyAura,
@@ -97,6 +106,7 @@ import {
   type NpcSpec,
   type QuestOfferInfo,
   type QuestLogEntry,
+  type AchievementSnap,
   type QuestStatus,
   type ClassId,
   type BaseStats,
@@ -110,7 +120,19 @@ import {
   regionAssetColliders,
   regionAllAssets,
   regionVolumeColliders,
+  regionBarrierColliders,
   pickRegionMob,
+  ensureRegionWorldOrigins,
+  regionWorldOrigin,
+  regionLocalToWorld,
+  worldToRegionLocal,
+  findRegionAtWorld,
+  regionsNearWorld,
+  regionWorldBounds,
+  sampleRegionHeightWorld,
+  sampleRegionWaterDepthWorld,
+  REGION_STREAM_RADIUS_METERS,
+  worldNodesFromRegion,
   ClientMsg as ClientMsgSchema,
 } from "@rustcraft/shared";
 import {
@@ -181,8 +203,10 @@ interface QueuedInput {
   moveZ: number;
   jump: boolean;
   sprint: boolean;
+  crouch: boolean;
   block: boolean;
   yaw: number;
+  pitch: number;
   revivingId: string | null;
 }
 
@@ -204,6 +228,7 @@ interface PlayerState {
   mana: number;
   hunger: number;
   thirst: number;
+  oxygen: number;
   xp: number;
   level: number;
   learnedSpells: string[];
@@ -238,6 +263,8 @@ interface PlayerState {
   partyId: string | null;
   pendingInviteFrom: string | null; // inviter character id
   questProgress: Map<string, { status: "active" | "completed"; progress: number }>;
+  /** Lifetime achievement counters + unlock timestamps. */
+  achievements: Map<string, { progress: number; unlockedAt: number | null }>;
   activeAuras: ActiveAura[];
   currentTargetId: string | null;
   /** Which dungeon run this player is currently inside, or null while in
@@ -337,6 +364,11 @@ export class GameServer {
   private players = new Map<string, PlayerState>();
   private peerToChar = new Map<string, string>();
   private mobs = new Map<string, MobState>();
+  /**
+   * Region mobs waiting near a player before entering the live sim/snapshot
+   * set. Avoids ticking/sending every authored spawn across the continent.
+   */
+  private dormantRegionMobs = new Map<string, MobState>();
   private pets = new Map<string, PetState>();
   private projectiles = new Map<string, Projectile>();
   private structures: StructureSnap[] = [];
@@ -383,11 +415,9 @@ export class GameServer {
    *  once loaded -- needed on every tick a region mob moves (ground height
    *  comes from its own heightmap, not the open-world terrain function). */
   private regionBlueprints = new Map<string, RegionBlueprint>();
-  /** Regions mobs have been spawned into at least once. Unlike dungeon runs
-   *  (disposable per-party instances torn down when empty), a region is a
-   *  persistent shared zone -- once activated its mobs stay resident and
-   *  respawn normally for the rest of this process's life, mirroring
-   *  region-two's own lazy-activation precedent (see regionTwoActive). */
+  /** Regions whose NPCs/nodes/events (and dormant mob roster) are live.
+   *  Region mobs stay in `dormantRegionMobs` until a player is nearby, then
+   *  wake into `mobs` (see streamRegionMobs). */
   private activeRegionIds = new Set<string>();
   /** Active/cooldown world-event runtimes keyed by `${regionId}:${eventId}`. */
   private worldEvents = new Map<string, WorldEventRuntime>();
@@ -443,7 +473,9 @@ export class GameServer {
     // Regions are freely creatable from the editor (unlike dungeon tiers, a
     // fixed hand-curated set), so this reads whatever's on disk right now
     // rather than a bundled import -- see utils/regions.ts's comment for why.
-    for (const region of listRegionBlueprints()) {
+    const regionList = listRegionBlueprints();
+    ensureRegionWorldOrigins(regionList);
+    for (const region of regionList) {
       this.registerRegionBlueprint(region);
     }
 
@@ -520,28 +552,47 @@ export class GameServer {
       await this.removePlayer(characterId, false);
     }
 
-    const startingRegion = this.getStartingRegion();
-    const isNew = persisted.x === 0 && persisted.z === 0 && persisted.xp === 0;
+    // New characters are inserted at (0,0) with 0 XP. After their first
+    // login we persist the starting-town pose, so later logins restore
+    // whatever world position they had when they left.
+    const isNew = persisted.xp === 0 && persisted.level <= 1 && persisted.x === 0 && persisted.z === 0;
+    const loggedOutDead = persisted.hp <= 0;
 
     let instanceId: string | null = null;
     let x = persisted.x;
     let z = persisted.z;
     let y = persisted.y;
+    let hp = persisted.hp;
+    let mana = persisted.mana;
+    let dead = false;
 
-    if (startingRegion) {
-      this.activateRegion(startingRegion);
-      instanceId = `region_${startingRegion.id}`;
-      if (isNew || (x === 0 && z === 0)) {
-        x = startingRegion.entryLocal.x + (Math.random() - 0.5) * 2;
-        z = startingRegion.entryLocal.z + (Math.random() - 0.5) * 2;
-      }
-      y = sampleRegionHeight(startingRegion, x, z) + 0.1;
-    } else if (isNew) {
-      x = SPAWN_POINT.x + (Math.random() - 0.5) * 6;
-      z = SPAWN_POINT.z + (Math.random() - 0.5) * 6;
-      y = terrainHeight(x, z);
+    if (isNew) {
+      // Brand-new character → starting town entry only.
+      const spawn = this.spawnInStartingRegion();
+      instanceId = spawn.instanceId;
+      x = spawn.x;
+      y = spawn.y;
+      z = spawn.z;
+    } else if (loggedOutDead) {
+      // Corpse logout → nearest village, still keeping continent ownership.
+      const village = this.nearestVillageAt(x, z);
+      const placed = this.restoreContinentPose(
+        village.x + (Math.random() - 0.5) * 6,
+        village.z + (Math.random() - 0.5) * 6,
+      );
+      instanceId = placed.instanceId;
+      x = placed.x;
+      y = placed.y;
+      z = placed.z;
+      hp = Math.max(1, persisted.hp);
+      mana = Math.max(0, persisted.mana);
     } else {
-      y = Math.max(persisted.y, terrainHeight(x, z));
+      // Returning alive → exact logout X/Z (and the region that contains it).
+      const placed = this.restoreContinentPose(x, z);
+      instanceId = placed.instanceId;
+      x = placed.x;
+      y = placed.y;
+      z = placed.z;
     }
 
     const player: PlayerState = {
@@ -558,10 +609,11 @@ export class GameServer {
       hairColor: persisted.hairColor,
       eyeColor: persisted.eyeColor,
       outfitHue: persisted.outfitHue,
-      hp: persisted.hp,
-      mana: persisted.mana,
+      hp,
+      mana,
       hunger: persisted.hunger,
       thirst: persisted.thirst,
+      oxygen: MAX_OXYGEN,
       xp: persisted.xp,
       level: persisted.level,
       learnedSpells: [
@@ -569,7 +621,7 @@ export class GameServer {
       ],
       inventory: persisted.inventory,
       selectedSlot: 0,
-      dead: persisted.hp <= 0,
+      dead,
       inputQueue: [],
       lastAckSeq: 0,
       lastMoveMag: 0,
@@ -591,10 +643,25 @@ export class GameServer {
       partyId: null,
       pendingInviteFrom: null,
       questProgress: new Map(persisted.questProgress.map((q) => [q.questId, { status: q.status, progress: q.progress }])),
+      achievements: new Map(
+        (persisted.achievements ?? []).map((a) => [
+          a.achievementId,
+          { progress: a.progress, unlockedAt: a.unlockedAt },
+        ]),
+      ),
       activeAuras: [],
       currentTargetId: null,
       instanceId,
     };
+
+    if (loggedOutDead && !isNew) {
+      player.hp = this.maxHp(player) * RESPAWN_HP_FRACTION;
+      player.mana = this.maxMana(player) * 0.5;
+      player.hunger = Math.max(player.hunger, 30);
+      player.thirst = Math.max(player.thirst, 30);
+    }
+
+    this.ensureStartingHotbar(player);
 
     this.players.set(player.id, player);
     this.peerToChar.set(peer.id, player.id);
@@ -611,45 +678,55 @@ export class GameServer {
       }
     }
 
-    // Mirrors the party re-link above: disconnecting doesn't remove you from
-    // a dungeon run either (see removePlayer), so reconnecting just needs to
-    // re-attach this fresh PlayerState and drop them back at the layout's
-    // entry point, same as it was when they left.
-    for (const instance of this.dungeonInstances.values()) {
-      if (instance.memberIds.has(player.id)) {
-        player.instanceId = instance.id;
-        const layout = generateDungeonLayout(instance.portalId);
-        player.move = {
-          x: layout.entryPoint.x,
-          y: layout.floorY,
-          z: layout.entryPoint.z,
-          vy: 0,
-          grounded: true,
-        };
-        instance.lastActivityAt = Date.now();
-        this.sendDungeonState(player, instance);
-        break;
+    // Dungeon runs: alive members re-enter at the layout entry. Dead logouts
+    // already woke at a village and must not be pulled back into the run.
+    if (!loggedOutDead) {
+      for (const instance of this.dungeonInstances.values()) {
+        if (instance.memberIds.has(player.id)) {
+          player.instanceId = instance.id;
+          const layout = generateDungeonLayout(instance.portalId);
+          player.move = {
+            x: layout.entryPoint.x,
+            y: layout.floorY,
+            z: layout.entryPoint.z,
+            vy: 0,
+            grounded: true,
+          };
+          instance.lastActivityAt = Date.now();
+          this.sendDungeonState(player, instance);
+          break;
+        }
+      }
+    } else {
+      // Drop stale dungeon membership so a corpse logout can't soft-lock them.
+      for (const instance of this.dungeonInstances.values()) {
+        instance.memberIds.delete(player.id);
       }
     }
 
-    // Regions are persistent shared zones, not per-party runs -- a
-    // reconnecting player who was inside one just needs dropping back at
-    // its entry point, same idea as the dungeon re-link above.
+    // Catch up quest/level achievements earned before this system existed.
+    this.checkAndUnlockAchievements(player, { sync: false });
+
+    // Continent regions: keep the restored world position — only sync UI/music.
     if (player.instanceId?.startsWith("region_")) {
       const regionId = player.instanceId.slice("region_".length);
       const region = this.regionBlueprints.get(regionId);
       if (region) {
-        player.move = {
-          x: region.entryLocal.x,
-          y: sampleRegionHeight(region, region.entryLocal.x, region.entryLocal.z),
-          z: region.entryLocal.z,
-          vy: 0,
-          grounded: true,
-        };
         this.sendRegionState(player, region);
       } else {
-        player.instanceId = null;
+        const placed = this.spawnInStartingRegion();
+        player.instanceId = placed.instanceId;
+        player.move = { x: placed.x, y: placed.y, z: placed.z, vy: 0, grounded: true };
+        const start = this.getStartingRegion();
+        if (start) this.sendRegionState(player, start);
       }
+    } else if (!this.isDungeonInstance(player.instanceId)) {
+      // Never leave players with a null open-world instance.
+      const placed = this.spawnInStartingRegion();
+      player.instanceId = placed.instanceId;
+      player.move = { x: placed.x, y: placed.y, z: placed.z, vy: 0, grounded: true };
+      const start = this.getStartingRegion();
+      if (start) this.sendRegionState(player, start);
     }
 
     this.sendTo(peer, {
@@ -671,6 +748,7 @@ export class GameServer {
       structures: this.structures,
       npcs: this.npcs.map((n) => this.npcSnapFor(n, player)),
       questLog: this.questLogFor(player),
+      achievements: this.achievementsFor(player),
       serverTime: Date.now(),
       dayLengthS: DAY_LENGTH_S,
       timeOfDay: this.timeOfDay(),
@@ -699,7 +777,46 @@ export class GameServer {
     for (const mob of this.mobs.values()) {
       if (mob.targetId === charId) mob.targetId = null;
     }
-    if (save) await savePlayer(this.toPersisted(player)).catch((e) => console.error("[game] save failed", e));
+    if (save) {
+      // Alive: persist exact world coords. Dead: wake at nearest village so
+      // the next login isn't a corpse at the death spot.
+      this.applyLogoutSpawn(player);
+      await savePlayer(this.toPersisted(player)).catch((e) => console.error("[game] save failed", e));
+    }
+  }
+
+  /** Normalize logout position before persisting. */
+  private applyLogoutSpawn(player: PlayerState): void {
+    if (!player.dead) {
+      // Keep live world/dungeon coords as-is.
+      return;
+    }
+
+    // Leaving a dungeon as a corpse ejects them from the run.
+    if (this.isDungeonInstance(player.instanceId)) {
+      const instance = this.dungeonInstances.get(player.instanceId!);
+      if (instance) instance.memberIds.delete(player.id);
+    }
+
+    const village = this.nearestVillageAt(player.move.x, player.move.z);
+    const placed = this.placeInRegionAt(
+      village.x + (Math.random() - 0.5) * 6,
+      village.z + (Math.random() - 0.5) * 6,
+    );
+    player.instanceId = placed.instanceId;
+    player.move = {
+      x: placed.x,
+      y: placed.y,
+      z: placed.z,
+      vy: 0,
+      grounded: true,
+    }
+    player.dead = false;
+    player.hp = this.maxHp(player) * RESPAWN_HP_FRACTION;
+    player.mana = this.maxMana(player) * 0.5;
+    player.hunger = Math.max(player.hunger, 30);
+    player.thirst = Math.max(player.thirst, 30);
+    player.oxygen = MAX_OXYGEN;
   }
 
   handleMessage(peer: PeerLike, raw: unknown): void {
@@ -820,13 +937,22 @@ export class GameServer {
 
   // ============================ chat & social ============================
 
-  private handleChat(player: PlayerState, channel: "realm" | "party", text: string): void {
+  private handleChat(player: PlayerState, channel: "realm" | "region" | "party", text: string): void {
     if (channel === "party") {
       if (!player.partyId) {
         this.sendEvent(player, { t: "event", kind: "error", message: "You are not in a party" });
         return;
       }
       this.sendToParty(player.partyId, { t: "chat", channel: "party", from: player.name, text });
+      return;
+    }
+    if (channel === "region") {
+      const regionId = this.regionIdFromInstance(player.instanceId) ?? player.lastRegionId;
+      if (!regionId) {
+        this.sendEvent(player, { t: "event", kind: "error", message: "You are not in a region" });
+        return;
+      }
+      this.sendToRegion(regionId, { t: "chat", channel: "region", from: player.name, text });
       return;
     }
     this.broadcast({ t: "chat", channel: "realm", from: player.name, text });
@@ -973,6 +1099,132 @@ export class GameServer {
     return entries;
   }
 
+  private achEntry(player: PlayerState, id: string): { progress: number; unlockedAt: number | null } {
+    let e = player.achievements.get(id);
+    if (!e) {
+      e = { progress: 0, unlockedAt: null };
+      player.achievements.set(id, e);
+    }
+    return e;
+  }
+
+  private achievementProgressValue(player: PlayerState, id: string): number {
+    const def = ACHIEVEMENTS[id];
+    if (!def) return 0;
+    const entry = player.achievements.get(id);
+    if (entry?.unlockedAt != null) return achievementTarget(def);
+    const c = def.criteria;
+    switch (c.kind) {
+      case "quest_complete":
+        return player.questProgress.get(c.questId)?.status === "completed" ? 1 : 0;
+      case "quest_complete_any": {
+        let n = 0;
+        for (const e of player.questProgress.values()) if (e.status === "completed") n++;
+        return n;
+      }
+      case "level":
+        return player.level >= c.level ? 1 : 0;
+      case "kill":
+      case "gather":
+      case "world_event":
+      case "dungeon_complete":
+        return entry?.progress ?? 0;
+    }
+  }
+
+  private achievementsFor(player: PlayerState): AchievementSnap[] {
+    return ACHIEVEMENT_IDS.map((id) => {
+      const def = ACHIEVEMENTS[id]!;
+      const target = achievementTarget(def);
+      const entry = player.achievements.get(id);
+      const progress = Math.min(target, this.achievementProgressValue(player, id));
+      const complete = entry?.unlockedAt != null;
+      return {
+        id: def.id,
+        name: def.name,
+        description: def.description,
+        requirement: def.requirement,
+        category: def.category,
+        rewardXp: def.rewardXp,
+        rewardItems: def.rewardItems.map((r) => ({ ...r })),
+        progress,
+        target,
+        complete,
+        unlockedAt: entry?.unlockedAt ?? null,
+      };
+    });
+  }
+
+  private bumpAchievementCounter(
+    player: PlayerState,
+    kind: "kill" | "gather" | "world_event" | "dungeon_complete",
+    key: string,
+    amount: number,
+  ): void {
+    if (amount <= 0) return;
+    for (const id of ACHIEVEMENT_IDS) {
+      const def = ACHIEVEMENTS[id]!;
+      const c = def.criteria;
+      if (c.kind !== kind) continue;
+      if (kind === "kill" && c.kind === "kill" && c.mobType !== key) continue;
+      if (kind === "gather" && c.kind === "gather" && c.itemId !== key) continue;
+      if (kind === "world_event" && c.kind === "world_event" && c.eventId && c.eventId !== key) continue;
+      const entry = this.achEntry(player, id);
+      if (entry.unlockedAt != null) continue;
+      entry.progress = Math.min(achievementTarget(def), entry.progress + amount);
+      player.dirty = true;
+    }
+    this.checkAndUnlockAchievements(player);
+  }
+
+  private unlockAchievement(player: PlayerState, id: string): void {
+    const def = ACHIEVEMENTS[id];
+    if (!def) return;
+    const entry = this.achEntry(player, id);
+    if (entry.unlockedAt != null) return;
+    entry.unlockedAt = Date.now();
+    entry.progress = achievementTarget(def);
+    this.grantXp(player, def.rewardXp, { skipAchievements: true });
+    const items: { itemId: string; qty: number }[] = [];
+    for (const r of def.rewardItems) {
+      addItem(player.inventory, r.itemId, r.qty);
+      items.push({ itemId: r.itemId, qty: r.qty });
+    }
+    player.dirty = true;
+    this.sendInventory(player);
+    this.sendTo(player.peer, {
+      t: "achievementUnlocked",
+      id: def.id,
+      name: def.name,
+      xp: def.rewardXp,
+      items,
+    });
+  }
+
+  private checkAndUnlockAchievements(player: PlayerState, opts?: { sync?: boolean }): void {
+    let unlocked = false;
+    for (let pass = 0; pass < 3; pass++) {
+      let passUnlock = false;
+      for (const id of ACHIEVEMENT_IDS) {
+        const def = ACHIEVEMENTS[id]!;
+        const entry = this.achEntry(player, id);
+        if (entry.unlockedAt != null) continue;
+        const progress = this.achievementProgressValue(player, id);
+        entry.progress = progress;
+        if (progress >= achievementTarget(def)) {
+          this.unlockAchievement(player, id);
+          passUnlock = true;
+          unlocked = true;
+        }
+      }
+      if (!passUnlock) break;
+    }
+    if (opts?.sync !== false) {
+      this.sendTo(player.peer, { t: "achievements", achievements: this.achievementsFor(player) });
+    }
+    if (unlocked) player.dirty = true;
+  }
+
   private npcSnapFor(npc: NpcSpec, player: PlayerState): NpcSnap {
     let hasComplete = false;
     let hasAvailable = false;
@@ -998,7 +1250,8 @@ export class GameServer {
       if (!bp || !bp.npcs) return;
       const rNpc = bp.npcs.find((n) => n.id === realId);
       if (!rNpc) return;
-      if (dist2D(player.move.x, player.move.z, rNpc.localX, rNpc.localZ) > 8) return;
+      const npcW = regionLocalToWorld(bp, rNpc.localX, rNpc.localZ);
+      if (dist2D(player.move.x, player.move.z, npcW.x, npcW.z) > 8) return;
 
       const offers: QuestOfferInfo[] = [];
 
@@ -1172,17 +1425,21 @@ export class GameServer {
 
       player.questProgress.set(quest.id, { status: "completed", progress: quest.objectiveCount });
       this.grantXp(player, quest.rewardXp);
-      const rewards: InvItem[] = [];
+      const rewards: { itemId: string; qty: number }[] = [];
       for (const item of quest.rewardItems) {
-        this.grantItemToPlayer(player, item.itemId, item.qty);
-        rewards.push({ itemId: item.itemId, count: item.qty });
+        addItem(player.inventory, item.itemId, item.qty);
+        rewards.push({ itemId: item.itemId, qty: item.qty });
       }
       player.dirty = true;
+      this.sendInventory(player);
       this.sendTo(player.peer, { t: "questLog", quests: this.questLogFor(player) });
-      this.sendEvent(player, {
-        t: "event",
-        kind: "quest",
-        message: `Completed "${quest.name}"! +${quest.rewardXp} XP`,
+      this.checkAndUnlockAchievements(player);
+      this.sendTo(player.peer, {
+        t: "questComplete",
+        questId: quest.id,
+        questName: quest.name,
+        xp: quest.rewardXp,
+        items: rewards,
       });
       // Trigger WoW-style loot window with rewards!
       this.sendTo(player.peer, {
@@ -1259,12 +1516,18 @@ export class GameServer {
     let changed = false;
     for (const [questId, entry] of player.questProgress) {
       if (entry.status !== "active") continue;
-      const quest = questDef(questId);
+      let quest;
+      try {
+        quest = questDef(questId);
+      } catch {
+        continue;
+      }
       if (quest.objectiveKind !== "kill" || quest.objectiveTarget !== mobType) continue;
       if (entry.progress >= quest.objectiveCount) continue;
       entry.progress = Math.min(quest.objectiveCount, entry.progress + 1);
       changed = true;
     }
+    this.bumpAchievementCounter(player, "kill", mobType, 1);
     if (changed) {
       player.dirty = true;
       this.sendTo(player.peer, { t: "questLog", quests: this.questLogFor(player) });
@@ -1290,12 +1553,18 @@ export class GameServer {
     let changed = false;
     for (const [questId, entry] of player.questProgress) {
       if (entry.status !== "active") continue;
-      const quest = questDef(questId);
+      let quest;
+      try {
+        quest = questDef(questId);
+      } catch {
+        continue;
+      }
       if (quest.objectiveKind !== "gather" || quest.objectiveTarget !== itemId) continue;
       if (entry.progress >= quest.objectiveCount) continue;
       entry.progress = Math.min(quest.objectiveCount, entry.progress + qty);
       changed = true;
     }
+    this.bumpAchievementCounter(player, "gather", itemId, qty);
     if (changed) {
       player.dirty = true;
       this.sendTo(player.peer, { t: "questLog", quests: this.questLogFor(player) });
@@ -1578,7 +1847,11 @@ export class GameServer {
    *  it's this check, not distance, that keeps concurrent runs (and the
    *  overworld) from bleeding into each other. */
   private sameInstance(a: { instanceId: string | null }, b: { instanceId: string | null }): boolean {
-    return a.instanceId === b.instanceId;
+    if (a.instanceId === b.instanceId) return true;
+    // Open regions share one continent space (seamless streaming) — dungeons stay isolated.
+    const ra = this.regionIdFromInstance(a.instanceId);
+    const rb = this.regionIdFromInstance(b.instanceId);
+    return ra !== null && rb !== null;
   }
 
   /** All party members (including the player themselves) currently online,
@@ -1743,16 +2016,23 @@ export class GameServer {
   }
 
   private teleportOutOfDungeon(player: PlayerState, instance: DungeonInstance | null): void {
+    // No open overworld — dungeon exits return to the starting town (or the
+    // region that still contains the old portal coords, if any).
     const portal = instance ? this.dungeonPortals.get(instance.portalId) : null;
-    const dest = portal ? { x: portal.x, z: portal.z } : this.nearestGraveyard(player.move.x, player.move.z);
-    player.instanceId = null;
-    player.move = { x: dest.x, y: terrainHeight(dest.x, dest.z), z: dest.z, vy: 0, grounded: true };
+    const hintX = portal?.x ?? player.move.x;
+    const hintZ = portal?.z ?? player.move.z;
+    const placed = this.placeInRegionAt(hintX, hintZ);
+    player.instanceId = placed.instanceId;
+    player.move = { x: placed.x, y: placed.y, z: placed.z, vy: 0, grounded: true };
     player.dirty = true;
     for (const pet of this.pets.values()) {
-      if (pet.ownerId === player.id) pet.instanceId = null;
+      if (pet.ownerId === player.id) pet.instanceId = player.instanceId;
     }
     this.sendSelf(player);
     this.sendDungeonState(player, null);
+    const regionId = this.regionIdFromInstance(player.instanceId);
+    const region = regionId ? this.regionBlueprints.get(regionId) : undefined;
+    if (region) this.sendRegionState(player, region);
   }
 
   private sendDungeonState(player: PlayerState, instance: DungeonInstance | null): void {
@@ -1822,6 +2102,7 @@ export class GameServer {
       member.dirty = true;
       this.sendInventory(member);
       this.sendTo(member.peer, { t: "dungeonComplete", tier: instance.tier, xp: xpEach, items });
+      this.bumpAchievementCounter(member, "dungeon_complete", "", 1);
       this.teleportOutOfDungeon(member, instance);
     }
     this.broadcastChat(
@@ -1944,54 +2225,74 @@ export class GameServer {
       const spawn = region.mobSpawns[i]!;
       const type = spawn.type ?? pickRegionMob(region.biome, Math.random());
       const def = mobDef(type);
+      const world = regionLocalToWorld(region, spawn.localX, spawn.localZ);
       const y = sampleRegionHeight(region, spawn.localX, spawn.localZ);
       const mobId = `${instanceId}_${i}`;
-      this.mobs.set(mobId, {
+      const scale = Math.max(0.25, spawn.difficulty ?? 1);
+      // Stay dormant until a player walks near — keeps tickMobs + snapshots
+      // cheap when a region has dozens of authored spawns.
+      this.dormantRegionMobs.set(mobId, {
         id: mobId,
         type,
-        x: spawn.localX,
+        x: world.x,
         y,
-        z: spawn.localZ,
+        z: world.z,
         yaw: 0,
-        hp: def.maxHp,
-        homeX: spawn.localX,
-        homeZ: spawn.localZ,
+        hp: def.maxHp * scale,
+        homeX: world.x,
+        homeZ: world.z,
         targetId: null,
         attackReadyAt: 0,
         respawnAt: null,
-        wanderTx: spawn.localX,
-        wanderTz: spawn.localZ,
+        wanderTx: world.x,
+        wanderTz: world.z,
         nextWanderAt: 0,
         actionAnimUntil: 0,
         activeAuras: [],
         instanceId,
-        hpMult: 1,
-        dmgMult: 1,
+        hpMult: scale,
+        dmgMult: scale,
       });
     }
 
     for (const rNpc of region.npcs ?? []) {
+      const world = regionLocalToWorld(region, rNpc.localX, rNpc.localZ);
       const y = sampleRegionHeight(region, rNpc.localX, rNpc.localZ);
       this.activeRegionNpcs.set(rNpc.id, {
         id: rNpc.id,
         name: rNpc.name,
         regionId: region.id,
         instanceId,
-        x: rNpc.localX,
+        x: world.x,
         y,
-        z: rNpc.localZ,
-        startX: rNpc.localX,
-        startZ: rNpc.localZ,
+        z: world.z,
+        startX: world.x,
+        startZ: world.z,
         hp: 100,
         maxHp: 100,
       });
     }
+
+    this.syncRegionResourceNodes(region);
 
     const now = Date.now();
     for (const ev of region.worldEvents ?? []) {
       const key = `${region.id}:${ev.id}`;
       if (this.worldEvents.has(key)) continue;
       this.worldEvents.set(key, createWorldEventRuntime(ev, region.id, now));
+    }
+  }
+
+  /** Replace gather nodes authored on a region (safe to call on editor re-save). */
+  private syncRegionResourceNodes(region: RegionBlueprint): void {
+    for (const id of [...this.nodes.keys()]) {
+      // Authored ids always contain `_node` after the region prefix; mob ids do not.
+      if (!id.startsWith(`region_${region.id}_`) || !id.includes("_node")) continue;
+      this.nodes.delete(id);
+      this.nodeHits.delete(id);
+    }
+    for (const node of worldNodesFromRegion(region)) {
+      this.nodes.set(node.id, node);
     }
   }
 
@@ -2004,6 +2305,114 @@ export class GameServer {
       z: blueprint.portalWorldZ,
     });
     this.activateRegion(blueprint);
+    // activateRegion no-ops when already live — still refresh authored nodes.
+    this.syncRegionResourceNodes(blueprint);
+  }
+
+  /**
+   * Tear down a region that was deleted from disk: relocate players, drop
+   * mobs/NPCs/nodes/events, scrub in-memory portal links on other regions,
+   * and remove catalog entries.
+   */
+  unregisterRegionBlueprint(regionId: string): void {
+    const instanceId = `region_${regionId}`;
+    const fallback =
+      [...this.regionBlueprints.values()].find((r) => r.id !== regionId && r.isStartingRegion) ??
+      [...this.regionBlueprints.values()].find((r) => r.id !== regionId);
+    if (fallback) {
+      for (const player of this.players.values()) {
+        if (this.regionIdFromInstance(player.instanceId) === regionId) {
+          this.teleportToRegion(player, fallback.id, fallback.entryLocal.x, fallback.entryLocal.z);
+        }
+        if (player.lastRegionId === regionId) {
+          player.lastRegionId = undefined;
+          player.lastRegionX = undefined;
+          player.lastRegionZ = undefined;
+        }
+      }
+    }
+
+    for (const id of [...this.mobs.keys()]) {
+      const mob = this.mobs.get(id);
+      if (mob?.instanceId === instanceId) this.mobs.delete(id);
+    }
+    for (const id of [...this.dormantRegionMobs.keys()]) {
+      const mob = this.dormantRegionMobs.get(id);
+      if (mob?.instanceId === instanceId) this.dormantRegionMobs.delete(id);
+    }
+    for (const [npcId, npc] of [...this.activeRegionNpcs.entries()]) {
+      if (npc.regionId === regionId) this.activeRegionNpcs.delete(npcId);
+    }
+    for (const id of [...this.nodes.keys()]) {
+      if (id.startsWith(`region_${regionId}_`)) {
+        this.nodes.delete(id);
+        this.nodeHits.delete(id);
+      }
+    }
+    for (const key of [...this.worldEvents.keys()]) {
+      if (key.startsWith(`${regionId}:`)) this.worldEvents.delete(key);
+    }
+
+    for (const bp of this.regionBlueprints.values()) {
+      if (bp.id === regionId || !bp.portals?.length) continue;
+      const next = bp.portals.filter((p) => p.targetRegionId !== regionId);
+      if (next.length !== bp.portals.length) {
+        bp.portals = next.length > 0 ? next : undefined;
+      }
+    }
+
+    this.regionBlueprints.delete(regionId);
+    this.regionPortals.delete(regionId);
+    this.activeRegionIds.delete(regionId);
+  }
+
+  /** Reposition a region on the continent map — rebases live mobs/NPCs by the
+   *  origin delta so editor layout changes take effect without a restart. */
+  updateRegionWorldOrigin(regionId: string, worldOriginX: number, worldOriginZ: number): void {
+    const bp = this.regionBlueprints.get(regionId);
+    if (!bp) return;
+    const prev = regionWorldOrigin(bp);
+    const dx = worldOriginX - prev.x;
+    const dz = worldOriginZ - prev.z;
+    bp.worldOriginX = worldOriginX;
+    bp.worldOriginZ = worldOriginZ;
+    this.regionBlueprints.set(regionId, bp);
+    if (dx === 0 && dz === 0) return;
+
+    const instanceId = `region_${regionId}`;
+    for (const mob of this.mobs.values()) {
+      if (mob.instanceId !== instanceId) continue;
+      mob.x += dx;
+      mob.z += dz;
+      mob.homeX += dx;
+      mob.homeZ += dz;
+      mob.wanderTx += dx;
+      mob.wanderTz += dz;
+    }
+    for (const mob of this.dormantRegionMobs.values()) {
+      if (mob.instanceId !== instanceId) continue;
+      mob.x += dx;
+      mob.z += dz;
+      mob.homeX += dx;
+      mob.homeZ += dz;
+      mob.wanderTx += dx;
+      mob.wanderTz += dz;
+    }
+    for (const npc of this.activeRegionNpcs.values()) {
+      if (npc.regionId !== regionId) continue;
+      npc.x += dx;
+      npc.z += dz;
+      npc.startX += dx;
+      npc.startZ += dz;
+    }
+    for (const player of this.players.values()) {
+      if (this.regionIdFromInstance(player.instanceId) !== regionId) continue;
+      player.move.x += dx;
+      player.move.z += dz;
+      player.dirty = true;
+    }
+    // Rebuild authored gather nodes at the new world origin.
+    this.syncRegionResourceNodes(bp);
   }
 
   private getStartingRegion(): RegionBlueprint | undefined {
@@ -2017,9 +2426,81 @@ export class GameServer {
     );
   }
 
+  /** Spawn pose at the starting region's entry (with a tiny jitter). */
+  private spawnInStartingRegion(): { instanceId: string; x: number; y: number; z: number } {
+    const startingRegion = this.getStartingRegion();
+    if (!startingRegion) {
+      return { instanceId: "", x: 0, y: 0, z: 0 };
+    }
+    this.activateRegion(startingRegion);
+    const lx = startingRegion.entryLocal.x + (Math.random() - 0.5) * 2;
+    const lz = startingRegion.entryLocal.z + (Math.random() - 0.5) * 2;
+    const world = regionLocalToWorld(startingRegion, lx, lz);
+    return {
+      instanceId: `region_${startingRegion.id}`,
+      x: world.x,
+      y: sampleRegionHeight(startingRegion, lx, lz) + 0.1,
+      z: world.z,
+    };
+  }
+
+  /**
+   * Restore a saved world pose into the continent. Keeps the exact (x,z) the
+   * player logged out at — only used for returning characters, never to force
+   * starting-town for veterans.
+   */
+  private restoreContinentPose(
+    x: number,
+    z: number,
+  ): { instanceId: string; x: number; y: number; z: number } {
+    const under =
+      findRegionAtWorld(this.regionBlueprints.values(), x, z) ??
+      this.nearestRegionToWorld(x, z);
+    if (under) {
+      this.activateRegion(under);
+      const y = sampleRegionHeightWorld(under, x, z);
+      return {
+        instanceId: `region_${under.id}`,
+        x,
+        y: (y ?? this.continentGroundAt(x, z)) + 0.1,
+        z,
+      };
+    }
+    // No region blueprints loaded — last-resort starting town.
+    return this.spawnInStartingRegion();
+  }
+
+  /** Closest region by distance to its world AABB (0 if inside). */
+  private nearestRegionToWorld(wx: number, wz: number): RegionBlueprint | null {
+    let best: RegionBlueprint | null = null;
+    let bestDist = Infinity;
+    for (const bp of this.regionBlueprints.values()) {
+      const b = regionWorldBounds(bp);
+      const dx = wx < b.minX ? b.minX - wx : wx > b.maxX ? wx - b.maxX : 0;
+      const dz = wz < b.minZ ? b.minZ - wz : wz > b.maxZ ? wz - b.maxZ : 0;
+      const d = dx * dx + dz * dz;
+      if (d < bestDist) {
+        bestDist = d;
+        best = bp;
+      }
+    }
+    return best;
+  }
+
+  /** Alias used by dungeon exit / logout helpers. */
+  private placeInRegionAt(
+    x: number,
+    z: number,
+  ): { instanceId: string; x: number; y: number; z: number } {
+    return this.restoreContinentPose(x, z);
+  }
+
   private teleportToRegion(player: PlayerState, targetRegionId: string, targetX?: number, targetZ?: number): void {
+    // Legacy "overworld" portal targets redirect to the starting town.
     if (targetRegionId === "overworld") {
-      this.teleportOutOfRegion(player, this.regionIdFromInstance(player.instanceId) ?? "");
+      const start = this.getStartingRegion();
+      if (!start) return;
+      this.teleportToRegion(player, start.id, start.entryLocal.x, start.entryLocal.z);
       return;
     }
     const targetRegion = this.regionBlueprints.get(targetRegionId);
@@ -2028,8 +2509,15 @@ export class GameServer {
     const currentRegionId = this.regionIdFromInstance(player.instanceId);
     if (currentRegionId && currentRegionId !== targetRegionId) {
       player.lastRegionId = currentRegionId;
-      player.lastRegionX = player.move.x;
-      player.lastRegionZ = player.move.z;
+      const cur = this.regionBlueprints.get(currentRegionId);
+      if (cur) {
+        const local = worldToRegionLocal(cur, player.move.x, player.move.z);
+        player.lastRegionX = local.x;
+        player.lastRegionZ = local.z;
+      } else {
+        player.lastRegionX = player.move.x;
+        player.lastRegionZ = player.move.z;
+      }
     }
 
     this.activateRegion(targetRegion);
@@ -2037,14 +2525,63 @@ export class GameServer {
     player.instanceId = `region_${targetRegionId}`;
     const lx = targetX ?? targetRegion.entryLocal.x;
     const lz = targetZ ?? targetRegion.entryLocal.z;
+    const world = regionLocalToWorld(targetRegion, lx, lz);
     const ly = sampleRegionHeight(targetRegion, lx, lz);
-    player.move = { x: lx, y: ly, z: lz, vy: 0, grounded: true };
+    player.move = { x: world.x, y: ly, z: world.z, vy: 0, grounded: true };
     player.dirty = true;
     for (const pet of this.pets.values()) {
       if (pet.ownerId === player.id) pet.instanceId = player.instanceId;
     }
     this.sendSelf(player);
     this.sendRegionState(player, targetRegion);
+  }
+
+  /** Soft zone ownership change — no teleport, no loading screen. */
+  private seamlessEnterRegion(player: PlayerState, region: RegionBlueprint): void {
+    if (this.regionIdFromInstance(player.instanceId) === region.id) return;
+    this.activateRegion(region);
+    player.instanceId = `region_${region.id}`;
+    for (const pet of this.pets.values()) {
+      if (pet.ownerId === player.id) pet.instanceId = player.instanceId;
+    }
+    player.dirty = true;
+    this.sendRegionState(player, region);
+  }
+
+  private continentGroundAt(wx: number, wz: number): number {
+    for (const bp of this.regionBlueprints.values()) {
+      const h = sampleRegionHeightWorld(bp, wx, wz);
+      if (h !== null) return h;
+    }
+    return 0;
+  }
+
+  private continentWaterDepthAt(wx: number, wz: number): number {
+    for (const bp of this.regionBlueprints.values()) {
+      if (sampleRegionHeightWorld(bp, wx, wz) === null) continue;
+      return sampleRegionWaterDepthWorld(bp, wx, wz);
+    }
+    return 0;
+  }
+
+  private continentCollidersNear(wx: number, wz: number): ReturnType<typeof regionAssetColliders> {
+    const near = regionsNearWorld(this.regionBlueprints.values(), wx, wz, REGION_STREAM_RADIUS_METERS);
+    const out: ReturnType<typeof regionAssetColliders> = [];
+    for (const bp of near) {
+      const o = regionWorldOrigin(bp);
+      for (const c of [
+        ...regionAssetColliders(regionAllAssets(bp)),
+        ...regionVolumeColliders(bp.terrainVolumes ?? []),
+        ...regionBarrierColliders(bp.barrierVolumes),
+      ]) {
+        out.push({
+          ...c,
+          x: c.x + o.x,
+          z: c.z + o.z,
+        });
+      }
+    }
+    return out;
   }
 
   private handleRegionPortal(player: PlayerState, targetRegionId: string, portalId?: string): void {
@@ -2055,43 +2592,31 @@ export class GameServer {
       const currentRegion = this.regionBlueprints.get(currentRegionId);
       if (!currentRegion) return;
 
-      // Check inter-region portal links
+      // Check inter-region portal links (player is world-space; links are local).
       if (currentRegion.portals) {
         const link = currentRegion.portals.find((p) => p.id === portalId || p.targetRegionId === targetRegionId);
         if (link) {
-          if (dist2D(player.move.x, player.move.z, link.localX, link.localZ) <= 8.0) {
+          const linkW = regionLocalToWorld(currentRegion, link.localX, link.localZ);
+          if (dist2D(player.move.x, player.move.z, linkW.x, linkW.z) <= 8.0) {
             this.teleportToRegion(player, link.targetRegionId, link.targetLocalX, link.targetLocalZ);
             return;
           }
         }
       }
 
-      // Or check region exit portal (entryLocal)
-      if (dist2D(player.move.x, player.move.z, currentRegion.entryLocal.x, currentRegion.entryLocal.z) <= 6.0) {
-        this.teleportOutOfRegion(player, currentRegionId);
-        return;
-      }
-    } else {
-      // Overworld portal
-      const portal = this.regionPortals.get(targetRegionId);
-      const region = this.regionBlueprints.get(targetRegionId);
-      if (!portal || !region) return;
-      if (dist2D(player.move.x, player.move.z, portal.x, portal.z) > DUNGEON_PORTAL_ACTIVATION_RADIUS) return;
-      this.teleportToRegion(player, targetRegionId);
+      // No "leave to overworld" — entryLocal is just a landmark now.
     }
   }
 
+  /** Legacy interact id — redirect home instead of dumping to overworld. */
   private handleRegionLeave(player: PlayerState): void {
-    const regionId = this.regionIdFromInstance(player.instanceId);
-    if (!regionId) return;
-    const region = this.regionBlueprints.get(regionId);
-    if (region && dist2D(player.move.x, player.move.z, region.entryLocal.x, region.entryLocal.z) > 6.0) {
-      return; // Too far from the exit portal
-    }
-    this.teleportOutOfRegion(player, regionId);
+    const start = this.getStartingRegion();
+    if (!start) return;
+    if (this.regionIdFromInstance(player.instanceId) === start.id) return;
+    this.teleportToRegion(player, start.id, start.entryLocal.x, start.entryLocal.z);
   }
 
-  private teleportOutOfRegion(player: PlayerState, regionId: string): void {
+  private teleportOutOfRegion(player: PlayerState, _regionId: string): void {
     if (player.lastRegionId && this.regionBlueprints.has(player.lastRegionId)) {
       const returnRegionId = player.lastRegionId;
       const targetX = player.lastRegionX;
@@ -2104,7 +2629,6 @@ export class GameServer {
     const startingRegion = this.getStartingRegion();
     if (startingRegion) {
       this.teleportToRegion(player, startingRegion.id, startingRegion.entryLocal.x, startingRegion.entryLocal.z);
-      return;
     }
   }
 
@@ -2304,6 +2828,7 @@ export class GameServer {
           from: "system",
           text: `${rt.def.name} complete — ${tier.toUpperCase()} rewards!`,
         });
+        this.bumpAchievementCounter(player, "world_event", rt.def.id, 1);
         this.sendInventory(player);
         this.sendSelf(player);
         player.dirty = true;
@@ -2457,14 +2982,21 @@ export class GameServer {
     player.dodgeCharges -= 1;
     player.dodgeChargeQueue.push(now + DODGE_CHARGE_REGEN_MS);
 
-    const tx = clamp(player.move.x + nx * DODGE_DISTANCE, WORLD_MIN_X, WORLD_MAX_X);
-    const tz = clamp(player.move.z + nz * DODGE_DISTANCE, WORLD_MIN_Z, WORLD_MAX_Z);
+    // Continent regions sit far outside the legacy overworld AABB — clamping
+    // dodge to WORLD_* teleports fighters to the old map edge (other region).
+    const inContinent = this.regionIdFromInstance(player.instanceId) !== null;
+    const rawTx = player.move.x + nx * DODGE_DISTANCE;
+    const rawTz = player.move.z + nz * DODGE_DISTANCE;
+    const tx = inContinent ? rawTx : clamp(rawTx, WORLD_MIN_X, WORLD_MAX_X);
+    const tz = inContinent ? rawTz : clamp(rawTz, WORLD_MIN_Z, WORLD_MAX_Z);
     player.move.x = tx;
     player.move.z = tz;
-    player.move.y = Math.max(player.move.y, terrainHeight(tx, tz));
+    player.move.y = inContinent
+      ? this.continentGroundAt(tx, tz)
+      : Math.max(player.move.y, terrainHeight(tx, tz));
     player.dirty = true;
     this.sendSelf(player);
-    
+
     this.broadcastNear(
       tx,
       tz,
@@ -2859,6 +3391,24 @@ export class GameServer {
     this.broadcast({ t: "structureAdd", structure });
   }
 
+  /**
+   * Fill empty default hotbar slots (attack on `1`, Heal on `Q`) without
+   * overwriting slots the player already arranged.
+   */
+  private ensureStartingHotbar(player: PlayerState): void {
+    const loadout = startingHotbarLoadout(classDef(player.classId));
+    let changed = false;
+    for (const { slot, spellId } of loadout) {
+      if (!player.learnedSpells.includes(spellId)) continue;
+      const marker = `spell:${spellId}`;
+      if (player.inventory.some((it) => it.container === "hotbar" && it.itemId === marker)) continue;
+      if (player.inventory.some((it) => it.container === "hotbar" && it.slot === slot)) continue;
+      player.inventory.push({ container: "hotbar", slot, itemId: marker, qty: 1, durability: null });
+      changed = true;
+    }
+    if (changed) player.dirty = true;
+  }
+
   /** Puts a *newly chosen* spell from the spellbook into a hotbar slot (or
    *  clears it with spellId: null). Rearranging a spell already slotted
    *  goes through the normal "moveItem" hotbar<->hotbar path instead --
@@ -2903,22 +3453,25 @@ export class GameServer {
     if (regionId) {
       const region = this.regionBlueprints.get(regionId);
       if (region) {
-        // Regions are persistent shared zones, not disposable runs -- dying
-        // just respawns you back at the region's own entry point, same as
-        // dungeon respawn below, but there's no wipe/eject timer to clear.
-        const x = region.entryLocal.x + (Math.random() - 0.5) * 3;
-        const z = region.entryLocal.z + (Math.random() - 0.5) * 3;
-        player.move = { x, y: sampleRegionHeight(region, x, z) + 0.1, z, vy: 0, grounded: true };
-      } else {
-        player.instanceId = null;
-        const grave = this.nearestGraveyard(player.move.x, player.move.z);
+        // Prefer a village in the region you died in (seam fights shouldn't
+        // respawn you across the continent into a neighbor).
+        const village = this.nearestVillageAt(player.move.x, player.move.z, regionId);
+        const placed = this.placeInRegionAt(
+          village.x + (Math.random() - 0.5) * 6,
+          village.z + (Math.random() - 0.5) * 6,
+        );
+        player.instanceId = placed.instanceId;
         player.move = {
-          x: grave.x + (Math.random() - 0.5) * 6,
-          y: terrainHeight(grave.x, grave.z) + 0.1,
-          z: grave.z + (Math.random() - 0.5) * 6,
+          x: placed.x,
+          y: placed.y,
+          z: placed.z,
           vy: 0,
           grounded: true,
         };
+      } else {
+        const placed = this.spawnInStartingRegion();
+        player.instanceId = placed.instanceId;
+        player.move = { x: placed.x, y: placed.y, z: placed.z, vy: 0, grounded: true };
       }
     } else if (player.instanceId) {
       const instance = this.dungeonInstances.get(player.instanceId);
@@ -2933,49 +3486,72 @@ export class GameServer {
           grounded: true,
         };
       } else {
-        player.instanceId = null;
-        const grave = this.nearestGraveyard(player.move.x, player.move.z);
-        player.move = {
-          x: grave.x + (Math.random() - 0.5) * 6,
-          y: terrainHeight(grave.x, grave.z) + 0.1,
-          z: grave.z + (Math.random() - 0.5) * 6,
-          vy: 0,
-          grounded: true,
-        };
+        const placed = this.spawnInStartingRegion();
+        player.instanceId = placed.instanceId;
+        player.move = { x: placed.x, y: placed.y, z: placed.z, vy: 0, grounded: true };
       }
     } else {
-      // Respawn at the nearest village graveyard, falling back to world spawn.
-      const grave = this.nearestGraveyard(player.move.x, player.move.z);
-      player.move = {
-        x: grave.x + (Math.random() - 0.5) * 6,
-        y: terrainHeight(grave.x, grave.z) + 0.1,
-        z: grave.z + (Math.random() - 0.5) * 6,
-        vy: 0,
-        grounded: true,
-      };
+      const village = this.nearestVillageAt(player.move.x, player.move.z);
+      const placed = this.placeInRegionAt(
+        village.x + (Math.random() - 0.5) * 6,
+        village.z + (Math.random() - 0.5) * 6,
+      );
+      player.instanceId = placed.instanceId;
+      player.move = { x: placed.x, y: placed.y, z: placed.z, vy: 0, grounded: true };
     }
     player.dirty = true;
     this.sendSelf(player);
+    const rid = this.regionIdFromInstance(player.instanceId);
+    const bp = rid ? this.regionBlueprints.get(rid) : undefined;
+    if (bp) this.sendRegionState(player, bp);
   }
 
   private nearestGraveyard(x: number, z: number): { x: number; z: number } {
-    // Respawn at the closest village; only fall back to world spawn if the
-    // realm has no villages at all.
-    let best: { x: number; z: number } | null = null;
-    let bestDist = Infinity;
-    for (const village of this.villages) {
-      const d = dist2D(x, z, village.x, village.z);
-      if (d < bestDist) {
-        bestDist = d;
-        best = { x: village.x, z: village.z };
+    return this.nearestVillageAt(x, z);
+  }
+
+  /** Closest region-authored village in world space (continent only).
+   *  When `preferRegionId` is set, villages in that region win unless none exist. */
+  private nearestVillageAt(
+    x: number,
+    z: number,
+    preferRegionId?: string,
+  ): { x: number; z: number } {
+    const pick = (onlyId?: string): { x: number; z: number } | null => {
+      let best: { x: number; z: number } | null = null;
+      let bestDist = Infinity;
+      for (const bp of this.regionBlueprints.values()) {
+        if (onlyId && bp.id !== onlyId) continue;
+        for (const v of bp.villages ?? []) {
+          const world = regionLocalToWorld(bp, v.localX, v.localZ);
+          const d = dist2D(x, z, world.x, world.z);
+          if (d < bestDist) {
+            bestDist = d;
+            best = world;
+          }
+        }
       }
+      return best;
+    };
+
+    const preferred = preferRegionId ? pick(preferRegionId) : null;
+    if (preferred) return preferred;
+    const any = pick();
+    if (any) return any;
+
+    const under =
+      (preferRegionId ? this.regionBlueprints.get(preferRegionId) : null) ??
+      findRegionAtWorld(this.regionBlueprints.values(), x, z) ??
+      this.getStartingRegion();
+    if (under) {
+      return regionLocalToWorld(under, under.entryLocal.x, under.entryLocal.z);
     }
-    return best ?? { x: SPAWN_POINT.x, z: SPAWN_POINT.z };
+    return { x: 0, z: 0 };
   }
 
   // ============================ combat ============================
 
-  private grantXp(player: PlayerState, amount: number): void {
+  private grantXp(player: PlayerState, amount: number, opts?: { skipAchievements?: boolean }): void {
     if (player.level >= MAX_LEVEL) return;
     player.xp += amount;
     this.sendEvent(player, { t: "event", kind: "xp", amount });
@@ -2990,6 +3566,7 @@ export class GameServer {
     }
     player.dirty = true;
     this.sendSelf(player);
+    if (!opts?.skipAchievements) this.checkAndUnlockAchievements(player);
   }
 
   private damagePlayer(player: PlayerState, rawAmount: number, sourceId: string): void {
@@ -3061,6 +3638,7 @@ export class GameServer {
     }
 
     this.tickProjectiles();
+    this.streamRegionMobs();
     this.tickMobs(now);
     this.tickPets(now);
     this.tickNodeRespawns(now);
@@ -3090,24 +3668,38 @@ export class GameServer {
       return;
     }
     const inputs = player.inputQueue.splice(0, MAX_INPUTS_PER_TICK);
-    const inDungeon = player.instanceId !== null;
+    const inDungeon = this.isDungeonInstance(player.instanceId);
     const regionId = this.regionIdFromInstance(player.instanceId);
-    const region = regionId ? this.regionBlueprints.get(regionId) : undefined;
-    const regionHeightmap = region;
-    const regionAssets = region
-      ? [
-          ...regionAssetColliders(regionAllAssets(region)),
-          ...regionVolumeColliders(region.terrainVolumes ?? []),
-        ]
+    const inContinent = regionId !== null;
+    const groundAt = inContinent ? (x: number, z: number) => this.continentGroundAt(x, z) : undefined;
+    const waterDepthAt = inContinent ? (x: number, z: number) => this.continentWaterDepthAt(x, z) : undefined;
+    const regionAssets = inContinent
+      ? this.continentCollidersNear(player.move.x, player.move.z)
       : undefined;
+    const moveOpts = {
+      mount: player.mount,
+      inDungeon,
+      groundAt,
+      waterDepthAt,
+      regionAssets,
+    };
     if (inputs.length === 0) {
       // Keep physics ticking (falling, water) even without fresh input.
       player.move = stepMovement(
         player.move,
-        { moveX: 0, moveZ: 0, jump: false, sprint: false, mount: player.mount, inDungeon, regionHeightmap, regionAssets },
+        {
+          moveX: 0,
+          moveZ: 0,
+          jump: false,
+          sprint: false,
+          crouch: false,
+          lookPitch: 0,
+          ...moveOpts,
+        },
         TICK_DT,
       );
       player.lastMoveMag = 0;
+      if (inContinent) this.updateContinentZone(player);
       return;
     }
     for (const input of inputs) {
@@ -3123,12 +3715,21 @@ export class GameServer {
       const moveZ = rooted ? 0 : input.moveZ;
       player.move = stepMovement(
         player.move,
-        { moveX, moveZ, jump: input.jump, sprint: input.sprint, mount: player.mount, inDungeon, regionHeightmap, regionAssets },
+        {
+          moveX,
+          moveZ,
+          jump: input.jump,
+          sprint: input.sprint,
+          crouch: input.crouch,
+          lookPitch: input.pitch,
+          ...moveOpts,
+        },
         TICK_DT,
       );
       player.lastAckSeq = input.seq;
       player.lastMoveMag = Math.hypot(moveX, moveZ);
     }
+    if (inContinent) this.updateContinentZone(player);
     // Only the final queued input's intent matters here (same as yaw/
     // blocking above) -- re-evaluated every tick against the *current*
     // position, so releasing E, moving out of range, or the target no
@@ -3136,6 +3737,15 @@ export class GameServer {
     // cancel message needed.
     this.updateRevive(player, inputs[inputs.length - 1]!.revivingId, now);
     player.dirty = true;
+  }
+
+  /** When the player walks into a neighboring region's bounds, soft-switch
+   *  ownership so UI/music/interest follow — coords stay world-space. */
+  private updateContinentZone(player: PlayerState): void {
+    const under = findRegionAtWorld(this.regionBlueprints.values(), player.move.x, player.move.z);
+    if (!under) return;
+    const cur = this.regionIdFromInstance(player.instanceId);
+    if (cur !== under.id) this.seamlessEnterRegion(player, under);
   }
 
   private updateRevive(player: PlayerState, targetId: string | null, now: number): void {
@@ -3188,6 +3798,22 @@ export class GameServer {
     const manaMult = player.sitting !== null ? SIT_MANA_REGEN_MULT : 1;
     player.mana = clamp(player.mana + MANA_REGEN_PER_S * manaMult * TICK_DT, 0, this.maxMana(player));
 
+    const region = this.regionBlueprintFor(player);
+    const inContinent = this.regionIdFromInstance(player.instanceId) !== null;
+    const underwater = isUnderwaterAt(
+      player.move.x,
+      player.move.y,
+      player.move.z,
+      inContinent ? undefined : region ?? undefined,
+      inContinent ? (x, z) => this.continentGroundAt(x, z) : undefined,
+      inContinent ? (x, z) => this.continentWaterDepthAt(x, z) : undefined,
+    );
+    if (underwater) {
+      player.oxygen = clamp(player.oxygen - OXYGEN_DRAIN_PER_S * TICK_DT, 0, MAX_OXYGEN);
+    } else {
+      player.oxygen = clamp(player.oxygen + OXYGEN_REGEN_PER_S * TICK_DT, 0, MAX_OXYGEN);
+    }
+
     if (player.hunger <= 0 || player.thirst <= 0) {
       player.hp -= STARVATION_DPS * TICK_DT;
       if (player.hp <= 0) {
@@ -3200,6 +3826,18 @@ export class GameServer {
       }
     } else if (player.hunger > 30 && player.thirst > 30) {
       player.hp = clamp(player.hp + HP_REGEN_PER_S * TICK_DT, 0, this.maxHp(player));
+    }
+
+    if (!player.dead && underwater && player.oxygen <= 0) {
+      player.hp -= DROWN_DPS * TICK_DT;
+      if (player.hp <= 0) {
+        player.hp = 0;
+        player.dead = true;
+        player.mount = null;
+        this.sendEvent(player, { t: "event", kind: "death" });
+        this.broadcastChat("system", `${player.name} drowned.`);
+        if (player.instanceId) this.checkDungeonWipe(player.instanceId);
+      }
     }
   }
 
@@ -3275,6 +3913,56 @@ export class GameServer {
     }
   }
 
+  /**
+   * Wake dormant region mobs near any player; put idle far-away region mobs
+   * back to sleep. Combat / corpses stay awake so combat and loot don't vanish.
+   */
+  private streamRegionMobs(): void {
+    if (this.dormantRegionMobs.size === 0 && this.mobs.size === 0) return;
+    const wakeR = INTEREST_RADIUS + 40;
+    const sleepR = INTEREST_RADIUS + 90;
+    const wakeR2 = wakeR * wakeR;
+    const sleepR2 = sleepR * sleepR;
+
+    if (this.dormantRegionMobs.size > 0 && this.players.size > 0) {
+      for (const [id, mob] of [...this.dormantRegionMobs]) {
+        for (const player of this.players.values()) {
+          if (player.dead) continue;
+          if (!this.sameInstance(mob, player)) continue;
+          const dx = mob.x - player.move.x;
+          const dz = mob.z - player.move.z;
+          if (dx * dx + dz * dz <= wakeR2) {
+            this.dormantRegionMobs.delete(id);
+            this.mobs.set(id, mob);
+            break;
+          }
+        }
+      }
+    }
+
+    // Sleep infrequently — every ~0.5s — so we don't thrash at the boundary.
+    if (this.tickCount % 10 !== 0) return;
+    for (const [id, mob] of [...this.mobs]) {
+      if (!mob.instanceId?.startsWith("region_")) continue;
+      if (mob.targetId || mob.hp <= 0 || mob.respawnAt !== null || mob.leashing) continue;
+      let near = false;
+      for (const player of this.players.values()) {
+        if (player.dead) continue;
+        if (!this.sameInstance(mob, player)) continue;
+        const dx = mob.x - player.move.x;
+        const dz = mob.z - player.move.z;
+        if (dx * dx + dz * dz <= sleepR2) {
+          near = true;
+          break;
+        }
+      }
+      if (!near) {
+        this.mobs.delete(id);
+        this.dormantRegionMobs.set(id, mob);
+      }
+    }
+  }
+
   private tickMobs(now: number): void {
     for (const mob of this.mobs.values()) {
       const def = mobDef(mob.type);
@@ -3308,6 +3996,23 @@ export class GameServer {
           this.mobs.delete(mob.id);
         }
         continue;
+      }
+
+      // Overworld / far idle: skip AI until someone is in interest range.
+      if (!mob.targetId && !mob.leashing && !mob.instanceId?.startsWith("region_")) {
+        let near = false;
+        const r2 = (INTEREST_RADIUS + 40) * (INTEREST_RADIUS + 40);
+        for (const player of this.players.values()) {
+          if (player.dead) continue;
+          if (!this.sameInstance(mob, player)) continue;
+          const dx = mob.x - player.move.x;
+          const dz = mob.z - player.move.z;
+          if (dx * dx + dz * dz <= r2) {
+            near = true;
+            break;
+          }
+        }
+        if (!near) continue;
       }
 
       this.tickMobAuras(mob, now);
@@ -3555,8 +4260,9 @@ export class GameServer {
       mob.instanceId,
     );
 
+    // XP/level land on the end-of-tick sendSelf in sendSnapshots — avoid a
+    // second full self payload mid-hit (felt as hitch on every kill).
     killer.dirty = true;
-    this.sendSelf(killer);
   }
 
   private damageMob(mob: MobState, amount: number, attacker: PlayerState): void {
@@ -3834,11 +4540,8 @@ export class GameServer {
     let ny: number | null;
     const regionId = this.regionIdFromInstance(mob.instanceId);
     if (regionId) {
-      // A region's ground comes from its own heightmap, not the dungeon
-      // floor grid (which would return null everywhere outside a real
-      // dungeon arena, freezing every region mob in place).
-      const region = this.regionBlueprints.get(regionId);
-      ny = region ? sampleRegionHeight(region, nx, nz) : mob.y;
+      // Continent mobs live in world space — sample across neighboring regions.
+      ny = this.continentGroundAt(nx, nz);
     } else if (mob.instanceId !== null) {
       ny = dungeonFloorHeightAt(nx, nz);
       if (ny === null) return; // Block mobs from clipping walls
@@ -4056,7 +4759,19 @@ export class GameServer {
     if (player.actionAnim) return player.actionAnim;
     if (player.move.vy !== 0) return "jump";
     const region = this.regionBlueprintFor(player);
-    if (isSwimmingAt(player.move.x, player.move.y, player.move.z, region ?? undefined)) return "swim";
+    const inContinent = this.regionIdFromInstance(player.instanceId) !== null;
+    if (
+      isSwimmingAt(
+        player.move.x,
+        player.move.y,
+        player.move.z,
+        inContinent ? undefined : region ?? undefined,
+        inContinent ? (x, z) => this.continentGroundAt(x, z) : undefined,
+        inContinent ? (x, z) => this.continentWaterDepthAt(x, z) : undefined,
+      )
+    ) {
+      return "swim";
+    }
     if (player.lastMoveMag > 0.1) return "run";
     return "idle";
   }
@@ -4080,6 +4795,7 @@ export class GameServer {
       maxMana: this.maxMana(player),
       hunger: player.hunger,
       thirst: player.thirst,
+      oxygen: player.oxygen,
       xp: player.xp,
       xpNext: xpForLevel(player.level),
       level: player.level,
@@ -4144,6 +4860,8 @@ export class GameServer {
           armsId: findItem(other.inventory, "equip", EQUIP_SLOTS.indexOf("arms"))?.itemId ?? null,
           legsId: findItem(other.inventory, "equip", EQUIP_SLOTS.indexOf("legs"))?.itemId ?? null,
           feetId: findItem(other.inventory, "equip", EQUIP_SLOTS.indexOf("feet"))?.itemId ?? null,
+          shouldersId: findItem(other.inventory, "equip", EQUIP_SLOTS.indexOf("shoulders"))?.itemId ?? null,
+          neckId: findItem(other.inventory, "equip", EQUIP_SLOTS.indexOf("neck"))?.itemId ?? null,
           debuffs: this.dotDebuffs(other.activeAuras),
         });
       }
@@ -4169,7 +4887,7 @@ export class GameServer {
           maxHp: def.maxHp,
           anim: isDead ? "dead" : mob.actionAnimUntil > now ? "attack" : mob.moving ? "run" : "idle",
           debuffs: this.dotDebuffs(mob.activeAuras),
-          lootable: isDead && mob.respawnAt === null,
+          lootable: isDead && (mob.loot?.length ?? 0) > 0,
         });
       }
 
@@ -4261,6 +4979,20 @@ export class GameServer {
     }
   }
 
+  /** Deliver to everyone currently in (or last belonging to) a region. */
+  private sendToRegion(regionId: string, msg: ServerMsg): void {
+    const data = JSON.stringify(msg);
+    for (const player of this.players.values()) {
+      const id = this.regionIdFromInstance(player.instanceId) ?? player.lastRegionId;
+      if (id !== regionId) continue;
+      try {
+        player.peer.send(data);
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+
   private broadcastNear(x: number, z: number, msg: ServerMsg, instanceId: string | null): void {
     const data = JSON.stringify(msg);
     for (const player of this.players.values()) {
@@ -4308,6 +5040,11 @@ export class GameServer {
         questId,
         status: e.status,
         progress: e.progress,
+      })),
+      achievements: [...player.achievements.entries()].map(([achievementId, e]) => ({
+        achievementId,
+        progress: e.progress,
+        unlockedAt: e.unlockedAt,
       })),
     };
   }

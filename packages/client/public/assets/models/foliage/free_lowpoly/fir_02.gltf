@@ -1,0 +1,325 @@
+{
+  "asset": {
+    "generator": "Khronos glTF Blender I/O v5.2.39",
+    "version": "2.0"
+  },
+  "extensionsUsed": [
+    "KHR_materials_specular"
+  ],
+  "scene": 0,
+  "scenes": [
+    {
+      "name": "Scene",
+      "nodes": [
+        0
+      ]
+    }
+  ],
+  "nodes": [
+    {
+      "mesh": 0,
+      "name": "SM_Fir_02",
+      "translation": [
+        -0.12807196378707886,
+        0.066951222717762,
+        0.060057997703552246
+      ]
+    }
+  ],
+  "materials": [
+    {
+      "doubleSided": true,
+      "extensions": {
+        "KHR_materials_specular": {
+          "specularColorFactor": [
+            2.0,
+            2.0,
+            2.0
+          ]
+        }
+      },
+      "name": "M_Atlas",
+      "normalTexture": {
+        "index": 1
+      },
+      "pbrMetallicRoughness": {
+        "baseColorTexture": {
+          "index": 0
+        },
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.85
+      },
+      "alphaMode": "OPAQUE"
+    },
+    {
+      "doubleSided": true,
+      "name": "M_Pine",
+      "normalTexture": {
+        "index": 1
+      },
+      "pbrMetallicRoughness": {
+        "baseColorTexture": {
+          "index": 0
+        },
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.85
+      },
+      "alphaMode": "OPAQUE"
+    }
+  ],
+  "meshes": [
+    {
+      "name": "SM_Fir_02",
+      "primitives": [
+        {
+          "attributes": {
+            "POSITION": 0,
+            "NORMAL": 1,
+            "TEXCOORD_0": 2,
+            "TEXCOORD_1": 3,
+            "COLOR_0": 4,
+            "COLOR_1": 5
+          },
+          "indices": 6,
+          "material": 0
+        },
+        {
+          "attributes": {
+            "POSITION": 7,
+            "NORMAL": 8,
+            "TEXCOORD_0": 9,
+            "TEXCOORD_1": 10,
+            "COLOR_0": 11,
+            "COLOR_1": 12
+          },
+          "indices": 13,
+          "material": 1
+        }
+      ]
+    }
+  ],
+  "textures": [
+    {
+      "source": 0
+    },
+    {
+      "source": 1
+    }
+  ],
+  "images": [
+    {
+      "uri": "textures/T_Atlas_01.png"
+    },
+    {
+      "uri": "textures/T_BasePolygon_N.png"
+    }
+  ],
+  "accessors": [
+    {
+      "bufferView": 0,
+      "componentType": 5126,
+      "count": 376,
+      "max": [
+        0.3271266222000122,
+        5.620964050292969,
+        0.2246929556131363
+      ],
+      "min": [
+        -0.22469329833984375,
+        -0.066951222717762,
+        -0.2246929556131363
+      ],
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 1,
+      "componentType": 5126,
+      "count": 376,
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 2,
+      "componentType": 5126,
+      "count": 376,
+      "type": "VEC2"
+    },
+    {
+      "bufferView": 3,
+      "componentType": 5126,
+      "count": 376,
+      "type": "VEC2"
+    },
+    {
+      "bufferView": 4,
+      "componentType": 5121,
+      "count": 376,
+      "normalized": true,
+      "type": "VEC4"
+    },
+    {
+      "bufferView": 5,
+      "componentType": 5123,
+      "count": 376,
+      "normalized": true,
+      "type": "VEC4"
+    },
+    {
+      "bufferView": 6,
+      "componentType": 5123,
+      "count": 552,
+      "type": "SCALAR"
+    },
+    {
+      "bufferView": 7,
+      "componentType": 5126,
+      "count": 636,
+      "max": [
+        1.8350809812545776,
+        5.73055362701416,
+        1.6057155132293701
+      ],
+      "min": [
+        -1.57893705368042,
+        0.7651779651641846,
+        -1.7258315086364746
+      ],
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 8,
+      "componentType": 5126,
+      "count": 636,
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 9,
+      "componentType": 5126,
+      "count": 636,
+      "type": "VEC2"
+    },
+    {
+      "bufferView": 10,
+      "componentType": 5126,
+      "count": 636,
+      "type": "VEC2"
+    },
+    {
+      "bufferView": 11,
+      "componentType": 5121,
+      "count": 636,
+      "normalized": true,
+      "type": "VEC4"
+    },
+    {
+      "bufferView": 12,
+      "componentType": 5123,
+      "count": 636,
+      "normalized": true,
+      "type": "VEC4"
+    },
+    {
+      "bufferView": 13,
+      "componentType": 5123,
+      "count": 1944,
+      "type": "SCALAR"
+    }
+  ],
+  "bufferViews": [
+    {
+      "buffer": 0,
+      "byteLength": 4512,
+      "byteOffset": 0,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 4512,
+      "byteOffset": 4512,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 3008,
+      "byteOffset": 9024,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 3008,
+      "byteOffset": 12032,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 1504,
+      "byteOffset": 15040,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 3008,
+      "byteOffset": 16544,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 1104,
+      "byteOffset": 19552,
+      "target": 34963
+    },
+    {
+      "buffer": 0,
+      "byteLength": 7632,
+      "byteOffset": 20656,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 7632,
+      "byteOffset": 28288,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 5088,
+      "byteOffset": 35920,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 5088,
+      "byteOffset": 41008,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 2544,
+      "byteOffset": 46096,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 5088,
+      "byteOffset": 48640,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 3888,
+      "byteOffset": 53728,
+      "target": 34963
+    }
+  ],
+  "samplers": [
+    {
+      "magFilter": 9729,
+      "minFilter": 9987
+    }
+  ],
+  "buffers": [
+    {
+      "byteLength": 57616,
+      "uri": "fir_02.bin"
+    }
+  ]
+}

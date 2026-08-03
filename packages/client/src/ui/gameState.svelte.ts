@@ -1,13 +1,60 @@
-import type { SelfState, ItemSnap, PartyMemberSnap, RosterEntry, QuestOfferInfo, QuestLogEntry } from "@rustcraft/shared";
+import type {
+  SelfState,
+  ItemSnap,
+  PartyMemberSnap,
+  RosterEntry,
+  QuestOfferInfo,
+  QuestLogEntry,
+  AchievementSnap,
+  CharacterGender,
+  CharacterAppearance,
+  GraphicsSettings,
+  AccountSettings,
+} from "@rustcraft/shared";
+import {
+  clampGraphicsSettings,
+  graphicsFromPreset,
+  mergeGraphicsSettings,
+  resolveGraphicsPreset,
+  type GraphicsPresetId,
+} from "@rustcraft/shared";
 import type { TargetInfo } from "../render/entities";
 
-export type ChatChannel = "realm" | "party" | "system";
-export type CharacterTab = "inventory" | "quests" | "spellbook" | "craft" | "party" | "system";
+const GRAPHICS_STORAGE_KEY = "rc_graphics";
+
+function loadGraphicsFromStorage(): GraphicsSettings {
+  if (typeof localStorage === "undefined") return clampGraphicsSettings(undefined);
+  try {
+    const raw = localStorage.getItem(GRAPHICS_STORAGE_KEY);
+    if (!raw) return clampGraphicsSettings(undefined);
+    return clampGraphicsSettings(JSON.parse(raw) as Partial<GraphicsSettings>);
+  } catch {
+    return clampGraphicsSettings(undefined);
+  }
+}
+
+function persistGraphicsLocal(settings: GraphicsSettings): void {
+  if (typeof localStorage === "undefined") return;
+  try {
+    localStorage.setItem(GRAPHICS_STORAGE_KEY, JSON.stringify(settings));
+  } catch {
+    /* quota / private mode */
+  }
+}
+
+export type ChatChannel = "realm" | "region" | "party" | "system";
+export type CharacterTab = "inventory" | "quests" | "achievements" | "spellbook" | "craft" | "party" | "system";
 
 export interface ChatLine {
   channel: ChatChannel;
   from: string;
   text: string;
+  at: number;
+}
+
+export interface ChatMention {
+  channel: ChatChannel;
+  from: string;
   at: number;
 }
 
@@ -27,6 +74,14 @@ export interface QuestMarker {
 
 let toastId = 0;
 
+/** True when `text` contains an @mention of `name` (case-insensitive; spaces allowed). */
+export function textMentionsName(text: string, name: string): boolean {
+  const trimmed = name.trim();
+  if (!trimmed) return false;
+  const esc = trimmed.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+");
+  return new RegExp(`(?:^|[\\s([{\"'“])@${esc}(?=$|[\\s,.!?;:)\\]}'\"”])`, "i").test(text);
+}
+
 class GameState {
   connected = $state(false);
   loading = $state(false);
@@ -36,6 +91,16 @@ class GameState {
   selfName = $state("");
   selfId = $state("");
   classId = $state("");
+  /** Live appearance for the paperdoll / equip preview (set on welcome). */
+  gender = $state<CharacterGender>("male");
+  appearance = $state<CharacterAppearance>({
+    gender: "male",
+    hairStyle: "none",
+    facialHair: "none",
+    hairColor: 0x2b1a12,
+    eyeColor: 0x6b4423,
+    outfitHue: 0xffffff,
+  });
   /** serverTime - Date.now(), sampled once from the "welcome" message.
    *  castEndsAt (and anything else the server timestamps) is in the
    *  server's clock, not the client's -- subtract this offset before
@@ -52,6 +117,8 @@ class GameState {
   compassYaw = $state(0);
   playerX = $state(0);
   playerZ = $state(0);
+  /** Local prediction: head is below the water surface (blue overlay). */
+  underwater = $state(false);
   questMarkers = $state<QuestMarker[]>([]);
   lastDevice = $state<"kbm" | "gamepad">("kbm");
   /** Master flag for the unified full-page character screen (Inventory /
@@ -61,6 +128,8 @@ class GameState {
   inventoryOpen = $state(false);
   activeTab = $state<CharacterTab>("inventory");
   chatOpen = $state(false);
+  /** Set when another player @mentions you — Chat.svelte surfaces the panel. */
+  chatMention = $state<ChatMention | null>(null);
   worldMapOpen = $state(false);
   disconnected = $state(false);
   pvpEnabled = $state(false);
@@ -75,6 +144,7 @@ class GameState {
   names = new Map<string, string>();
   questOffer = $state<{ npcId: string; npcName: string; offers: QuestOfferInfo[] } | null>(null);
   questLog = $state<QuestLogEntry[]>([]);
+  achievements = $state<AchievementSnap[]>([]);
   untrackedQuests = $state<Set<string>>(new Set(typeof localStorage !== "undefined" ? JSON.parse(localStorage.getItem("rc:untracked-quests") ?? "[]") : []));
 
   toggleQuestTrack(questId: string): void {
@@ -126,6 +196,20 @@ class GameState {
       : false,
   );
 
+  /** Show floating names above other players (and your own avatar plate). */
+  showPlayerNameplates = $state<boolean>(
+    typeof localStorage !== "undefined" && localStorage.getItem("rc_player_nameplates") !== null
+      ? localStorage.getItem("rc_player_nameplates") === "true"
+      : true,
+  );
+
+  /** Show floating names above mobs and pets. */
+  showMobNameplates = $state<boolean>(
+    typeof localStorage !== "undefined" && localStorage.getItem("rc_mob_nameplates") !== null
+      ? localStorage.getItem("rc_mob_nameplates") === "true"
+      : true,
+  );
+
   /** SFX master volume 0–1 (persisted). */
   sfxVolume = $state<number>(
     typeof localStorage !== "undefined" && localStorage.getItem("rc_sfx_vol") !== null
@@ -140,10 +224,29 @@ class GameState {
       : 0.55,
   );
 
+  /** Graphics prefs — localStorage cache; account server copy when signed in. */
+  graphics = $state<GraphicsSettings>(loadGraphicsFromStorage());
+
+  private graphicsSaveTimer = 0;
+
   setAutoLoot(enabled: boolean): void {
     this.autoLoot = enabled;
     if (typeof localStorage !== "undefined") {
       localStorage.setItem("rc_autoloot", String(enabled));
+    }
+  }
+
+  setShowPlayerNameplates(enabled: boolean): void {
+    this.showPlayerNameplates = enabled;
+    if (typeof localStorage !== "undefined") {
+      localStorage.setItem("rc_player_nameplates", String(enabled));
+    }
+  }
+
+  setShowMobNameplates(enabled: boolean): void {
+    this.showMobNameplates = enabled;
+    if (typeof localStorage !== "undefined") {
+      localStorage.setItem("rc_mob_nameplates", String(enabled));
     }
   }
 
@@ -161,9 +264,61 @@ class GameState {
     }
   }
 
-  addChat(channel: ChatChannel, from: string, text: string): void {
+  /** Seed from `/api/me` account.settings (account wins over local cache). */
+  hydrateAccountSettings(settings: AccountSettings | null | undefined): void {
+    if (!settings?.graphics) return;
+    this.graphics = mergeGraphicsSettings(this.graphics, settings.graphics);
+    this.graphics = {
+      ...this.graphics,
+      preset: resolveGraphicsPreset(this.graphics),
+    };
+    persistGraphicsLocal(this.graphics);
+    void import("../game/instance").then(({ getGame }) => {
+      getGame()?.applyGraphicsSettings(this.graphics);
+    });
+  }
+
+  setGraphicsPreset(preset: GraphicsPresetId): void {
+    this.commitGraphics(graphicsFromPreset(preset));
+  }
+
+  patchGraphics(partial: Partial<GraphicsSettings>): void {
+    const next = clampGraphicsSettings({ ...this.graphics, ...partial });
+    next.preset = resolveGraphicsPreset({ ...next, preset: "custom" });
+    this.commitGraphics(next, partial);
+  }
+
+  private commitGraphics(next: GraphicsSettings, applyPartial?: Partial<GraphicsSettings>): void {
+    this.graphics = next;
+    persistGraphicsLocal(next);
+    this.scheduleGraphicsAccountSave();
+    void import("../game/instance").then(({ getGame }) => {
+      getGame()?.applyGraphicsSettings(applyPartial ?? next);
+    });
+  }
+
+  private scheduleGraphicsAccountSave(): void {
+    if (typeof window === "undefined") return;
+    window.clearTimeout(this.graphicsSaveTimer);
+    this.graphicsSaveTimer = window.setTimeout(() => {
+      window.dispatchEvent(
+        new CustomEvent("rc:graphics-save", { detail: this.graphics }),
+      );
+    }, 450);
+  }
+
+  addChat(channel: ChatChannel, from: string, text: string): boolean {
     this.chatLog.push({ channel, from, text, at: Date.now() });
     if (this.chatLog.length > 150) this.chatLog.shift();
+    if (
+      channel !== "system" &&
+      from !== this.selfName &&
+      textMentionsName(text, this.selfName)
+    ) {
+      this.chatMention = { channel, from, at: Date.now() };
+      return true;
+    }
+    return false;
   }
 
   addCombat(text: string): void {
@@ -205,6 +360,7 @@ class GameState {
     this.inventoryOpen = false;
     this.activeTab = "inventory";
     this.chatOpen = false;
+    this.chatMention = null;
     this.worldMapOpen = false;
     this.disconnected = false;
     this.pvpEnabled = false;
@@ -216,6 +372,7 @@ class GameState {
     this.names.clear();
     this.questOffer = null;
     this.questLog = [];
+    this.achievements = [];
     this.currentZoneId = null;
     this.zoneBanner = null;
     this.questMarkers = [];

@@ -32,6 +32,16 @@
           <span>💧</span>
         </div>
       </div>
+      {#if game.underwater || self.oxygen < 99}
+        <div
+          class="bar oxygen"
+          class:critical={self.oxygen < 25}
+          title="Breath"
+        >
+          <div class="fill" style="width: {Math.min(100, self.oxygen)}%"></div>
+          <span>{Math.ceil(self.oxygen)} air</span>
+        </div>
+      {/if}
       <div class="bar xp" title="Experience">
         <div class="fill" style="width: {(self.xp / self.xpNext) * 100}%"></div>
       </div>
@@ -145,6 +155,22 @@
   }
   .thirst .fill {
     background: linear-gradient(180deg, #52c4d8, #26718f);
+  }
+  .oxygen {
+    height: 12px;
+    margin-top: 2px;
+  }
+  .oxygen .fill {
+    background: linear-gradient(180deg, #7ee0ff, #2a7aa8);
+  }
+  .oxygen.critical .fill {
+    background: linear-gradient(180deg, #ff8a6a, #c43b2a);
+    animation: oxygen-pulse 0.7s ease-in-out infinite;
+  }
+  @keyframes oxygen-pulse {
+    50% {
+      opacity: 0.65;
+    }
   }
   .xp {
     height: 5px;

@@ -8,6 +8,13 @@ export interface QuestProgressEntry {
   progress: number;
 }
 
+export interface AchievementProgressEntry {
+  achievementId: string;
+  progress: number;
+  /** Epoch ms; null/undefined while incomplete. */
+  unlockedAt: number | null;
+}
+
 export interface PersistedPlayer {
   id: string;
   accountId: string;
@@ -32,6 +39,7 @@ export interface PersistedPlayer {
   learnedSpells: string[];
   inventory: InvItem[];
   questProgress: QuestProgressEntry[];
+  achievements: AchievementProgressEntry[];
 }
 
 export async function loadPlayer(characterId: string): Promise<PersistedPlayer | null> {
@@ -44,6 +52,9 @@ export async function loadPlayer(characterId: string): Promise<PersistedPlayer |
   });
   const quests = await db.query.questProgress.findMany({
     where: eq(schema.questProgress.characterId, characterId),
+  });
+  const achievements = await db.query.characterAchievements.findMany({
+    where: eq(schema.characterAchievements.characterId, characterId),
   });
   return {
     id: character.id,
@@ -78,6 +89,11 @@ export async function loadPlayer(characterId: string): Promise<PersistedPlayer |
       questId: q.questId,
       status: q.status as "active" | "completed",
       progress: q.progress,
+    })),
+    achievements: achievements.map((a) => ({
+      achievementId: a.achievementId,
+      progress: a.progress,
+      unlockedAt: a.unlockedAt ? a.unlockedAt.getTime() : null,
     })),
   };
 }
@@ -122,6 +138,17 @@ export async function savePlayer(p: PersistedPlayer): Promise<void> {
           questId: q.questId,
           status: q.status,
           progress: q.progress,
+        })),
+      );
+    }
+    await tx.delete(schema.characterAchievements).where(eq(schema.characterAchievements.characterId, p.id));
+    if (p.achievements.length > 0) {
+      await tx.insert(schema.characterAchievements).values(
+        p.achievements.map((a) => ({
+          characterId: p.id,
+          achievementId: a.achievementId,
+          progress: a.progress,
+          unlockedAt: a.unlockedAt != null ? new Date(a.unlockedAt) : null,
         })),
       );
     }

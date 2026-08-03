@@ -724,6 +724,215 @@ export const RECIPES: Record<string, RecipeDef> = {
       { itemId: "bone", qty: 4 },
     ],
   },
+  // Quaternius Fantasy modular outfits (Noble / Wizard / Knight).
+  noble_crown: {
+    id: "noble_crown",
+    output: "noble_crown",
+    outputQty: 1,
+    ingredients: [
+      { itemId: "hide", qty: 8 },
+      { itemId: "silver_ore", qty: 4 },
+    ],
+  },
+  noble_chest: {
+    id: "noble_chest",
+    output: "noble_chest",
+    outputQty: 1,
+    ingredients: [
+      { itemId: "hide", qty: 18 },
+      { itemId: "wood", qty: 6 },
+    ],
+  },
+  noble_arms: {
+    id: "noble_arms",
+    output: "noble_arms",
+    outputQty: 1,
+    ingredients: [
+      { itemId: "hide", qty: 8 },
+      { itemId: "wood", qty: 3 },
+    ],
+  },
+  noble_legs: {
+    id: "noble_legs",
+    output: "noble_legs",
+    outputQty: 1,
+    ingredients: [
+      { itemId: "hide", qty: 14 },
+      { itemId: "wood", qty: 4 },
+    ],
+  },
+  noble_feet: {
+    id: "noble_feet",
+    output: "noble_feet",
+    outputQty: 1,
+    ingredients: [
+      { itemId: "hide", qty: 10 },
+      { itemId: "wood", qty: 2 },
+    ],
+  },
+  wizard_chest: {
+    id: "wizard_chest",
+    output: "wizard_chest",
+    outputQty: 1,
+    ingredients: [
+      { itemId: "hide", qty: 16 },
+      { itemId: "silver_ore", qty: 6 },
+    ],
+  },
+  wizard_arms: {
+    id: "wizard_arms",
+    output: "wizard_arms",
+    outputQty: 1,
+    ingredients: [
+      { itemId: "hide", qty: 8 },
+      { itemId: "silver_ore", qty: 3 },
+    ],
+  },
+  wizard_legs: {
+    id: "wizard_legs",
+    output: "wizard_legs",
+    outputQty: 1,
+    ingredients: [
+      { itemId: "hide", qty: 12 },
+      { itemId: "silver_ore", qty: 4 },
+    ],
+  },
+  wizard_feet: {
+    id: "wizard_feet",
+    output: "wizard_feet",
+    outputQty: 1,
+    ingredients: [
+      { itemId: "hide", qty: 8 },
+      { itemId: "gold_ore", qty: 2 },
+    ],
+  },
+  knight_helmet: {
+    id: "knight_helmet",
+    output: "knight_helmet",
+    outputQty: 1,
+    ingredients: [
+      { itemId: "iron_ore", qty: 12 },
+      { itemId: "hide", qty: 6 },
+    ],
+  },
+  knight_chest: {
+    id: "knight_chest",
+    output: "knight_chest",
+    outputQty: 1,
+    ingredients: [
+      { itemId: "iron_ore", qty: 24 },
+      { itemId: "mithril_ore", qty: 8 },
+      { itemId: "hide", qty: 10 },
+    ],
+  },
+  knight_chest_cloth: {
+    id: "knight_chest_cloth",
+    output: "knight_chest_cloth",
+    outputQty: 1,
+    ingredients: [
+      { itemId: "hide", qty: 20 },
+      { itemId: "iron_ore", qty: 6 },
+    ],
+  },
+  knight_arms: {
+    id: "knight_arms",
+    output: "knight_arms",
+    outputQty: 1,
+    ingredients: [
+      { itemId: "iron_ore", qty: 12 },
+      { itemId: "hide", qty: 6 },
+    ],
+  },
+  knight_legs: {
+    id: "knight_legs",
+    output: "knight_legs",
+    outputQty: 1,
+    ingredients: [
+      { itemId: "iron_ore", qty: 18 },
+      { itemId: "hide", qty: 8 },
+    ],
+  },
+  knight_feet: {
+    id: "knight_feet",
+    output: "knight_feet",
+    outputQty: 1,
+    ingredients: [
+      { itemId: "iron_ore", qty: 10 },
+      { itemId: "hide", qty: 6 },
+    ],
+  },
+  knight_horns: {
+    id: "knight_horns",
+    output: "knight_horns",
+    outputQty: 1,
+    ingredients: [
+      { itemId: "bone", qty: 10 },
+      { itemId: "iron_ore", qty: 6 },
+    ],
+  },
+  knight_pauldrons_round: {
+    id: "knight_pauldrons_round",
+    output: "knight_pauldrons_round",
+    outputQty: 1,
+    ingredients: [
+      { itemId: "iron_ore", qty: 10 },
+      { itemId: "hide", qty: 6 },
+    ],
+  },
+  knight_pauldrons_spike: {
+    id: "knight_pauldrons_spike",
+    output: "knight_pauldrons_spike",
+    outputQty: 1,
+    ingredients: [
+      { itemId: "iron_ore", qty: 12 },
+      { itemId: "bone", qty: 4 },
+    ],
+  },
+  knight_scarf: {
+    id: "knight_scarf",
+    output: "knight_scarf",
+    outputQty: 1,
+    ingredients: [
+      { itemId: "hide", qty: 8 },
+      { itemId: "wood", qty: 2 },
+    ],
+  },
+  noble_pauldrons: {
+    id: "noble_pauldrons",
+    output: "noble_pauldrons",
+    outputQty: 1,
+    ingredients: [
+      { itemId: "hide", qty: 10 },
+      { itemId: "silver_ore", qty: 3 },
+    ],
+  },
+  noble_pauldrons_lion: {
+    id: "noble_pauldrons_lion",
+    output: "noble_pauldrons_lion",
+    outputQty: 1,
+    ingredients: [
+      { itemId: "hide", qty: 12 },
+      { itemId: "gold_ore", qty: 3 },
+    ],
+  },
+  noble_gorget: {
+    id: "noble_gorget",
+    output: "noble_gorget",
+    outputQty: 1,
+    ingredients: [
+      { itemId: "hide", qty: 6 },
+      { itemId: "silver_ore", qty: 4 },
+    ],
+  },
+  ranger_pauldrons: {
+    id: "ranger_pauldrons",
+    output: "ranger_pauldrons",
+    outputQty: 1,
+    ingredients: [
+      { itemId: "hide", qty: 12 },
+      { itemId: "bone", qty: 6 },
+    ],
+  },
   // Ultimate RPG Items Pack chest armor (see armorProp in items.ts) --
   // rigid plate-style pieces, tiered roughly by ore rarity.
   plate_armor_leather: {

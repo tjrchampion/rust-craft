@@ -16,8 +16,12 @@ export const InputMsg = z.object({
   moveZ: z.number().min(-3).max(3),
   jump: z.boolean(),
   sprint: z.boolean(),
+  /** Hold Ctrl (or gamepad L3) to dive while swimming. */
+  crouch: z.boolean().default(false),
   block: z.boolean(),
   yaw: z.number(),
+  /** Camera pitch (client convention: negative = looking down). Steers swim dive. */
+  pitch: z.number().min(-2).max(2).default(0),
   /** Character id being revived while E is held over a dead player, or null.
    *  Re-sent every tick alongside movement -- releasing E (or the client's
    *  interact target changing) naturally stops it, which is what lets the
@@ -84,7 +88,7 @@ export const PlaceMsg = z.object({
 
 export const ChatMsg = z.object({
   t: z.literal("chat"),
-  channel: z.enum(["realm", "party"]).default("realm"),
+  channel: z.enum(["realm", "region", "party"]).default("realm"),
   text: z.string().min(1).max(240),
 });
 
@@ -234,6 +238,8 @@ export interface PlayerSnap {
   armsId: string | null;
   legsId: string | null;
   feetId: string | null;
+  shouldersId: string | null;
+  neckId: string | null;
   /** Aura ids for currently-ticking damage-over-time effects only (not
    *  buffs/HoTs/silence) -- drives the floating debuff icon over their head. */
   debuffs: string[];
@@ -350,6 +356,22 @@ export interface QuestLogEntry {
   waypoints?: { x: number; z: number }[];
 }
 
+export interface AchievementSnap {
+  id: string;
+  name: string;
+  description: string;
+  requirement: string;
+  category: string;
+  rewardXp: number;
+  rewardItems: { itemId: string; qty: number }[];
+  /** 0..target toward unlock; equals target when complete. */
+  progress: number;
+  target: number;
+  complete: boolean;
+  /** Epoch ms when unlocked; null if incomplete. */
+  unlockedAt: number | null;
+}
+
 export interface ItemSnap {
   container: "inventory" | "hotbar" | "equip" | "crafting";
   slot: number;
@@ -370,6 +392,8 @@ export interface SelfState {
   maxMana: number;
   hunger: number;
   thirst: number;
+  /** Remaining breath (0..100). Drains while the head is underwater. */
+  oxygen: number;
   xp: number;
   xpNext: number;
   level: number;
@@ -413,6 +437,7 @@ export type ServerMsg =
       structures: StructureSnap[];
       npcs: NpcSnap[];
       questLog: QuestLogEntry[];
+      achievements: AchievementSnap[];
       serverTime: number;
       dayLengthS: number;
       timeOfDay: number; // 0..1
@@ -462,7 +487,7 @@ export type ServerMsg =
       dirX?: number;
       dirZ?: number;
     }
-  | { t: "chat"; channel: "realm" | "party" | "system"; from: string; text: string }
+  | { t: "chat"; channel: "realm" | "region" | "party" | "system"; from: string; text: string }
   | {
       t: "party";
       /** Current party members (including self), or null when not in a party. */
@@ -474,6 +499,8 @@ export type ServerMsg =
   | { t: "roster"; players: RosterEntry[] }
   | { t: "questOffer"; npcId: string; npcName: string; offers: QuestOfferInfo[] }
   | { t: "questLog"; quests: QuestLogEntry[] }
+  | { t: "achievements"; achievements: AchievementSnap[] }
+  | { t: "achievementUnlocked"; id: string; name: string; xp: number; items: { itemId: string; qty: number }[] }
   | { t: "questComplete"; questId: string; questName: string; xp: number; items: { itemId: string; qty: number }[] }
   | {
       t: "dungeonState";

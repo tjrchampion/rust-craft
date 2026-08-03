@@ -1,0 +1,1182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Quick Grass — procedural field</title>
+<style>
+  :root{
+    --ink:#0a0f0c;
+    --panel:rgba(10,16,12,.84);
+    --line:rgba(184,217,74,.16);
+    --line-soft:rgba(255,255,255,.07);
+    --text:#dde5d2;
+    --muted:#8a9885;
+    --accent:#b8d94a;
+    --deep:#2f5e21;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;overflow:hidden;background:var(--ink);color:var(--text);
+    font-family:var(--sans);-webkit-font-smoothing:antialiased;overscroll-behavior:none}
+  canvas#view{position:fixed;inset:0;width:100%;height:100%;display:block;touch-action:none}
+
+  /* ---------- HUD ---------- */
+  #hud{position:fixed;top:14px;left:16px;font-family:var(--mono);font-size:10.5px;
+    line-height:1.75;letter-spacing:.04em;color:var(--muted);pointer-events:none;
+    text-shadow:0 1px 3px rgba(0,0,0,.7)}
+  #hud b{color:var(--accent);font-weight:500;font-variant-numeric:tabular-nums}
+  #hud .t{display:inline-block;min-width:74px}
+
+  #hint{position:fixed;bottom:14px;left:16px;font-size:11px;color:var(--muted);
+    letter-spacing:.02em;pointer-events:none;text-shadow:0 1px 3px rgba(0,0,0,.7);max-width:44vw}
+  #hint kbd{font-family:var(--mono);font-size:10px;color:var(--text);border:1px solid var(--line-soft);
+    border-radius:3px;padding:1px 4px;background:rgba(255,255,255,.05)}
+
+  /* ---------- panel ---------- */
+  #panel{position:fixed;top:0;right:0;height:100%;width:322px;background:var(--panel);
+    backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);
+    border-left:1px solid var(--line);display:flex;flex-direction:column;
+    transition:transform .28s cubic-bezier(.4,0,.2,1);z-index:5}
+  #panel.hidden{transform:translateX(100%)}
+
+  .phead{padding:16px 18px 12px;border-bottom:1px solid var(--line-soft);flex:0 0 auto}
+  .phead h1{margin:0;font-size:11px;font-weight:600;letter-spacing:.22em;text-transform:uppercase;color:var(--text)}
+  .phead p{margin:5px 0 0;font-size:10.5px;line-height:1.5;color:var(--muted)}
+  .phead p a{color:var(--muted)}
+
+  .scroll{flex:1 1 auto;overflow-y:auto;overscroll-behavior:contain;padding-bottom:22px}
+  .scroll::-webkit-scrollbar{width:8px}
+  .scroll::-webkit-scrollbar-thumb{background:rgba(184,217,74,.18);border-radius:8px}
+
+  details{border-bottom:1px solid var(--line-soft)}
+  summary{list-style:none;cursor:pointer;padding:11px 18px;display:flex;align-items:center;gap:9px;
+    font-size:10px;letter-spacing:.19em;text-transform:uppercase;color:var(--muted);user-select:none}
+  summary::-webkit-details-marker{display:none}
+  summary:hover{color:var(--text)}
+  summary .bar{width:2px;height:11px;background:var(--deep);border-radius:2px;flex:0 0 auto;
+    transition:background .2s,height .2s}
+  details[open] summary{color:var(--text)}
+  details[open] summary .bar{background:var(--accent);height:14px}
+  summary .n{margin-left:auto;font-family:var(--mono);font-size:9.5px;opacity:.55;letter-spacing:.06em}
+  .body{padding:2px 18px 16px}
+
+  .row{margin:0 0 13px}
+  .row .lab{display:flex;align-items:baseline;gap:8px;margin-bottom:6px}
+  .row .lab span{font-size:11.5px;color:var(--text);letter-spacing:.01em}
+  .row .lab output{margin-left:auto;font-family:var(--mono);font-size:10.5px;color:var(--accent);
+    font-variant-numeric:tabular-nums}
+
+  input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:14px;background:transparent;
+    display:block;cursor:ew-resize;margin:0}
+  input[type=range]::-webkit-slider-runnable-track{height:3px;border-radius:2px;
+    background:linear-gradient(90deg,#1e3f16 0%,var(--accent) var(--p,50%),rgba(255,255,255,.11) var(--p,50%))}
+  input[type=range]::-moz-range-track{height:3px;border-radius:2px;
+    background:linear-gradient(90deg,#1e3f16 0%,var(--accent) var(--p,50%),rgba(255,255,255,.11) var(--p,50%))}
+  input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:4px;height:15px;border-radius:2px;
+    background:#eef5da;border:none;margin-top:-6px;box-shadow:0 0 0 1px rgba(0,0,0,.45),0 1px 4px rgba(0,0,0,.5)}
+  input[type=range]::-moz-range-thumb{width:4px;height:15px;border-radius:2px;background:#eef5da;border:none;
+    box-shadow:0 0 0 1px rgba(0,0,0,.45)}
+  input[type=range]:focus-visible{outline:none}
+  input[type=range]:focus-visible::-webkit-slider-thumb{box-shadow:0 0 0 2px var(--accent)}
+
+  .swatch{display:flex;align-items:center;gap:10px}
+  input[type=color]{-webkit-appearance:none;appearance:none;width:34px;height:20px;padding:0;border:none;
+    background:transparent;cursor:pointer;border-radius:3px;overflow:hidden}
+  input[type=color]::-webkit-color-swatch-wrapper{padding:0}
+  input[type=color]::-webkit-color-swatch{border:1px solid rgba(255,255,255,.22);border-radius:3px}
+  .swatch code{font-family:var(--mono);font-size:10px;color:var(--muted);text-transform:uppercase}
+
+  .toggle{display:flex;align-items:center;gap:10px;cursor:pointer;margin:0 0 11px;user-select:none}
+  .toggle input{position:absolute;opacity:0;width:0;height:0}
+  .toggle .sw{width:28px;height:15px;border-radius:9px;background:rgba(255,255,255,.10);
+    border:1px solid var(--line-soft);position:relative;flex:0 0 auto;transition:background .18s}
+  .toggle .sw::after{content:"";position:absolute;top:2px;left:2px;width:9px;height:9px;border-radius:50%;
+    background:var(--muted);transition:transform .18s,background .18s}
+  .toggle input:checked + .sw{background:rgba(184,217,74,.28);border-color:rgba(184,217,74,.4)}
+  .toggle input:checked + .sw::after{transform:translateX(13px);background:var(--accent)}
+  .toggle input:focus-visible + .sw{outline:2px solid var(--accent);outline-offset:2px}
+  .toggle span{font-size:11.5px;color:var(--text)}
+
+  .chips{display:flex;flex-wrap:wrap;gap:6px;padding:0 18px 16px}
+  .chip{font:inherit;font-size:10.5px;letter-spacing:.03em;color:var(--text);background:rgba(255,255,255,.05);
+    border:1px solid var(--line-soft);border-radius:20px;padding:5px 11px;cursor:pointer;transition:.15s}
+  .chip:hover{border-color:var(--accent);color:var(--accent)}
+  .chip.reset{margin-left:auto;color:var(--muted)}
+
+  #toggleBtn{position:fixed;top:14px;right:14px;z-index:6;font:inherit;font-size:10px;letter-spacing:.16em;
+    text-transform:uppercase;color:var(--text);background:rgba(10,16,12,.8);backdrop-filter:blur(10px);
+    border:1px solid var(--line);border-radius:4px;padding:7px 11px;cursor:pointer;display:none}
+  #panel.hidden ~ #toggleBtn{display:block}
+
+  .closeX{margin-left:auto;background:none;border:none;color:var(--muted);font:inherit;font-size:15px;
+    line-height:1;cursor:pointer;padding:2px 4px}
+  .closeX:hover{color:var(--accent)}
+  .phead .top{display:flex;align-items:center;gap:8px}
+
+  #fail{position:fixed;inset:0;display:none;place-items:center;padding:32px;text-align:center;
+    font-size:13px;line-height:1.6;color:var(--text);background:var(--ink)}
+
+  @media (max-width:760px){
+    #panel{top:auto;bottom:0;width:100%;height:auto;max-height:56vh;border-left:none;
+      border-top:1px solid var(--line);border-radius:14px 14px 0 0}
+    #panel.hidden{transform:translateY(100%)}
+    #hint{max-width:70vw;bottom:auto;top:60px}
+  }
+  @media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<canvas id="view"></canvas>
+
+<div id="hud">
+  <span class="t">frame</span><b id="s_fps">—</b> fps<br>
+  <span class="t">patches</span><b id="s_patch">—</b><br>
+  <span class="t">blades</span><b id="s_blades">—</b><br>
+  <span class="t">triangles</span><b id="s_tris">—</b>
+</div>
+
+<div id="hint">
+  <kbd>drag</kbd> look · <kbd>scroll</kbd> zoom · <kbd>W A S D</kbd> walk · <kbd>click</kbd> field to jump there · <kbd>H</kbd> panel
+</div>
+
+<aside id="panel">
+  <div class="phead">
+    <div class="top">
+      <h1>Quick Grass</h1>
+      <button class="closeX" id="closeBtn" aria-label="Hide panel">✕</button>
+    </div>
+    <p>One instanced draw per patch. Every blade is built in the vertex shader from a hash of its world position.</p>
+  </div>
+  <div class="scroll" id="sections"></div>
+  <div class="chips" id="chips"></div>
+</aside>
+<button id="toggleBtn">Controls</button>
+
+<div id="fail">This demo needs WebGL. Try a different browser or enable hardware acceleration.</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+(function(){
+"use strict";
+
+if (!window.THREE) { document.getElementById('fail').style.display = 'grid'; return; }
+
+/* ============================================================
+   PARAMETERS
+   ============================================================ */
+const DEFAULTS = {
+  // field
+  bladesPerPatch: 3072,
+  patchSize: 10,
+  drawDistance: 90,
+  detailDistance: 18,
+  segments: 6,
+  // blade
+  bladeWidth: 0.10,
+  bladeHeight: 1.5,
+  heightVariation: 0.55,
+  curvature: 0.45,
+  tipTaper: 2.0,
+  roundness: 0.30,
+  thickening: 1.0,
+  // wind
+  windStrength: 1.0,
+  windSpeed: 1.0,
+  gustScale: 0.25,
+  windDrift: 0.05,
+  // interaction
+  pushRadius: 2.5,
+  pushStrength: 0.45,
+  // look
+  baseColour: '#0a2a10',
+  tipColour:  '#a8cc3f',
+  colourVariation: 0.6,
+  sunElevation: 24,
+  sunAzimuth: 214,
+  sunIntensity: 1.35,
+  ambient: 0.85,
+  translucency: 0.9,
+  normalFlatten: 1.0,
+  haze: 1.0,
+  exposure: 1.5,
+  terrainAmplitude: 1.0,
+  // render
+  renderScale: 1.0,
+  showLod: false,
+  wireframe: false,
+  freezeWind: false,
+  showTerrain: true,
+  autoOrbit: false,
+};
+const P = Object.assign({}, DEFAULTS);
+
+const SECTIONS = [
+  { name:'Field', items:[
+    {k:'bladesPerPatch', l:'Blades per patch', min:256, max:8192, step:256, rebuild:true, f:v=>v.toLocaleString()},
+    {k:'patchSize', l:'Patch size', min:4, max:24, step:1, rebuild:true, f:v=>v+' m'},
+    {k:'drawDistance', l:'Draw distance', min:20, max:180, step:5, f:v=>v+' m'},
+    {k:'detailDistance', l:'Detail distance', min:4, max:70, step:1, f:v=>v+' m'},
+    {k:'segments', l:'Segments per blade', min:2, max:9, step:1, rebuild:true, f:v=>v},
+    {k:'terrainAmplitude', l:'Terrain relief', min:0, max:2.5, step:.05, f:v=>v.toFixed(2)+'×'},
+  ]},
+  { name:'Blade', items:[
+    {k:'bladeWidth', l:'Width', min:.02, max:.4, step:.005, f:v=>v.toFixed(3)+' m'},
+    {k:'bladeHeight', l:'Height', min:.2, max:4, step:.05, f:v=>v.toFixed(2)+' m'},
+    {k:'heightVariation', l:'Height variation', min:0, max:1.2, step:.02, f:pct},
+    {k:'curvature', l:'Curve', min:0, max:1.4, step:.02, f:v=>v.toFixed(2)},
+    {k:'tipTaper', l:'Tip taper', min:1, max:6, step:.1, f:v=>v.toFixed(1)},
+    {k:'roundness', l:'Normal spread', min:0, max:.5, step:.01, f:v=>(v*180).toFixed(0)+'°'},
+    {k:'thickening', l:'Edge-on thickening', min:0, max:2.5, step:.05, f:v=>v.toFixed(2)},
+  ]},
+  { name:'Wind', items:[
+    {k:'windStrength', l:'Strength', min:0, max:2.5, step:.05, f:v=>v.toFixed(2)},
+    {k:'windSpeed', l:'Speed', min:0, max:4, step:.05, f:v=>v.toFixed(2)},
+    {k:'gustScale', l:'Gust size', min:.02, max:1, step:.01, f:v=>(1/v).toFixed(0)+' m'},
+    {k:'windDrift', l:'Direction drift', min:.005, max:.3, step:.005, f:v=>v.toFixed(3)},
+    {k:'pushRadius', l:'Orb push radius', min:0, max:8, step:.1, f:v=>v.toFixed(1)+' m'},
+    {k:'pushStrength', l:'Orb push force', min:0, max:1.5, step:.02, f:v=>v.toFixed(2)},
+  ]},
+  { name:'Light & colour', items:[
+    {k:'baseColour', l:'Root colour', type:'color'},
+    {k:'tipColour', l:'Tip colour', type:'color'},
+    {k:'colourVariation', l:'Colour variation', min:0, max:1.5, step:.02, f:pct},
+    {k:'sunElevation', l:'Sun elevation', min:-4, max:88, step:1, f:v=>v+'°'},
+    {k:'sunAzimuth', l:'Sun azimuth', min:0, max:360, step:2, f:v=>v+'°'},
+    {k:'sunIntensity', l:'Sun intensity', min:0, max:3.5, step:.05, f:v=>v.toFixed(2)},
+    {k:'ambient', l:'Sky ambient', min:0, max:2.5, step:.05, f:v=>v.toFixed(2)},
+    {k:'translucency', l:'Backscatter', min:0, max:2.5, step:.05, f:v=>v.toFixed(2)},
+    {k:'normalFlatten', l:'Normals toward up', min:0, max:1, step:.02, f:pct},
+    {k:'haze', l:'Haze', min:0, max:3, step:.05, f:v=>v.toFixed(2)},
+    {k:'exposure', l:'Exposure', min:.3, max:3.5, step:.05, f:v=>v.toFixed(2)},
+  ]},
+  { name:'Render', items:[
+    {k:'renderScale', l:'Resolution scale', min:.5, max:2, step:.1, f:v=>v.toFixed(1)+'×'},
+    {k:'showLod', l:'Tint by detail level', type:'toggle'},
+    {k:'wireframe', l:'Wireframe', type:'toggle'},
+    {k:'showTerrain', l:'Draw ground', type:'toggle'},
+    {k:'freezeWind', l:'Freeze time', type:'toggle'},
+    {k:'autoOrbit', l:'Auto-orbit camera', type:'toggle'},
+  ]},
+];
+
+const PRESETS = {
+  'Still morning': {windStrength:.28, windSpeed:.45, gustScale:.14, sunElevation:9, sunAzimuth:96,
+    sunIntensity:1.9, ambient:.7, haze:1.5, exposure:1.55, tipColour:'#c2cf52', baseColour:'#0e2a12',
+    curvature:.3, translucency:1.5},
+  'Gale': {windStrength:2.2, windSpeed:2.6, gustScale:.42, windDrift:.12, curvature:.85,
+    sunElevation:31, sunIntensity:1.1, ambient:1.1, haze:1.8, exposure:1.4, tipColour:'#93b84a'},
+  'Deep meadow': {bladesPerPatch:6144, patchSize:8, bladeHeight:2.1, heightVariation:.8, detailDistance:26,
+    drawDistance:110, curvature:.55, colourVariation:.9, baseColour:'#07240f', tipColour:'#9dc93c'},
+  'Xenoturf': {baseColour:'#12063a', tipColour:'#57e0c8', bladeWidth:.055, bladeHeight:2.6, curvature:.9,
+    sunElevation:6, sunAzimuth:300, sunIntensity:2.2, ambient:.6, haze:2.2, translucency:2.0,
+    colourVariation:1.1, windSpeed:.6, exposure:1.7},
+};
+
+function pct(v){ return Math.round(v*100)+'%'; }
+
+/* ============================================================
+   SHADER SOURCE
+   ============================================================ */
+const COMMON = `
+#define PI 3.14159265359
+float saturate(float x){ return clamp(x, 0.0, 1.0); }
+vec3 saturate3(vec3 x){ return clamp(x, vec3(0.0), vec3(1.0)); }
+float linearstep(float a, float b, float v){ return clamp((v-a)/(b-a), 0.0, 1.0); }
+float remap(float v, float a, float b, float c, float d){ return mix(c, d, (v-a)/(b-a)); }
+float easeOut(float x, float t){ return 1.0 - pow(1.0 - x, t); }
+float easeIn(float x, float t){ return pow(x, t); }
+
+float hash12(vec2 p){
+  vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+  p3 += dot(p3, p3.yzx + 33.33);
+  return fract((p3.x + p3.y) * p3.z);
+}
+vec2 hash22(vec2 p){
+  vec3 p3 = fract(vec3(p.xyx) * vec3(0.1031, 0.1030, 0.0973));
+  p3 += dot(p3, p3.yzx + 33.33);
+  return fract((p3.xx + p3.yz) * p3.zy);
+}
+vec4 hash42(vec2 p){
+  vec4 p4 = fract(vec4(p.xyxy) * vec4(0.1031, 0.1030, 0.0973, 0.1099));
+  p4 += dot(p4, p4.wzxy + 33.33);
+  return fract((p4.xxyz + p4.yzzw) * p4.zywx);
+}
+float noise12(vec2 p){
+  vec2 i = floor(p), f = fract(p);
+  vec2 u = f*f*(3.0-2.0*f);
+  float v = mix(mix(hash12(i), hash12(i+vec2(1.0,0.0)), u.x),
+                mix(hash12(i+vec2(0.0,1.0)), hash12(i+vec2(1.0,1.0)), u.x), u.y);
+  return v * 2.0 - 1.0;
+}
+
+mat3 rotateX(float t){ float c=cos(t), s=sin(t); return mat3(1.,0.,0., 0.,c,-s, 0.,s,c); }
+mat3 rotateY(float t){ float c=cos(t), s=sin(t); return mat3(c,0.,s, 0.,1.,0., -s,0.,c); }
+mat3 rotateAxis(vec3 axis, float angle){
+  axis = normalize(axis);
+  float s = sin(angle), c = cos(angle), oc = 1.0 - c;
+  return mat3(
+    oc*axis.x*axis.x + c,        oc*axis.x*axis.y - axis.z*s, oc*axis.z*axis.x + axis.y*s,
+    oc*axis.x*axis.y + axis.z*s, oc*axis.y*axis.y + c,        oc*axis.y*axis.z - axis.x*s,
+    oc*axis.z*axis.x - axis.y*s, oc*axis.y*axis.z + axis.x*s, oc*axis.z*axis.z + c);
+}
+
+uniform float uTerrainAmp;
+float terrainHeight(vec2 p){
+  float h  = sin(p.x*0.021 + 1.7) * cos(p.y*0.019 - 0.6) * 6.0;
+        h += sin(p.x*0.060)       * cos(p.y*0.055)       * 1.6;
+        h += sin(p.x*0.150 + 2.1) * cos(p.y*0.130)       * 0.35;
+  return h * uTerrainAmp;
+}
+`;
+
+const SKY = `
+uniform vec3 uSunDir;
+uniform vec3 uSkyHorizon;
+uniform vec3 uSkyZenith;
+uniform vec3 uSunColour;
+uniform vec3 uSunGlow;
+uniform vec3 uGroundColour;
+uniform float uSunIntensity;
+uniform float uHaze;
+uniform float uExposure;
+
+vec3 skyColour(vec3 viewDir){
+  float t = linearstep(-0.05, 1.0, viewDir.y);
+  vec3 grad = mix(uSkyZenith, uSkyHorizon, exp(-sqrt(t) * 2.0));
+  float mu = 1.0 - saturate(dot(viewDir, uSunDir));
+  vec3 c = grad + uSunGlow * saturate(exp(-sqrt(mu) * 9.0));
+  c += uSunColour * uSunIntensity * smoothstep(0.99955, 0.99975, 1.0 - mu);
+  return c;
+}
+vec3 applyFog(vec3 base, vec3 viewDir, float depth){
+  vec3 fogSky = skyColour(-viewDir);
+  float d = depth * depth;
+  float ext = 0.003 * uHaze;
+  float sca = ext * 0.17;
+  return base * exp(-ext*ext*d) + fogSky * (1.0 - exp(-sca*sca*d));
+}
+vec3 tonemap(vec3 c){
+  c *= uExposure;
+  c = (c * (2.51*c + 0.03)) / (c * (2.43*c + 0.59) + 0.14);
+  return saturate3(c);
+}
+vec4 present(vec3 c){ return vec4(pow(tonemap(c), vec3(1.0/2.2)), 1.0); }
+`;
+
+/* ---------- grass ---------- */
+const GRASS_VS = COMMON + SKY + `
+uniform vec2  uGrassSize;     // width, height
+uniform vec4  uGrassParams;   // segments, vertices, heightVariation, tipTaper
+uniform vec2  uGrassDraw;     // detailDistance, drawDistance
+uniform vec4  uWind;          // strength, speed, gustScale, drift
+uniform vec3  uPlayerPos;
+uniform vec2  uPush;          // radius, strength
+uniform float uTime;
+uniform float uCurve;
+uniform float uRound;
+uniform float uThicken;
+uniform float uNormalUp;
+uniform float uColourVar;
+uniform vec3  uBaseColour;
+uniform vec3  uTipColour;
+
+attribute float vertIndex;
+
+varying vec3 vNormalA;
+varying vec3 vNormalB;
+varying vec3 vGrassColour;
+varying vec4 vGrassParams;   // heightPercent, worldY, lodBlend, xSide
+varying vec3 vWorldPosition;
+
+void main(){
+  // per-instance offset lives in the (instanced) position attribute
+  vec3 grassOffset = vec3(position.x, 0.0, position.y);
+  vec3 bladeWorld = (modelMatrix * vec4(grassOffset, 1.0)).xyz;
+  bladeWorld.y = terrainHeight(bladeWorld.xz);
+
+  vec4 h = hash42(bladeWorld.xz);
+  float dist = distance(cameraPosition, bladeWorld);
+  float lodBlend = smoothstep(uGrassDraw.x * 0.5, uGrassDraw.x, dist);
+  float fadeOut  = smoothstep(uGrassDraw.y * 0.72, uGrassDraw.y, dist);
+
+  float randomAngle  = h.x * 2.0 * PI;
+  float randomShade  = remap(h.y, 0.0, 1.0, 1.0 - 0.5 * uColourVar, 1.0);
+  float randomHeight = remap(h.z, 0.0, 1.0, 1.0 - uGrassParams.z * 0.55, 1.0 + uGrassParams.z * 0.45)
+                       * (1.0 - fadeOut);
+  float randomLean   = remap(h.w, 0.0, 1.0, 0.15, 1.0) * uCurve;
+
+  float SEGMENTS = uGrassParams.x;
+  float VERTICES = uGrassParams.y;
+
+  float vertID = mod(vertIndex, VERTICES);
+  float zSide  = -(floor(vertIndex / VERTICES) * 2.0 - 1.0);   //  1 front, -1 back
+  float xSide  = mod(vertID, 2.0);                             //  0 left,   1 right
+  float heightPercent = (vertID - xSide) / (SEGMENTS * 2.0);
+
+  float totalHeight = uGrassSize.y * randomHeight;
+  float widthHigh = easeOut(1.0 - heightPercent, uGrassParams.w);
+  float widthLow  = 1.0 - heightPercent;
+  float totalWidth = uGrassSize.x * mix(widthHigh, widthLow, lodBlend);
+
+  float x = (xSide - 0.5) * totalWidth;
+  float y = heightPercent * totalHeight;
+
+  // ---- wind ----
+  float t = uTime * uWind.y;
+  float windDir   = noise12(bladeWorld.xz * uWind.w + t * 0.12) * PI;
+  float windNoise = noise12(bladeWorld.xz * uWind.z + t);
+  float windLean  = easeIn(remap(windNoise, -1.0, 1.0, 0.25, 1.0), 2.0) * 1.25 * uWind.x;
+  vec3  windAxis  = vec3(cos(windDir), 0.0, sin(windDir));
+  windLean *= heightPercent;
+
+  // ---- orb push ----
+  float dp = distance(bladeWorld.xz, uPlayerPos.xz);
+  float falloff = 1.0 - smoothstep(uPush.x * 0.35, max(uPush.x, 0.001), dp);
+  float pushLean = falloff * uPush.y * 1.6 * (0.3 + 0.7 * heightPercent);
+  vec3 toPlayer = normalize(vec3(uPlayerPos.x - bladeWorld.x, 0.0, uPlayerPos.z - bladeWorld.z) + vec3(1e-4, 0.0, 0.0));
+  vec3 pushAxis = vec3(toPlayer.z, 0.0, -toPlayer.x);
+
+  // ---- curve ----
+  float leanAnim = noise12(vec2(uTime * 0.35 * uWind.y) + bladeWorld.xz * 7.3) * 0.1;
+  float curve = randomLean + leanAnim * uCurve;
+  float easedHeight = mix(easeIn(heightPercent, 2.0), 1.0, lodBlend);
+  float curveAmount = -curve * easedHeight;
+
+  vec3 n1 = rotateX(curveAmount)       * vec3(0.0, heightPercent + 0.01, 0.0);
+  vec3 n2 = rotateX(curveAmount * 0.9) * vec3(0.0, (heightPercent + 0.01) * 0.9, 0.0);
+  vec3 ncurve = normalize(n1 - n2 + vec3(0.0, 1e-5, 0.0));
+
+  mat3 grassMat = rotateAxis(pushAxis, pushLean) * rotateAxis(windAxis, windLean) * rotateY(randomAngle);
+
+  vec3 faceNormal = grassMat * vec3(0.0, 0.0, 1.0) * zSide;
+
+  vec3 bladeNormal = vec3(0.0, -ncurve.z, ncurve.y);
+  vec3 nA = grassMat * (rotateY( PI * uRound * zSide) * bladeNormal) * zSide;
+  vec3 nB = grassMat * (rotateY(-PI * uRound * zSide) * bladeNormal) * zSide;
+
+  vec3 UP = vec3(0.0, 1.0, 0.0);
+  float upMix = mix(0.75, 1.0, lodBlend) * uNormalUp;
+  vNormalA = normalize(mix(nA, UP, upMix));
+  vNormalB = normalize(mix(nB, UP, upMix));
+
+  // ---- shape ----
+  vec3 vpos = vec3(x, y, 0.0);
+  vpos = rotateX(curveAmount) * vpos;
+  vpos = grassMat * vpos;
+  vpos += grassOffset;
+  vpos.y += bladeWorld.y;
+
+  // ---- colour ----
+  vec2 hc = hash22(bladeWorld.xz + 11.7);
+  vec3 baseC = uBaseColour * mix(1.0 - 0.35 * uColourVar, 1.0 + 0.35 * uColourVar, hc.x);
+  vec3 tipC  = uTipColour  * mix(1.0 - 0.25 * uColourVar, 1.0 + 0.25 * uColourVar, hc.y);
+  vec3 hiC = mix(baseC, tipC, easeIn(heightPercent, 4.0)) * randomShade;
+  vec3 loC = mix(uBaseColour, uTipColour, heightPercent);
+  vGrassColour = mix(hiC, loC, lodBlend);
+  vGrassParams = vec4(heightPercent, bladeWorld.y, lodBlend, xSide);
+
+  vec4 worldPos = modelMatrix * vec4(vpos, 1.0);
+  vWorldPosition = worldPos.xyz;
+
+  vec4 mvPosition = viewMatrix * worldPos;
+
+  // widen blades that are nearly edge-on to the camera
+  vec3 viewXZ = normalize(vec3(cameraPosition.x - bladeWorld.x, 0.0, cameraPosition.z - bladeWorld.z));
+  float vdn = saturate(dot(faceNormal, viewXZ));
+  float thicken = easeOut(1.0 - vdn, 4.0) * smoothstep(0.0, 0.2, vdn);
+  mvPosition.x += thicken * (xSide - 0.5) * totalWidth * 0.5 * zSide * uThicken;
+
+  gl_Position = projectionMatrix * mvPosition;
+}
+`;
+
+const GRASS_FS = COMMON + SKY + `
+uniform float uAmbient;
+uniform float uTranslucency;
+uniform vec3  uLodColour;
+uniform float uShowLod;
+
+varying vec3 vNormalA;
+varying vec3 vNormalB;
+varying vec3 vGrassColour;
+varying vec4 vGrassParams;
+varying vec3 vWorldPosition;
+
+void main(){
+  float heightPercent = vGrassParams.x;
+  float lodBlend = vGrassParams.z;
+  float xSide = vGrassParams.w;
+
+  vec3 albedo = vGrassColour;
+  albedo = mix(albedo, uLodColour * (0.25 + 0.75 * heightPercent), uShowLod);
+
+  // slight darkening toward the blade edges reads as roundness
+  float middle = mix(1.0 - abs(xSide - 0.5) * 2.0, 1.0, lodBlend);
+  albedo *= mix(0.82, 1.0, middle);
+  albedo *= mix(0.30, 1.0, easeIn(heightPercent, 2.0));   // ambient occlusion at the roots
+
+  vec3 n = normalize(mix(vNormalA, vNormalB, xSide));
+  vec3 viewDir = normalize(cameraPosition - vWorldPosition);
+  vec3 lightDir = uSunDir;
+  vec3 sun = uSunColour * uSunIntensity;
+
+  // wrapped diffuse: light bleeds around thin blades
+  float wrap = 0.5;
+  float dotNL = saturate((dot(n, lightDir) + wrap) / (1.0 + wrap));
+  vec3 col = albedo * dotNL * sun;
+
+  // specular sheen
+  vec3 hv = normalize(lightDir + viewDir);
+  col += sun * pow(saturate(dot(n, hv)), 24.0) * 0.10 * (1.0 - lodBlend);
+
+  // backscatter through the blade
+  float back = saturate((dot(viewDir, -lightDir) + wrap) / (1.0 + wrap));
+  col += albedo * sun * back * 0.5 * uTranslucency * (1.0 - lodBlend * 0.5);
+
+  // sky/ground ambient
+  vec3 amb = mix(uGroundColour, uSkyHorizon, saturate(n.y * 0.5 + 0.5));
+  col += albedo * amb * uAmbient;
+
+  col = applyFog(col, viewDir, distance(cameraPosition, vWorldPosition));
+  gl_FragColor = present(col);
+}
+`;
+
+/* ---------- terrain ---------- */
+const TERRAIN_VS = COMMON + SKY + `
+varying vec3 vWorldPosition;
+varying vec3 vWorldNormal;
+void main(){
+  vec3 p = position;
+  p.y = terrainHeight(p.xz);
+  float e = 0.6;
+  vec3 dx = vec3(e, terrainHeight(p.xz + vec2(e, 0.0)) - p.y, 0.0);
+  vec3 dz = vec3(0.0, terrainHeight(p.xz + vec2(0.0, e)) - p.y, e);
+  vWorldNormal = normalize(cross(dz, dx));
+  vec4 world = modelMatrix * vec4(p, 1.0);
+  vWorldPosition = world.xyz;
+  gl_Position = projectionMatrix * viewMatrix * world;
+}
+`;
+
+const TERRAIN_FS = COMMON + SKY + `
+uniform vec3  uBaseColour;
+uniform vec3  uTipColour;
+uniform float uAmbient;
+varying vec3 vWorldPosition;
+varying vec3 vWorldNormal;
+
+void main(){
+  vec3 n = normalize(vWorldNormal);
+  float patchy = noise12(vWorldPosition.xz * 0.09) * 0.5 + 0.5;
+  // past the grass ring the ground has to keep reading as field, not bare soil
+  vec3 grassy = mix(uBaseColour, uTipColour * 0.5, 0.35 + 0.3 * patchy);
+  vec3 dirt = mix(uBaseColour * 0.7, vec3(0.055, 0.048, 0.038), 0.55);
+  float slope = 1.0 - saturate(n.y);
+  vec3 albedo = mix(grassy, dirt, smoothstep(0.3, 0.65, slope));
+
+  vec3 viewDir = normalize(cameraPosition - vWorldPosition);
+  vec3 sun = uSunColour * uSunIntensity;
+  float dotNL = saturate(dot(n, uSunDir));
+  vec3 col = albedo * dotNL * sun;
+  col += albedo * mix(uGroundColour, uSkyHorizon, saturate(n.y * 0.5 + 0.5)) * uAmbient;
+  col = applyFog(col, viewDir, distance(cameraPosition, vWorldPosition));
+  gl_FragColor = present(col);
+}
+`;
+
+/* ---------- sky dome ---------- */
+const SKY_VS = COMMON + SKY + `
+varying vec3 vWorldPosition;
+void main(){
+  vec4 world = modelMatrix * vec4(position, 1.0);
+  vWorldPosition = world.xyz;
+  gl_Position = projectionMatrix * viewMatrix * world;
+}
+`;
+const SKY_FS = COMMON + SKY + `
+varying vec3 vWorldPosition;
+void main(){
+  vec3 viewDir = normalize(vWorldPosition - cameraPosition);
+  gl_FragColor = present(skyColour(viewDir));
+}
+`;
+
+/* ---------- orb ---------- */
+const ORB_VS = COMMON + SKY + `
+varying vec3 vWorldPosition;
+varying vec3 vWorldNormal;
+void main(){
+  vec4 world = modelMatrix * vec4(position, 1.0);
+  vWorldPosition = world.xyz;
+  vWorldNormal = normalize(mat3(modelMatrix) * normal);
+  gl_Position = projectionMatrix * viewMatrix * world;
+}
+`;
+const ORB_FS = COMMON + SKY + `
+varying vec3 vWorldPosition;
+varying vec3 vWorldNormal;
+void main(){
+  vec3 n = normalize(vWorldNormal);
+  vec3 viewDir = normalize(cameraPosition - vWorldPosition);
+  float rim = pow(1.0 - saturate(dot(n, viewDir)), 2.0);
+  vec3 col = vec3(0.9, 1.0, 0.75) * (0.35 + rim * 2.2);
+  col += uSunColour * uSunIntensity * saturate(dot(n, uSunDir)) * 0.4;
+  col = applyFog(col, viewDir, distance(cameraPosition, vWorldPosition));
+  gl_FragColor = present(col);
+}
+`;
+
+/* ============================================================
+   SCENE SETUP
+   ============================================================ */
+const canvas = document.getElementById('view');
+let renderer;
+try {
+  renderer = new THREE.WebGLRenderer({canvas:canvas, antialias:true, powerPreference:'high-performance'});
+} catch(e) {
+  document.getElementById('fail').style.display = 'grid'; return;
+}
+renderer.setClearColor(0x05080a, 1);
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(55, 1, 0.1, 3000);
+
+const U = {
+  uTime:          {value:0},
+  uTerrainAmp:    {value:P.terrainAmplitude},
+  uSunDir:        {value:new THREE.Vector3(0,1,0)},
+  uSkyHorizon:    {value:new THREE.Color(0x53709c).convertSRGBToLinear()},
+  uSkyZenith:     {value:new THREE.Color(0x0e1730).convertSRGBToLinear()},
+  uSunColour:     {value:new THREE.Color(0xfff0d2).convertSRGBToLinear()},
+  uSunGlow:       {value:new THREE.Color(0x40506a).convertSRGBToLinear()},
+  uGroundColour:  {value:new THREE.Color(0x1b2114).convertSRGBToLinear()},
+  uSunIntensity:  {value:P.sunIntensity},
+  uHaze:          {value:P.haze},
+  uExposure:      {value:P.exposure},
+  uAmbient:       {value:P.ambient},
+  uTranslucency:  {value:P.translucency},
+  uBaseColour:    {value:new THREE.Color(P.baseColour).convertSRGBToLinear()},
+  uTipColour:     {value:new THREE.Color(P.tipColour).convertSRGBToLinear()},
+  uColourVar:     {value:P.colourVariation},
+  uGrassSize:     {value:new THREE.Vector2(P.bladeWidth, P.bladeHeight)},
+  uGrassDraw:     {value:new THREE.Vector2(P.detailDistance, P.drawDistance)},
+  uWind:          {value:new THREE.Vector4(P.windStrength, P.windSpeed, P.gustScale, P.windDrift)},
+  uPlayerPos:     {value:new THREE.Vector3()},
+  uPush:          {value:new THREE.Vector2(P.pushRadius, P.pushStrength)},
+  uCurve:         {value:P.curvature},
+  uRound:         {value:P.roundness},
+  uThicken:       {value:P.thickening},
+  uNormalUp:      {value:P.normalFlatten},
+  uShowLod:       {value:0},
+};
+
+function grassMaterial(lodColour){
+  return new THREE.ShaderMaterial({
+    vertexShader: GRASS_VS,
+    fragmentShader: GRASS_FS,
+    side: THREE.FrontSide,
+    uniforms: Object.assign({}, U, {
+      uGrassParams: {value:new THREE.Vector4(1, 4, P.heightVariation, P.tipTaper)},
+      uLodColour:   {value:new THREE.Color(lodColour)},
+    }),
+  });
+}
+const matHigh = grassMaterial(0xff4d3d);
+const matLow  = grassMaterial(0x3d7bff);
+
+// sky dome — follows the camera so it never clips
+const sky = new THREE.Mesh(
+  new THREE.SphereGeometry(900, 32, 16),
+  new THREE.ShaderMaterial({vertexShader:SKY_VS, fragmentShader:SKY_FS, uniforms:U,
+    side:THREE.BackSide, depthWrite:false})
+);
+sky.frustumCulled = false;
+sky.renderOrder = -10;
+scene.add(sky);
+
+// ground
+const TERRAIN_SIZE = 700;
+const terrainGeo = new THREE.PlaneGeometry(TERRAIN_SIZE, TERRAIN_SIZE, 300, 300);
+terrainGeo.rotateX(-Math.PI/2);
+const terrain = new THREE.Mesh(terrainGeo, new THREE.ShaderMaterial({
+  vertexShader:TERRAIN_VS, fragmentShader:TERRAIN_FS, uniforms:U, side:THREE.FrontSide
+}));
+terrain.frustumCulled = false;
+scene.add(terrain);
+
+// orb the grass reacts to
+const orb = new THREE.Mesh(
+  new THREE.SphereGeometry(0.35, 20, 14),
+  new THREE.ShaderMaterial({vertexShader:ORB_VS, fragmentShader:ORB_FS, uniforms:U})
+);
+scene.add(orb);
+
+const grassGroup = new THREE.Group();
+scene.add(grassGroup);
+
+/* ============================================================
+   GRASS GEOMETRY  (this is the whole trick)
+   ============================================================ */
+function mulberry32(a){
+  return function(){
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+
+function createGrassGeometry(segments, count, patchSize){
+  const VERTICES = (segments + 1) * 2;
+
+  // two ribbons of quads: one facing front, one facing back (wound in reverse)
+  const indices = [];
+  for (let i = 0; i < segments; ++i){
+    const vi = i * 2;
+    indices.push(vi + 0, vi + 1, vi + 2,  vi + 2, vi + 1, vi + 3);
+    const fi = VERTICES + vi;
+    indices.push(fi + 2, fi + 1, fi + 0,  fi + 3, fi + 1, fi + 2);
+  }
+
+  // one vertex id per vertex; the shader derives side / height from it
+  const vertID = new Float32Array(VERTICES * 2);
+  for (let i = 0; i < VERTICES * 2; ++i) vertID[i] = i;
+
+  // one offset per blade — jittered grid spreads more evenly than pure random
+  const rand = mulberry32(1337);
+  const offsets = new Float32Array(count * 3);
+  const cols = Math.ceil(Math.sqrt(count));
+  const cell = patchSize / cols;
+  for (let i = 0; i < count; ++i){
+    const cx = i % cols, cz = Math.floor(i / cols);
+    offsets[i*3+0] = -patchSize*0.5 + (cx + rand()) * cell;
+    offsets[i*3+1] = -patchSize*0.5 + (cz + rand()) * cell;   // read as world Z
+    offsets[i*3+2] = 0;
+  }
+
+  const geo = new THREE.InstancedBufferGeometry();
+  geo.instanceCount = count;
+  geo.setAttribute('vertIndex', new THREE.Float32BufferAttribute(vertID, 1));
+  geo.setAttribute('position', new THREE.InstancedBufferAttribute(offsets, 3));
+  geo.setIndex(indices);
+  geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), patchSize * 2 + 8);
+  return geo;
+}
+
+let geoHigh = null, geoLow = null;
+const poolHigh = [], poolLow = [];
+const MAX_PATCHES = 520;
+
+function rebuildGrass(){
+  for (const m of poolHigh) grassGroup.remove(m);
+  for (const m of poolLow)  grassGroup.remove(m);
+  poolHigh.length = 0; poolLow.length = 0;
+  if (geoHigh) geoHigh.dispose();
+  if (geoLow)  geoLow.dispose();
+
+  const segHigh = P.segments|0;
+  const segLow = 1;
+  geoHigh = createGrassGeometry(segHigh, P.bladesPerPatch|0, P.patchSize);
+  geoLow  = createGrassGeometry(segLow,  P.bladesPerPatch|0, P.patchSize);
+
+  matHigh.uniforms.uGrassParams.value.set(segHigh, (segHigh+1)*2, P.heightVariation, P.tipTaper);
+  matLow.uniforms.uGrassParams.value.set(segLow,  (segLow+1)*2,  P.heightVariation, P.tipTaper);
+}
+
+const cursor = {high:0, low:0};
+function takePatch(pool, key, geo, mat){
+  const i = cursor[key]++;
+  if (i < pool.length) return pool[i];
+  if (pool.length >= MAX_PATCHES) return null;
+  const m = new THREE.Mesh(geo, mat);
+  m.frustumCulled = false;
+  m.visible = false;
+  pool.push(m);
+  grassGroup.add(m);
+  return m;
+}
+
+/* ============================================================
+   CAMERA + WALKER
+   ============================================================ */
+function terrainHeightJS(x, z){
+  let h  = Math.sin(x*0.021 + 1.7) * Math.cos(z*0.019 - 0.6) * 6.0;
+      h += Math.sin(x*0.060)       * Math.cos(z*0.055)       * 1.6;
+      h += Math.sin(x*0.150 + 2.1) * Math.cos(z*0.130)       * 0.35;
+  return h * P.terrainAmplitude;
+}
+
+const walker = new THREE.Vector3(0, 0, 0);
+const view = {yaw: 0.7, pitch: 0.22, dist: 7.5};
+const keys = Object.create(null);
+const WORLD_LIMIT = 240;
+
+addEventListener('keydown', e => {
+  keys[e.code] = true;
+  if (e.code === 'KeyH'){ panel.classList.toggle('hidden'); }
+});
+addEventListener('keyup', e => { keys[e.code] = false; });
+
+let dragging = false, lastX = 0, lastY = 0, moved = 0, pinch = 0;
+canvas.addEventListener('pointerdown', e => {
+  dragging = true; moved = 0; lastX = e.clientX; lastY = e.clientY;
+  canvas.setPointerCapture(e.pointerId);
+});
+canvas.addEventListener('pointermove', e => {
+  if (!dragging) return;
+  const dx = e.clientX - lastX, dy = e.clientY - lastY;
+  lastX = e.clientX; lastY = e.clientY;
+  moved += Math.abs(dx) + Math.abs(dy);
+  view.yaw -= dx * 0.005;
+  view.pitch = Math.max(-0.35, Math.min(1.25, view.pitch + dy * 0.004));
+});
+canvas.addEventListener('pointerup', e => {
+  dragging = false;
+  if (moved < 6) jumpTo(e.clientX, e.clientY);
+});
+canvas.addEventListener('pointercancel', () => { dragging = false; });
+canvas.addEventListener('wheel', e => {
+  e.preventDefault();
+  view.dist = Math.max(1.2, Math.min(70, view.dist * (1 + Math.sign(e.deltaY) * 0.12)));
+}, {passive:false});
+canvas.addEventListener('touchmove', e => {
+  if (e.touches.length === 2){
+    const d = Math.hypot(e.touches[0].clientX - e.touches[1].clientX,
+                         e.touches[0].clientY - e.touches[1].clientY);
+    if (pinch) view.dist = Math.max(1.2, Math.min(70, view.dist * (pinch / d)));
+    pinch = d;
+  }
+}, {passive:true});
+canvas.addEventListener('touchend', () => { pinch = 0; });
+
+const ray = new THREE.Raycaster();
+const ndc = new THREE.Vector2();
+function jumpTo(clientX, clientY){
+  ndc.x = (clientX / innerWidth) * 2 - 1;
+  ndc.y = -(clientY / innerHeight) * 2 + 1;
+  ray.setFromCamera(ndc, camera);
+  // march the ray against the height field
+  const o = ray.ray.origin, d = ray.ray.direction;
+  let t = 0;
+  for (let i = 0; i < 220; ++i){
+    const px = o.x + d.x*t, py = o.y + d.y*t, pz = o.z + d.z*t;
+    if (py <= terrainHeightJS(px, pz)){
+      walker.set(clamp(px, -WORLD_LIMIT, WORLD_LIMIT), 0, clamp(pz, -WORLD_LIMIT, WORLD_LIMIT));
+      return;
+    }
+    t += 0.9;
+    if (t > 260) break;
+  }
+}
+function clamp(v, a, b){ return v < a ? a : (v > b ? b : v); }
+
+/* ============================================================
+   PANEL
+   ============================================================ */
+const panel = document.getElementById('panel');
+document.getElementById('closeBtn').onclick = () => panel.classList.add('hidden');
+document.getElementById('toggleBtn').onclick = () => panel.classList.remove('hidden');
+
+const controls = {};
+let needsRebuild = false;
+
+function buildPanel(){
+  const host = document.getElementById('sections');
+  host.innerHTML = '';
+  SECTIONS.forEach((sec, si) => {
+    const d = document.createElement('details');
+    if (si < 3) d.open = true;
+    const s = document.createElement('summary');
+    s.innerHTML = '<i class="bar"></i>' + sec.name + '<i class="n">' + sec.items.length + '</i>';
+    d.appendChild(s);
+    const body = document.createElement('div');
+    body.className = 'body';
+    sec.items.forEach(it => body.appendChild(buildRow(it)));
+    d.appendChild(body);
+    host.appendChild(d);
+  });
+
+  const chips = document.getElementById('chips');
+  chips.innerHTML = '';
+  Object.keys(PRESETS).forEach(name => {
+    const b = document.createElement('button');
+    b.className = 'chip'; b.textContent = name;
+    b.onclick = () => applyPreset(PRESETS[name]);
+    chips.appendChild(b);
+  });
+  const r = document.createElement('button');
+  r.className = 'chip reset'; r.textContent = 'Reset all';
+  r.onclick = () => applyPreset(DEFAULTS, true);
+  chips.appendChild(r);
+}
+
+function buildRow(it){
+  const row = document.createElement('div');
+  row.className = 'row';
+
+  if (it.type === 'toggle'){
+    const lab = document.createElement('label');
+    lab.className = 'toggle';
+    const inp = document.createElement('input');
+    inp.type = 'checkbox'; inp.checked = !!P[it.k];
+    const sw = document.createElement('i'); sw.className = 'sw';
+    const txt = document.createElement('span'); txt.textContent = it.l;
+    lab.append(inp, sw, txt);
+    inp.onchange = () => { P[it.k] = inp.checked; onChange(it); };
+    controls[it.k] = {set:v => { inp.checked = !!v; }};
+    row.className = '';
+    row.appendChild(lab);
+    return row;
+  }
+
+  const head = document.createElement('div');
+  head.className = 'lab';
+  const name = document.createElement('span'); name.textContent = it.l;
+  head.appendChild(name);
+
+  if (it.type === 'color'){
+    const wrap = document.createElement('div');
+    wrap.className = 'swatch';
+    const inp = document.createElement('input');
+    inp.type = 'color'; inp.value = P[it.k];
+    const code = document.createElement('code'); code.textContent = P[it.k];
+    head.appendChild(document.createElement('output'));
+    wrap.append(inp, code);
+    row.append(head, wrap);
+    inp.oninput = () => { P[it.k] = inp.value; code.textContent = inp.value; onChange(it); };
+    controls[it.k] = {set:v => { inp.value = v; code.textContent = v; }};
+    return row;
+  }
+
+  const out = document.createElement('output');
+  out.textContent = it.f(P[it.k]);
+  head.appendChild(out);
+
+  const inp = document.createElement('input');
+  inp.type = 'range'; inp.min = it.min; inp.max = it.max; inp.step = it.step; inp.value = P[it.k];
+  inp.setAttribute('aria-label', it.l);
+  const paint = () => {
+    const pctv = ((inp.value - it.min) / (it.max - it.min)) * 100;
+    inp.style.setProperty('--p', pctv + '%');
+  };
+  paint();
+  inp.oninput = () => {
+    P[it.k] = parseFloat(inp.value);
+    out.textContent = it.f(P[it.k]);
+    paint();
+    onChange(it);
+  };
+  controls[it.k] = {set:v => { inp.value = v; out.textContent = it.f(v); paint(); }};
+
+  row.append(head, inp);
+  return row;
+}
+
+function onChange(it){ if (it.rebuild) needsRebuild = true; }
+
+function applyPreset(obj, full){
+  const src = full ? DEFAULTS : Object.assign({}, DEFAULTS, obj);
+  Object.keys(src).forEach(k => {
+    if (!(k in P)) return;
+    P[k] = src[k];
+    if (controls[k]) controls[k].set(src[k]);
+  });
+  needsRebuild = true;
+}
+
+buildPanel();
+
+/* ============================================================
+   FRAME
+   ============================================================ */
+const tmpBox = new THREE.Box3();
+const tmpVec = new THREE.Vector3();
+const boxSize = new THREE.Vector3();
+const frustum = new THREE.Frustum();
+const projScreen = new THREE.Matrix4();
+const camXZ = new THREE.Vector3();
+const cells = [];
+
+const el = {
+  fps: document.getElementById('s_fps'),
+  patch: document.getElementById('s_patch'),
+  blades: document.getElementById('s_blades'),
+  tris: document.getElementById('s_tris'),
+};
+
+let last = performance.now(), shaderTime = 0, fpsAvg = 60, statTimer = 0;
+
+function resize(){
+  const w = innerWidth, h = innerHeight;
+  renderer.setPixelRatio(Math.min((devicePixelRatio || 1) * P.renderScale, 2.5));
+  renderer.setSize(w, h, false);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+}
+addEventListener('resize', resize);
+
+let lastScale = P.renderScale;
+
+function pushUniforms(){
+  U.uTerrainAmp.value = P.terrainAmplitude;
+  U.uGrassSize.value.set(P.bladeWidth, P.bladeHeight);
+  U.uGrassDraw.value.set(P.detailDistance, P.drawDistance);
+  U.uWind.value.set(P.windStrength, P.windSpeed, P.gustScale, P.windDrift);
+  U.uPush.value.set(P.pushRadius, P.pushStrength);
+  U.uCurve.value = P.curvature;
+  U.uRound.value = P.roundness;
+  U.uThicken.value = P.thickening;
+  U.uNormalUp.value = P.normalFlatten;
+  U.uColourVar.value = P.colourVariation;
+  U.uSunIntensity.value = P.sunIntensity;
+  U.uAmbient.value = P.ambient;
+  U.uTranslucency.value = P.translucency;
+  U.uHaze.value = P.haze;
+  U.uExposure.value = P.exposure;
+  U.uShowLod.value = P.showLod ? 1 : 0;
+  U.uBaseColour.value.set(P.baseColour).convertSRGBToLinear();
+  U.uTipColour.value.set(P.tipColour).convertSRGBToLinear();
+
+  const el2 = P.sunElevation * Math.PI / 180, az = P.sunAzimuth * Math.PI / 180;
+  U.uSunDir.value.set(Math.cos(el2)*Math.sin(az), Math.sin(el2), Math.cos(el2)*Math.cos(az)).normalize();
+
+  matHigh.uniforms.uGrassParams.value.z = P.heightVariation;
+  matHigh.uniforms.uGrassParams.value.w = P.tipTaper;
+  matLow.uniforms.uGrassParams.value.z = P.heightVariation;
+  matLow.uniforms.uGrassParams.value.w = P.tipTaper;
+
+  matHigh.wireframe = matLow.wireframe = P.wireframe;
+  terrain.material.wireframe = P.wireframe;
+  terrain.visible = P.showTerrain;
+
+  if (P.renderScale !== lastScale){ lastScale = P.renderScale; resize(); }
+}
+
+function moveWalker(dt){
+  let fx = 0, fz = 0;
+  if (keys.KeyW || keys.ArrowUp) fz += 1;
+  if (keys.KeyS || keys.ArrowDown) fz -= 1;
+  if (keys.KeyA || keys.ArrowLeft) fx -= 1;
+  if (keys.KeyD || keys.ArrowRight) fx += 1;
+  if (!fx && !fz) return;
+  const len = Math.hypot(fx, fz); fx /= len; fz /= len;
+  const speed = (keys.ShiftLeft || keys.ShiftRight) ? 12 : 4.5;
+  const s = Math.sin(view.yaw), c = Math.cos(view.yaw);
+  walker.x = clamp(walker.x + (fx * c + fz * s) * speed * dt, -WORLD_LIMIT, WORLD_LIMIT);
+  walker.z = clamp(walker.z + (fz * c - fx * s) * speed * dt, -WORLD_LIMIT, WORLD_LIMIT);
+}
+
+function updatePatches(){
+  const size = P.patchSize;
+  const maxD = P.drawDistance;
+  const lodD = P.detailDistance;
+
+  for (const m of poolHigh) m.visible = false;
+  for (const m of poolLow)  m.visible = false;
+  cursor.high = 0; cursor.low = 0;
+
+  projScreen.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+  frustum.setFromProjectionMatrix(projScreen);
+  camXZ.set(camera.position.x, 0, camera.position.z);
+
+  const bx = Math.floor(camera.position.x / size) * size;
+  const bz = Math.floor(camera.position.z / size) * size;
+  const reach = Math.ceil(maxD / size) + 1;
+  boxSize.set(size, 40 + P.terrainAmplitude * 20 + P.bladeHeight * 2, size);
+
+  let n = 0;
+  for (let x = -reach; x <= reach; ++x){
+    for (let z = -reach; z <= reach; ++z){
+      const cx = bx + x * size, cz = bz + z * size;
+      if (Math.abs(cx) > TERRAIN_SIZE*0.5 || Math.abs(cz) > TERRAIN_SIZE*0.5) continue;
+      tmpVec.set(cx, terrainHeightJS(cx, cz), cz);
+      tmpBox.setFromCenterAndSize(tmpVec, boxSize);
+      const d = tmpBox.distanceToPoint(camXZ);
+      if (d > maxD) continue;
+      if (!frustum.intersectsBox(tmpBox)) continue;
+      if (!cells[n]) cells[n] = {x:0, z:0, d:0};
+      const c = cells[n++];
+      c.x = cx; c.z = cz; c.d = d;
+    }
+  }
+  let list = cells.slice(0, n);
+  if (n > MAX_PATCHES) {
+    list.sort((a, b) => a.d - b.d);
+    list.length = MAX_PATCHES;
+  }
+
+  let patches = 0, blades = 0, tris = 0;
+  const bladesHigh = geoHigh.instanceCount, bladesLow = geoLow.instanceCount;
+  const segHigh = P.segments|0;
+
+  for (const c of list){
+    const near = c.d <= lodD;
+    const m = near ? takePatch(poolHigh, 'high', geoHigh, matHigh)
+                   : takePatch(poolLow,  'low',  geoLow,  matLow);
+    if (!m) continue;
+    m.position.set(c.x, 0, c.z);
+    m.visible = true;
+    patches++;
+    blades += near ? bladesHigh : bladesLow;
+    tris += (near ? bladesHigh * segHigh : bladesLow) * 4;
+  }
+  return {patches:patches, blades:blades, tris:tris};
+}
+
+function frame(now){
+  requestAnimationFrame(frame);
+  const dt = Math.min(0.05, (now - last) / 1000);
+  last = now;
+
+  if (needsRebuild){ needsRebuild = false; rebuildGrass(); }
+  pushUniforms();
+
+  if (!P.freezeWind) shaderTime += dt;
+  U.uTime.value = shaderTime;
+
+  moveWalker(dt);
+  if (P.autoOrbit) view.yaw += dt * 0.08;
+
+  walker.y = terrainHeightJS(walker.x, walker.z);
+  orb.position.set(walker.x, walker.y + 0.45, walker.z);
+  U.uPlayerPos.value.copy(orb.position);
+
+  const cp = Math.cos(view.pitch), sp = Math.sin(view.pitch);
+  camera.position.set(
+    walker.x - Math.sin(view.yaw) * cp * view.dist,
+    walker.y + 1.1 + sp * view.dist,
+    walker.z - Math.cos(view.yaw) * cp * view.dist
+  );
+  const groundAtCam = terrainHeightJS(camera.position.x, camera.position.z);
+  if (camera.position.y < groundAtCam + 0.4) camera.position.y = groundAtCam + 0.4;
+  camera.lookAt(walker.x, walker.y + 1.0, walker.z);
+  camera.updateMatrixWorld();
+  sky.position.copy(camera.position);
+
+  const stats = updatePatches();
+  renderer.render(scene, camera);
+
+  fpsAvg += (1/Math.max(dt, 1e-4) - fpsAvg) * 0.08;
+  statTimer += dt;
+  if (statTimer > 0.25){
+    statTimer = 0;
+    el.fps.textContent = fpsAvg.toFixed(0);
+    el.patch.textContent = stats.patches;
+    el.blades.textContent = stats.blades > 1e6
+      ? (stats.blades/1e6).toFixed(2) + ' M' : stats.blades.toLocaleString();
+    el.tris.textContent = stats.tris > 1e6
+      ? (stats.tris/1e6).toFixed(1) + ' M' : stats.tris.toLocaleString();
+  }
+}
+
+rebuildGrass();
+resize();
+requestAnimationFrame(frame);
+
+})();
+</script>
+</body>
+</html>

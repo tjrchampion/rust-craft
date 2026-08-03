@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import type { RegionBlueprint } from "@rustcraft/shared";
 
@@ -7,7 +7,7 @@ import type { RegionBlueprint } from "@rustcraft/shared";
 // freely creatable from the in-browser editor and must go live with no
 // rebuild -- so this reads the JSON files off disk at request time, not
 // import time. A simple in-memory cache avoids re-reading on every request;
-// it's invalidated by saveRegionBlueprint, the only write path.
+// it's invalidated by saveRegionBlueprint / deleteRegionBlueprint.
 function getRegionsDir(): string {
   const cwd = process.cwd();
   const candidates = [
@@ -61,4 +61,34 @@ export function saveRegionBlueprint(id: string, blueprint: RegionBlueprint): voi
   const dir = getRegionsDir();
   writeFileSync(resolve(dir, `${id}.json`), JSON.stringify(blueprint, null, 2) + "\n", "utf-8");
   cache = null;
+}
+
+/** Remove a region's JSON from disk. Returns false if no file existed. */
+export function deleteRegionBlueprint(id: string): boolean {
+  ensureDir();
+  const path = resolve(getRegionsDir(), `${id}.json`);
+  if (!existsSync(path)) {
+    cache = null;
+    return false;
+  }
+  unlinkSync(path);
+  cache = null;
+  return true;
+}
+
+/**
+ * Strip portal links that target `deletedId` from every other region on disk.
+ * Returns the ids of regions that were rewritten.
+ */
+export function scrubPortalLinksToRegion(deletedId: string): string[] {
+  const cleaned: string[] = [];
+  for (const bp of listRegionBlueprints()) {
+    if (bp.id === deletedId || !bp.portals?.length) continue;
+    const next = bp.portals.filter((p) => p.targetRegionId !== deletedId);
+    if (next.length === bp.portals.length) continue;
+    const updated: RegionBlueprint = { ...bp, portals: next.length > 0 ? next : undefined };
+    saveRegionBlueprint(bp.id, updated);
+    cleaned.push(bp.id);
+  }
+  return cleaned;
 }

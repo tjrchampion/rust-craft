@@ -5,7 +5,9 @@ import { db, schema } from "../../db/client";
 import {
   CLASS_IDS,
   classDef,
+  startingHotbarLoadout,
   itemDef,
+  EQUIP_SLOTS,
   isCharacterGender,
   isHairStyleId,
   isFacialHairId,
@@ -14,7 +16,9 @@ import {
 } from "@rustcraft/shared";
 
 const MAX_CHARACTERS_PER_ACCOUNT = 4;
-const EQUIP_SLOT_INDEX: Record<string, number> = { weapon: 0, head: 1, chest: 2 };
+const EQUIP_SLOT_INDEX: Record<string, number> = Object.fromEntries(
+  EQUIP_SLOTS.map((slot, i) => [slot, i]),
+);
 
 interface CreateCharacterBody {
   name?: string;
@@ -90,16 +94,23 @@ export default defineEventHandler(async (event) => {
       })
       .returning({ id: schema.characters.id, name: schema.characters.name });
     if (character) {
-      await db.insert(schema.inventoryItems).values(
-        template.startingGear.map((g) => ({
-          characterId: character.id,
-          container: "equip" as const,
-          slot: EQUIP_SLOT_INDEX[g.slot]!,
-          itemId: g.itemId,
-          qty: 1,
-          durability: itemDef(g.itemId).maxDurability ?? null,
-        })),
-      );
+      const equipRows = template.startingGear.map((g) => ({
+        characterId: character.id,
+        container: "equip" as const,
+        slot: EQUIP_SLOT_INDEX[g.slot]!,
+        itemId: g.itemId,
+        qty: 1,
+        durability: itemDef(g.itemId).maxDurability ?? null,
+      }));
+      const hotbarRows = startingHotbarLoadout(template).map((h) => ({
+        characterId: character.id,
+        container: "hotbar" as const,
+        slot: h.slot,
+        itemId: `spell:${h.spellId}`,
+        qty: 1,
+        durability: null,
+      }));
+      await db.insert(schema.inventoryItems).values([...equipRows, ...hotbarRows]);
     }
     return { character };
   } catch (err: unknown) {

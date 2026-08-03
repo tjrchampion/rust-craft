@@ -14,6 +14,8 @@ export interface FrameActions {
   lookY: number;
   jump: boolean;
   sprint: boolean;
+  /** Ctrl — dive while swimming (ignored on land). */
+  crouch: boolean;
   block: boolean; // V (held): shield block -- roots movement, halves damage
   /** Edge-triggered (true on the frame they fire). */
   interactPressed: boolean;
@@ -27,8 +29,11 @@ export interface FrameActions {
    *  instead even though the original ask was for B. */
   dodgePressed: boolean;
   inventoryPressed: boolean;
+  questsPressed: boolean; // L: toggle Quest Log tab
+  achievementsPressed: boolean; // Y: toggle Achievements tab
   spellbookPressed: boolean; // K: toggle Spell Book tab
   craftingPressed: boolean; // J: toggle Crafting tab
+  partyPressed: boolean; // U: toggle Party tab
   systemPressed: boolean; // O: toggle System tab
   chatPressed: boolean;
   respawnPressed: boolean;
@@ -38,7 +43,9 @@ export interface FrameActions {
   clearTargetPressed: boolean; // gamepad B only -- keyboard has no bind (Escape does nothing but exit fullscreen)
   mapPressed: boolean; // M: toggle world map
   systemMenuPressed: boolean; // gamepad Start only -- toggle the System tab
-  hotbarDelta: number; // -1 | 0 | 1 from wheel / dpad
+  hotbarDelta: number; // -1 | 0 | 1 from wheel (menus) / dpad
+  /** Scroll-wheel zoom while pointer-locked in gameplay. +1 = zoom out. */
+  zoomDelta: number;
   /** Direct selection into the unified 10-slot action bar: 0-5 are number
    *  keys 1-6, 6-9 are Q/Z/X/C. Game.ts decides cast-vs-select by checking
    *  what's actually socketed in that slot. On gamepad, reached via the
@@ -76,7 +83,8 @@ export class InputManager {
   private keys = new Set<string>();
   private mouseDx = 0;
   private mouseDy = 0;
-  private wheelDelta = 0;
+  /** Accumulated wheel deltaY; zoom consumes in threshold chunks (one step/frame). */
+  private wheelAccum = 0;
   private pressedQueue = new Set<string>();
   private mouseAttackQueued = false;
   private capsQueued = false;
@@ -169,7 +177,9 @@ export class InputManager {
       }
     });
     window.addEventListener("wheel", (e) => {
-      this.wheelDelta += Math.sign(e.deltaY);
+      // Prefer pixel deltas; line-mode mice often report ±1 / ±100 depending on browser.
+      const dy = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaMode === 2 ? e.deltaY * 40 : e.deltaY;
+      this.wheelAccum += dy;
     });
     window.addEventListener("gamepadconnected", () => {
       this.lastDevice = "gamepad";
@@ -225,6 +235,8 @@ export class InputManager {
     let jump = this.keys.has("Space");
     // Hold Shift to run; walk otherwise.
     let sprint = this.keys.has("ShiftLeft") || this.keys.has("ShiftRight");
+    // Ctrl — dive while swimming (C is a hotbar key).
+    let crouch = this.keys.has("ControlLeft") || this.keys.has("ControlRight");
     // Hold V to raise a shield block.
     let block = this.keys.has("KeyV");
 
@@ -240,8 +252,11 @@ export class InputManager {
       if (pressed(code) && this.checkDoubleTap(code)) dodgePressed = true;
     }
     let inventoryPressed = pressed("Tab") || pressed("KeyI");
+    const questsPressed = pressed("KeyL");
+    const achievementsPressed = pressed("KeyY");
     const spellbookPressed = pressed("KeyK");
     const craftingPressed = pressed("KeyJ");
+    const partyPressed = pressed("KeyU");
     const systemPressed = pressed("KeyO");
     const chatPressed = pressed("Enter");
     let respawnPressed = pressed("KeyR");
@@ -255,7 +270,21 @@ export class InputManager {
     let targetPressed = this.capsQueued;
     this.capsQueued = false;
     let clearTargetPressed = false; // gamepad-only, see FrameActions doc comment
-    let hotbarDelta = Math.sign(this.wheelDelta);
+    // Pointer-locked: wheel zooms (one notch per frame). Otherwise: hotbar.
+    // Threshold keeps a light trackpad flick from racing through the range.
+    const WHEEL_STEP = 48;
+    let zoomDelta = 0;
+    let hotbarDelta = 0;
+    if (Math.abs(this.wheelAccum) >= WHEEL_STEP) {
+      const dir = Math.sign(this.wheelAccum);
+      this.wheelAccum -= dir * WHEEL_STEP;
+      // Cap leftover so a huge swipe doesn't queue a burst next frames.
+      if (Math.abs(this.wheelAccum) > WHEEL_STEP * 2) this.wheelAccum = dir * WHEEL_STEP;
+      if (this.pointerLocked && !this.uiMode) zoomDelta = dir;
+      else hotbarDelta = dir;
+    } else if (Math.abs(this.wheelAccum) < 1) {
+      this.wheelAccum = 0;
+    }
     let hotbarSlot: number | null = null;
     for (let i = 1; i <= 6; i++) {
       if (pressed(`Digit${i}`)) hotbarSlot = i - 1;
@@ -389,6 +418,8 @@ export class InputManager {
         interactHeld ||= padHeld(2);
         dodgePressed ||= padPressed(3); // Y / Triangle
       }
+      // L3 (left stick click) — dive while swimming.
+      crouch ||= padHeld(10);
       if (!lbHeld) {
         mountPressed ||= padPressed(12); // dpad up: toggle mount
         pvpTogglePressed ||= padPressed(13); // dpad down: toggle PvP
@@ -417,7 +448,6 @@ export class InputManager {
     // reset per-frame accumulators
     this.mouseDx = 0;
     this.mouseDy = 0;
-    this.wheelDelta = 0;
     this.pressedQueue.clear();
     this.mouseAttackQueued = false;
 
@@ -428,6 +458,7 @@ export class InputManager {
       lookY = 0;
       jump = false;
       sprint = false;
+      crouch = false;
       block = false;
       pvpTogglePressed = false;
       mountPressed = false;
@@ -437,6 +468,7 @@ export class InputManager {
       interactHeld = false;
       targetPressed = false;
       hotbarDelta = 0;
+      zoomDelta = 0;
       hotbarSlot = null;
     }
 
@@ -447,14 +479,18 @@ export class InputManager {
       lookY,
       jump,
       sprint,
+      crouch,
       block,
       interactPressed,
       interactHeld,
       attackPressed,
       dodgePressed,
       inventoryPressed,
+      questsPressed,
+      achievementsPressed,
       spellbookPressed,
       craftingPressed,
+      partyPressed,
       systemPressed,
       chatPressed,
       respawnPressed,
@@ -465,6 +501,7 @@ export class InputManager {
       mapPressed,
       systemMenuPressed,
       hotbarDelta,
+      zoomDelta,
       hotbarSlot,
       menuUp,
       menuDown,

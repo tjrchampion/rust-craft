@@ -2,7 +2,7 @@
  * ADT-style tiles for editor region interiors: fixed-size cells streamed in a
  * Chebyshev ring around the viewer.
  *
- * Defaults: 64 m tiles, ring = 2 → up to 5×5 = 25 resident terrain tiles.
+ * Defaults: 64 m tiles, ring = 3 → up to 7×7 stream + keep margin.
  * Open-world Greenlands uses a single mesh; Ashenpeak is not client-loaded.
  */
 
@@ -11,25 +11,30 @@ import { WORLD_MAX_X, WORLD_MAX_Z, WORLD_MIN_X, WORLD_MIN_Z } from "./constants"
 /** Edge length of one ADT tile in meters (overworld + region local space). */
 export const ADT_SIZE = 64;
 
-/** Chebyshev ring radius (ring=2 → 5×5 tiles). Terrain default. */
-export const ADT_RING = 2;
+/** Chebyshev ring radius (ring=3 → 7×7 tiles). Terrain + water stream this
+ *  far so new tiles finish building before the player can see the seam. */
+export const ADT_RING = 3;
 
-/** Grass is fine detail — smaller ring than terrain (~3×3 tiles). */
-export const ADT_GRASS_RING = 1;
+/** Extra Chebyshev steps to keep loaded after leaving the stream ring —
+ *  avoids thrash/reload hitches when walking near a tile boundary. */
+export const ADT_KEEP_EXTRA = 1;
+
+/** Grass is fine detail — one step inside the terrain ring. */
+export const ADT_GRASS_RING = 2;
 
 /** Overworld village stream ring (~ring 3 ≈ old 190 m radius). */
 export const ADT_VILLAGE_RING = 3;
 
 /**
  * Meters from a viewer at a tile center to the outer edge of a Chebyshev ring.
- * ring=2 → 160 m, ring=3 → 224 m. Used to keep fog / stream distances in lockstep.
+ * ring=3 → 224 m. Used to keep fog / stream distances in lockstep.
  */
 export function adtRingRadiusMeters(ring: number): number {
   return (ring + 0.5) * ADT_SIZE;
 }
 
 /** Linear Fog near — light atmospheric fade, well inside village stream. */
-export const OVERWORLD_FOG_NEAR = adtRingRadiusMeters(ADT_RING) * 0.75; // ~120 m
+export const OVERWORLD_FOG_NEAR = adtRingRadiusMeters(ADT_RING) * 0.55; // ~123 m
 
 /** Linear Fog far — soft horizon; trees/villages are distance-culled separately. */
 export const OVERWORLD_FOG_FAR = adtRingRadiusMeters(ADT_VILLAGE_RING) * 1.4; // ~314 m
@@ -37,7 +42,7 @@ export const OVERWORLD_FOG_FAR = adtRingRadiusMeters(ADT_VILLAGE_RING) * 1.4; //
 /**
  * Soft floor for region FogExp2 (~35% transmittance at the village ring).
  * Foliage is distance-culled to the terrain ADT ring, so fog only needs a
- * gentle horizon — not a hard wall at ~160 m.
+ * gentle horizon — not a hard wall at the stream edge.
  */
 export const REGION_FOG_DENSITY_MIN = -Math.log(0.35) / adtRingRadiusMeters(ADT_VILLAGE_RING);
 
@@ -46,7 +51,7 @@ export function clampRegionFogDensity(density: number): number {
 }
 
 /** Region / overworld asset draw distance — matches terrain ADT ring edge. */
-export const TREE_VISIBLE_RADIUS = adtRingRadiusMeters(ADT_RING); // ~160 m
+export const TREE_VISIBLE_RADIUS = adtRingRadiusMeters(ADT_RING); // ~224 m
 
 export interface AdtAabb {
   minX: number;
@@ -66,6 +71,12 @@ export function adtKey(ix: number, iz: number): string {
 export function parseAdtKey(key: string): { ix: number; iz: number } {
   const [a, b] = key.split(":");
   return { ix: Number(a), iz: Number(b) };
+}
+
+/** Chebyshev tile distance from viewer to tile key (for pending priority). */
+export function adtKeyChebyshevDist(key: string, x: number, z: number): number {
+  const { ix, iz } = parseAdtKey(key);
+  return Math.max(Math.abs(ix - adtIndex(x)), Math.abs(iz - adtIndex(z)));
 }
 
 /** World-space center of tile (ix, iz). */

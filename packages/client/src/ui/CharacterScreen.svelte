@@ -9,6 +9,7 @@
   import { wikiMarkdown } from "./wikiContent";
   import { sound } from "../game/sound";
   import { music } from "../game/music";
+  import { ClassPreviewScene } from "../render/ClassPreviewScene";
 
   const KBM_LABELS = ["1", "2", "3", "4", "5", "6", "Q", "Z", "X", "C"];
   const PAD_LABELS = ["LB+A", "LB+B", "LB+X", "LB+Y", "LB+↑", "LB+↓", "LB+←", "LB+→", "RB+A", "RB+B"];
@@ -27,12 +28,18 @@
     HOTBAR_SLOTS,
     EQUIP_SLOTS,
     computeActorStats,
+    GRAPHICS_PRESET_IDS,
+    GRAPHICS_PRESET_LABELS,
+    streamRingMeters,
     type ItemSnap,
     type ItemDef,
     type GearSlot,
     type SpellDef,
     type StatModifiers,
     type RecipeDef,
+    type ClassId,
+    type GraphicsPresetId,
+    type ShadowMapSize,
   } from "@rustcraft/shared";
 
   const SPELL_PREFIX = "spell:";
@@ -43,20 +50,29 @@
   const TABS: { id: CharacterTab; label: string }[] = [
     { id: "inventory", label: "Inventory" },
     { id: "quests", label: "Quests" },
+    { id: "achievements", label: "Achievements" },
     { id: "spellbook", label: "Spell Book" },
     { id: "craft", label: "Crafting" },
     { id: "party", label: "Party" },
     { id: "system", label: "System" },
   ];
-  const EQUIP_LABELS: Record<string, string> = {
+  const EQUIP_LABELS: Record<GearSlot, string> = {
     weapon: "Weapon",
-    head: "Head/Helmet",
-    chest: "Chest/Body",
-    arms: "Hands/Gloves",
-    legs: "Legs/Pants",
-    feet: "Feet/Boots"
+    head: "Head",
+    neck: "Neck",
+    shoulders: "Shoulders",
+    chest: "Chest",
+    arms: "Hands",
+    legs: "Legs",
+    feet: "Feet",
   };
+  /** WoW-style paperdoll columns (visual order; indices still come from EQUIP_SLOTS). */
+  const PAPERDOLL_LEFT: GearSlot[] = ["head", "neck", "chest", "arms", "legs"];
+  const PAPERDOLL_RIGHT: GearSlot[] = ["shoulders", "weapon", "feet"];
   const recipes = Object.values(RECIPES);
+
+  let paperdollCanvas = $state<HTMLCanvasElement | null>(null);
+  let paperdollScene: ClassPreviewScene | null = null;
 
   let invCursor = $state(0);
   let equipCursor = $state(0);
@@ -70,10 +86,13 @@
   let craftGridCursor = $state(0);
   let clearBtnFocus = $state(0);
   let systemCursor = $state(0);
-  let systemSubTabIdx = $state(0); // 0 = game, 1 = wiki
-  const systemTabSub = $derived(systemSubTabIdx === 0 ? "game" : "wiki");
+  let systemSubTabIdx = $state(0); // 0 = settings, 1 = graphics, 2 = wiki
+  const systemTabSub = $derived(
+    systemSubTabIdx === 0 ? "game" : systemSubTabIdx === 1 ? "graphics" : "wiki",
+  );
   let systemSubFocus = $state<"sidebar" | "content">("sidebar");
   let wikiScrollContainer = $state<HTMLDivElement | null>(null);
+  let graphicsScrollContainer = $state<HTMLDivElement | null>(null);
 
   interface WikiLine {
     type: "h1" | "h2" | "h3" | "p" | "li" | "hr";
@@ -127,11 +146,20 @@
   let hoveredItem = $state<{ itemId: string; durability: number | null } | null>(null);
   let itemTooltipPos = $state({ x: 0, y: 0 });
   let isFullscreen = $state(!!document.fullscreenElement);
+  /** Right-click item context menu (Equip / Unequip / Use). */
+  let itemContextMenu = $state<{
+    x: number;
+    y: number;
+    container: "inventory" | "hotbar" | "equip";
+    slot: number;
+    itemId: string;
+  } | null>(null);
 
   $effect(() => {
     const _tab = game.activeTab;
     moving = null;
     movingSpell = null;
+    itemContextMenu = null;
     spellBookFocus = "spells";
     spellHotbarCursor = 0;
     questsCursor = 0;
@@ -143,6 +171,17 @@
     systemSubFocus = "sidebar";
   });
 
+  onMount(() => {
+    const onPointerDown = (e: PointerEvent) => {
+      if (!itemContextMenu) return;
+      const t = e.target as HTMLElement | null;
+      if (t?.closest?.(".item-context-menu")) return;
+      closeItemContextMenu();
+    };
+    window.addEventListener("pointerdown", onPointerDown, true);
+    return () => window.removeEventListener("pointerdown", onPointerDown, true);
+  });
+
   const invSlots = $derived(
     Array.from({ length: INVENTORY_SLOTS }, (_, i) => game.inventory.find((it) => it.container === "inventory" && it.slot === i)),
   );
@@ -152,7 +191,45 @@
   const equipSlots = $derived(
     Array.from({ length: EQUIP_SLOTS.length }, (_, i) => game.inventory.find((it) => it.container === "equip" && it.slot === i)),
   );
+  const paperdollEquip = $derived.by(() => {
+    const equip: Partial<Record<string, string>> = {};
+    for (let i = 0; i < EQUIP_SLOTS.length; i++) {
+      const item = equipSlots[i];
+      if (item) equip[EQUIP_SLOTS[i]!] = item.itemId;
+    }
+    return equip;
+  });
   const learnedSpells = $derived(game.learnedSpells);
+
+  $effect(() => {
+    const canvas = paperdollCanvas;
+    const tab = game.activeTab;
+    if (!canvas || tab !== "inventory") {
+      paperdollScene?.dispose();
+      paperdollScene = null;
+      return;
+    }
+    if (!paperdollScene) {
+      paperdollScene = new ClassPreviewScene(canvas, {
+        pedestal: false,
+        motes: false,
+        spotlight: false,
+      });
+    }
+    const classId = (game.classId || "warrior") as ClassId;
+    paperdollScene.setClass(classId, game.gender, game.appearance, paperdollEquip);
+    paperdollScene.resize();
+  });
+
+  onMount(() => {
+    const onResize = () => paperdollScene?.resize();
+    window.addEventListener("resize", onResize);
+    return () => {
+      window.removeEventListener("resize", onResize);
+      paperdollScene?.dispose();
+      paperdollScene = null;
+    };
+  });
 
   let spellElements = $state<(HTMLElement | null)[]>([]);
   let hotbarElements = $state<(HTMLElement | null)[]>([]);
@@ -434,6 +511,78 @@
   }
   function hideItemTooltip(): void {
     hoveredItem = null;
+  }
+
+  function closeItemContextMenu(): void {
+    itemContextMenu = null;
+  }
+
+  function openItemContextMenu(
+    container: "inventory" | "hotbar" | "equip",
+    slot: number,
+    itemId: string,
+    e: MouseEvent,
+  ): void {
+    e.preventDefault();
+    e.stopPropagation();
+    moving = null;
+    hideItemTooltip();
+    const menuW = 160;
+    const menuH = 120;
+    itemContextMenu = {
+      x: Math.min(e.clientX, window.innerWidth - menuW - 8),
+      y: Math.min(e.clientY, window.innerHeight - menuH - 8),
+      container,
+      slot,
+      itemId,
+    };
+  }
+
+  function firstEmptyInventorySlot(): number {
+    return invSlots.findIndex((s) => !s);
+  }
+
+  function contextMenuActions(menu: NonNullable<typeof itemContextMenu>): { id: string; label: string }[] {
+    const def = itemDef(menu.itemId);
+    const actions: { id: string; label: string }[] = [];
+    if (menu.container === "equip") {
+      actions.push({ id: "unequip", label: "Unequip" });
+    } else if (def.slot && EQUIP_SLOTS.includes(def.slot)) {
+      actions.push({ id: "equip", label: "Equip" });
+    }
+    if (def.type === "consumable" || def.type === "tome") {
+      actions.push({ id: "use", label: def.type === "tome" ? "Learn" : "Use" });
+    }
+    if (def.type === "placeable") {
+      actions.push({ id: "place", label: "Place" });
+    }
+    return actions;
+  }
+
+  function runContextAction(actionId: string): void {
+    const menu = itemContextMenu;
+    const g = getGame();
+    if (!menu || !g) return;
+    const def = itemDef(menu.itemId);
+    if (actionId === "equip" && def.slot) {
+      const equipIdx = EQUIP_SLOTS.indexOf(def.slot);
+      if (equipIdx >= 0) g.sendMoveItem(menu.container, menu.slot, "equip", equipIdx);
+    } else if (actionId === "unequip") {
+      const empty = firstEmptyInventorySlot();
+      if (empty < 0) {
+        game.toast("Backpack is full");
+      } else {
+        g.sendMoveItem("equip", menu.slot, "inventory", empty);
+      }
+    } else if (actionId === "use") {
+      g.sendConsume(menu.container === "equip" ? "inventory" : menu.container, menu.slot);
+    } else if (actionId === "place") {
+      g.sendPlace(menu.container === "equip" ? "inventory" : menu.container, menu.slot);
+      closeItemContextMenu();
+      close();
+      return;
+    }
+    closeItemContextMenu();
   }
 
   const STAT_LABELS: Record<string, string> = {
@@ -725,7 +874,7 @@
     } else if (game.activeTab === "system") {
       if (systemSubFocus === "sidebar") {
         if (dy !== 0) {
-          systemSubTabIdx = systemSubTabIdx === 0 ? 1 : 0;
+          systemSubTabIdx = (systemSubTabIdx + (dy > 0 ? 1 : 2)) % 3;
         } else if (dx > 0) {
           systemSubFocus = "content";
           systemCursor = 0;
@@ -736,6 +885,10 @@
         } else {
           if (systemTabSub === "game") {
             systemCursor = Math.min(systemActions.length - 1, Math.max(0, systemCursor + dy));
+          } else if (systemTabSub === "graphics") {
+            if (graphicsScrollContainer) {
+              graphicsScrollContainer.scrollTop += dy * 40;
+            }
           } else if (systemTabSub === "wiki") {
             if (wikiScrollContainer) {
               wikiScrollContainer.scrollTop += dy * 40;
@@ -840,49 +993,83 @@
 
     <div class="content">
       {#if game.activeTab === "inventory"}
-        <div class="col equip-col">
-          <h3>Equipment</h3>
-          <div class="equip-list">
-            {#each equipSlots as item, i (i)}
-              <button
-                class="equip-row"
-                class:cursor={equipCursor === i}
-                class:moving={moving?.container === "equip" && moving.slot === i}
-                onclick={() => {
-                  equipCursor = i;
-                  activateInv("equip", i);
-                }}
-                onmouseenter={(e) => item && showItemTooltip(item.itemId, item.durability, e)}
-                onmouseleave={hideItemTooltip}
-              >
-                <span class="equip-label">{EQUIP_LABELS[EQUIP_SLOTS[i]!]}</span>
-                <span class="equip-value">
-                  {#if item}
-                    <IconGlyph value={itemIcon(item.itemId)} size={20} itemId={item.itemId} />
-                    {itemDef(item.itemId).name}
-                  {:else}
-                    Empty
-                  {/if}
-                </span>
-              </button>
-            {/each}
-          </div>
-          <div class="char-info">
-            <div class="char-level-class">Level {game.self?.level ?? 1} · {classInfo?.name ?? "Adventurer"}</div>
-            <div class="char-vitals">
-              <div>HP: {Math.round(game.self?.hp ?? 0)}/{Math.round(game.self?.maxHp ?? 0)}</div>
-              <div>{classInfo?.resourceLabel ?? "Mana"}: {Math.round(game.self?.mana ?? 0)}/{Math.round(game.self?.maxMana ?? 0)}</div>
+        <div class="col paperdoll-col">
+          <h3>Character</h3>
+          <div class="paperdoll">
+            <div class="paperdoll-slots">
+              {#each PAPERDOLL_LEFT as slotName (slotName)}
+                {@const i = EQUIP_SLOTS.indexOf(slotName)}
+                {@const item = equipSlots[i]}
+                <button
+                  class="equip-slot"
+                  class:cursor={equipCursor === i}
+                  class:filled={!!item}
+                  class:moving={moving?.container === "equip" && moving.slot === i}
+                  title={item ? itemDef(item.itemId).name : EQUIP_LABELS[slotName]}
+                  onclick={() => {
+                    equipCursor = i;
+                    activateInv("equip", i);
+                  }}
+                  oncontextmenu={(e) => item && openItemContextMenu("equip", i, item.itemId, e)}
+                  onmouseenter={(e) => item && showItemTooltip(item.itemId, item.durability, e)}
+                  onmouseleave={hideItemTooltip}
+                >
+                  <span class="equip-slot-icon">
+                    {#if item}
+                      <IconGlyph value={itemIcon(item.itemId)} size={28} itemId={item.itemId} />
+                    {/if}
+                  </span>
+                  <span class="equip-slot-label">{EQUIP_LABELS[slotName]}</span>
+                </button>
+              {/each}
             </div>
-            {#if computedStats}
-              <div class="stats-grid">
-                <div class="stat-item"><span class="stat-name">Power:</span> <span class="stat-val">{Math.round(computedStats.power)}</span></div>
-                <div class="stat-item"><span class="stat-name">Agility:</span> <span class="stat-val">{Math.round(computedStats.agility)}</span></div>
-                <div class="stat-item"><span class="stat-name">Vitality:</span> <span class="stat-val">{Math.round(computedStats.vitality)}</span></div>
-                <div class="stat-item"><span class="stat-name">Armor:</span> <span class="stat-val">{Math.round(computedStats.armor)}</span></div>
-                <div class="stat-item"><span class="stat-name">Crit:</span> <span class="stat-val">{Math.round(computedStats.critChance * 100)}%</span></div>
-                <div class="stat-item"><span class="stat-name">Speed:</span> <span class="stat-val">x{computedStats.moveSpeedMult.toFixed(2)}</span></div>
+            <div class="paperdoll-stage">
+              <canvas class="paperdoll-canvas" bind:this={paperdollCanvas}></canvas>
+              <div class="char-info">
+                <div class="char-level-class">Level {game.self?.level ?? 1} · {classInfo?.name ?? "Adventurer"}</div>
+                <div class="char-vitals">
+                  <div>HP: {Math.round(game.self?.hp ?? 0)}/{Math.round(game.self?.maxHp ?? 0)}</div>
+                  <div>{classInfo?.resourceLabel ?? "Mana"}: {Math.round(game.self?.mana ?? 0)}/{Math.round(game.self?.maxMana ?? 0)}</div>
+                </div>
+                {#if computedStats}
+                  <div class="stats-grid">
+                    <div class="stat-item"><span class="stat-name">Power:</span> <span class="stat-val">{Math.round(computedStats.power)}</span></div>
+                    <div class="stat-item"><span class="stat-name">Agility:</span> <span class="stat-val">{Math.round(computedStats.agility)}</span></div>
+                    <div class="stat-item"><span class="stat-name">Vitality:</span> <span class="stat-val">{Math.round(computedStats.vitality)}</span></div>
+                    <div class="stat-item"><span class="stat-name">Armor:</span> <span class="stat-val">{Math.round(computedStats.armor)}</span></div>
+                    <div class="stat-item"><span class="stat-name">Crit:</span> <span class="stat-val">{Math.round(computedStats.critChance * 100)}%</span></div>
+                    <div class="stat-item"><span class="stat-name">Speed:</span> <span class="stat-val">x{computedStats.moveSpeedMult.toFixed(2)}</span></div>
+                  </div>
+                {/if}
               </div>
-            {/if}
+            </div>
+            <div class="paperdoll-slots">
+              {#each PAPERDOLL_RIGHT as slotName (slotName)}
+                {@const i = EQUIP_SLOTS.indexOf(slotName)}
+                {@const item = equipSlots[i]}
+                <button
+                  class="equip-slot"
+                  class:cursor={equipCursor === i}
+                  class:filled={!!item}
+                  class:moving={moving?.container === "equip" && moving.slot === i}
+                  title={item ? itemDef(item.itemId).name : EQUIP_LABELS[slotName]}
+                  onclick={() => {
+                    equipCursor = i;
+                    activateInv("equip", i);
+                  }}
+                  oncontextmenu={(e) => item && openItemContextMenu("equip", i, item.itemId, e)}
+                  onmouseenter={(e) => item && showItemTooltip(item.itemId, item.durability, e)}
+                  onmouseleave={hideItemTooltip}
+                >
+                  <span class="equip-slot-icon">
+                    {#if item}
+                      <IconGlyph value={itemIcon(item.itemId)} size={28} itemId={item.itemId} />
+                    {/if}
+                  </span>
+                  <span class="equip-slot-label">{EQUIP_LABELS[slotName]}</span>
+                </button>
+              {/each}
+            </div>
           </div>
         </div>
         <div class="col backpack-col">
@@ -897,6 +1084,7 @@
                   invCursor = i;
                   activateInv("inventory", i);
                 }}
+                oncontextmenu={(e) => item && openItemContextMenu("inventory", i, item.itemId, e)}
                 onmouseenter={(e) => item && showItemTooltip(item.itemId, item.durability, e)}
                 onmouseleave={hideItemTooltip}
               >
@@ -916,6 +1104,7 @@
                 class:first={i === 6}
                 class:moving={moving?.container === "hotbar" && moving.slot === i}
                 onclick={() => activateInv("hotbar", i)}
+                oncontextmenu={(e) => !spellId && item && openItemContextMenu("hotbar", i, item.itemId, e)}
                 onmouseenter={(e) => !spellId && item && showItemTooltip(item.itemId, item.durability, e)}
                 onmouseleave={hideItemTooltip}
               >
@@ -982,6 +1171,48 @@
               </div>
             {:else}
               <div class="empty-quests">No active quests. Visit NPCs in towns to accept tasks.</div>
+            {/each}
+          </div>
+        </div>
+      {:else if game.activeTab === "achievements"}
+        <div class="achievements-tab">
+          <h3>Achievements</h3>
+          <p class="achievements-sub">
+            {game.achievements.filter((a) => a.complete).length}/{game.achievements.length || 0} complete
+          </p>
+          <div class="achievement-list">
+            {#each [...game.achievements].sort((a, b) => Number(a.complete) - Number(b.complete) || a.category.localeCompare(b.category) || a.name.localeCompare(b.name)) as a (a.id)}
+              <div class="achievement-row" class:complete={a.complete}>
+                <div class="achievement-mark" aria-hidden="true">{a.complete ? "✓" : "◇"}</div>
+                <div class="achievement-body">
+                  <div class="achievement-title-row">
+                    <span class="achievement-name">{a.name}</span>
+                    <span class="achievement-cat">{a.category}</span>
+                    {#if a.complete}
+                      <span class="achievement-done">Complete</span>
+                    {/if}
+                  </div>
+                  <div class="achievement-desc">{a.description}</div>
+                  <div class="achievement-req">Requires: {a.requirement}</div>
+                  <div class="achievement-progress">
+                    <div class="achievement-bar">
+                      <div
+                        class="achievement-fill"
+                        style="width: {a.target > 0 ? Math.min(100, (a.progress / a.target) * 100) : 0}%"
+                      ></div>
+                    </div>
+                    <span class="achievement-count">{a.progress}/{a.target}</span>
+                  </div>
+                  <div class="achievement-rewards">
+                    Reward: +{a.rewardXp} XP
+                    {#each a.rewardItems as r (r.itemId + ":" + r.qty)}
+                      · {r.qty}× {itemDef(r.itemId).name}
+                    {/each}
+                  </div>
+                </div>
+              </div>
+            {:else}
+              <div class="empty-quests">No achievements synced yet.</div>
             {/each}
           </div>
         </div>
@@ -1265,10 +1496,21 @@
             </button>
             <button
               class="sub-tab-btn"
-              class:active={systemTabSub === "wiki"}
+              class:active={systemTabSub === "graphics"}
               class:cursor={systemSubFocus === "sidebar" && systemSubTabIdx === 1}
               onclick={() => {
                 systemSubTabIdx = 1;
+                systemSubFocus = "sidebar";
+              }}
+            >
+              Graphics
+            </button>
+            <button
+              class="sub-tab-btn"
+              class:active={systemTabSub === "wiki"}
+              class:cursor={systemSubFocus === "sidebar" && systemSubTabIdx === 2}
+              onclick={() => {
+                systemSubTabIdx = 2;
                 systemSubFocus = "sidebar";
               }}
             >
@@ -1336,6 +1578,28 @@
 
                 <div class="settings-section">
                   <div class="settings-section-title">Display</div>
+                  <label class="setting-toggle">
+                    <input
+                      type="checkbox"
+                      checked={game.showPlayerNameplates}
+                      onchange={(e) => {
+                        game.setShowPlayerNameplates(e.currentTarget.checked);
+                        getGame()?.syncNameplateVisibility();
+                      }}
+                    />
+                    <span class="setting-label">Player Nameplates</span>
+                  </label>
+                  <label class="setting-toggle">
+                    <input
+                      type="checkbox"
+                      checked={game.showMobNameplates}
+                      onchange={(e) => {
+                        game.setShowMobNameplates(e.currentTarget.checked);
+                        getGame()?.syncNameplateVisibility();
+                      }}
+                    />
+                    <span class="setting-label">Mob Nameplates</span>
+                  </label>
                   <button
                     class="rc-btn"
                     class:selected={systemSubFocus === "content" && systemCursor === 0}
@@ -1353,6 +1617,153 @@
                   >
                     Exit to Character Select
                   </button>
+                </div>
+              </div>
+            {:else if systemTabSub === "graphics"}
+              <div class="col system-col settings-col graphics-col" bind:this={graphicsScrollContainer}>
+                <h3>Graphics</h3>
+                <p class="settings-hint">
+                  Saved to your account. Resolution &amp; draw distance apply immediately;
+                  antialiasing applies the next time you enter the world.
+                </p>
+
+                <div class="settings-section">
+                  <div class="settings-section-title">Quality Preset</div>
+                  <div class="preset-row">
+                    {#each GRAPHICS_PRESET_IDS as id (id)}
+                      <button
+                        type="button"
+                        class="rc-btn preset-btn"
+                        class:selected={game.graphics.preset === id}
+                        onclick={() => game.setGraphicsPreset(id as GraphicsPresetId)}
+                      >
+                        {GRAPHICS_PRESET_LABELS[id]}
+                      </button>
+                    {/each}
+                  </div>
+                  {#if game.graphics.preset === "custom"}
+                    <div class="settings-note">Custom</div>
+                  {/if}
+                </div>
+
+                <div class="settings-section">
+                  <div class="settings-section-title">Resolution</div>
+                  <label class="setting-slider">
+                    <span class="setting-label">
+                      Render Scale
+                      <span class="setting-value">{Math.round(game.graphics.resolutionScale * 100)}%</span>
+                    </span>
+                    <input
+                      type="range"
+                      min="50"
+                      max="150"
+                      step="5"
+                      value={Math.round(game.graphics.resolutionScale * 100)}
+                      oninput={(e) =>
+                        game.patchGraphics({ resolutionScale: Number(e.currentTarget.value) / 100 })}
+                    />
+                  </label>
+                  <label class="setting-slider">
+                    <span class="setting-label">
+                      Max Pixel Ratio
+                      <span class="setting-value">{game.graphics.maxPixelRatio.toFixed(2)}</span>
+                    </span>
+                    <input
+                      type="range"
+                      min="75"
+                      max="200"
+                      step="5"
+                      value={Math.round(game.graphics.maxPixelRatio * 100)}
+                      oninput={(e) =>
+                        game.patchGraphics({ maxPixelRatio: Number(e.currentTarget.value) / 100 })}
+                    />
+                  </label>
+                </div>
+
+                <div class="settings-section">
+                  <div class="settings-section-title">Effects</div>
+                  <label class="setting-toggle">
+                    <input
+                      type="checkbox"
+                      checked={game.graphics.antialias}
+                      onchange={(e) => game.patchGraphics({ antialias: e.currentTarget.checked })}
+                    />
+                    <span class="setting-label">Antialiasing</span>
+                  </label>
+                  <label class="setting-toggle">
+                    <input
+                      type="checkbox"
+                      checked={game.graphics.shadowsEnabled}
+                      onchange={(e) => game.patchGraphics({ shadowsEnabled: e.currentTarget.checked })}
+                    />
+                    <span class="setting-label">Shadows</span>
+                  </label>
+                  <label class="setting-slider" class:setting-disabled={!game.graphics.shadowsEnabled}>
+                    <span class="setting-label">
+                      Shadow Map
+                      <span class="setting-value">{game.graphics.shadowMapSize}px</span>
+                    </span>
+                    <input
+                      type="range"
+                      min="0"
+                      max="2"
+                      step="1"
+                      disabled={!game.graphics.shadowsEnabled}
+                      value={[512, 1024, 2048].indexOf(game.graphics.shadowMapSize)}
+                      oninput={(e) => {
+                        const sizes: ShadowMapSize[] = [512, 1024, 2048];
+                        const size = sizes[Number(e.currentTarget.value)] ?? 1024;
+                        game.patchGraphics({ shadowMapSize: size });
+                      }}
+                    />
+                  </label>
+                </div>
+
+                <div class="settings-section">
+                  <div class="settings-section-title">Draw Distance</div>
+                  <label class="setting-slider">
+                    <span class="setting-label">
+                      World Stream
+                      <span class="setting-value">~{streamRingMeters(game.graphics.streamRing)} m</span>
+                    </span>
+                    <input
+                      type="range"
+                      min="2"
+                      max="5"
+                      step="1"
+                      value={game.graphics.streamRing}
+                      oninput={(e) => game.patchGraphics({ streamRing: Number(e.currentTarget.value) })}
+                    />
+                  </label>
+                  <label class="setting-slider">
+                    <span class="setting-label">
+                      Grass Distance
+                      <span class="setting-value">{Math.round(game.graphics.grassDrawDistance)} m</span>
+                    </span>
+                    <input
+                      type="range"
+                      min="40"
+                      max="160"
+                      step="5"
+                      value={game.graphics.grassDrawDistance}
+                      oninput={(e) =>
+                        game.patchGraphics({ grassDrawDistance: Number(e.currentTarget.value) })}
+                    />
+                  </label>
+                  <label class="setting-slider">
+                    <span class="setting-label">
+                      Fog Density
+                      <span class="setting-value">{Math.round(game.graphics.fogScale * 100)}%</span>
+                    </span>
+                    <input
+                      type="range"
+                      min="50"
+                      max="150"
+                      step="5"
+                      value={Math.round(game.graphics.fogScale * 100)}
+                      oninput={(e) => game.patchGraphics({ fogScale: Number(e.currentTarget.value) / 100 })}
+                    />
+                  </label>
                 </div>
               </div>
             {:else if systemTabSub === "wiki"}
@@ -1404,6 +1815,23 @@
         {/each}
       </div>
     </div>
+  {/if}
+  {#if itemContextMenu}
+    {@const actions = contextMenuActions(itemContextMenu)}
+    {#if actions.length > 0}
+      <div
+        class="item-context-menu"
+        style="left: {itemContextMenu.x}px; top: {itemContextMenu.y}px;"
+        role="menu"
+      >
+        <div class="item-context-title">{itemDef(itemContextMenu.itemId).name}</div>
+        {#each actions as action (action.id)}
+          <button type="button" class="item-context-action" role="menuitem" onclick={() => runContextAction(action.id)}>
+            {action.label}
+          </button>
+        {/each}
+      </div>
+    {/if}
   {/if}
   {#if hoveredItem}
     {@const info = itemTooltipInfo(hoveredItem.itemId, hoveredItem.durability)}
@@ -1458,8 +1886,8 @@
   .screen {
     display: flex;
     flex-direction: column;
-    width: min(920px, 92vw);
-    height: min(600px, 86vh);
+    width: min(1080px, 94vw);
+    height: min(680px, 90vh);
     padding: 0;
   }
   .tabs {
@@ -1522,39 +1950,78 @@
     letter-spacing: 2px;
     color: var(--rc-gold);
   }
-  /* ---- Inventory tab ---- */
-  .equip-col {
-    width: 260px;
+  /* ---- Inventory tab (WoW-style paperdoll) ---- */
+  .paperdoll-col {
+    flex: 0 0 auto;
+    width: min(360px, 38vw);
+    min-width: 0;
   }
-  .equip-list {
+  .paperdoll {
+    display: grid;
+    grid-template-columns: 64px minmax(140px, 1fr) 64px;
+    gap: 8px;
+    align-items: start;
+    flex: 1;
+    min-height: 0;
+  }
+  .paperdoll-slots {
     display: flex;
     flex-direction: column;
-    gap: 6px;
-  }
-  .equip-row {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
     gap: 8px;
-    background: rgba(255, 255, 255, 0.04);
-    border: 2px solid rgba(255, 255, 255, 0.1);
+  }
+  .equip-slot {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 3px;
+    background: rgba(255, 255, 255, 0.03);
+    border: 2px solid rgba(201, 162, 75, 0.28);
     border-radius: 6px;
-    padding: 8px 12px;
+    padding: 4px;
     cursor: pointer;
     color: #dce6f2;
-    text-align: left;
+    width: 64px;
   }
-  .equip-label {
-    font-size: 11px;
-    text-transform: uppercase;
-    letter-spacing: 1px;
-    color: #6b7686;
+  .equip-slot.filled {
+    border-color: rgba(201, 162, 75, 0.55);
+    background: rgba(201, 162, 75, 0.08);
   }
-  .equip-value {
+  .equip-slot.cursor,
+  .equip-slot.moving {
+    border-color: var(--rc-gold-bright);
+    box-shadow: 0 0 0 1px rgba(255, 214, 110, 0.35);
+  }
+  .equip-slot-icon {
+    width: 48px;
+    height: 48px;
     display: flex;
     align-items: center;
-    gap: 6px;
-    font-size: 13px;
+    justify-content: center;
+    background: rgba(0, 0, 0, 0.35);
+    border-radius: 4px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+  }
+  .equip-slot-label {
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    color: #8a93a3;
+    line-height: 1.1;
+  }
+  .paperdoll-stage {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    gap: 8px;
+  }
+  .paperdoll-canvas {
+    width: 100%;
+    height: min(260px, 34vh);
+    border-radius: 6px;
+    background: rgba(8, 10, 14, 0.45);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    cursor: grab;
+    touch-action: none;
   }
   .char-info {
     margin-top: auto;
@@ -1730,6 +2197,46 @@
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
     text-align: left;
     pointer-events: none;
+  }
+  .item-context-menu {
+    position: fixed;
+    z-index: 10000;
+    min-width: 148px;
+    background: rgba(10, 12, 18, 0.98);
+    border: 1px solid var(--rc-gold-dim);
+    border-radius: 6px;
+    padding: 4px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.65);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .item-context-title {
+    font-family: var(--rc-display);
+    font-size: 11px;
+    letter-spacing: 0.5px;
+    color: var(--rc-gold);
+    padding: 6px 10px 4px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    margin-bottom: 2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 200px;
+  }
+  .item-context-action {
+    background: transparent;
+    border: none;
+    color: #dce6f2;
+    text-align: left;
+    font-size: 13px;
+    padding: 8px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+  }
+  .item-context-action:hover {
+    background: rgba(201, 162, 75, 0.16);
+    color: var(--rc-gold-bright);
   }
   .tt-title {
     font-family: var(--rc-display);
@@ -2027,6 +2534,138 @@
     font-style: italic;
   }
 
+  /* ---- Achievements tab ---- */
+  .achievements-tab {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+  }
+  .achievements-sub {
+    margin: 0 0 10px;
+    font-size: 12px;
+    color: var(--rc-ink-dim);
+  }
+  .achievement-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    overflow-y: auto;
+    flex: 1;
+    padding-right: 4px;
+  }
+  .achievement-row {
+    display: flex;
+    gap: 12px;
+    align-items: flex-start;
+    background: rgba(255, 255, 255, 0.04);
+    border: 2px solid rgba(255, 255, 255, 0.1);
+    border-radius: 6px;
+    padding: 10px 12px;
+    color: #dce6f2;
+  }
+  .achievement-row.complete {
+    border-color: rgba(143, 212, 143, 0.35);
+    background: rgba(143, 212, 143, 0.06);
+  }
+  .achievement-mark {
+    flex-shrink: 0;
+    width: 22px;
+    text-align: center;
+    font-size: 16px;
+    line-height: 1.2;
+    color: var(--rc-gold);
+  }
+  .achievement-row.complete .achievement-mark {
+    color: #8fd48f;
+  }
+  .achievement-body {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .achievement-title-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+  }
+  .achievement-name {
+    font-family: var(--rc-display);
+    font-weight: 700;
+    font-size: 14px;
+    color: var(--rc-parchment);
+  }
+  .achievement-row.complete .achievement-name {
+    color: #8fd48f;
+  }
+  .achievement-cat {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--rc-ink-dim);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 3px;
+    padding: 1px 6px;
+  }
+  .achievement-done {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    color: #8fd48f;
+    background: rgba(143, 212, 143, 0.12);
+    border: 1px solid rgba(143, 212, 143, 0.25);
+    padding: 2px 7px;
+    border-radius: 4px;
+    margin-left: auto;
+  }
+  .achievement-desc {
+    font-size: 12px;
+    color: var(--rc-ink-dim);
+  }
+  .achievement-req {
+    font-size: 11px;
+    color: var(--rc-gold);
+  }
+  .achievement-progress {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 2px;
+  }
+  .achievement-bar {
+    flex: 1;
+    height: 8px;
+    border-radius: 4px;
+    background: rgba(0, 0, 0, 0.35);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    overflow: hidden;
+  }
+  .achievement-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #8a6f33, var(--rc-gold-bright, #ffd66e));
+    border-radius: 3px;
+  }
+  .achievement-row.complete .achievement-fill {
+    background: linear-gradient(90deg, #4a8a4a, #8fd48f);
+  }
+  .achievement-count {
+    font-size: 11px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    color: var(--rc-parchment);
+    min-width: 3.5em;
+    text-align: right;
+  }
+  .achievement-rewards {
+    font-size: 11px;
+    color: #b8c4d4;
+    margin-top: 2px;
+  }
+
   /* ---- Crafting Board ---- */
   .craft-container {
     display: flex;
@@ -2209,6 +2848,40 @@
     text-transform: uppercase;
     color: var(--rc-gold-bright);
     opacity: 0.85;
+  }
+  .settings-hint {
+    margin: 0 0 4px;
+    font-size: 12px;
+    line-height: 1.45;
+    color: var(--rc-ink-dim);
+    opacity: 0.9;
+  }
+  .settings-note {
+    font-size: 11px;
+    color: var(--rc-gold-bright);
+    opacity: 0.75;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+  .preset-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .preset-btn {
+    flex: 1 1 auto;
+    min-width: 64px;
+    padding: 8px 10px;
+    font-size: 12px;
+  }
+  .graphics-col {
+    overflow-y: auto;
+    min-height: 0;
+    padding-right: 4px;
+  }
+  .setting-disabled {
+    opacity: 0.45;
+    pointer-events: none;
   }
   .setting-slider {
     display: flex;

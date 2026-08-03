@@ -1,0 +1,247 @@
+{
+  "asset": {
+    "generator": "Khronos glTF Blender I/O v5.2.39",
+    "version": "2.0"
+  },
+  "scene": 0,
+  "scenes": [
+    {
+      "name": "Scene",
+      "nodes": [
+        0
+      ]
+    }
+  ],
+  "nodes": [
+    {
+      "mesh": 0,
+      "name": "CastleWallShoot_ArcherSlit_Small",
+      "rotation": [
+        0,
+        0.7071068286895752,
+        -0.7071068286895752,
+        5.338509012631221e-08
+      ],
+      "translation": [
+        0.0001811981201171875,
+        0.0009361332631669939,
+        0
+      ]
+    }
+  ],
+  "materials": [
+    {
+      "doubleSided": true,
+      "name": "Castle Wall.008",
+      "normalTexture": {
+        "index": 1
+      },
+      "pbrMetallicRoughness": {
+        "baseColorTexture": {
+          "index": 0
+        },
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.75
+      }
+    },
+    {
+      "doubleSided": true,
+      "name": "Stone Floor.007",
+      "normalTexture": {
+        "index": 3
+      },
+      "pbrMetallicRoughness": {
+        "baseColorTexture": {
+          "index": 2
+        },
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.75
+      }
+    }
+  ],
+  "meshes": [
+    {
+      "name": "Cube.013",
+      "primitives": [
+        {
+          "attributes": {
+            "POSITION": 0,
+            "NORMAL": 1,
+            "TEXCOORD_0": 2
+          },
+          "indices": 3,
+          "material": 0
+        },
+        {
+          "attributes": {
+            "POSITION": 4,
+            "NORMAL": 5,
+            "TEXCOORD_0": 6
+          },
+          "indices": 7,
+          "material": 1
+        }
+      ]
+    }
+  ],
+  "textures": [
+    {
+      "source": 0
+    },
+    {
+      "source": 1
+    },
+    {
+      "source": 2
+    },
+    {
+      "source": 3
+    }
+  ],
+  "images": [
+    {
+      "uri": "textures/castle_wall_color.png"
+    },
+    {
+      "uri": "textures/castle_wall_normal.png"
+    },
+    {
+      "uri": "textures/stone_floor_color.png"
+    },
+    {
+      "uri": "textures/stone_floor_normal.png"
+    }
+  ],
+  "accessors": [
+    {
+      "bufferView": 0,
+      "componentType": 5126,
+      "count": 356,
+      "max": [
+        3.259937286376953,
+        1.350000023841858,
+        0.0009360313415527344
+      ],
+      "min": [
+        -3.2595748901367188,
+        -1.350000023841858,
+        -6.099064350128174
+      ],
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 1,
+      "componentType": 5126,
+      "count": 356,
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 2,
+      "componentType": 5126,
+      "count": 356,
+      "type": "VEC2"
+    },
+    {
+      "bufferView": 3,
+      "componentType": 5123,
+      "count": 846,
+      "type": "SCALAR"
+    },
+    {
+      "bufferView": 4,
+      "componentType": 5126,
+      "count": 1502,
+      "max": [
+        3.259937286376953,
+        0.8611272573471069,
+        -3.9990639686584473
+      ],
+      "min": [
+        -3.2595748901367188,
+        -0.8611271977424622,
+        -5.026857852935791
+      ],
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 5,
+      "componentType": 5126,
+      "count": 1502,
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 6,
+      "componentType": 5126,
+      "count": 1502,
+      "type": "VEC2"
+    },
+    {
+      "bufferView": 7,
+      "componentType": 5123,
+      "count": 2310,
+      "type": "SCALAR"
+    }
+  ],
+  "bufferViews": [
+    {
+      "buffer": 0,
+      "byteLength": 4272,
+      "byteOffset": 0,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 4272,
+      "byteOffset": 4272,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 2848,
+      "byteOffset": 8544,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 1692,
+      "byteOffset": 11392,
+      "target": 34963
+    },
+    {
+      "buffer": 0,
+      "byteLength": 18024,
+      "byteOffset": 13084,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 18024,
+      "byteOffset": 31108,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 12016,
+      "byteOffset": 49132,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 4620,
+      "byteOffset": 61148,
+      "target": 34963
+    }
+  ],
+  "samplers": [
+    {
+      "magFilter": 9729,
+      "minFilter": 9987
+    }
+  ],
+  "buffers": [
+    {
+      "byteLength": 65768,
+      "uri": "wall_archer_slit.bin"
+    }
+  ]
+}

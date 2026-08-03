@@ -1,7 +1,7 @@
 import type { CharacterGender } from "@rustcraft/shared";
 import { EQUIP_SLOTS, itemDef, type ItemSnap } from "@rustcraft/shared";
 import type { AnimatedModel, PropAttachConfig } from "./gltf";
-import { modularPart, resolveModularUrl } from "./classModels";
+import { resolveModularUrl } from "./classModels";
 
 type ModularPart = keyof NonNullable<ReturnType<typeof itemDef>["modularModel"]>;
 
@@ -11,6 +11,8 @@ export interface EquipSnap {
   armsId?: string | null;
   legsId?: string | null;
   feetId?: string | null;
+  shouldersId?: string | null;
+  neckId?: string | null;
 }
 
 function itemInSlot(items: ItemSnap[], slot: (typeof EQUIP_SLOTS)[number]): ItemSnap | undefined {
@@ -28,34 +30,6 @@ function modularUrlForItem(
   return resolveModularUrl(gender, raw);
 }
 
-/** Fantasy outfit pieces are authored for the Regular body; fill bare slots so skin does not poke through.
- *  `hasChest` covers *either* a skinned modular tunic or a rigid armorProp chest piece -- either way the
- *  wearer has committed to "not bare torso," so bare arms/legs/feet underneath would look just as wrong. */
-function fillOutfitGaps(
-  gender: CharacterGender,
-  hasChest: boolean,
-  legs: string | null,
-  arms: string | null,
-  feet: string | null,
-): { legs: string | null; arms: string | null; feet: string | null; armsIsPeasantFallback: boolean } {
-  if (!hasChest) return { legs, arms, feet, armsIsPeasantFallback: false };
-  const peasantLegs = resolveModularUrl(gender, modularPart("{gender}_Peasant_Legs.gltf"));
-  const peasantArms = resolveModularUrl(gender, modularPart("{gender}_Peasant_Arms.gltf"));
-  const peasantFeet = resolveModularUrl(gender, modularPart("{gender}_Peasant_Feet.gltf"));
-  return {
-    legs: legs ?? peasantLegs,
-    arms: arms ?? peasantArms,
-    feet: feet ?? peasantFeet,
-    // Peasant_Arms.gltf isn't just a wrist-length bracer -- ~88% of its
-    // second primitive's vertices are dominant-weighted to hand/finger
-    // bones, i.e. it's authored as a full glove (see peasant_arms'
-    // coversHands in items.ts). Leaving the base rig's bare-hand region
-    // visible underneath it (the old assumption) produced two overlapping
-    // hand shapes ("duplicate hands").
-    armsIsPeasantFallback: !arms,
-  };
-}
-
 function resolveSlots(
   gender: CharacterGender,
   snap: EquipSnap,
@@ -69,30 +43,29 @@ function resolveSlots(
   arms: string | null;
   legs: string | null;
   feet: string | null;
-  /** Whether the *actually equipped* (not gap-filled) arms piece covers the
-   *  hand/fingers -- see ItemDef.coversHands. Gap-filled Peasant Bracers
-   *  never do, so this stays false in that case. */
+  shoulders: string | null;
+  neck: string | null;
   armsCoversHands: boolean;
+  headCoversHead: boolean;
+  /** Tint applied to the base rig's still-visible Thigh mesh so gaps in
+   *  plate-style legs pieces (e.g. Knight greaves) read as a matching
+   *  underlayer instead of bare skin -- see AnimatedModel.autoManageBodySkin. */
+  legsTint: number | null;
 } {
-  const chest = modularUrlForItem(gender, snap.chestId, "chest");
-  const chestArmorProp = snap.chestId ? (itemDef(snap.chestId).armorProp ?? null) : null;
-  const legs = modularUrlForItem(gender, snap.legsId, "legs");
   const arms = modularUrlForItem(gender, snap.armsId, "arms");
-  const feet = modularUrlForItem(gender, snap.feetId, "feet");
-  const filled = fillOutfitGaps(gender, !!chest || !!chestArmorProp, legs, arms, feet);
-  const armsCoversHands = filled.armsIsPeasantFallback
-    ? !!itemDef("peasant_arms").coversHands
-    : arms
-      ? !!itemDef(snap.armsId!).coversHands
-      : false;
+  const head = modularUrlForItem(gender, snap.headId, "head");
   return {
-    head: modularUrlForItem(gender, snap.headId, "head"),
-    chest,
-    chestArmorProp,
-    arms: filled.arms,
-    legs: filled.legs,
-    feet: filled.feet,
-    armsCoversHands,
+    head,
+    chest: modularUrlForItem(gender, snap.chestId, "chest"),
+    chestArmorProp: snap.chestId ? (itemDef(snap.chestId).armorProp ?? null) : null,
+    arms,
+    legs: modularUrlForItem(gender, snap.legsId, "legs"),
+    feet: modularUrlForItem(gender, snap.feetId, "feet"),
+    shoulders: modularUrlForItem(gender, snap.shouldersId, "shoulders"),
+    neck: modularUrlForItem(gender, snap.neckId, "neck"),
+    armsCoversHands: arms && snap.armsId ? !!itemDef(snap.armsId).coversHands : false,
+    headCoversHead: head && snap.headId ? !!itemDef(snap.headId).coversHead : false,
+    legsTint: snap.legsId ? (itemDef(snap.legsId).gearTint ?? null) : null,
   };
 }
 
@@ -102,12 +75,14 @@ export async function applyModularGearFromSnapAsync(
   snap: EquipSnap,
 ): Promise<void> {
   const slots = resolveSlots(gender, snap);
-  await model.equipModularSlot("head", slots.head);
+  await model.equipModularSlot("head", slots.head, { coversHead: slots.headCoversHead });
   await model.equipModularSlot("chest", slots.chest);
   await model.setArmorProp(slots.chestArmorProp);
   await model.equipModularSlot("arms", slots.arms, { coversHands: slots.armsCoversHands });
-  await model.equipModularSlot("legs", slots.legs);
+  await model.equipModularSlot("legs", slots.legs, { tint: slots.legsTint });
   await model.equipModularSlot("feet", slots.feet);
+  await model.equipModularSlot("shoulders", slots.shoulders);
+  await model.equipModularSlot("neck", slots.neck);
 }
 
 /** Apply equipped modular glTF pieces onto a Universal-base avatar. */
@@ -122,6 +97,8 @@ export function applyModularGearFromInventory(
     armsId: itemInSlot(items, "arms")?.itemId,
     legsId: itemInSlot(items, "legs")?.itemId,
     feetId: itemInSlot(items, "feet")?.itemId,
+    shouldersId: itemInSlot(items, "shoulders")?.itemId,
+    neckId: itemInSlot(items, "neck")?.itemId,
   });
 }
 
@@ -136,6 +113,8 @@ export async function applyModularGearFromInventoryAsync(
     armsId: itemInSlot(items, "arms")?.itemId,
     legsId: itemInSlot(items, "legs")?.itemId,
     feetId: itemInSlot(items, "feet")?.itemId,
+    shouldersId: itemInSlot(items, "shoulders")?.itemId,
+    neckId: itemInSlot(items, "neck")?.itemId,
   });
 }
 
@@ -145,10 +124,12 @@ export function applyModularGearFromSnap(
   snap: EquipSnap,
 ): void {
   const slots = resolveSlots(gender, snap);
-  void model.equipModularSlot("head", slots.head);
+  void model.equipModularSlot("head", slots.head, { coversHead: slots.headCoversHead });
   void model.equipModularSlot("chest", slots.chest);
   void model.setArmorProp(slots.chestArmorProp);
   void model.equipModularSlot("arms", slots.arms, { coversHands: slots.armsCoversHands });
-  void model.equipModularSlot("legs", slots.legs);
+  void model.equipModularSlot("legs", slots.legs, { tint: slots.legsTint });
   void model.equipModularSlot("feet", slots.feet);
+  void model.equipModularSlot("shoulders", slots.shoulders);
+  void model.equipModularSlot("neck", slots.neck);
 }

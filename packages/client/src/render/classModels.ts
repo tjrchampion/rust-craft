@@ -3,6 +3,9 @@ import type { ClassId, CharacterGender, HairStyleId, FacialHairId } from "@rustc
 /** Quaternius Universal rig — shared by UAL and Fantasy modular outfits. */
 export const UNIVERSAL_ANIMATION_LIBRARY =
   "/assets/models/animations/UAL1_Standard.glb";
+/** UAL2 source pack — strafe/backpedal/dash and expanded combat clips. */
+export const UNIVERSAL_ANIMATION_LIBRARY_2 =
+  "/assets/models/animations/UAL2.glb";
 
 const MODULAR = "/assets/models/modular";
 const PARTS = `${MODULAR}/Modular Parts`;
@@ -36,8 +39,31 @@ export function resolveModularUrl(gender: CharacterGender, url: string | null | 
   if (!url) return null;
   const token = gender === "female" ? "Female" : "Male";
   let resolved = url.replaceAll("{gender}", token);
+  // Pack uses asymmetric male filenames for a few Knight/Ranger parts.
   if (resolved.endsWith("Male_Ranger_Feet.gltf")) {
     resolved = resolved.replace("Male_Ranger_Feet.gltf", "Male_Ranger_Feet_Boots.gltf");
+  }
+  if (resolved.endsWith("Male_Knight_Feet.gltf")) {
+    resolved = resolved.replace("Male_Knight_Feet.gltf", "Male_Knight_Feet_Armor.gltf");
+  }
+  if (resolved.endsWith("Male_Knight_Legs.gltf")) {
+    resolved = resolved.replace("Male_Knight_Legs.gltf", "Male_Knight_Legs_Armor.gltf");
+  }
+  // Pack uses singular "Pauldron" on male accessory files vs plural "Pauldrons" on female.
+  if (resolved.endsWith("Male_Knight_Acc_Pauldrons_Round.gltf")) {
+    resolved = resolved.replace(
+      "Male_Knight_Acc_Pauldrons_Round.gltf",
+      "Male_Knight_Acc_Pauldron_Round.gltf",
+    );
+  }
+  if (resolved.endsWith("Male_Knight_Acc_Pauldrons_Spike.gltf")) {
+    resolved = resolved.replace(
+      "Male_Knight_Acc_Pauldrons_Spike.gltf",
+      "Male_Knight_Acc_Pauldron_Spike.gltf",
+    );
+  }
+  if (resolved.endsWith("Male_Ranger_Acc_Pauldrons.gltf")) {
+    resolved = resolved.replace("Male_Ranger_Acc_Pauldrons.gltf", "Male_Ranger_Acc_Pauldron.gltf");
   }
   return encodeURI(resolved);
 }

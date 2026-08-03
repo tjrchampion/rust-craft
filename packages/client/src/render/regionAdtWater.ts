@@ -1,6 +1,8 @@
 import * as THREE from "three";
 import {
+  ADT_KEEP_EXTRA,
   ADT_RING,
+  adtKeyChebyshevDist,
   adtRingKeysInBounds,
   parseAdtKey,
   type RegionBlueprint,
@@ -9,7 +11,7 @@ import { buildRegionAdtWaterTile, createRegionWaterMaterial, applyWaterEnvironme
 import type { StreamBudget } from "./streamBudget";
 
 const BUILDS_PER_FRAME = 1;
-const MAX_ATTEMPTS = 4;
+const MAX_ATTEMPTS = 8;
 const DISPOSES_PER_FRAME = 1;
 
 type WaterBlueprint = Pick<RegionBlueprint, "gridSize" | "pitch" | "heights"> & {
@@ -19,6 +21,7 @@ type WaterBlueprint = Pick<RegionBlueprint, "gridSize" | "pitch" | "heights"> & 
 /**
  * Streams 64 m ADT tiles of painted region water around the player.
  * Dry tiles are skipped (no mesh). Editor preview still uses the full mesh.
+ * Same load/keep hysteresis as terrain so seams stay filled while walking.
  */
 export class RegionAdtWaterStreamer {
   readonly group = new THREE.Group();
@@ -30,6 +33,7 @@ export class RegionAdtWaterStreamer {
   private disposeQueue: THREE.BufferGeometry[] = [];
   private lastAnchorKey = "";
   private readonly bounds: { minX: number; maxX: number; minZ: number; maxZ: number };
+  private keepRing: number;
   private scrollT = 0;
 
   constructor(
@@ -38,14 +42,32 @@ export class RegionAdtWaterStreamer {
     private ring = ADT_RING,
   ) {
     this.group.name = "region-adt-water";
+    this.keepRing = ring + ADT_KEEP_EXTRA;
     const half = ((blueprint.gridSize - 1) * blueprint.pitch) / 2;
     this.bounds = { minX: -half, maxX: half, minZ: -half, maxZ: half };
     this.material = createRegionWaterMaterial();
     parent.add(this.group);
   }
 
-  private desiredKeys(x: number, z: number): string[] {
+  /** Update Chebyshev stream ring (graphics draw-distance). Forces re-enqueue. */
+  setRing(ring: number): void {
+    const next = Math.max(1, Math.min(6, Math.round(ring)));
+    if (next === this.ring) return;
+    this.ring = next;
+    this.keepRing = next + ADT_KEEP_EXTRA;
+    this.lastAnchorKey = "";
+  }
+
+  private loadKeys(x: number, z: number): string[] {
     return adtRingKeysInBounds(x, z, this.ring, this.bounds);
+  }
+
+  private keepKeys(x: number, z: number): string[] {
+    return adtRingKeysInBounds(x, z, this.keepRing, this.bounds);
+  }
+
+  private sortPending(x: number, z: number): void {
+    this.pending.sort((a, b) => adtKeyChebyshevDist(a, x, z) - adtKeyChebyshevDist(b, x, z));
   }
 
   private enqueueDispose(mesh: THREE.Mesh): void {
@@ -63,8 +85,9 @@ export class RegionAdtWaterStreamer {
   }
 
   update(x: number, z: number, budget?: StreamBudget): void {
-    const desired = this.desiredKeys(x, z);
+    const desired = this.loadKeys(x, z);
     const desiredSet = new Set(desired);
+    const keepSet = new Set(this.keepKeys(x, z));
     const anchor = desired[0] ?? "";
 
     if (anchor !== this.lastAnchorKey) {
@@ -77,9 +100,10 @@ export class RegionAdtWaterStreamer {
         }
       }
     }
+    this.sortPending(x, z);
 
     for (const [key, mesh] of this.tiles) {
-      if (desiredSet.has(key)) continue;
+      if (keepSet.has(key)) continue;
       this.enqueueDispose(mesh);
       this.tiles.delete(key);
     }
@@ -88,14 +112,18 @@ export class RegionAdtWaterStreamer {
     let built = 0;
     let attempts = 0;
     while (built < BUILDS_PER_FRAME && attempts < MAX_ATTEMPTS && this.pending.length > 0) {
-      if (budget && !budget.ok) break;
       attempts++;
-      const key = this.pending.shift()!;
-      if (this.tiles.has(key) || this.dryTiles.has(key) || !desiredSet.has(key)) continue;
-      if (budget && !budget.takeBuild()) {
-        this.pending.unshift(key);
-        break;
+      const key = this.pending[0]!;
+      if (this.tiles.has(key) || this.dryTiles.has(key) || !desiredSet.has(key)) {
+        this.pending.shift();
+        continue;
       }
+      const dist = adtKeyChebyshevDist(key, x, z);
+      const urgent = dist <= 1;
+      if (budget && !urgent && !budget.ok) break;
+      if (budget && !urgent && !budget.takeBuild()) break;
+      if (budget && urgent) budget.takeBuild();
+      this.pending.shift();
       const { ix, iz } = parseAdtKey(key);
       const mesh = buildRegionAdtWaterTile(this.blueprint, ix, iz, this.material);
       if (!mesh) {
@@ -110,7 +138,7 @@ export class RegionAdtWaterStreamer {
 
   /** Sync-build the full water ring (loading screen). */
   warm(x: number, z: number): void {
-    const keys = this.desiredKeys(x, z);
+    const keys = this.loadKeys(x, z);
     for (const key of keys) {
       if (this.tiles.has(key) || this.dryTiles.has(key)) continue;
       const { ix, iz } = parseAdtKey(key);
@@ -128,9 +156,9 @@ export class RegionAdtWaterStreamer {
 
   /** Apply region sky/fog/ground tint to the shared water material. */
   applyEnvironment(env: {
-    skyColor: string;
-    fogColor: string;
-    groundTint?: string;
+    skyColor: THREE.ColorRepresentation;
+    fogColor: THREE.ColorRepresentation;
+    groundTint?: THREE.ColorRepresentation;
   }): void {
     applyWaterEnvironment(this.material, env);
   }
@@ -156,8 +184,6 @@ export class RegionAdtWaterStreamer {
     this.tiles.clear();
     this.dryTiles.clear();
     this.pending = [];
-    const normalMap = this.material.userData.waterNormalMap as THREE.Texture | undefined;
-    normalMap?.dispose();
     this.material.dispose();
     if (this.group.parent) this.group.parent.remove(this.group);
     this.group.clear();

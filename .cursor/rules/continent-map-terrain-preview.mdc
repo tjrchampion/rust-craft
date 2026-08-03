@@ -1,0 +1,27 @@
+---
+description: Future idea — 2D continent layout map should show heightmap terrain thumbnails
+globs: packages/client/src/ui/ContinentLayoutMap.svelte,packages/client/src/ui/continentLayout.ts,packages/client/src/ui/RegionEditor.svelte,packages/shared/src/content/regionWorld.ts,packages/server/routes/api/regions/**
+alwaysApply: false
+---
+
+# Continent layout map — terrain preview (future)
+
+A mistaken interpretation once implemented (then removed) a **top-down heightmap preview on the 2D Continent Layout Map**. The user clarified they wanted **neighbor regions in the 3D editor** for seam moulding instead — but they explicitly want this 2D idea kept for later:
+
+> It would make for a very good map further down the road.
+
+## Intended future feature
+
+When building a richer continent / world map UI:
+
+- Optional toggle: show **baked top-down terrain thumbnails** on each region tile (not live WebGL).
+- Efficient path (already prototyped once):
+  - Downsample heights to ~64² (shared helper like `downsampleRegionHeights` / `REGION_LAYOUT_PREVIEW_SIZE`).
+  - Lightweight API e.g. `GET /api/regions/:id/layout-preview` returning heights + colorGrading (not full blueprint).
+  - CPU canvas bake (elevation + fake slope shade from groundTint/biome); cache per region id.
+  - Open region can bake from live `RegionEditorScene` heights (unsaved sculpt).
+- Keep it **opt-in** so the layout map stays cheap when editing origins only.
+
+## Do not confuse with
+
+**World → Show neighbor regions** in the 3D editor = read-only adjacent terrain for moulding seams. That is the current seam-authoring tool; the 2D height preview is a separate map UX enhancement.

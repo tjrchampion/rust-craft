@@ -117,6 +117,7 @@ const TREE_HEIGHTS: Record<TreeKey, number> = {
 };
 
 const templates = new Map<TreeKey, THREE.Group>();
+const loading = new Map<TreeKey, Promise<void>>();
 
 function normalize(gltf: GLTF, targetHeight: number): THREE.Group {
   const model = gltf.scene;
@@ -140,45 +141,44 @@ function normalize(gltf: GLTF, targetHeight: number): THREE.Group {
   return wrapper;
 }
 
-const treePromises: Promise<void>[] = [];
-
-/**
- * Kick off loading every known tree template immediately at module load, so
- * by the time a game session actually starts (after a real network
- * round-trip to connect) most templates are already cached and ready to
- * clone synchronously — no per-node async loading needed.
- */
-function preload(): void {
-  for (const key of Object.keys(TREE_URLS) as TreeKey[]) {
-    const p = new Promise<void>((resolve) => {
-      loader.load(
-        TREE_URLS[key],
-        (gltf) => {
-          templates.set(key, normalize(gltf, TREE_HEIGHTS[key]));
-          resolve();
-        },
-        undefined,
-        (err) => {
-          console.warn(`[natureAssets] failed to load ${key}`, err);
-          resolve();
-        }
-      );
-    });
-    treePromises.push(p);
-  }
+/** Load one nature template on demand (no module-load catalog fetch). */
+export function ensureNatureTemplate(key: TreeKey): Promise<void> {
+  if (templates.has(key)) return Promise.resolve();
+  let p = loading.get(key);
+  if (p) return p;
+  p = new Promise<void>((resolve) => {
+    loader.load(
+      TREE_URLS[key],
+      (gltf) => {
+        templates.set(key, normalize(gltf, TREE_HEIGHTS[key]));
+        resolve();
+      },
+      undefined,
+      (err) => {
+        console.warn(`[natureAssets] failed to load ${key}`, err);
+        resolve();
+      },
+    );
+  });
+  loading.set(key, p);
+  return p;
 }
-preload();
 
-export const natureAssetsLoaded = Promise.all(treePromises);
+/** @deprecated Prefer ensureNatureTemplate; kept for callers that used to await the old eager catalog. */
+export const natureAssetsLoaded = Promise.resolve();
 
 /**
  * A ready-to-place clone of a real imported tree model, with deterministic
  * per-node scale/rotation variation. Returns null if the template hasn't
- * finished loading yet — callers should fall back to a procedural model.
+ * finished loading yet — kicks off a load and callers should fall back to a
+ * procedural model until the next rebuild.
  */
 export function buildGltfTree(key: TreeKey, variant: number): THREE.Group | null {
   const template = templates.get(key);
-  if (!template) return null;
+  if (!template) {
+    void ensureNatureTemplate(key);
+    return null;
+  }
   const instance = template.clone(true);
   instance.scale.setScalar(0.85 + variant * 0.4);
   instance.rotation.y = variant * Math.PI * 2;
