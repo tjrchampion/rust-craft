@@ -51,11 +51,17 @@
 
   const villagePoints = $derived(villages.map((v) => ({ id: v.id, p: project(v.x, v.z) })));
   const questPoints = $derived(game.questMarkers.map((m) => ({ ...m, p: project(m.x, m.z) })));
-  const worldEventPoints = $derived(
-    game.worldEvents
+  const worldEventPoints = $derived.by(() => {
+    const gameInstance = getGame();
+    return game.worldEvents
       .filter((e) => e.phase === "active" || e.phase === "success" || e.phase === "failed")
-      .map((e) => ({ ...e, p: project(e.localX, e.localZ) })),
-  );
+      .map((e) => {
+        const origin = gameInstance?.regionWorldOriginOf(e.regionId);
+        const wx = (origin?.x ?? 0) + e.localX;
+        const wz = (origin?.z ?? 0) + e.localZ;
+        return { ...e, p: project(wx, wz) };
+      });
+  });
 
   interface PartyPoint {
     id: string;

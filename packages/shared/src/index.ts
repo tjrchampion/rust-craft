@@ -27,6 +27,7 @@ export * from "./content/skyPresets";
 export * from "./content/graphicsSettings";
 export * from "./content/quickGrass";
 export * from "./content/regionWorld";
+export * from "./content/regionMap";
 export * from "./content/houseGen";
 export * from "./content/castleGen";
 export * from "./content/fantasticBuildingGen";
