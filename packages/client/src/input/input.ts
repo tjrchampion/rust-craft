@@ -161,30 +161,53 @@ export class InputManager {
       this.lastMouseY = e.clientY;
     });
     window.addEventListener("mousedown", (e) => {
-      if (e.button === 0) this.leftDown = true;
-      if (e.button === 2) this.rightDown = true;
-      this.lastMouseX = e.clientX;
-      this.lastMouseY = e.clientY;
-      // Right mouse button held over the game viewport engages the camera control
-      // (pointer lock hides OS cursor for camera rotation). Left mouse is reserved
-      // for UI elements and spell bar interactions.
-      if (!this.uiMode && !this.pointerLocked && e.button === 2 && (e.target === canvas || canvas.contains(e.target as Node))) {
-        void canvas.requestPointerLock();
-      }
       if (e.button === 0) {
+        this.leftDown = true;
         this.lastDevice = "kbm";
       }
+      if (e.button === 2) {
+        this.rightDown = true;
+        const targetEl = e.target as HTMLElement | null;
+        const isTextInput = targetEl?.tagName === "INPUT" || targetEl?.tagName === "TEXTAREA";
+        if (!isTextInput) {
+          e.preventDefault();
+          if (!this.pointerLocked) {
+            void canvas.requestPointerLock();
+          }
+        }
+      }
+      this.lastMouseX = e.clientX;
+      this.lastMouseY = e.clientY;
     });
     window.addEventListener("mouseup", (e) => {
       if (e.button === 0) this.leftDown = false;
-      if (e.button === 2) this.rightDown = false;
-      if (!this.rightDown) this.releasePointer();
-    });
-    window.addEventListener("contextmenu", (e) => {
-      if (e.target === canvas || canvas.contains(e.target as Node)) {
-        e.preventDefault();
+      if (e.button === 2) {
+        this.rightDown = false;
+        const targetEl = e.target as HTMLElement | null;
+        const isTextInput = targetEl?.tagName === "INPUT" || targetEl?.tagName === "TEXTAREA";
+        if (!isTextInput) {
+          e.preventDefault();
+        }
+        this.releasePointer();
       }
     });
+    const blockMenu = (e: Event) => {
+      e.preventDefault();
+      return false;
+    };
+    window.oncontextmenu = blockMenu;
+    document.oncontextmenu = blockMenu;
+    canvas.oncontextmenu = blockMenu;
+    window.onauxclick = blockMenu;
+    document.onauxclick = blockMenu;
+    canvas.onauxclick = blockMenu;
+
+    window.addEventListener("contextmenu", (e) => {
+      e.preventDefault();
+    }, true);
+    window.addEventListener("auxclick", (e) => {
+      e.preventDefault();
+    }, true);
     window.addEventListener("wheel", (e) => {
       // Prefer pixel deltas; line-mode mice often report ±1 / ±100 depending on browser.
       const dy = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaMode === 2 ? e.deltaY * 40 : e.deltaY;
@@ -232,8 +255,13 @@ export class InputManager {
     let lookX = -this.mouseDx * MOUSE_SENSITIVITY;
     let lookY = -this.mouseDy * MOUSE_SENSITIVITY;
     let jump = this.keys.has("Space");
-    // Hold Shift to run; walk otherwise.
-    let sprint = this.keys.has("ShiftLeft") || this.keys.has("ShiftRight");
+    // Hold Control (or Shift / CapsLock) to run; walk otherwise.
+    let sprint =
+      this.keys.has("ControlLeft") ||
+      this.keys.has("ControlRight") ||
+      this.keys.has("ShiftLeft") ||
+      this.keys.has("ShiftRight") ||
+      this.keys.has("CapsLock");
     // Ctrl — dive while swimming (C is a hotbar key).
     let crouch = this.keys.has("ControlLeft") || this.keys.has("ControlRight");
     // Hold V to raise a shield block.

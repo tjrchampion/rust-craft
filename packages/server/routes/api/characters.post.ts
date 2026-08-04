@@ -8,11 +8,16 @@ import {
   startingHotbarLoadout,
   itemDef,
   EQUIP_SLOTS,
+  isHairStyleAllowedForGender,
+  isFacialHairAllowedForGender,
   isCharacterGender,
   isHairStyleId,
   isFacialHairId,
   isColor24,
   type ClassId,
+  type CharacterGender,
+  type HairStyleId,
+  type FacialHairId,
 } from "@rustcraft/shared";
 
 const MAX_CHARACTERS_PER_ACCOUNT = 4;
@@ -57,6 +62,13 @@ export default defineEventHandler(async (event) => {
   }
   if (body?.facialHair !== undefined && !isFacialHairId(body.facialHair)) {
     throw createError({ statusCode: 400, statusMessage: "Invalid facial hair" });
+  }
+  const effectiveGender = (body?.gender ?? "male") as CharacterGender;
+  if (body?.hairStyle && !isHairStyleAllowedForGender(body.hairStyle as HairStyleId, effectiveGender)) {
+    throw createError({ statusCode: 400, statusMessage: "Selected hair style is not allowed for this gender" });
+  }
+  if (body?.facialHair && !isFacialHairAllowedForGender(body.facialHair as FacialHairId, effectiveGender)) {
+    throw createError({ statusCode: 400, statusMessage: "Selected facial hair is not allowed for this gender" });
   }
   for (const [field, value] of [
     ["hairColor", body?.hairColor],

@@ -211,7 +211,7 @@
     font-weight: 600;
     border-radius: 4px;
     text-align: left;
-    cursor: url('/assets/cursors/02.png') 2 2, pointer !important;
+    cursor: none !important;
     pointer-events: auto !important;
     transition: all 0.12s ease;
   }
@@ -223,7 +223,7 @@
     transform: translateX(2px);
   }
   .menu-item:active {
-    cursor: url('/assets/cursors/03.png') 2 2, pointer !important;
+    cursor: none !important;
     background: rgba(201, 162, 75, 0.45);
     transform: translateX(1px) translateY(1px);
   }
@@ -265,7 +265,7 @@
     background: rgba(255, 255, 255, 0.04);
     border: 1px solid rgba(255, 255, 255, 0.1);
     border-radius: 3px;
-    cursor: url('/assets/cursors/02.png') 2 2, pointer !important;
+    cursor: none !important;
     transition: all 0.1s ease;
   }
   .tag-btn:hover {

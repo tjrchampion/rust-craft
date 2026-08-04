@@ -7,6 +7,7 @@
   import DungeonEditor from "./DungeonEditor.svelte";
   import RegionEditor from "./RegionEditor.svelte";
   import Logo from "./Logo.svelte";
+  import GameCursor from "./GameCursor.svelte";
 
   onMount(() => {
     if (import.meta.env.DEV) {
@@ -39,6 +40,8 @@
 {:else if app.screen === "regioneditor"}
   <RegionEditor />
 {/if}
+
+<GameCursor />
 
 <style>
   .loading-screen {

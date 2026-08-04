@@ -30,6 +30,24 @@ export interface CharacterAppearance {
   outfitHue: number;
 }
 
+export const GENDER_HAIR_STYLES: Record<CharacterGender, HairStyleId[]> = {
+  male: ["none", "buzzed", "simple_parted"],
+  female: ["none", "buzzed_female", "long", "simple_parted", "buns"],
+};
+
+export const GENDER_FACIAL_HAIR: Record<CharacterGender, FacialHairId[]> = {
+  male: ["none", "beard"],
+  female: ["none"],
+};
+
+export function isHairStyleAllowedForGender(style: HairStyleId, gender: CharacterGender): boolean {
+  return GENDER_HAIR_STYLES[gender]?.includes(style) ?? false;
+}
+
+export function isFacialHairAllowedForGender(facial: FacialHairId, gender: CharacterGender): boolean {
+  return GENDER_FACIAL_HAIR[gender]?.includes(facial) ?? false;
+}
+
 export function isCharacterGender(v: unknown): v is CharacterGender {
   return typeof v === "string" && (GENDERS as string[]).includes(v);
 }
@@ -45,3 +63,4 @@ export function isFacialHairId(v: unknown): v is FacialHairId {
 export function isColor24(v: unknown): v is number {
   return typeof v === "number" && Number.isInteger(v) && v >= 0 && v <= 0xffffff;
 }
+

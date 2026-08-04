@@ -319,31 +319,17 @@
   right: 10px;
 }
 
-/* Stone Cursor Pack (Wenrexa) */
-html, body, #ui-root, *, ::before, ::after {
-  cursor: url('/assets/cursors/01.png') 2 2, auto;
-}
+/* Global Custom In-Game Cursor Override */
+html, body, #ui-root, *, ::before, ::after,
 button, a, select, input, textarea, label, [role="button"],
 .rc-btn, .clickable, .mode-tab, .slot-btn, .menu-item, .item-slot,
 .friend-row, .roster-row, .party-member, .tab-btn, .sub-tab-btn,
-button:hover, a:hover, [role="button"]:hover, .rc-btn:hover {
-  cursor: url('/assets/cursors/02.png') 2 2, pointer !important;
-}
-html:active, body:active, button:active, a:active, .rc-btn:active, .clickable:active, :active {
-  cursor: url('/assets/cursors/03.png') 2 2, pointer !important;
-}
-.cursor-grab, [draggable="true"], .draggable, .drag-handle, .slot-item, .inventory-slot, .hotbar-slot {
-  cursor: url('/assets/cursors/08.png') 8 8, grab !important;
-}
-.cursor-grab:active, [draggable="true"]:active, .dragging, .is-dragging, body.is-dragging * {
-  cursor: url('/assets/cursors/09.png') 8 8, grabbing !important;
-}
-.cursor-attack { cursor: url('/assets/cursors/04.png') 2 2, crosshair !important; }
-.cursor-talk { cursor: url('/assets/cursors/05.png') 2 2, pointer !important; }
-.cursor-inspect { cursor: url('/assets/cursors/06.png') 2 2, pointer !important; }
-.cursor-target { cursor: url('/assets/cursors/07.png') 16 16, crosshair !important; }
-.cursor-disabled, button:disabled, .rc-btn:disabled, [disabled] {
-  cursor: url('/assets/cursors/10.png') 2 2, not-allowed !important;
+button:hover, a:hover, [role="button"]:hover, .rc-btn:hover,
+html:active, body:active, button:active, a:active, .rc-btn:active, .clickable:active, :active,
+.cursor-grab, [draggable="true"], .draggable, .drag-handle, .slot-item, .inventory-slot, .hotbar-slot,
+.cursor-grab:active, [draggable="true"]:active, .dragging, .is-dragging, body.is-dragging *,
+.cursor-attack, .cursor-talk, .cursor-inspect, .cursor-target, .cursor-disabled, button:disabled, .rc-btn:disabled, [disabled] {
+  cursor: none !important;
 }
 
 :root {

@@ -1010,7 +1010,7 @@
                     equipCursor = i;
                     activateInv("equip", i);
                   }}
-                  oncontextmenu={(e) => item && openItemContextMenu("equip", i, item.itemId, e)}
+                  oncontextmenu={(e) => { e.preventDefault(); if (item) openItemContextMenu("equip", i, item.itemId, e); }}
                   onmouseenter={(e) => item && showItemTooltip(item.itemId, item.durability, e)}
                   onmouseleave={hideItemTooltip}
                 >
@@ -1057,7 +1057,7 @@
                     equipCursor = i;
                     activateInv("equip", i);
                   }}
-                  oncontextmenu={(e) => item && openItemContextMenu("equip", i, item.itemId, e)}
+                  oncontextmenu={(e) => { e.preventDefault(); if (item) openItemContextMenu("equip", i, item.itemId, e); }}
                   onmouseenter={(e) => item && showItemTooltip(item.itemId, item.durability, e)}
                   onmouseleave={hideItemTooltip}
                 >
@@ -1084,7 +1084,7 @@
                   invCursor = i;
                   activateInv("inventory", i);
                 }}
-                oncontextmenu={(e) => item && openItemContextMenu("inventory", i, item.itemId, e)}
+                oncontextmenu={(e) => { e.preventDefault(); if (item) openItemContextMenu("inventory", i, item.itemId, e); }}
                 onmouseenter={(e) => item && showItemTooltip(item.itemId, item.durability, e)}
                 onmouseleave={hideItemTooltip}
               >
@@ -1104,7 +1104,7 @@
                 class:first={i === 6}
                 class:moving={moving?.container === "hotbar" && moving.slot === i}
                 onclick={() => activateInv("hotbar", i)}
-                oncontextmenu={(e) => !spellId && item && openItemContextMenu("hotbar", i, item.itemId, e)}
+                oncontextmenu={(e) => { e.preventDefault(); if (!spellId && item) openItemContextMenu("hotbar", i, item.itemId, e); }}
                 onmouseenter={(e) => !spellId && item && showItemTooltip(item.itemId, item.durability, e)}
                 onmouseleave={hideItemTooltip}
               >
@@ -2704,7 +2704,7 @@
     background: rgba(255, 255, 255, 0.04);
     border: 1px solid rgba(255, 255, 255, 0.1);
     border-radius: 3px;
-    cursor: url('/assets/cursors/02.png') 2 2, pointer !important;
+    cursor: none !important;
     transition: all 0.1s ease;
   }
   .tag-sm:hover {

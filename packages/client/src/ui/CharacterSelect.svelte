@@ -10,6 +10,10 @@
     GENDERS,
     HAIR_STYLES,
     FACIAL_HAIR_OPTIONS,
+    GENDER_HAIR_STYLES,
+    GENDER_FACIAL_HAIR,
+    isHairStyleAllowedForGender,
+    isFacialHairAllowedForGender,
     type ClassId,
     type CharacterGender,
     type HairStyleId,
@@ -19,6 +23,7 @@
   import { ClassPreviewScene } from "../render/ClassPreviewScene";
   import { CLASS_ICONS } from "../render/classModels";
   import { preloadCharacterAssets } from "../render/gltf";
+  import CharacterThumbnail from "./CharacterThumbnail.svelte";
 
   const GENDER_LABELS: Record<CharacterGender, string> = { male: "Male", female: "Female" };
   const HAIR_STYLE_LABELS: Record<HairStyleId, string> = {
@@ -146,6 +151,16 @@
     return parts.length > 0 ? parts.join(", ") : "A class ability.";
   }
 
+  function selectGender(g: CharacterGender): void {
+    draftGender = g;
+    if (!isHairStyleAllowedForGender(draftHairStyle, g)) {
+      draftHairStyle = GENDER_HAIR_STYLES[g][0] ?? "none";
+    }
+    if (!isFacialHairAllowedForGender(draftFacialHair, g)) {
+      draftFacialHair = "none";
+    }
+  }
+
   const SIGNATURE_ABILITY_COUNT = 3;
   const previewSpells = $derived(infoClass.startingSpells.slice(0, SIGNATURE_ABILITY_COUNT));
 
@@ -174,7 +189,7 @@
   let previewLoading = $state(true);
 
   onMount(() => {
-    scene = new ClassPreviewScene(canvas);
+    scene = new ClassPreviewScene(canvas, { pedestal: false });
     void scene
       .preloadAll()
       .then(() => scene?.setClass(stageClassId, stageAppearance.gender, stageAppearance, stageEquip))
@@ -281,36 +296,61 @@
     padRafId = requestAnimationFrame(pollGamepad);
     return () => cancelAnimationFrame(padRafId);
   });
+
+  // Pre-seeded particle data — gives each mote a deterministic-but-varied
+  // x position, timing, size, and lateral drift without relying on the CSS
+  // `mod` operator (which has poor browser support in calc()).
+  const PARTICLES = Array.from({ length: 28 }, (_, i) => ({
+    x:     ((i * 137 + 23) % 100),            // 0–99% horizontal spread
+    delay: -((i * 79 + 11) % 40) * 0.1,       // pre-running offset so motes are already in flight
+    dur:   2.4 + ((i * 53 + 7) % 30) * 0.1,   // 2.4–5.3s rise time
+    size:  2 + ((i * 41 + 3) % 4),            // 2–5px
+    drift: -16 + ((i * 67 + 17) % 32),        // –16 to +15px lateral drift
+    kind:  i % 3 === 0 ? "ember" : i % 7 === 0 ? "streak" : "mote",
+  }));
 </script>
 
 <div class="select-screen">
   <div class="vignette"></div>
 
   <div class="topbar">
-    <Logo size={0.4} />
+    <Logo size={0.85} />
   </div>
   <div class="account-line">
     {app.me?.account?.displayName ?? "unknown"} · {app.realm.name}
     <button class="linkish" onclick={() => void app.logout()}>sign out</button>
   </div>
 
-  <div class="title-bar">
-    <div class="screen-title">{mode === "select" ? "Your Champions" : "Create Champion"}</div>
-    {#if mode === "create"}
-      <input
-        class="rc-input name-input"
-        placeholder="Champion name"
-        bind:value={newName}
-        maxlength={16}
-        onkeydown={(e) => {
-          if (e.key === "Enter") void createSelected();
-        }}
-      />
-    {/if}
-  </div>
 
-  <div class="stage" class:create-mode={mode === "create"} style:--accent={stageAccent}>
-    <div class="stage-dais" class:hidden={previewLoading}></div>
+
+  <!-- Character preview canvas — absolutely positioned over the stone
+       platform in the background image. The platform centre sits at
+       ~52% X / 64% Y in the 16:9 art. translateX(-50%) centres the
+       canvas on that X and translateY(-100%) moves the bottom of the
+       canvas (feet) to that Y, so the character stands on the stone. -->
+  <div class="stage-anchor" class:create-mode={mode === "create"}>
+
+    <!-- Shadow pool beneath character feet -->
+    <div class="stage-shadow"></div>
+
+    <!-- Rising runic particle motes -->
+    <div class="stage-particles" aria-hidden="true">
+      {#each PARTICLES as p}
+        <span
+          class="particle"
+          class:ember={p.kind === 'ember'}
+          class:streak={p.kind === 'streak'}
+          style="
+            --x: {p.x}%;
+            --delay: {p.delay}s;
+            --dur: {p.dur}s;
+            --size: {p.size}px;
+            --drift: {p.drift}px;
+          "
+        ></span>
+      {/each}
+    </div>
+
     <canvas bind:this={canvas} class="stage-canvas" class:loading={previewLoading}></canvas>
 
     {#if previewLoading}
@@ -320,6 +360,20 @@
       </div>
     {/if}
   </div>
+
+  {#if mode === "create" && !previewLoading}
+    <div class="name-input-wrapper">
+      <input
+        class="name-input"
+        placeholder="Enter Champion Name..."
+        bind:value={newName}
+        maxlength={16}
+        onkeydown={(e) => {
+          if (e.key === "Enter") void createSelected();
+        }}
+      />
+    </div>
+  {/if}
 
   {#if mode === "create"}
     <div class="customize-panel rc-frame" style:--accent={stageAccent} class:hidden={previewLoading}>
@@ -337,7 +391,7 @@
         <span class="custom-label">Gender</span>
         <div class="segmented">
           {#each GENDERS as g (g)}
-            <button type="button" class="segment" class:active={draftGender === g} onclick={() => (draftGender = g)}>
+            <button type="button" class="segment" class:active={draftGender === g} onclick={() => selectGender(g)}>
               {GENDER_LABELS[g]}
             </button>
           {/each}
@@ -348,7 +402,7 @@
       <div class="custom-row">
         <span class="custom-label">Hair</span>
         <div class="chip-grid">
-          {#each HAIR_STYLES as style (style)}
+          {#each GENDER_HAIR_STYLES[draftGender] as style (style)}
             <button
               type="button"
               class="chip"
@@ -361,21 +415,23 @@
         </div>
       </div>
 
-      <div class="custom-row">
-        <span class="custom-label">Facial Hair</span>
-        <div class="segmented">
-          {#each FACIAL_HAIR_OPTIONS as opt (opt)}
-            <button
-              type="button"
-              class="segment"
-              class:active={draftFacialHair === opt}
-              onclick={() => (draftFacialHair = opt)}
-            >
-              {FACIAL_HAIR_LABELS[opt]}
-            </button>
-          {/each}
+      {#if draftGender === "male"}
+        <div class="custom-row">
+          <span class="custom-label">Facial Hair</span>
+          <div class="segmented">
+            {#each FACIAL_HAIR_OPTIONS as opt (opt)}
+              <button
+                type="button"
+                class="segment"
+                class:active={draftFacialHair === opt}
+                onclick={() => (draftFacialHair = opt)}
+              >
+                {FACIAL_HAIR_LABELS[opt]}
+              </button>
+            {/each}
+          </div>
         </div>
-      </div>
+      {/if}
 
       <div class="rc-divider"></div>
       <div class="custom-row">
@@ -430,49 +486,68 @@
   {/if}
 
   <div class="info-panel rc-frame" style:--accent={stageAccent} class:hidden={previewLoading}>
-    {#if mode === "select" && activeCharacter}
-      <div class="info-name">{activeCharacter.name}</div>
-      <div class="info-role">
-        Level {activeCharacter.level} · {infoClass.name}
-      </div>
-    {:else}
-      <div class="info-name">{infoClass.name}</div>
-      <div class="info-role">{infoClass.resourceLabel} User</div>
-    {/if}
-    <div class="info-desc">{infoClass.description}</div>
+    <div class="info-scroll">
+      {#if mode === "select" && activeCharacter}
+        <div class="info-name">{activeCharacter.name}</div>
+        <div class="info-role">
+          Level {activeCharacter.level} · {infoClass.name}
+        </div>
+      {:else}
+        <div class="info-name">{infoClass.name}</div>
+        <div class="info-role">{infoClass.resourceLabel} User</div>
+      {/if}
+      <div class="info-desc">{infoClass.description}</div>
 
-    <div class="rc-divider"></div>
-    <div class="info-section-title">Starting Stats</div>
-    <div class="stat-grid">
-      <div class="stat-row"><span class="stat-label">Power</span><span class="stat-value">{infoClass.baseStats.power}</span></div>
-      <div class="stat-row"><span class="stat-label">Agility</span><span class="stat-value">{infoClass.baseStats.agility}</span></div>
-      <div class="stat-row"><span class="stat-label">Vitality</span><span class="stat-value">{infoClass.baseStats.vitality}</span></div>
-      <div class="stat-row"><span class="stat-label">Armor</span><span class="stat-value">{infoClass.baseStats.armor}</span></div>
+      <div class="rc-divider"></div>
+      <div class="info-section-title">Starting Stats</div>
+      <div class="stat-grid">
+        <div class="stat-row"><span class="stat-label">Power</span><span class="stat-value">{infoClass.baseStats.power}</span></div>
+        <div class="stat-row"><span class="stat-label">Agility</span><span class="stat-value">{infoClass.baseStats.agility}</span></div>
+        <div class="stat-row"><span class="stat-label">Vitality</span><span class="stat-value">{infoClass.baseStats.vitality}</span></div>
+        <div class="stat-row"><span class="stat-label">Armor</span><span class="stat-value">{infoClass.baseStats.armor}</span></div>
+      </div>
+
+      <div class="rc-divider"></div>
+      <div class="info-section-title">Equipment</div>
+      <div class="equip-row"><span class="equip-label">Resource</span><span class="equip-tag">{infoClass.resourceLabel}</span></div>
+      {#if infoWeapon}
+        <div class="equip-row"><span class="equip-label">Weapon</span><span class="equip-tag">{infoWeapon.weaponType ?? infoWeapon.name}</span></div>
+      {/if}
+      {#if infoArmor}
+        <div class="equip-row"><span class="equip-label">Armor</span><span class="equip-tag">{infoArmor.name}</span></div>
+      {/if}
+
+      <div class="rc-divider"></div>
+      <div class="info-section-title">Signature Abilities</div>
+      <div class="ability-list">
+        {#each previewSpells as spellId (spellId)}
+          {@const spell = spellDef(spellId)}
+          <div class="ability-card">
+            <span class="ability-icon">{CLASS_ICONS[stageClassId]}</span>
+            <div class="ability-text">
+              <div class="ability-name">{spell.name}</div>
+              <div class="ability-desc">{spellSummary(spellId)}</div>
+            </div>
+          </div>
+        {/each}
+      </div>
     </div>
 
-    <div class="rc-divider"></div>
-    <div class="info-section-title">Equipment</div>
-    <div class="equip-row"><span class="equip-label">Resource</span><span class="equip-tag">{infoClass.resourceLabel}</span></div>
-    {#if infoWeapon}
-      <div class="equip-row"><span class="equip-label">Weapon</span><span class="equip-tag">{infoWeapon.weaponType ?? infoWeapon.name}</span></div>
-    {/if}
-    {#if infoArmor}
-      <div class="equip-row"><span class="equip-label">Armor</span><span class="equip-tag">{infoArmor.name}</span></div>
-    {/if}
-
-    <div class="rc-divider"></div>
-    <div class="info-section-title">Signature Abilities</div>
-    <div class="ability-list">
-      {#each previewSpells as spellId (spellId)}
-        {@const spell = spellDef(spellId)}
-        <div class="ability-card">
-          <span class="ability-icon">{CLASS_ICONS[stageClassId]}</span>
-          <div class="ability-text">
-            <div class="ability-name">{spell.name}</div>
-            <div class="ability-desc">{spellSummary(spellId)}</div>
-          </div>
-        </div>
-      {/each}
+    <div class="info-action">
+      {#if mode === "select"}
+        <button type="button" class="rc-btn hero info-btn" disabled={!activeCharacter} onclick={enterSelected}>
+          Enter World
+        </button>
+      {:else}
+        <button
+          type="button"
+          class="rc-btn hero info-btn"
+          disabled={!selectedClassId || !newName.trim()}
+          onclick={() => void createSelected()}
+        >
+          Create
+        </button>
+      {/if}
     </div>
   </div>
 
@@ -488,8 +563,23 @@
             style:--accent={accent}
             onclick={() => selectCharacter(character)}
           >
-            <span class="strip-badge"><span class="strip-icon">{CLASS_ICONS[character.classId as ClassId] ?? "❔"}</span></span>
+            <span class="strip-badge">
+              <CharacterThumbnail
+                classId={character.classId as ClassId}
+                gender={character.gender}
+                appearance={{
+                  gender: character.gender,
+                  hairStyle: character.hairStyle,
+                  facialHair: character.facialHair,
+                  hairColor: character.hairColor,
+                  eyeColor: character.eyeColor,
+                  outfitHue: character.outfitHue,
+                }}
+                equip={character.equip}
+              />
+            </span>
             <span class="strip-label">{character.name}</span>
+            <span class="strip-sublabel">{CLASSES[character.classId as ClassId]?.name ?? ''}</span>
           </button>
         {:else}
           <div class="sub empty">No champions yet.</div>
@@ -499,6 +589,12 @@
           <span class="strip-label">New</span>
         </button>
       {:else}
+        <button type="button" class="strip-item strip-back" onclick={() => (mode = "select")}>
+          <span class="strip-badge strip-badge-back">
+            <span class="back-arrow">‹</span>
+          </span>
+          <span class="strip-label">Back</span>
+        </button>
         {#each CLASS_IDS as classId (classId)}
           {@const cls = CLASSES[classId]}
           {@const accent = CLASS_ACCENT[classId] ?? "var(--rc-gold)"}
@@ -513,7 +609,13 @@
             onfocus={() => (hoveredClassId = classId)}
             onblur={() => (hoveredClassId = null)}
           >
-            <span class="strip-badge"><span class="strip-icon">{CLASS_ICONS[classId]}</span></span>
+            <span class="strip-badge">
+              <CharacterThumbnail
+                classId={classId}
+                gender={draftGender}
+                appearance={stageAppearance}
+              />
+            </span>
             <span class="strip-label">{cls.name}</span>
           </button>
         {/each}
@@ -521,33 +623,11 @@
     </div>
   {/if}
 
-  <div class="corner-bar corner-left">
-    {#if !previewLoading && mode === "create" && characters.length > 0}
-      <button type="button" class="rc-btn ghost" onclick={() => (mode = "select")}>‹ Back</button>
-    {/if}
-  </div>
+  <div class="corner-bar corner-left"></div>
 
   <div class="corner-bar corner-right">
     {#if app.error}
       <div class="error">{app.error}</div>
-    {/if}
-    {#if previewLoading}
-      <!-- Enter World / Create hidden entirely while the preview scene is
-           still loading -- nothing to click yet, and pressing early raced
-           the model/gear load. -->
-    {:else if mode === "select"}
-      <button type="button" class="rc-btn hero" disabled={!activeCharacter} onclick={enterSelected}>
-        Enter World
-      </button>
-    {:else}
-      <button
-        type="button"
-        class="rc-btn hero"
-        disabled={!selectedClassId || !newName.trim()}
-        onclick={() => void createSelected()}
-      >
-        Create
-      </button>
     {/if}
   </div>
 </div>
@@ -560,26 +640,26 @@
     font-family: var(--rc-body);
     color: var(--rc-ink);
     overflow: hidden;
-    background: #080605 url('/assets/ui/loading_bg.jpg') no-repeat center center;
+    /* Dark base so image never leaves a white flash while loading */
+    background: #08050a url('/assets/ui/char_select_bg.png') no-repeat center center;
     background-size: cover;
   }
   .vignette {
     position: absolute;
     inset: 0;
-    background: radial-gradient(ellipse at center 55%, transparent 0%, rgba(8, 5, 2, 0.6) 100%);
+    /* Heavier darkening at edges to make panels readable over the busy art */
+    background:
+      radial-gradient(ellipse at 50% 40%, transparent 20%, rgba(4, 2, 8, 0.55) 80%),
+      linear-gradient(to bottom, rgba(4,2,8,0.55) 0%, transparent 18%, transparent 75%, rgba(4,2,8,0.7) 100%);
     pointer-events: none;
   }
 
   .topbar {
     position: absolute;
-    top: 16px;
-    left: 24px;
+    top: 30px;
+    left: 50%;
+    transform: translateX(-50%);
     z-index: 3;
-    /* Purely decorative wordmark. transform:scale shrinks what's painted
-       but not the underlying layout box, which stays at the logo's full
-       untransformed height — without this, that invisible overhang sits
-       above the sidebar in the stack and silently swallows clicks on the
-       class list underneath it. */
     pointer-events: none;
   }
   /* Its own corner (not stacked under the Logo) so it can't end up behind
@@ -606,53 +686,163 @@
     padding: 0;
   }
 
-  /* --- Top title + name input ------------------------------------- */
-  .title-bar {
+  /* --- Champion Name Input (Create Mode) --------------------------- */
+  .name-input-wrapper {
     position: absolute;
-    top: 20px;
+    bottom: 160px;
     left: 50%;
     transform: translateX(-50%);
-    z-index: 3;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 12px;
-  }
-  .screen-title {
-    font-family: var(--rc-display);
-    font-weight: 900;
-    font-size: 26px;
-    letter-spacing: 4px;
-    text-transform: uppercase;
-    color: var(--rc-gold-bright);
-    text-shadow: 0 2px 14px rgba(0, 0, 0, 0.85);
+    z-index: 15;
+    pointer-events: auto;
   }
   .name-input {
-    width: 280px;
+    width: 260px;
+    padding: 10px 16px;
     text-align: center;
+    font-family: var(--rc-display);
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: var(--rc-gold-bright);
+    background: rgba(10, 5, 25, 0.85);
+    backdrop-filter: blur(8px);
+    border: 1.5px solid rgba(212, 175, 92, 0.45);
+    border-radius: 6px;
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.12),
+      0 4px 16px rgba(0, 0, 0, 0.7);
+    outline: none;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  }
+  .name-input::placeholder {
+    color: rgba(200, 170, 255, 0.35);
+    letter-spacing: 1.5px;
+    text-transform: none;
+    font-weight: 400;
+    font-size: 12px;
+  }
+  .name-input:focus {
+    border-color: var(--rc-gold-bright);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.2),
+      0 0 18px rgba(212, 175, 92, 0.45),
+      0 4px 16px rgba(0, 0, 0, 0.8);
   }
 
-  /* --- Center stage -------------------------------------------------- */
-  .stage {
+  /* --- Character canvas anchored to the stone platform in the bg image -- */
+  /*
+   * The stone platform centre in the 16:9 art sits at roughly:
+   *   X = 50%  (dead centre horizontally)
+   *   Y = 67%  (upper-third of the lower half)
+   *
+   * We place .stage-anchor at those percentages, then translateX(-50%) so
+   * the canvas is horizontally centred on the platform, and translateY(-100%)
+   * so the BOTTOM edge of the canvas (= the character's feet) sits exactly
+   * on that Y anchor. This means the character always stands on the platform
+   * regardless of viewport size.
+   *
+   * The canvas width/height define how much of the screen the preview fills
+   * while keeping the feet anchored to the platform.
+   */
+  .stage-anchor {
     position: absolute;
-    inset: 0;
-    padding-right: 340px;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: flex-end;
-    padding-bottom: 120px;
+    /* Centered horizontally to the browser */
+    left: 50%;
+    /* Lowered onto the lower section of the stone pathway */
+    top: 86%;
+    /* Centre the canvas on X and lift feet to pathway Y. */
+    transform: translateX(-50%) translateY(-100%);
     z-index: 1;
+    pointer-events: none;
   }
-  /* Create mode adds a left-side appearance panel mirroring the right info
-     panel, so the character preview stays centered between both instead of
-     drifting toward the (now occupied) left edge. */
-  .stage.create-mode {
-    padding-left: 340px;
+  .stage-anchor.create-mode {
+    left: 50%;
+  }
+
+  /* --- Foot shadow -------------------------------------------------------- */
+  /* Dark elliptical pool beneath the character's feet — blends into the
+     stone platform so the model reads as grounded rather than floating. */
+  .stage-shadow {
+    position: absolute;
+    bottom: -6px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: clamp(120px, 18vw, 280px);
+    height: clamp(18px, 3vw, 44px);
+    border-radius: 50%;
+    background: radial-gradient(
+      ellipse at center,
+      rgba(10, 4, 20, 0.82) 0%,
+      rgba(30, 10, 50, 0.45) 50%,
+      transparent 75%
+    );
+    filter: blur(6px);
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  /* Blur the whole particle layer slightly so every dot gets a natural
+     light-bleeding bloom — no SVG filter needed. */
+  .stage-particles {
+    position: absolute;
+    bottom: 0;
+    left: 50%;
+    transform: translateX(-50%);
+    width: clamp(160px, 22vw, 340px);
+    height: clamp(200px, 40vh, 480px);
+    pointer-events: none;
+    z-index: 2;
+    overflow: visible;
+    filter: blur(0.5px);
+  }
+
+  .particle {
+    position: absolute;
+    bottom: 4px;
+    left: var(--x);
+    width: var(--size);
+    height: var(--size);
+    border-radius: 50%;
+    /* Bright core + wide bloom layers */
+    background: rgba(220, 130, 255, 1);
+    box-shadow:
+      0 0 3px  2px  rgba(210, 100, 255, 1),
+      0 0 8px  4px  rgba(170,  60, 255, 0.9),
+      0 0 18px 6px  rgba(130,  30, 220, 0.7),
+      0 0 32px 10px rgba(100,  10, 180, 0.4);
+    animation: particle-rise var(--dur) var(--delay) ease-in infinite;
+    opacity: 0;
+  }
+  .particle.ember {
+    background: rgba(255, 190, 60, 1);
+    box-shadow:
+      0 0 3px  2px  rgba(255, 200,  80, 1),
+      0 0 8px  4px  rgba(255, 140,  20, 0.9),
+      0 0 18px 6px  rgba(220,  90,  10, 0.7),
+      0 0 32px 10px rgba(180,  50,   0, 0.4);
+  }
+  .particle.streak {
+    width: calc(var(--size) * 4);
+    height: calc(var(--size) * 0.6px);
+    border-radius: 2px;
+    background: rgba(220, 130, 255, 1);
+    box-shadow:
+      0 0 4px  2px  rgba(200, 100, 255, 1),
+      0 0 12px 4px  rgba(160,  60, 255, 0.8),
+      0 0 24px 8px  rgba(120,  20, 200, 0.5);
+  }
+
+  @keyframes particle-rise {
+    0%   { opacity: 0;   transform: translateY(0)      translateX(0); }
+    10%  { opacity: 0.9; }
+    80%  { opacity: 0.5; transform: translateY(-80px)  translateX(var(--drift)); }
+    100% { opacity: 0;   transform: translateY(-130px) translateX(calc(var(--drift) * 1.4)); }
   }
   .stage-canvas {
-    width: min(46vw, 680px);
-    height: min(86vh, 900px);
+    /* Increased character size */
+    width: clamp(260px, 27vw, 540px);
+    height: clamp(360px, 66vh, 780px);
     display: block;
     cursor: grab;
     touch-action: none;
@@ -664,12 +854,9 @@
     opacity: 0;
     pointer-events: none;
   }
-  /* Full-viewport, not inset to the side panels -- both panels are opacity:0
-     while loading (see .info-panel.hidden/.customize-panel.hidden) and the
-     roster/class strip + action buttons are removed outright, so nothing
-     else is competing for space and the spinner can sit at true center. */
+  /* Spinner centred in the viewport (not the canvas) while loading */
   .stage-loading {
-    position: absolute;
+    position: fixed;
     inset: 0;
     display: flex;
     flex-direction: column;
@@ -695,32 +882,10 @@
     color: var(--rc-ink-dim);
   }
   @keyframes stage-spin {
-    to {
-      transform: rotate(360deg);
-    }
+    to { transform: rotate(360deg); }
   }
   .stage-canvas:active {
     cursor: grabbing;
-  }
-  /* A soft radial glow etched into the floor under the character -- reads
-     as a lit dais/spotlight pool without needing an actual 3D pedestal mesh
-     underneath the transparent preview canvas. */
-  .stage-dais {
-    position: absolute;
-    left: calc(50% - 170px);
-    transform: translateX(-50%);
-    bottom: 112px;
-    width: min(38vw, 560px);
-    height: 100px;
-    border-radius: 50%;
-    background: radial-gradient(ellipse at center, color-mix(in srgb, var(--accent, var(--rc-gold)) 45%, transparent) 0%, transparent 72%);
-    filter: blur(2px);
-    opacity: 0.55;
-    transition: opacity 0.25s ease;
-    pointer-events: none;
-  }
-  .stage-dais.hidden {
-    opacity: 0;
   }
 
   /* --- Right info panel (stats / equipment / abilities) --------------- */
@@ -728,18 +893,40 @@
     position: absolute;
     right: 24px;
     top: 96px;
-    bottom: 96px;
+    bottom: 120px;
     width: 300px;
     z-index: 2;
     padding: 18px 20px;
-    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
     transition: opacity 0.25s ease;
   }
   .info-panel.hidden {
     opacity: 0;
   }
+  .info-scroll {
+    flex: 1;
+    overflow-y: auto;
+    padding-right: 4px;
+  }
   .info-panel .rc-divider {
     margin: 12px 0;
+  }
+  .info-action {
+    margin-top: 12px;
+    padding-top: 10px;
+    border-top: 1px solid rgba(212, 175, 92, 0.2);
+    flex-shrink: 0;
+    display: flex;
+    justify-content: center;
+  }
+  .info-btn {
+    width: 100%;
+    padding: 12px 0;
+    font-size: 16px;
+    letter-spacing: 2px;
+    box-sizing: border-box;
   }
 
   /* --- Left customize panel (create mode only) ------------------------ */
@@ -747,7 +934,7 @@
     position: absolute;
     left: 24px;
     top: 96px;
-    bottom: 210px;
+    bottom: 120px;
     width: 300px;
     z-index: 2;
     padding: 18px 20px;
@@ -952,83 +1139,237 @@
   /* --- Bottom roster/class strip --------------------------------------- */
   .roster-strip {
     position: absolute;
-    left: 24px;
-    right: 340px;
-    bottom: 96px;
-    z-index: 2;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 10;
     display: flex;
     justify-content: center;
-    gap: 10px;
+    gap: 12px;
     overflow-x: auto;
-    padding: 4px 2px;
+    padding: 10px 24px;
+    background: linear-gradient(to top, rgba(4, 2, 10, 0.95) 0%, rgba(4, 2, 10, 0.75) 60%, transparent 100%);
+    backdrop-filter: blur(8px);
+    border-top: 1px solid rgba(140, 70, 255, 0.25);
+    box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.6);
+    scrollbar-width: none;
   }
+  .roster-strip::-webkit-scrollbar { display: none; }
   .roster-strip.create-mode {
-    left: 340px;
+    left: 0;
   }
   .sub.empty {
     color: var(--rc-ink-dim);
     font-size: 13px;
     padding: 8px 12px;
   }
+
+  /* Strip button */
   .strip-item {
     position: relative;
     flex-shrink: 0;
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 5px;
+    gap: 4px;
     background: none;
     border: none;
     cursor: pointer;
-    padding: 4px;
+    padding: 4px 6px;
+    border-radius: 6px;
+    transition: background 0.15s ease;
   }
+  .strip-item:hover {
+    background: rgba(140, 60, 255, 0.08);
+  }
+  .strip-item.active {
+    background: rgba(140, 60, 255, 0.14);
+  }
+
+  /* Portrait frame */
   .strip-badge {
-    width: 56px;
-    height: 56px;
-    border-radius: 50%;
+    width: 60px;
+    height: 60px;
+    border-radius: 8px;
     display: flex;
     align-items: center;
     justify-content: center;
-    background: radial-gradient(circle at 35% 30%, rgba(255, 255, 255, 0.08), rgba(0, 0, 0, 0.45));
-    border: 2px solid var(--accent, var(--rc-gold-dim));
-    transition: border-color 0.12s ease, box-shadow 0.12s ease, transform 0.12s ease;
+    /* Dark glass base */
+    background:
+      linear-gradient(160deg, rgba(60,20,90,0.75) 0%, rgba(10,5,25,0.90) 100%);
+    border: 1.5px solid rgba(140, 70, 255, 0.35);
+    box-shadow:
+      inset 0 1px 0 rgba(200,150,255,0.12),
+      0 2px 8px rgba(0,0,0,0.5);
+    transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
+    overflow: hidden;
+    position: relative;
   }
   .strip-item:hover .strip-badge {
-    transform: translateY(-2px);
+    border-color: rgba(180, 100, 255, 0.7);
+    transform: translateY(-3px);
+    box-shadow:
+      inset 0 1px 0 rgba(200,150,255,0.18),
+      0 0 14px rgba(140, 60, 255, 0.45),
+      0 4px 12px rgba(0,0,0,0.5);
   }
   .strip-item.active .strip-badge {
-    border-color: var(--accent, var(--rc-gold-bright));
-    box-shadow: 0 0 16px color-mix(in srgb, var(--accent, var(--rc-gold-bright)) 55%, transparent);
+    border-color: var(--accent, rgba(180,100,255,0.9));
+    box-shadow:
+      inset 0 1px 0 rgba(200,150,255,0.2),
+      0 0 20px color-mix(in srgb, var(--accent, rgba(180,100,255,1)) 60%, transparent),
+      0 0 6px rgba(140,60,255,0.8),
+      0 4px 12px rgba(0,0,0,0.6);
   }
-  .strip-icon {
-    font-size: 24px;
-    line-height: 1;
+
+  /* ---- CSS class portrait head ---------------------------------------- */
+  /* A simple helmet silhouette: oval face + trapezoid helm top, tinted by
+     the class accent colour via filter:hue-rotate on the container.        */
+  .class-portrait {
+    position: relative;
+    width: 38px;
+    height: 44px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-end;
+    /* Tint towards the class accent using a CSS filter on the whole portrait.
+       We set --accent on the button, so we convert it to a hue-rotate
+       approximation per class via data-class attribute. */
   }
+  /* Helm (upper dome) */
+  .portrait-helm {
+    position: absolute;
+    top: 0;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 32px;
+    height: 24px;
+    background: linear-gradient(180deg,
+      color-mix(in srgb, var(--accent, #a050ff) 70%, #1a0a2a) 0%,
+      color-mix(in srgb, var(--accent, #a050ff) 35%, #0a0515) 100%
+    );
+    border-radius: 50% 50% 20% 20% / 60% 60% 30% 30%;
+    box-shadow:
+      inset 0 3px 6px rgba(255,255,255,0.18),
+      inset -3px 0 4px rgba(0,0,0,0.35),
+      0 0 10px color-mix(in srgb, var(--accent, #a050ff) 45%, transparent);
+  }
+  /* Cheek guards — two side flanges */
+  .portrait-helm::before,
+  .portrait-helm::after {
+    content: '';
+    position: absolute;
+    bottom: -6px;
+    width: 9px;
+    height: 12px;
+    background: color-mix(in srgb, var(--accent, #a050ff) 45%, #0d0820);
+    border-radius: 2px 2px 4px 4px;
+    box-shadow: inset 0 1px 2px rgba(255,255,255,0.1);
+  }
+  .portrait-helm::before { left: 0; border-radius: 4px 2px 2px 4px; }
+  .portrait-helm::after  { right: 0; border-radius: 2px 4px 4px 2px; }
+  /* Face / visor */
+  .portrait-face {
+    position: absolute;
+    bottom: 0;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 22px;
+    height: 22px;
+    background: linear-gradient(180deg,
+      rgba(20, 10, 40, 0.95) 0%,
+      rgba(10, 5, 20, 0.98) 100%
+    );
+    border-radius: 40% 40% 45% 45%;
+    box-shadow:
+      inset 0 0 6px rgba(0,0,0,0.8);
+  }
+  /* Eyes — glowing slits */
+  .portrait-face::before {
+    content: '';
+    position: absolute;
+    top: 7px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 14px;
+    height: 3px;
+    background: color-mix(in srgb, var(--accent, #a050ff) 90%, white);
+    border-radius: 2px;
+    box-shadow:
+      0 0 4px 1px color-mix(in srgb, var(--accent, #a050ff) 80%, transparent),
+      0 0 8px 2px color-mix(in srgb, var(--accent, #a050ff) 50%, transparent);
+    /* Split into two eyes via box-shadow trick */
+    clip-path: polygon(0% 0%, 38% 0%, 38% 100%, 0% 100%,
+                       0% 100%, 62% 100%, 62% 0%, 100% 0%);
+  }
+
+  /* "+" add-new badge and "‹" back badge */
   .strip-badge-add {
     font-family: var(--rc-display);
-    font-size: 24px;
+    font-size: 26px;
     font-weight: 700;
-    color: var(--rc-gold-dim);
-    border-style: dashed;
+    color: rgba(140, 80, 255, 0.6);
+    background:
+      linear-gradient(160deg, rgba(40,15,70,0.6) 0%, rgba(10,5,25,0.8) 100%);
+    border: 1.5px dashed rgba(120, 60, 220, 0.45);
   }
+  .strip-badge-add:hover {
+    color: rgba(180, 110, 255, 0.9);
+  }
+  .strip-badge-back {
+    background: linear-gradient(160deg, rgba(50, 20, 50, 0.75) 0%, rgba(15, 5, 20, 0.9) 100%);
+    border: 1.5px dashed rgba(212, 175, 92, 0.5);
+  }
+  .back-arrow {
+    font-family: var(--rc-display);
+    font-size: 28px;
+    font-weight: 700;
+    color: var(--rc-gold);
+    line-height: 1;
+    margin-top: -2px;
+  }
+  .strip-item:hover .strip-badge-back {
+    border-color: var(--rc-gold-bright);
+    box-shadow: 0 0 14px rgba(212, 175, 92, 0.4);
+  }
+  .strip-item:hover .back-arrow {
+    color: #fff;
+  }
+
   .strip-label {
     font-size: 10px;
+    font-family: var(--rc-display);
     text-transform: uppercase;
-    letter-spacing: 1px;
-    color: var(--rc-ink-dim);
-    max-width: 64px;
+    letter-spacing: 1.5px;
+    color: rgba(200, 170, 255, 0.6);
+    max-width: 70px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
+  .strip-sublabel {
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: rgba(160, 120, 220, 0.45);
+    max-width: 70px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-top: -2px;
+  }
   .strip-item.active .strip-label {
-    color: var(--rc-gold-bright);
+    color: color-mix(in srgb, var(--accent, #c8a0ff) 85%, white);
+  }
+  .strip-item.active .strip-sublabel {
+    color: color-mix(in srgb, var(--accent, #a060ff) 60%, transparent);
   }
 
   /* --- Corner action buttons ------------------------------------------ */
   .corner-bar {
     position: absolute;
-    bottom: 20px;
+    bottom: 116px;
     z-index: 3;
     display: flex;
     align-items: center;
@@ -1057,5 +1398,24 @@
   .error {
     color: #ff8a80;
     font-size: 13px;
+  }
+  /* --- Responsive Scaling for Smaller Viewports ----------------------- */
+  @media (max-height: 820px) {
+    .name-input-wrapper {
+      bottom: 92px;
+    }
+    .info-panel,
+    .customize-panel {
+      top: 64px;
+      bottom: 110px;
+      padding: 14px 16px;
+    }
+    .roster-strip {
+      padding: 6px 16px;
+    }
+    .strip-badge {
+      width: 50px;
+      height: 50px;
+    }
   }
 </style>

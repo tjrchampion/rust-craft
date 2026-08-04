@@ -333,10 +333,10 @@ export class Game {
     this.entities.prewarmVfx(this.renderer, this.camera);
     this.input = new InputManager(canvas);
 
-    canvas.addEventListener("contextmenu", (e) => {
+    canvas.oncontextmenu = (e) => {
+      e.preventDefault();
       const hit = this.entities.raycastPlayer(this.camera, e.clientX, e.clientY);
       if (hit) {
-        e.preventDefault();
         this.selectTarget(hit.id);
         ui.playerContextMenu = {
           x: e.clientX,
@@ -346,9 +346,20 @@ export class Game {
           playerClass: hit.classId,
         };
       }
-    });
+      return false;
+    };
+    canvas.onauxclick = (e) => {
+      e.preventDefault();
+      return false;
+    };
 
     canvas.addEventListener("mousedown", (e) => {
+      if (e.button === 2) {
+        e.preventDefault();
+        if (document.pointerLockElement !== canvas) {
+          void canvas.requestPointerLock();
+        }
+      }
       if (e.button === 0) {
         const hit = this.entities.raycastPlayer(this.camera, e.clientX, e.clientY);
         if (hit) {
