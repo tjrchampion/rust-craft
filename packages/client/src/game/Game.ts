@@ -2439,6 +2439,15 @@ export class Game {
     this.setUiMode(open || ui.inventoryOpen || ui.chatOpen || ui.questOffer !== null);
   }
 
+  /** Resolve a region's world origin for UI maps (minimap / overlays). */
+  regionWorldOriginOf(regionId: string): { x: number; z: number } | null {
+    const bp =
+      this.regionBlueprintCache.get(regionId) ??
+      this.regionCatalog.find((r) => r.id === regionId);
+    if (!bp) return null;
+    return { x: bp.worldOriginX ?? 0, z: bp.worldOriginZ ?? 0 };
+  }
+
   get inputManager(): InputManager {
     return this.input;
   }
