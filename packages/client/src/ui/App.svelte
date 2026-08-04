@@ -6,6 +6,7 @@
   import Hud from "./Hud.svelte";
   import DungeonEditor from "./DungeonEditor.svelte";
   import RegionEditor from "./RegionEditor.svelte";
+  import Logo from "./Logo.svelte";
 
   onMount(() => {
     if (import.meta.env.DEV) {
@@ -24,8 +25,8 @@
 </script>
 
 {#if app.screen === "loading"}
-  <div class="panel-center">
-    <div class="panel">Loading…</div>
+  <div class="loading-screen">
+    <Logo size={2} />
   </div>
 {:else if app.screen === "login"}
   <TitleScreen />
@@ -40,6 +41,15 @@
 {/if}
 
 <style>
+  .loading-screen {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #080605 url('/assets/ui/loading_bg.jpg') no-repeat center center;
+    background-size: cover;
+  }
   :global(.panel-center) {
     position: fixed;
     inset: 0;

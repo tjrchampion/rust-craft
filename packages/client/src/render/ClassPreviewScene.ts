@@ -231,12 +231,9 @@ export class ClassPreviewScene {
     });
   }
 
-  /** Play a celebratory flourish animation on the currently visible model. */
-  flourish(): void {
-    const model = this.activeGender ? this.models.get(this.activeGender) : null;
-    if (!model?.loaded) return;
-    model.play("cheer");
-  }
+  /** Character-select preview just shows the champion standing (idle) for now
+   *  — the celebratory flourish is disabled. */
+  flourish(): void {}
 
   private onPointerDown = (e: PointerEvent): void => {
     this.dragging = true;

@@ -54,6 +54,7 @@ import {
   type ItemDef,
   type PoiSpec,
   type RegionBlueprint,
+  type RegionMapEntry,
   type RegionAssetCollider,
   type CharacterGender,
   type CharacterAppearance,
@@ -2446,6 +2447,83 @@ export class Game {
       this.regionCatalog.find((r) => r.id === regionId);
     if (!bp) return null;
     return { x: bp.worldOriginX ?? 0, z: bp.worldOriginZ ?? 0 };
+  }
+
+  /** Lightweight continent stubs for the world map (layout + optional overlays). */
+  getRegionMapCatalog(): RegionMapEntry[] {
+    return this.regionCatalog.map((stub) => {
+      const full = this.regionBlueprintCache.get(stub.id);
+      const src = full ?? stub;
+      return {
+        id: src.id,
+        name: src.name,
+        biome: src.biome,
+        gridSize: src.gridSize,
+        pitch: src.pitch,
+        worldOriginX: src.worldOriginX ?? 0,
+        worldOriginZ: src.worldOriginZ ?? 0,
+        portalWorldX: src.portalWorldX,
+        portalWorldZ: src.portalWorldZ,
+        isStartingRegion: src.isStartingRegion,
+        entryLocal: src.entryLocal ?? { x: 0, z: 0 },
+        colorGrading: src.colorGrading,
+        villages: (src.villages ?? []).map((v) => ({
+          name: v.name,
+          localX: v.localX,
+          localZ: v.localZ,
+          radius: v.radius,
+        })),
+        portals: (src.portals ?? []).map((p) => ({
+          id: p.id,
+          name: p.name,
+          localX: p.localX,
+          localZ: p.localZ,
+          targetRegionId: p.targetRegionId,
+        })),
+        worldEvents: (src.worldEvents ?? []).map((e) => ({
+          id: e.id,
+          name: e.name,
+          localX: e.localX,
+          localZ: e.localZ,
+          radius: e.radius,
+        })),
+        npcs: (src.npcs ?? []).map((n) => ({
+          id: n.id,
+          name: n.name,
+          localX: n.localX,
+          localZ: n.localZ,
+          title: n.title,
+          hasQuests: Boolean(n.quests?.length) || (n.generateProceduralQuests !== false && !n.vendorId),
+          vendorId: n.vendorId,
+        })),
+      };
+    });
+  }
+
+  /** Ensure the region catalog is loaded (used by the world map). */
+  async ensureRegionMapCatalog(): Promise<RegionMapEntry[]> {
+    if (this.regionCatalog.length === 0) await this.loadRegionCatalog();
+    return this.getRegionMapCatalog();
+  }
+
+  /** Full blueprint (with heights) for a region — used by the world map for
+   *  painted heightmap thumbnails. Returns cached data, else fetches once. */
+  async ensureRegionBlueprint(id: string): Promise<RegionBlueprint | null> {
+    const cached = this.regionBlueprintCache.get(id);
+    if (cached?.heights?.length) return cached;
+    try {
+      const res = await fetch(app.apiUrl(`/api/regions/${id}`), { credentials: "include" });
+      if (res.ok) {
+        const data = (await res.json()) as { blueprint: RegionBlueprint };
+        if (data.blueprint?.heights?.length) {
+          this.regionBlueprintCache.set(id, data.blueprint);
+          return data.blueprint;
+        }
+      }
+    } catch {
+      /* fall through */
+    }
+    return this.regionBlueprintCache.get(id) ?? null;
   }
 
   get inputManager(): InputManager {

@@ -191,7 +191,7 @@ export function buildStaticMarkers(
     if (focusRegionId && r.id !== focusRegionId) continue;
 
     if (filters.villages) {
-      for (const v of r.villages) {
+      for (const v of r.villages ?? []) {
         const w = regionLocalToWorld(r, v.localX, v.localZ);
         out.push({
           id: `vil:${r.id}:${v.name}:${v.localX},${v.localZ}`,
@@ -206,7 +206,7 @@ export function buildStaticMarkers(
     }
 
     if (filters.portals) {
-      for (const p of r.portals) {
+      for (const p of r.portals ?? []) {
         const w = regionLocalToWorld(r, p.localX, p.localZ);
         out.push({
           id: `por:${r.id}:${p.id}`,
@@ -232,7 +232,7 @@ export function buildStaticMarkers(
     }
 
     if (filters.events) {
-      for (const e of r.worldEvents) {
+      for (const e of r.worldEvents ?? []) {
         const w = regionLocalToWorld(r, e.localX, e.localZ);
         out.push({
           id: `evt:${r.id}:${e.id}`,
@@ -248,7 +248,7 @@ export function buildStaticMarkers(
     }
 
     if (filters.npcs || filters.quests) {
-      for (const n of r.npcs) {
+      for (const n of r.npcs ?? []) {
         const w = regionLocalToWorld(r, n.localX, n.localZ);
         if (filters.quests && n.hasQuests) {
           out.push({
@@ -276,7 +276,8 @@ export function buildStaticMarkers(
 
     // Spawn / entry point marker in region view.
     if (focusRegionId === r.id) {
-      const w = regionLocalToWorld(r, r.entryLocal.x, r.entryLocal.z);
+      const entry = r.entryLocal ?? { x: 0, z: 0 };
+      const w = regionLocalToWorld(r, entry.x, entry.z);
       out.push({
         id: `entry:${r.id}`,
         kind: "entry",

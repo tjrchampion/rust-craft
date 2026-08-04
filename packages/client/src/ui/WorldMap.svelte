@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, untrack } from "svelte";
   import { game } from "./gameState.svelte";
   import { app } from "./appState.svelte";
   import { getGame } from "../game/instance";
@@ -20,10 +20,15 @@
     type MapMarker,
     type MapViewMode,
   } from "./worldMapModel";
+  import { renderRegionThumbnail, OVERVIEW_EDGE, DETAIL_EDGE } from "./worldMapThumbnail";
 
   let regions = $state<RegionMapEntry[]>([]);
   let loadError = $state<string | null>(null);
   let loading = $state(false);
+  /** Low-detail continent-overview thumbnails (region id → PNG data URL). */
+  let thumbById = $state<Record<string, string>>({});
+  /** High-detail thumbnails, rendered on demand for the region you zoom into. */
+  let detailById = $state<Record<string, string>>({});
 
   let mode = $state<MapViewMode>("world");
   let focusRegionId = $state<string | null>(null);
@@ -143,6 +148,10 @@
     return regions.map((r) => {
       const b = regionWorldBounds(r);
       const c = cam.worldToScreen(b.originX, b.originZ);
+      // Region rects are axis-aligned on screen (north-up, no rotation), so an
+      // <image> at (west,north)→(east,south) fits the tile exactly.
+      const tl = cam.worldToScreen(b.minX, b.maxZ);
+      const br = cam.worldToScreen(b.maxX, b.minZ);
       return {
         region: r,
         path: regionTilePath(cam, r),
@@ -151,6 +160,13 @@
         fill: r.colorGrading?.groundTint ?? BIOME_FILL[r.biome],
         current: r.id === currentRegionId,
         focused: r.id === focusRegionId,
+        // Zoomed-into region uses its high-detail render; everything else the
+        // cheap overview thumbnail.
+        thumb: (r.id === focusRegionId ? detailById[r.id] : undefined) ?? thumbById[r.id],
+        imgX: tl.x,
+        imgY: tl.y,
+        imgW: br.x - tl.x,
+        imgH: br.y - tl.y,
       };
     });
   });
@@ -163,26 +179,108 @@
     });
   });
 
+  function normalizeRegion(raw: Partial<RegionMapEntry> & { id: string; name: string }): RegionMapEntry {
+    return {
+      id: raw.id,
+      name: raw.name,
+      biome: raw.biome ?? "grassland",
+      gridSize: raw.gridSize ?? 2,
+      pitch: raw.pitch ?? 1,
+      worldOriginX: raw.worldOriginX ?? 0,
+      worldOriginZ: raw.worldOriginZ ?? 0,
+      portalWorldX: raw.portalWorldX ?? 0,
+      portalWorldZ: raw.portalWorldZ ?? 0,
+      isStartingRegion: raw.isStartingRegion,
+      entryLocal: raw.entryLocal ?? { x: 0, z: 0 },
+      colorGrading: raw.colorGrading,
+      villages: raw.villages ?? [],
+      portals: raw.portals ?? [],
+      worldEvents: raw.worldEvents ?? [],
+      npcs: raw.npcs ?? [],
+    };
+  }
+
   async function loadCatalog(): Promise<void> {
     loading = true;
     loadError = null;
     try {
-      const res = await fetch(app.apiUrl("/api/regions"), { credentials: "include" });
-      if (!res.ok) throw new Error(`Failed to load regions (${res.status})`);
-      const data = (await res.json()) as { regions: RegionMapEntry[] };
-      regions = data.regions ?? [];
-      // Default focus: current region if known, else starting region.
-      const start =
-        regions.find((r) => r.id === currentRegionId) ??
-        regions.find((r) => r.isStartingRegion) ??
-        regions[0] ??
-        null;
-      fitWorld();
-      if (start && mode === "region") openRegion(start.id);
+      // Prefer the live game catalog (already fetched for continent streaming),
+      // then refresh from /api/regions for overlay fields (villages/npcs/etc).
+      const g = getGame();
+      const fromGame = g ? await g.ensureRegionMapCatalog() : [];
+      let fromApi: RegionMapEntry[] = [];
+      try {
+        const res = await fetch(app.apiUrl("/api/regions"), { credentials: "include" });
+        if (res.ok) {
+          const data = (await res.json()) as { regions?: Partial<RegionMapEntry>[] };
+          fromApi = (data.regions ?? []).map((r) =>
+            normalizeRegion(r as Partial<RegionMapEntry> & { id: string; name: string }),
+          );
+        }
+      } catch {
+        /* fall through to game catalog */
+      }
+
+      const byId = new Map<string, RegionMapEntry>();
+      for (const r of fromGame) byId.set(r.id, normalizeRegion(r));
+      for (const r of fromApi) {
+        const prev = byId.get(r.id);
+        byId.set(r.id, prev ? { ...prev, ...r, villages: r.villages, portals: r.portals, worldEvents: r.worldEvents, npcs: r.npcs } : r);
+      }
+      regions = [...byId.values()];
+
+      if (regions.length === 0) {
+        loadError = "No regions found. Is the server running, and have any regions been saved?";
+      } else {
+        // Always open on the continent overview so navigation is obvious.
+        fitWorld();
+        void loadThumbnails();
+      }
     } catch (e) {
       loadError = e instanceof Error ? e.message : "Failed to load map";
     } finally {
       loading = false;
+      // Stage may have just finished mounting — refit once size is known.
+      queueMicrotask(() => {
+        if (regions.length > 0 && mode === "world") fitWorld();
+      });
+    }
+  }
+
+  /** Fetch each region's full blueprint (heights) and render a painted
+   *  relief thumbnail. Cheap + cached; failures leave the flat biome fill. */
+  async function loadThumbnails(): Promise<void> {
+    const g = getGame();
+    if (!g) return;
+    const ids = regions.map((r) => r.id);
+    await Promise.all(
+      ids.map(async (id) => {
+        if (thumbById[id]) return;
+        try {
+          const bp = await g.ensureRegionBlueprint(id);
+          if (!bp) return;
+          const url = renderRegionThumbnail(bp, { edge: OVERVIEW_EDGE });
+          if (url) thumbById = { ...thumbById, [id]: url };
+        } catch {
+          /* keep flat fill */
+        }
+      }),
+    );
+  }
+
+  /** Render the high-detail relief for a region on demand (when zoomed into
+   *  it) so its enlarged tile stays crisp instead of a stretched overview. */
+  async function ensureDetail(id: string): Promise<void> {
+    if (detailById[id]) return;
+    const g = getGame();
+    if (!g) return;
+    try {
+      const bp = await g.ensureRegionBlueprint(id);
+      if (!bp) return;
+      const url = renderRegionThumbnail(bp, { edge: DETAIL_EDGE });
+      if (url) detailById = { ...detailById, [id]: url };
+    } catch {
+      /* keep overview thumbnail */
     }
   }
 
@@ -196,7 +294,7 @@
     mode = "world";
     focusRegionId = null;
     resize();
-    cam.fitContinent(regions, 72);
+    if (regions.length > 0) cam.fitContinent(regions, 72);
     bumpCam();
   }
 
@@ -208,6 +306,8 @@
     resize();
     cam.fitRegion(r, 56);
     bumpCam();
+    // Zoomed in → render the crisp high-detail relief for this region.
+    void ensureDetail(id);
   }
 
   function close(): void {
@@ -292,20 +392,26 @@
 
   $effect(() => {
     if (!game.worldMapOpen || !wrapEl) return;
-    resize();
     const el = wrapEl;
-    const ro = new ResizeObserver(() => {
-      const prevFocusX = cam.focusX;
-      const prevFocusZ = cam.focusZ;
-      const prevScale = cam.scale;
-      const prevPanX = cam.panX;
-      const prevPanY = cam.panY;
+    // Frame the current view once per open. Untracked so writing mode /
+    // focusRegionId (via fitWorld / openRegion) and reading regions doesn't
+    // re-trigger this effect into an infinite resize→bumpCam loop.
+    untrack(() => {
       resize();
-      cam.focusX = prevFocusX;
-      cam.focusZ = prevFocusZ;
-      cam.scale = prevScale;
-      cam.panX = prevPanX;
-      cam.panY = prevPanY;
+      if (regions.length > 0) {
+        if (mode === "region" && focusRegionId) openRegion(focusRegionId);
+        else fitWorld();
+      }
+    });
+    const ro = new ResizeObserver(() => {
+      resize();
+      if (regions.length === 0) return;
+      if (mode === "region" && focusRegionId) {
+        const r = regions.find((x) => x.id === focusRegionId);
+        if (r) cam.fitRegion(r, 56);
+      } else {
+        cam.fitContinent(regions, 72);
+      }
       bumpCam();
     });
     ro.observe(el);
@@ -349,7 +455,7 @@
           {/if}
         </h1>
         <nav class="wm-crumb" aria-label="Map breadcrumb">
-          <button type="button" class:on={mode === "world"} onclick={fitWorld}>World</button>
+          <button type="button" class:on={mode === "world"} onclick={fitWorld}>Continent</button>
           {#if focusRegion}
             <span class="sep">/</span>
             <button type="button" class:on={mode === "region"} onclick={() => openRegion(focusRegion.id)}>
@@ -359,6 +465,9 @@
         </nav>
       </div>
       <div class="wm-top-actions">
+        {#if mode === "region"}
+          <button type="button" class="wm-back" onclick={fitWorld}>← Continent</button>
+        {/if}
         {#if hoverLabel}<span class="wm-hover">{hoverLabel}</span>{/if}
         <button type="button" class="rc-close" onclick={close} aria-label="Close map">✕</button>
       </div>
@@ -366,7 +475,7 @@
 
     <aside class="wm-side">
       <div class="side-section">
-        <div class="side-label">Regions</div>
+        <div class="side-label">Navigate</div>
         <div class="region-list">
           <button
             type="button"
@@ -375,7 +484,7 @@
             onclick={fitWorld}
           >
             <span class="swatch all"></span>
-            <span class="rname">All Regions</span>
+            <span class="rname">Continent</span>
             <span class="rmeta">{regions.length}</span>
           </button>
           {#each regions as r (r.id)}
@@ -390,6 +499,10 @@
               <span class="rname">{r.name}</span>
               <span class="rmeta">{biomeLabel(r.biome)}</span>
             </button>
+          {:else}
+            {#if !loading}
+              <div class="empty-regions">No regions loaded</div>
+            {/if}
           {/each}
         </div>
       </div>
@@ -435,29 +548,84 @@
         <div class="wm-status">Charting the continent…</div>
       {:else if loadError}
         <div class="wm-status error">{loadError}</div>
+      {:else if regions.length === 0}
+        <div class="wm-status error">No regions to display</div>
       {:else}
         <svg class="wm-svg" width="100%" height="100%">
           <defs>
-            <pattern id="wm-grid" width="48" height="48" patternUnits="userSpaceOnUse">
-              <path d="M 48 0 L 0 0 0 48" fill="none" stroke="rgba(196,163,90,0.08)" stroke-width="1" />
+            <pattern id="wm-grid" width="64" height="64" patternUnits="userSpaceOnUse">
+              <path d="M 64 0 L 0 0 0 64" fill="none" stroke="rgba(180,220,235,0.05)" stroke-width="1" />
             </pattern>
-            <radialGradient id="wm-vignette" cx="50%" cy="50%" r="65%">
-              <stop offset="0%" stop-color="rgba(0,0,0,0)" />
-              <stop offset="100%" stop-color="rgba(8,4,14,0.55)" />
+            <!-- Deep ocean: teal near the middle fading to dark navy at the edges. -->
+            <radialGradient id="wm-ocean" cx="48%" cy="42%" r="75%">
+              <stop offset="0%" stop-color="#1a5566" />
+              <stop offset="45%" stop-color="#123f52" />
+              <stop offset="100%" stop-color="#08202f" />
             </radialGradient>
+            <radialGradient id="wm-vignette" cx="50%" cy="50%" r="70%">
+              <stop offset="0%" stop-color="rgba(0,0,0,0)" />
+              <stop offset="100%" stop-color="rgba(4,12,20,0.6)" />
+            </radialGradient>
+            <!-- Coastal shallows glow (wide blur) + beach ring (tight blur). -->
+            <filter id="wm-coast" x="-30%" y="-30%" width="160%" height="160%">
+              <feGaussianBlur stdDeviation="26" />
+            </filter>
+            <filter id="wm-beach" x="-20%" y="-20%" width="140%" height="140%">
+              <feGaussianBlur stdDeviation="8" />
+            </filter>
           </defs>
 
-          <rect width="100%" height="100%" fill="#0c0a12" />
+          <rect width="100%" height="100%" fill="url(#wm-ocean)" />
+
+          <!-- Continent backdrop: each region radiates a shallow-water halo,
+               then a sandy coast, so the terrain tiles sit on land in the sea.
+               Overlapping regions' halos merge into one landmass (GW2-style). -->
+          <g class="wm-shallows" filter="url(#wm-coast)">
+            {#each regionTiles as tile (tile.region.id)}
+              <rect
+                x={tile.imgX - 40}
+                y={tile.imgY - 40}
+                width={tile.imgW + 80}
+                height={tile.imgH + 80}
+                rx="26"
+              />
+            {/each}
+          </g>
+          <g class="wm-coast" filter="url(#wm-beach)">
+            {#each regionTiles as tile (tile.region.id)}
+              <rect
+                x={tile.imgX - 13}
+                y={tile.imgY - 13}
+                width={tile.imgW + 26}
+                height={tile.imgH + 26}
+                rx="12"
+              />
+            {/each}
+          </g>
+
           <rect width="100%" height="100%" fill="url(#wm-grid)" />
 
           {#each regionTiles as tile (tile.region.id)}
+            {#if tile.thumb && tile.imgW > 0 && tile.imgH > 0}
+              <image
+                class="tile-thumb"
+                class:dim={mode === "region" && !tile.focused}
+                href={tile.thumb}
+                x={tile.imgX}
+                y={tile.imgY}
+                width={tile.imgW}
+                height={tile.imgH}
+                preserveAspectRatio="none"
+              />
+            {/if}
             <path
               d={tile.path}
               class="tile"
               class:current={tile.current}
               class:focused={tile.focused}
               class:dim={mode === "region" && !tile.focused}
-              style="fill: {tile.fill}"
+              class:has-thumb={!!tile.thumb}
+              style="fill: {tile.thumb ? 'none' : tile.fill}"
             />
             {#if mode === "world" || tile.focused}
               <text x={tile.cx} y={tile.cy} class="tile-label">{tile.region.name}</text>
@@ -536,7 +704,7 @@
         <button type="button" title="Zoom out" onclick={zoomOut}>−</button>
         <button type="button" title="Recenter on you" onclick={recenterOnPlayer}>◎</button>
         {#if mode === "region"}
-          <button type="button" title="Back to world" onclick={fitWorld}>⧉</button>
+          <button type="button" title="Back to continent" onclick={fitWorld}>⧉</button>
         {/if}
       </div>
     </div>
@@ -622,6 +790,28 @@
     font-size: 12px;
     color: var(--rc-ink-dim);
     letter-spacing: 0.5px;
+  }
+  .wm-back {
+    background: linear-gradient(180deg, #3a2e48, #1c1628);
+    border: 1px solid rgba(196, 163, 90, 0.5);
+    color: var(--rc-ink);
+    font-family: var(--rc-display);
+    font-size: 11px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    padding: 6px 12px;
+    border-radius: 3px;
+    cursor: pointer;
+  }
+  .wm-back:hover {
+    border-color: var(--rc-gold-bright);
+    color: var(--rc-gold-bright);
+  }
+  .empty-regions {
+    font-size: 11px;
+    color: var(--rc-ink-dim);
+    padding: 8px;
+    font-style: italic;
   }
 
   .wm-side {
@@ -763,6 +953,16 @@
     width: 100%;
     height: 100%;
   }
+  /* Coastal shallows halo around the landmass (wide, translucent teal). */
+  .wm-shallows rect {
+    fill: #2f93a8;
+    fill-opacity: 0.5;
+  }
+  /* Sandy coast under the tiles so terrain meets a beach, not open water. */
+  .wm-coast rect {
+    fill: #a89162;
+    fill-opacity: 0.85;
+  }
   .wm-status {
     position: absolute;
     inset: 0;
@@ -797,6 +997,19 @@
   .tile.dim {
     fill-opacity: 0.18;
     stroke-opacity: 0.25;
+  }
+  /* With a painted thumbnail the fill is transparent; the stroke + states
+     still convey current / focused / dim. */
+  .tile.has-thumb {
+    fill: none;
+  }
+  .tile-thumb {
+    pointer-events: none;
+    opacity: 0.96;
+    transition: opacity 0.15s ease;
+  }
+  .tile-thumb.dim {
+    opacity: 0.28;
   }
   .tile-label {
     fill: #f4eef8;

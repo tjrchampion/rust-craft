@@ -560,6 +560,8 @@
     font-family: var(--rc-body);
     color: var(--rc-ink);
     overflow: hidden;
+    background: #080605 url('/assets/ui/loading_bg.jpg') no-repeat center center;
+    background-size: cover;
   }
   .vignette {
     position: absolute;
