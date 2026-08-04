@@ -90,8 +90,11 @@ export class InputManager {
   private capsQueued = false;
   private lastCapsAt = 0;
   private pointerLocked = false;
-  private isMouseDown = false;
-  private isRightMouseDown = false;
+  /** Which look-buttons (left/right) are currently held -- lock is released
+   *  only once both are up, so holding one while releasing the other (or
+   *  briefly overlapping the two) doesn't cut the drag short. */
+  private leftDown = false;
+  private rightDown = false;
   private lastMouseX = 0;
   private lastMouseY = 0;
   private prevPadButtons: boolean[] = [];
@@ -136,29 +139,37 @@ export class InputManager {
       }
       this.keys.delete(e.code);
     });
-    window.addEventListener("blur", () => this.keys.clear());
-
-    canvas.addEventListener("click", () => {
-      if (!this.uiMode && !this.pointerLocked) void canvas.requestPointerLock();
+    window.addEventListener("blur", () => {
+      this.keys.clear();
+      this.leftDown = false;
+      this.rightDown = false;
     });
+
     document.addEventListener("pointerlockchange", () => {
       this.pointerLocked = document.pointerLockElement === canvas;
     });
     window.addEventListener("mousemove", (e) => {
-      if (this.pointerLocked || this.isMouseDown || this.isRightMouseDown) {
-        const dx = e.movementX !== undefined && (this.pointerLocked || e.movementX !== 0) ? e.movementX : e.clientX - this.lastMouseX;
-        const dy = e.movementY !== undefined && (this.pointerLocked || e.movementY !== 0) ? e.movementY : e.clientY - this.lastMouseY;
-        this.mouseDx += dx;
-        this.mouseDy += dy;
+      // Only rotate the camera while a look-button hold has us pointer-locked
+      // (see mousedown/mouseup below) -- WoW-style: the cursor is otherwise
+      // free to click HUD/menus, and merely moving the mouse over the
+      // viewport does nothing.
+      if (this.pointerLocked) {
+        this.mouseDx += e.movementX ?? 0;
+        this.mouseDy += e.movementY ?? 0;
       }
       this.lastMouseX = e.clientX;
       this.lastMouseY = e.clientY;
     });
     window.addEventListener("mousedown", (e) => {
-      if (e.button === 0) this.isMouseDown = true;
-      if (e.button === 2) this.isRightMouseDown = true;
+      if (e.button === 0) this.leftDown = true;
+      if (e.button === 2) this.rightDown = true;
       this.lastMouseX = e.clientX;
       this.lastMouseY = e.clientY;
+      // Either mouse button held over the game viewport engages the camera
+      // "action cam" (pointer lock hides the OS cursor and gives unlimited
+      // relative movement for the drag) -- released the moment both buttons
+      // come back up, so the cursor is free again for clicking UI the rest
+      // of the time, instead of staying locked for the whole session.
       if (!this.uiMode && !this.pointerLocked && (e.target === canvas || canvas.contains(e.target as Node))) {
         void canvas.requestPointerLock();
       }
@@ -168,8 +179,9 @@ export class InputManager {
       }
     });
     window.addEventListener("mouseup", (e) => {
-      if (e.button === 0) this.isMouseDown = false;
-      if (e.button === 2) this.isRightMouseDown = false;
+      if (e.button === 0) this.leftDown = false;
+      if (e.button === 2) this.rightDown = false;
+      if (!this.leftDown && !this.rightDown) this.releasePointer();
     });
     window.addEventListener("contextmenu", (e) => {
       if (e.target === canvas || canvas.contains(e.target as Node)) {
@@ -211,16 +223,6 @@ export class InputManager {
 
   releasePointer(): void {
     if (this.pointerLocked) document.exitPointerLock();
-  }
-
-  requestPointer(): void {
-    if (!this.pointerLocked) {
-      void this.canvas.requestPointerLock();
-    }
-  }
-
-  get hasPointerLock(): boolean {
-    return this.pointerLocked;
   }
 
   /** Sample and reset per-frame input. Call once per rAF with dt in seconds. */

@@ -107,6 +107,8 @@ interface RemoteEntity {
   lootRing?: THREE.Mesh;
   freezeMesh?: THREE.Group;
   lootable?: boolean;
+  /** Last painted HP fraction — skip canvas redraw when unchanged. */
+  lastHpFrac: number;
 }
 
 export interface TargetInfo {
@@ -143,6 +145,15 @@ interface GroundBurst {
   lifeMs: number;
 }
 
+/** A rising column of light -- the centerpiece of the level-up celebration,
+ *  visible from across the map unlike the small hit-burst particles. */
+interface LevelUpPillar {
+  mesh: THREE.Mesh;
+  ring: THREE.Mesh;
+  born: number;
+  lifeMs: number;
+}
+
 interface ProjectileInstance {
   group: THREE.Group;
   target: THREE.Vector3;
@@ -151,6 +162,8 @@ interface ProjectileInstance {
    *  SpellVfxSystem.attachTrail) -- null for schools with no extracted
    *  trail effect, which fall back to the old per-frame mesh sparks. */
   trailPs: QUARKS.ParticleSystem | null;
+  /** Throttle mesh-spark trails so dense bolt fights don't spawn one/frame. */
+  lastSparkAt: number;
 }
 
 function createDamageSprite(text: string, color: string): THREE.Sprite {
@@ -218,6 +231,13 @@ function paintHpBar(sprite: THREE.Sprite, fraction: number): void {
   texture.needsUpdate = true;
 }
 
+function paintHpBarIfChanged(entity: RemoteEntity, fraction: number): void {
+  const f = Math.max(0, Math.min(1, fraction));
+  if (Math.abs(f - entity.lastHpFrac) < 0.004) return;
+  entity.lastHpFrac = f;
+  if (entity.hpBar) paintHpBar(entity.hpBar, f);
+}
+
 function buildDebuffIcons(): THREE.Sprite {
   const canvas = document.createElement("canvas");
   canvas.width = 160;
@@ -267,6 +287,7 @@ export class EntityManager {
   private damageNumberPool: THREE.Sprite[] = [];
   private sparks: Spark[] = [];
   private groundBursts: GroundBurst[] = [];
+  private levelUpPillars: LevelUpPillar[] = [];
   private sparkPools = new Map<School, Spark[]>();
   private groundBurstPools = new Map<School, GroundBurst[]>();
   private raycaster = new THREE.Raycaster();
@@ -343,7 +364,7 @@ export class EntityManager {
         const projectile = buildSchoolProjectile(school, true);
         projectile.visible = true;
         const light = projectile.getObjectByName("light") as THREE.PointLight | undefined;
-        if (light) light.intensity = 6;
+        if (light) light.intensity = 0;
         this.scene.add(projectile);
         recycleSchoolProjectile(school, projectile);
       }
@@ -469,6 +490,7 @@ export class EntityManager {
       feetId: null,
       shouldersId: null,
       neckId: null,
+      lastHpFrac: -1,
     };
     this.entities.set(id, entity);
     return entity;
@@ -596,7 +618,7 @@ export class EntityManager {
       this.setGearAppearance(entity, snap);
       entity.samples.push({ t: now, x: snap.x, y: snap.y, z: snap.z, yaw: snap.yaw });
       if (entity.samples.length > 12) entity.samples.shift();
-      if (entity.hpBar) paintHpBar(entity.hpBar, snap.hp / snap.maxHp);
+      if (entity.hpBar) paintHpBarIfChanged(entity, snap.hp / snap.maxHp);
       if (entity.nameplate) entity.nameplate.visible = this.showPlayerNameplates;
       this.updateDebuffs(entity, snap.debuffs);
     }
@@ -615,15 +637,7 @@ export class EntityManager {
     const mesh = new THREE.Mesh(geom, mat);
     mesh.position.y = 0.05;
     mesh.visible = false;
-
-    // Add a golden point light so the ring actually illuminates the world
-    const light = new THREE.PointLight(0xffd700, 2.5, 5);
-    light.position.set(0, 0.3, 0);
-    mesh.add(light);
-    // Store base intensity for pulsing in update()
-    mesh.userData.lootLight = light;
-    mesh.userData.lootLightBase = 2.5;
-
+    // Emissive ring only — PointLights on every corpse destroy fill-rate in camps.
     return mesh;
   }
 
@@ -664,7 +678,7 @@ export class EntityManager {
       entity.prevAnim = snap.anim;
       if (entity.hpBar) {
         entity.hpBar.visible = snap.hp > 0;
-        if (snap.hp > 0) paintHpBar(entity.hpBar, snap.hp / snap.maxHp);
+        if (snap.hp > 0) paintHpBarIfChanged(entity, snap.hp / snap.maxHp);
       }
       if (entity.nameplate) {
         entity.nameplate.visible = snap.hp > 0 && this.nameplatesEnabledFor(entity.kind);
@@ -717,7 +731,7 @@ export class EntityManager {
       entity.maxHp = snap.maxHp;
       entity.samples.push({ t: now, x: snap.x, y: snap.y, z: snap.z, yaw: snap.yaw });
       if (entity.samples.length > 12) entity.samples.shift();
-      if (entity.hpBar) paintHpBar(entity.hpBar, snap.hp / snap.maxHp);
+      if (entity.hpBar) paintHpBarIfChanged(entity, snap.hp / snap.maxHp);
       if (entity.nameplate) {
         entity.nameplate.visible = snap.hp > 0 && this.showMobNameplates;
       }
@@ -788,12 +802,7 @@ export class EntityManager {
     const ring = new THREE.Mesh(ringGeom, ringMat);
     ring.position.y = 0.05;
     group.add(ring);
-
-    // 4. Intense Frost Light
-    const light = new THREE.PointLight(0x00e1ff, 4.5, 6.0);
-    light.position.y = 1.2;
-    group.add(light);
-    group.userData.light = light;
+    // No PointLight — many chilled targets in a pack would tank fill-rate.
 
     return group;
   }
@@ -817,8 +826,11 @@ export class EntityManager {
     }
   }
 
+  private projectileSeen = new Set<string>();
+
   applyProjectiles(snaps: ProjectileSnap[]): void {
-    const seen = new Set<string>();
+    const seen = this.projectileSeen;
+    seen.clear();
     for (const snap of snaps) {
       seen.add(snap.id);
       let proj = this.projectiles.get(snap.id);
@@ -829,14 +841,15 @@ export class EntityManager {
         group.visible = true;
         const core = group.getObjectByName("core");
         if (core) core.visible = true;
+        // Keep PointLight intensity at 0 — many concurrent bolts stall mid GPUs.
         const light = group.getObjectByName("light") as THREE.PointLight | undefined;
-        if (light) light.intensity = 6;
+        if (light) light.intensity = 0;
         if (!group.parent) {
           this.scene.add(group);
         }
         const trailId = HOVL_TRAIL_EFFECT[school];
         const trailPs = trailId ? this.spellVfx.attachTrail(trailId, group.position) : null;
-        proj = { group, target: new THREE.Vector3(snap.x, snap.y, snap.z), school, trailPs };
+        proj = { group, target: new THREE.Vector3(snap.x, snap.y, snap.z), school, trailPs, lastSparkAt: 0 };
         this.projectiles.set(snap.id, proj);
       }
       proj.target.set(snap.x, snap.y, snap.z);
@@ -859,8 +872,65 @@ export class EntityManager {
    *  which have no projectile of their own to carry a burst — spawned
    *  directly around the caster instead, using the same school profile
    *  projectile impacts do. */
-  spawnSpellBurst(x: number, y: number, z: number, spellId: string): void {
-    this.spawnBurst(new THREE.Vector3(x, y, z), spellSchool(spellId));
+  spawnSpellBurst(x: number, y: number, z: number, spellId: string, intensity = 1): void {
+    this.spawnBurst(new THREE.Vector3(x, y, z), spellSchool(spellId), intensity);
+  }
+
+  /** Golden pillar-of-light + multi-wave particle celebration when the local
+   *  player levels up -- deliberately much bigger/longer than a normal hit
+   *  burst (2.5s+ vs ~0.5s) so it reads clearly even mid-combat or from a
+   *  zoomed-out camera, instead of blending into the sky like the old
+   *  single small burst did. */
+  spawnLevelUpVfx(x: number, y: number, z: number): void {
+    const base = new THREE.Vector3(x, y + 0.4, z);
+    this.spawnLevelUpPillar(base);
+    // Staggered waves of particle bursts + ground rings read as a build-up
+    // rather than one instant blip.
+    const waves = [0, 140, 280, 420];
+    for (const delay of waves) {
+      window.setTimeout(() => {
+        this.spawnBurst(new THREE.Vector3(x, y + 0.4 + delay / 500, z), "holy", 2.2);
+        this.spawnBurst(new THREE.Vector3(x, y + 1.2 + delay / 400, z), "buff", 1.8);
+      }, delay);
+    }
+    this.spawnGroundRing(base, 0xffe9a8, 1400, "holy");
+    window.setTimeout(() => this.spawnGroundRing(base, 0xffd27a, 1200, "buff"), 200);
+  }
+
+  /** A tall additive-blended cylinder that shoots up from the player's feet
+   *  and fades, plus an expanding ring at its base -- the "pillar" read that
+   *  makes a level-up visible from a distance, not just a burst at head height. */
+  private spawnLevelUpPillar(base: THREE.Vector3): void {
+    const lifeMs = 1600;
+    const height = 6;
+    const geo = new THREE.CylinderGeometry(0.5, 0.8, height, 20, 1, true);
+    const material = new THREE.MeshBasicMaterial({
+      color: 0xffe9a8,
+      transparent: true,
+      opacity: 0.55,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    });
+    const mesh = new THREE.Mesh(geo, material);
+    mesh.position.set(base.x, base.y - 0.9 + height / 2, base.z);
+    this.scene.add(mesh);
+
+    const ringGeo = new THREE.RingGeometry(0.3, 1.4, 32);
+    const ringMaterial = new THREE.MeshBasicMaterial({
+      color: 0xffd27a,
+      transparent: true,
+      opacity: 0.9,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    });
+    const ring = new THREE.Mesh(ringGeo, ringMaterial);
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.set(base.x, base.y - 0.9, base.z);
+    this.scene.add(ring);
+
+    this.levelUpPillars.push({ mesh, ring, born: performance.now(), lifeMs });
   }
 
   /** Small school-colored spark, fading and drifting — used for projectile trails. */
@@ -920,7 +990,7 @@ export class EntityManager {
    *  hover/implode) comes from the school's profile, so Fire embers float
    *  up, Frost shards shatter down, Arcane glitter hangs and spins, and
    *  Shadow wisps look like they're being sucked toward the impact point. */
-  private spawnBurst(pos: THREE.Vector3, school: School): void {
+  private spawnBurst(pos: THREE.Vector3, school: School, intensity = 1): void {
     const profile = schoolProfile(school);
     // Every school's hit burst now goes through SpellVfxSystem -- a real
     // three.quarks particle system, either the school's extracted Hovl
@@ -929,8 +999,8 @@ export class EntityManager {
     // SCHOOL_VFX profile (see buildProceduralParticleSystem in spellVfx.ts).
     // The ground ring stays a separate, simpler procedural shockwave either way.
     this.spellVfx.spawnForSchool(school, pos);
-    this.schoolFlash.spawn(school, pos);
-    this.spawnGroundRing(pos, profile.ringColor, profile.ringDuration, school);
+    this.schoolFlash.spawn(school, pos, intensity);
+    this.spawnGroundRing(pos, profile.ringColor, profile.ringDuration * (intensity > 1.05 ? 1.2 : 1), school);
   }
 
   /** Flat ring that expands outward on the ground and fades — a shockwave
@@ -1018,8 +1088,18 @@ export class EntityManager {
     }
   }
 
-  spawnDamageNumber(x: number, y: number, z: number, amount: number, color = "#ffd0d0"): void {
-    const sprite = getDamageSprite(String(Math.round(amount)), color, this.damageNumberPool);
+  spawnDamageNumber(
+    x: number,
+    y: number,
+    z: number,
+    amount: number,
+    color = "#ffd0d0",
+    label?: string,
+  ): void {
+    const text = label ?? String(Math.round(amount));
+    const sprite = getDamageSprite(text, color, this.damageNumberPool);
+    const scale = label?.endsWith("!") ? 1.35 : label === "Miss" || label === "Dodge" ? 0.9 : 1;
+    sprite.scale.set(0.9 * scale, 0.45 * scale, 1);
     sprite.position.set(x + (Math.random() - 0.5) * 0.6, y, z + (Math.random() - 0.5) * 0.6);
     (sprite.material as THREE.SpriteMaterial).opacity = 1;
     if (!sprite.parent) {
@@ -1118,16 +1198,13 @@ export class EntityManager {
         entity.model.update(dt);
       }
 
-      // Pulse the loot ring light if present and visible
+      // Pulse loot ring opacity (no PointLight).
       if (entity.lootRing?.visible) {
-        const light = entity.lootRing.userData.lootLight as THREE.PointLight | undefined;
-        const base = entity.lootRing.userData.lootLightBase as number | undefined;
-        if (light && base !== undefined) {
-          light.intensity = base + Math.sin(now * 0.003) * 0.8;
-        }
+        const mat = entity.lootRing.material as THREE.MeshBasicMaterial;
+        mat.opacity = 0.7 + Math.sin(now * 0.003) * 0.2;
       }
 
-      // Animate blue flames and flicker light for frozen entities
+      // Animate freeze overlay without dynamic lights.
       if (entity.freezeMesh?.visible) {
         entity.freezeMesh.rotation.y += dt * 1.8;
         const flames = entity.freezeMesh.userData.flames as THREE.Mesh[] | undefined;
@@ -1141,22 +1218,20 @@ export class EntityManager {
             f.position.y = (f.userData.baseY as number) + Math.sin(phase * 1.7) * 0.15;
           }
         }
-        const light = entity.freezeMesh.userData.light as THREE.PointLight | undefined;
-        if (light) {
-          light.intensity = 4.0 + Math.sin(now * 0.015) * 1.8;
-        }
       }
     }
 
     this.updateTargetRing();
 
+    const sparkIntervalMs = 55;
     for (const proj of this.projectiles.values()) {
       proj.group.position.lerp(proj.target, Math.min(1, dt * 18));
       const spinSpeed = (proj.group.userData.spinSpeed as number | undefined) ?? 0;
       if (spinSpeed) proj.group.rotation.y += spinSpeed * dt;
       if (proj.trailPs) {
         this.spellVfx.moveTrail(proj.trailPs, proj.group.position);
-      } else {
+      } else if (now - proj.lastSparkAt >= sparkIntervalMs) {
+        proj.lastSparkAt = now;
         this.spawnTrailSpark(proj.group.position, proj.school);
       }
     }
@@ -1200,6 +1275,31 @@ export class EntityManager {
       const scale = 1 + age * 4;
       g.mesh.scale.set(scale, scale, 1);
       (g.mesh.material as THREE.MeshBasicMaterial).opacity = 1 - age;
+    }
+
+    for (let i = this.levelUpPillars.length - 1; i >= 0; i--) {
+      const p = this.levelUpPillars[i]!;
+      const age = (now - p.born) / p.lifeMs;
+      if (age >= 1) {
+        this.scene.remove(p.mesh, p.ring);
+        p.mesh.geometry.dispose();
+        (p.mesh.material as THREE.Material).dispose();
+        p.ring.geometry.dispose();
+        (p.ring.material as THREE.Material).dispose();
+        this.levelUpPillars.splice(i, 1);
+        continue;
+      }
+      // Quick fade-in, hold, then fade-out; the ring keeps expanding the
+      // whole time so it reads as a distinct "shockwave" beat.
+      const fadeIn = Math.min(1, age / 0.15);
+      const fadeOut = 1 - Math.max(0, (age - 0.7) / 0.3);
+      const pillarMat = p.mesh.material as THREE.MeshBasicMaterial;
+      pillarMat.opacity = 0.55 * fadeIn * fadeOut;
+      p.mesh.scale.y = 0.7 + fadeIn * 0.3;
+      const ringMat = p.ring.material as THREE.MeshBasicMaterial;
+      const ringScale = 1 + age * 5;
+      p.ring.scale.set(ringScale, ringScale, 1);
+      ringMat.opacity = 0.9 * (1 - age);
     }
 
     for (const group of this.structures.values()) {
@@ -1268,6 +1368,14 @@ export class EntityManager {
 
   getTargetId(): string | null {
     return this.targetId;
+  }
+
+  /** Lookup any tracked entity (including corpses). */
+  getEntity(id: string | null): { id: string; kind: "player" | "mob" | "pet"; hp: number } | null {
+    if (!id) return null;
+    const e = this.entities.get(id);
+    if (!e) return null;
+    return { id: e.id, kind: e.kind, hp: e.hp };
   }
 
   entityInfo(id: string | null): TargetInfo | null {
@@ -1399,6 +1507,13 @@ export class EntityManager {
       g.mesh.visible = false;
       this.groundBurstPools.get(g.school)?.push(g);
     }
+    for (const p of this.levelUpPillars) {
+      this.scene.remove(p.mesh, p.ring);
+      p.mesh.geometry.dispose();
+      (p.mesh.material as THREE.Material).dispose();
+      p.ring.geometry.dispose();
+      (p.ring.material as THREE.Material).dispose();
+    }
     for (const dn of this.damageNumbers) {
       dn.sprite.visible = false;
       this.damageNumberPool.push(dn.sprite);
@@ -1408,6 +1523,7 @@ export class EntityManager {
     this.structures.clear();
     this.sparks.length = 0;
     this.groundBursts.length = 0;
+    this.levelUpPillars.length = 0;
     this.damageNumbers.length = 0;
     this.setTarget(null);
   }

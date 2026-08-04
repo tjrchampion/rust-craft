@@ -1,9 +1,13 @@
 <script lang="ts">
   import { game } from "./gameState.svelte";
-  import { itemIcon, spellIcon } from "./icons";
+  import { itemIcon, spellIcon, rewardChestIcon } from "./icons";
   import IconGlyph from "./IconGlyph.svelte";
+  import LevelUpModal from "./LevelUpModal.svelte";
   import { promptLabel } from "./padGlyphs";
   import { HOTBAR_SLOTS, itemDef, spellDef } from "@rustcraft/shared";
+
+  let openChestId = $state<string | null>(null);
+  const openChest = $derived(game.levelRewards.find((c) => c.id === openChestId) ?? null);
 
   const SPELL_PREFIX = "spell:";
   // Keyboard: 1-6, then Q/Z/X/C. Gamepad: every slot needs LB or RB as a
@@ -34,27 +38,36 @@
       const spellId = item?.itemId.startsWith(SPELL_PREFIX) ? item.itemId.slice(SPELL_PREFIX.length) : null;
       let cooldownFrac = 0;
       let cooldownLabel = "";
+      let gcdFrac = 0;
       if (spellId) {
-        const total = spellDef(spellId).cooldownS;
+        const def = spellDef(spellId);
+        const total = def.cooldownS;
         const entry = game.self?.spellCooldowns.find((c) => c.spellId === spellId);
+        const currentServerTime = nowTick - game.serverTimeOffset;
         if (entry && total > 0) {
-          const currentServerTime = nowTick - game.serverTimeOffset;
           const remaining = Math.max(0, (entry.readyAt - currentServerTime) / 1000);
           cooldownFrac = Math.min(1, remaining / total);
           if (remaining > 0.05) cooldownLabel = remaining >= 10 ? String(Math.ceil(remaining)) : remaining.toFixed(1);
         }
+        if (def.triggersGcd !== false && game.self?.gcdReadyAt) {
+          const gcdLeft = Math.max(0, game.self.gcdReadyAt - currentServerTime);
+          // Approximate GCD length from remaining — display as soft dim, not a full CD.
+          gcdFrac = gcdLeft > 0 ? Math.min(0.55, gcdLeft / 1500) : 0;
+        }
       }
-      return { item, spellId, cooldownFrac, cooldownLabel };
+      const queued = spellId !== null && game.self?.queuedSpellId === spellId;
+      return { item, spellId, cooldownFrac, cooldownLabel, gcdFrac, queued };
     }),
   );
 </script>
 
 <div class="hotbar">
-  {#each slots as { item, spellId, cooldownFrac, cooldownLabel }, i (i)}
+  {#each slots as { item, spellId, cooldownFrac, cooldownLabel, gcdFrac, queued }, i (i)}
     <div
       class="slot"
       class:active={i === game.selectedSlot}
       class:spell={spellId !== null}
+      class:queued
       class:first={i === 6}
       title={spellId ? spellDef(spellId).name : undefined}
     >
@@ -63,9 +76,15 @@
         {#if game.self?.castingSpell === spellId}
           <div class="casting"></div>
         {/if}
+        {#if gcdFrac > 0 && cooldownFrac <= 0}
+          <div class="gcd-dim" style="opacity: {gcdFrac}"></div>
+        {/if}
         {#if cooldownFrac > 0}
           <div class="cooldown-sweep" style="--frac: {cooldownFrac}"></div>
           {#if cooldownLabel}<span class="cooldown-label">{cooldownLabel}</span>{/if}
+        {/if}
+        {#if queued}
+          <div class="queue-pip"></div>
         {/if}
       {:else if item}
         <IconGlyph value={itemIcon(item.itemId)} size={26} itemId={item.itemId} />
@@ -78,6 +97,21 @@
     </div>
   {/each}
 </div>
+
+{#if game.levelRewards.length > 0}
+  <div class="reward-chests">
+    {#each game.levelRewards as chest (chest.id)}
+      <button class="chest-button" title="Level {chest.level} Reward" onclick={() => (openChestId = chest.id)}>
+        <IconGlyph value={rewardChestIcon()} size={32} />
+        <span class="chest-level">{chest.level}</span>
+      </button>
+    {/each}
+  </div>
+{/if}
+
+{#if openChest}
+  <LevelUpModal chest={openChest} onClose={() => (openChestId = null)} />
+{/if}
 
 <style>
   .hotbar {
@@ -113,8 +147,32 @@
   .slot.spell {
     border-color: rgba(200, 120, 255, 0.55);
   }
+  .slot.spell.queued {
+    border-color: var(--rc-gold-bright);
+    box-shadow:
+      0 0 10px rgba(255, 214, 110, 0.35),
+      inset 0 0 8px rgba(0, 0, 0, 0.6);
+  }
   .slot.spell.first {
     margin-left: 12px;
+  }
+  .gcd-dim {
+    position: absolute;
+    inset: 0;
+    border-radius: 6px;
+    background: rgba(0, 0, 0, 0.55);
+    pointer-events: none;
+  }
+  .queue-pip {
+    position: absolute;
+    top: 3px;
+    right: 3px;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--rc-gold-bright);
+    box-shadow: 0 0 6px rgba(255, 214, 110, 0.8);
+    pointer-events: none;
   }
   .qty {
     position: absolute;
@@ -176,5 +234,53 @@
     color: #fff;
     text-shadow: 0 1px 3px #000;
     pointer-events: none;
+  }
+  .reward-chests {
+    position: absolute;
+    bottom: 90px;
+    right: 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    pointer-events: auto;
+  }
+  .chest-button {
+    position: relative;
+    width: 60px;
+    height: 60px;
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(0, 0, 0, 0.4)),
+      rgba(180, 100, 20, 0.4);
+    border: 2px solid rgba(255, 180, 80, 0.6);
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    box-shadow: 0 0 12px rgba(255, 150, 50, 0.4), inset 0 0 8px rgba(0, 0, 0, 0.5);
+    transition: all 0.2s;
+    font-size: 0;
+  }
+  .chest-button:hover {
+    border-color: rgb(255, 200, 100);
+    box-shadow:
+      0 0 20px rgba(255, 150, 50, 0.7),
+      inset 0 0 8px rgba(0, 0, 0, 0.5);
+    transform: scale(1.08);
+  }
+  .chest-button:active {
+    transform: scale(0.96);
+  }
+  .chest-level {
+    position: absolute;
+    top: 2px;
+    right: 3px;
+    font-size: 11px;
+    font-family: var(--rc-display);
+    font-weight: 700;
+    color: #ffd700;
+    background: rgba(0, 0, 0, 0.7);
+    padding: 2px 4px;
+    border-radius: 3px;
   }
 </style>

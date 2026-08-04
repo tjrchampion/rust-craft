@@ -421,6 +421,9 @@ export class SpellVfxSystem {
    *  which schools have a real extracted effect vs need the procedural
    *  fallback. */
   private effectIdForSchool = new Map<School, string>();
+  /** Soft cap on concurrent one-shot bursts — AoE spam shouldn't melt the GPU. */
+  private liveBurstCount = 0;
+  private static readonly MAX_LIVE_BURSTS = 18;
 
   constructor(scene: THREE.Scene) {
     this.scene = scene;
@@ -452,6 +455,7 @@ export class SpellVfxSystem {
    *  Hovl effect if one's loaded for this school, otherwise a procedural
    *  particle system built straight from SCHOOL_VFX. */
   spawnForSchool(school: School, pos: THREE.Vector3): void {
+    if (this.liveBurstCount >= SpellVfxSystem.MAX_LIVE_BURSTS) return;
     const effectId = this.effectIdForSchool.get(school);
     const effect = effectId ? this.effects.get(effectId) : undefined;
     const ps = effect ? buildEffectParticleSystem(effect) : buildProceduralParticleSystem(school);
@@ -465,12 +469,14 @@ export class SpellVfxSystem {
     // anywhere the renderer would draw them.)
     this.scene.add(ps.emitter);
     this.renderer.addSystem(ps);
+    this.liveBurstCount++;
     ps.play();
     // autoDestroy removes the system from the BatchedRenderer once all its
     // particles die, but never touches the scene graph -- without this the
     // now-empty emitter Object3D leaks forever.
     ps.addEventListener("destroy", () => {
       this.scene.remove(ps.emitter);
+      this.liveBurstCount = Math.max(0, this.liveBurstCount - 1);
     });
   }
 

@@ -314,7 +314,7 @@ export class SchoolFlashSystem {
     this.scene = scene;
   }
 
-  spawn(school: School, pos: THREE.Vector3): void {
+  spawn(school: School, pos: THREE.Vector3, intensity = 1): void {
     const params = SCHOOL_FLASH_PARAMS[school];
     const material = new THREE.ShaderMaterial({
       vertexShader: VERTEX_SHADER,
@@ -348,10 +348,16 @@ export class SchoolFlashSystem {
       this.scene.add(mesh);
     }
     mesh.position.copy(pos);
-    mesh.scale.setScalar(params.size);
+    const scale = params.size * Math.max(0.6, intensity);
+    mesh.scale.setScalar(scale);
     mesh.renderOrder = 5;
 
-    this.live.push({ mesh, material, born: performance.now(), lifeMs: params.lifeMs });
+    this.live.push({
+      mesh,
+      material,
+      born: performance.now(),
+      lifeMs: params.lifeMs * (intensity > 1.05 ? 1.15 : 1),
+    });
   }
 
   /** Billboards every live flash toward `camera` and advances its shader

@@ -1,5 +1,6 @@
 import { clamp } from "../math";
 import { BASE_MAX_HP, BASE_MAX_MANA, HP_PER_LEVEL, MANA_PER_LEVEL } from "../constants";
+import { gcdDurationS, ratingToPercent, spellHitChance } from "./combat";
 
 /**
  * The four base stats every actor (player, NPC, mob) is built from. Classes
@@ -22,8 +23,14 @@ export interface StatModifiers {
   vitality?: number;
   maxHp?: number;
   maxMana?: number;
+  /** Flat crit chance fraction (legacy / auras). Stacks with critRating. */
   critChance?: number;
   moveSpeedMult?: number;
+  /** Integer secondary ratings — converted via level scaling + soft-cap DR. */
+  critRating?: number;
+  hasteRating?: number;
+  hitRating?: number;
+  masteryRating?: number;
 }
 
 export interface ComputedStats {
@@ -33,7 +40,16 @@ export interface ComputedStats {
   vitality: number;
   maxHp: number;
   maxMana: number;
-  critChance: number; // 0..1
+  /** Final crit chance 0..1 (agility + flat + rating after DR). */
+  critChance: number;
+  /** Haste as a fraction (0.2 = 20%) after rating DR. */
+  hastePct: number;
+  /** Spell hit chance 0..1 after hit rating. */
+  hitChance: number;
+  /** Mastery as a fraction — class-agnostic damage/heal amp for now. */
+  masteryPct: number;
+  /** Effective GCD length in seconds for this actor. */
+  gcdS: number;
   moveSpeedMult: number;
 }
 
@@ -63,13 +79,46 @@ export function computeActorStats(
 
   const maxHp = BASE_MAX_HP + HP_PER_LEVEL * growth + vitality * 4 + sumMod(mods, "maxHp");
   const maxMana = BASE_MAX_MANA + MANA_PER_LEVEL * growth + sumMod(mods, "maxMana");
-  const critChance = clamp(0.05 + agility * 0.006 + sumMod(mods, "critChance"), 0, 0.75);
-  const moveSpeedMult = Math.max(0.1, 1 + sumMod(mods, "moveSpeedMult"));
 
-  return { power, armor, agility, vitality, maxHp, maxMana, critChance, moveSpeedMult };
+  const critFromRating = ratingToPercent(sumMod(mods, "critRating"), level);
+  const hastePct = ratingToPercent(sumMod(mods, "hasteRating"), level);
+  const hitFromRating = ratingToPercent(sumMod(mods, "hitRating"), level);
+  const masteryPct = ratingToPercent(sumMod(mods, "masteryRating"), level);
+
+  const critChance = clamp(
+    0.05 + agility * 0.006 + sumMod(mods, "critChance") + critFromRating,
+    0,
+    0.75,
+  );
+  const hitChance = spellHitChance(hitFromRating);
+  const moveSpeedMult = Math.max(0.1, 1 + sumMod(mods, "moveSpeedMult"));
+  const gcdS = gcdDurationS(hastePct);
+
+  return {
+    power,
+    armor,
+    agility,
+    vitality,
+    maxHp,
+    maxMana,
+    critChance,
+    hastePct,
+    hitChance,
+    masteryPct,
+    gcdS,
+    moveSpeedMult,
+  };
 }
 
-/** Classic diminishing-returns mitigation curve: 100 armor = 50% reduction. */
+/**
+ * Classic diminishing-returns mitigation curve: 100 armor = 50% reduction.
+ * EHP grows linearly with armor even as % DR soft-caps.
+ */
 export function armorMitigation(armor: number): number {
   return 100 / (100 + Math.max(0, armor));
+}
+
+/** Effective health vs physical for a given HP + armor pool. */
+export function effectiveHealth(hp: number, armor: number): number {
+  return hp * (1 + Math.max(0, armor) / 100);
 }

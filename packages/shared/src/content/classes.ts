@@ -93,7 +93,7 @@ export const CLASSES: Record<ClassId, ClassTemplate> = {
     description: "A gigantic barbarian variant that channels fury into crushing strikes.",
     resourceLabel: "Rage",
     baseStats: { power: 10, armor: 6, agility: 3, vitality: 10 },
-    startingSpells: ["rend", "charge", "heal", "whirlwind", "execute"],
+    startingSpells: ["rend", "charge", "heal", "whirlwind", "execute", "recklessness"],
     startingGear: [{ slot: "weapon", itemId: "axe_2handed_large" }],
   },
   assassin: {
@@ -111,7 +111,7 @@ export const CLASSES: Record<ClassId, ClassTemplate> = {
     description: "A master mechanic that repairs allies and builds tech in combat.",
     resourceLabel: "Steam",
     baseStats: { power: 8, armor: 8, agility: 5, vitality: 7 },
-    startingSpells: ["charge", "frostbolt", "heal", "shield_wall", "whirlwind"],
+    startingSpells: ["steam_blast", "repair_pulse", "heal", "steam_focus", "overcharge", "shield_wall"],
     startingGear: [{ slot: "weapon", itemId: "wrench" }],
   },
 };

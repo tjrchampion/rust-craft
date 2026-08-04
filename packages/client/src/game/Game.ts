@@ -567,6 +567,8 @@ export class Game {
         ui.questMarkers = this.npcManager.questMarkers();
         ui.questLog = msg.questLog;
         ui.achievements = msg.achievements ?? [];
+        ui.levelRewards = msg.levelRewards ?? [];
+        ui.levelRewardOpenId = null;
         void this.preloadAndEnter(msg);
         break;
       }
@@ -735,6 +737,9 @@ export class Game {
           this.setUiMode(false);
         }
         break;
+      case "levelRewards":
+        ui.levelRewards = msg.chests;
+        break;
       case "error":
         if (msg.message === "__disconnected__") {
           ui.disconnected = true;
@@ -788,36 +793,74 @@ export class Game {
   private onEvent(msg: Extract<ServerMsg, { t: "event" }>): void {
     switch (msg.kind) {
       case "damage":
-        if (msg.x !== undefined && msg.amount) {
+        if (msg.x !== undefined) {
           const mine = msg.sourceId === this.selfId;
           const toMe = msg.targetId === this.selfId;
+          const outcome = msg.outcome ?? "hit";
+          if (outcome === "miss" || outcome === "dodge") {
+            if (mine || toMe) {
+              this.entities.spawnDamageNumber(
+                msg.x,
+                (msg.y ?? 0) + 0.6,
+                msg.z ?? 0,
+                0,
+                "#c8c8c8",
+                outcome === "dodge" ? "Dodge" : "Miss",
+              );
+              ui.addCombat(
+                outcome === "dodge"
+                  ? `${ui.nameOf(msg.targetId)} dodged ${ui.nameOf(msg.sourceId)}`
+                  : `${ui.nameOf(msg.sourceId)} missed ${ui.nameOf(msg.targetId)}`,
+              );
+            }
+            break;
+          }
+          if (!msg.amount) break;
           if (toMe) this.avatar.play("hit");
-          else if (msg.targetId) this.entities.playHit(msg.targetId);
-          this.entities.spawnDamageNumber(
-            msg.x,
-            (msg.y ?? 0) + 0.6,
-            msg.z ?? 0,
-            msg.amount,
-            toMe ? "#ff6b5e" : mine ? "#ffe08a" : "#d9d9d9",
-          );
+          else if (mine && msg.targetId) this.entities.playHit(msg.targetId);
           if (mine || toMe) {
+            const crit = outcome === "crit";
+            this.entities.spawnDamageNumber(
+              msg.x,
+              (msg.y ?? 0) + 0.6,
+              msg.z ?? 0,
+              msg.amount,
+              toMe ? "#ff6b5e" : crit ? "#ffb347" : "#ffe08a",
+              crit ? `${Math.round(msg.amount)}!` : undefined,
+            );
+            if (crit && mine) {
+              this.entities.spawnSpellBurst(msg.x, (msg.y ?? 0) + 0.4, msg.z ?? 0, msg.spellId ?? "rend", 1.45);
+            }
             ui.addCombat(
-              `${ui.nameOf(msg.sourceId)} hit ${ui.nameOf(msg.targetId)} for ${Math.round(msg.amount)}`,
+              `${ui.nameOf(msg.sourceId)} ${crit ? "critically hit" : "hit"} ${ui.nameOf(msg.targetId)} for ${Math.round(msg.amount)}`,
             );
             sound.play(toMe ? "hitTaken" : "hitFlesh", { classId: this.selfClassId });
           } else if (msg.sourceId?.startsWith("m_") || msg.sourceId?.startsWith("wevt_")) {
-            sound.play("mobAttack", { volume: 0.5 });
+            sound.play("mobAttack", { volume: 0.35 });
           }
         }
         break;
       case "heal":
         if (msg.targetId === this.selfId) {
           if (msg.spellId === "shrine") ui.addCombat("You feel the shrine's blessing — fully restored");
-          else ui.addCombat(`${ui.nameOf(msg.sourceId)} healed ${ui.nameOf(msg.targetId)} for ${Math.round(msg.amount ?? 0)}`);
+          else {
+            const crit = msg.outcome === "crit";
+            ui.addCombat(
+              `${ui.nameOf(msg.sourceId)} ${crit ? "critically healed" : "healed"} ${ui.nameOf(msg.targetId)} for ${Math.round(msg.amount ?? 0)}`,
+            );
+          }
           sound.play("levelup");
         }
         if (msg.x !== undefined && msg.amount) {
-          this.entities.spawnDamageNumber(msg.x, (msg.y ?? 0) + 0.6, msg.z ?? 0, msg.amount, "#7be07b");
+          const crit = msg.outcome === "crit";
+          this.entities.spawnDamageNumber(
+            msg.x,
+            (msg.y ?? 0) + 0.6,
+            msg.z ?? 0,
+            msg.amount,
+            crit ? "#b8ff9a" : "#7be07b",
+            crit ? `${Math.round(msg.amount)}!` : undefined,
+          );
         }
         break;
       case "gather":
@@ -832,13 +875,21 @@ export class Game {
           ui.addCombat(`You gain ${msg.amount} experience`);
         }
         break;
-      case "levelup":
-        ui.toast(`Level up! You are now level ${msg.amount}`);
-        ui.addCombat(`You reached level ${msg.amount}!`);
+      case "levelup": {
+        const level = msg.amount ?? (ui.self?.level ?? 0);
+        ui.toast(`Level up! You are now level ${level}`);
+        ui.addCombat(`You reached level ${level}!`);
+        ui.showLevelUpBanner(level);
         sound.play("levelup");
-        // The broadcast actionAnim round-trip is fine for other players, but
-        // self shouldn't wait on it for this kind of instant feedback.
         this.avatar.play("cheer");
+        const lx = msg.x ?? this.move.x;
+        const ly = msg.y ?? this.move.y + 1;
+        const lz = msg.z ?? this.move.z;
+        this.entities.spawnLevelUpVfx(lx, ly, lz);
+        break;
+      }
+      case "levelReward":
+        if (msg.message) ui.toast(msg.message);
         break;
       case "learnSpell":
         if (msg.spellId) {
@@ -929,25 +980,63 @@ export class Game {
     if (entry?.itemId.startsWith("spell:")) {
       const spellId = entry.itemId.slice("spell:".length);
       this.faceTarget();
-      this.connection.send({ t: "cast", spellId });
-      // Instant spells (melee/self) resolve server-side with no cast bar, so
-      // the server's own "casting" pose never kicks in for them — play the
-      // swing predictively here, same as a plain attack, so pressing the key
-      // doesn't look like nothing happened.
-      const def = spellDef(spellId);
-      if (def.castTimeS <= 0) {
-        this.avatar.play("attack");
-        const school = def.effects.find((e) => e.type === "damage")?.damageType;
-        if (school === "physical") {
-          const ranged = this.equippedWeaponDef?.weaponType === "bow" || this.equippedWeaponDef?.weaponType === "crossbow";
-          sound.play(ranged ? "bowShot" : "swing", { classId: this.selfClassId });
-        } else {
-          sound.play("castStart", { spellId, classId: this.selfClassId });
-        }
-      }
+      this.queueOrCastSpell(spellId);
       return;
     }
     this.connection.send({ t: "selectSlot", slot });
+  }
+
+  /**
+   * Client-side spell queue: if GCD/cast is active, remember the intent and
+   * auto-send when the window opens (mirrors server SQW). Otherwise cast now.
+   */
+  private clientSpellQueue: { spellId: string; at: number } | null = null;
+
+  private queueOrCastSpell(spellId: string): void {
+    const def = spellDef(spellId);
+    const now = Date.now();
+    const serverNow = now - ui.serverTimeOffset;
+    const gcdReady = ui.self?.gcdReadyAt ?? 0;
+    const castEnds = ui.self?.castEndsAt ?? 0;
+    const busyUntil = Math.max(gcdReady, castEnds);
+    const onGcd = def.triggersGcd !== false && serverNow < gcdReady;
+    const casting = !!ui.self?.castingSpell;
+
+    if (onGcd || casting) {
+      this.clientSpellQueue = { spellId, at: now };
+      // Still send — server will buffer if inside the queue window.
+      this.connection.send({ t: "cast", spellId });
+      return;
+    }
+
+    this.clientSpellQueue = null;
+    this.connection.send({ t: "cast", spellId });
+    if (def.castTimeS <= 0) {
+      this.avatar.play("attack");
+      const school = def.effects.find((e) => e.type === "damage")?.damageType;
+      if (school === "physical") {
+        const ranged =
+          this.equippedWeaponDef?.weaponType === "bow" || this.equippedWeaponDef?.weaponType === "crossbow";
+        sound.play(ranged ? "bowShot" : "swing", { classId: this.selfClassId });
+      } else {
+        sound.play("castStart", { spellId, classId: this.selfClassId });
+      }
+    }
+  }
+
+  /** Flush client spell queue once GCD/cast frees up (backup if server queue missed). */
+  private tickClientSpellQueue(): void {
+    const q = this.clientSpellQueue;
+    if (!q || !ui.self) return;
+    const serverNow = Date.now() - ui.serverTimeOffset;
+    if (ui.self.castingSpell) return;
+    if (ui.self.gcdReadyAt > serverNow) return;
+    // If the server already accepted/queued this press, SelfState.queuedSpellId
+    // will match — don't double-fire. Otherwise re-send (press was outside SQW).
+    const spellId = q.spellId;
+    this.clientSpellQueue = null;
+    if (ui.self.queuedSpellId === spellId) return;
+    this.connection.send({ t: "cast", spellId });
   }
 
 /** Server ack + authoritative state: rewind & replay unacked inputs. */
@@ -991,6 +1080,10 @@ export class Game {
         : undefined;
     const liveGround = inContinent ? this.continentGroundAt : undefined;
     const liveWater = inContinent ? this.continentWaterDepthAt : undefined;
+    // True-geometry (BVH) collision closures — matches the authoritative
+    // server so reconcile settles at the same wall/deck instead of snapping.
+    const meshResolve = inContinent ? this.continent!.meshResolveWorld : undefined;
+    const meshGroundBelow = inContinent ? this.continent!.meshGroundBelowWorld : undefined;
     let replayed = serverState;
     for (const p of this.pending) {
       replayed = stepMovement(
@@ -1000,6 +1093,8 @@ export class Game {
           regionAssets: liveAssets ?? p.regionAssets,
           groundAt: liveGround ?? p.groundAt,
           waterDepthAt: liveWater ?? p.waterDepthAt,
+          meshResolve,
+          meshGroundBelow,
         },
         TICK_DT,
       );
@@ -1231,6 +1326,7 @@ export class Game {
     this.syncAuthoredRegionNodes();
     this.nodes?.update(rx, rz, now, dt);
     this.entities.update(now, dt, this.camera);
+    this.tickClientSpellQueue();
     if (now - this.interactPromptAt >= INTERACT_PROMPT_INTERVAL_MS) {
       this.interactPromptAt = now;
       this.updateInteractPrompt();
@@ -1504,6 +1600,10 @@ export class Game {
             ...regionBarrierColliders(this.regionRenderer.blueprint.barrierVolumes),
           ]
         : undefined;
+    // True-geometry (BVH) collision closures (continent only) — same as the
+    // authoritative server so prediction doesn't rubber-band at walls/decks.
+    const meshResolve = inContinent ? this.continent!.meshResolveWorld : undefined;
+    const meshGroundBelow = inContinent ? this.continent!.meshGroundBelowWorld : undefined;
     const seq = ++this.inputSeq;
     this.pending.push({
       seq,
@@ -1521,7 +1621,7 @@ export class Game {
     // omits mount (server is authoritative on mount state).
     this.move = stepMovement(
       this.move,
-      { ...input, mount, inDungeon, regionHeightmap, regionAssets, groundAt, waterDepthAt },
+      { ...input, mount, inDungeon, regionHeightmap, regionAssets, groundAt, waterDepthAt, meshResolve, meshGroundBelow },
       TICK_DT,
     );
     this.connection.send({
@@ -1967,10 +2067,7 @@ export class Game {
         ? targetEntity.id
         : this.lootCorpseId;
 
-    console.log("[Loot Debug] doInteract executed. targetId:", targetId, "lootCorpseId:", this.lootCorpseId, "resolvedCorpseId:", corpseId, "interactLabel:", ui.interactLabel);
-
     if (corpseId) {
-      console.log("[Loot Debug] Sending lootCorpse request to server for mobId:", corpseId, "autoLoot:", ui.autoLoot);
       if (ui.autoLoot) {
         this.connection.send({ t: "lootCorpse", mobId: corpseId, lootAll: true });
       } else {
@@ -1979,7 +2076,6 @@ export class Game {
       return;
     }
     if (this.interactNodeId) {
-      console.log("[Interact Debug] Sending interact to server for nodeId:", this.interactNodeId);
       this.connection.send({ t: "interact", nodeId: this.interactNodeId });
     } else if (ui.self?.sitting || this.nearCampfire) {
       this.connection.send({ t: "sit" });
@@ -2259,13 +2355,17 @@ export class Game {
     sound.play("loot");
   }
 
+  sendClaimLevelReward(rewardId: string | null = null): void {
+    this.connection.send({ t: "claimLevelReward", rewardId });
+    sound.play("loot");
+  }
+
   setUiMode(open: boolean): void {
     this.input.uiMode = open;
-    if (open) {
-      this.input.releasePointer();
-    } else {
-      this.input.requestPointer();
-    }
+    if (open) this.input.releasePointer();
+    // Closing a menu no longer re-locks the pointer -- the cursor stays free
+    // (WoW-style) until the player holds a mouse button over the viewport
+    // again to look around.
   }
 
   /** Open the character screen directly on `tab`, or close it if it's

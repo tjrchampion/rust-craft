@@ -51,6 +51,16 @@ export interface SpellDef {
    *  can cast this. Undefined means unrestricted (all self/heal spells, and
    *  any spell not listed here, can be cast with anything equipped). */
   allowedWeaponTypes?: WeaponType[];
+  /**
+   * When false, the ability does not trigger the global cooldown (WoW off-GCD).
+   * Defaults to true.
+   */
+  triggersGcd?: boolean;
+  /**
+   * Threat multiplier vs raw damage (default 1). Heals use HEAL_THREAT_FRAC
+   * unless overridden here.
+   */
+  threatMult?: number;
 }
 
 export const SPELLS: Record<string, SpellDef> = {
@@ -95,6 +105,7 @@ export const SPELLS: Record<string, SpellDef> = {
     ],
     requiredLevel: 1,
     allowedWeaponTypes: ["sword", "axe"],
+    threatMult: 1.25,
   },
   charge: {
     id: "charge",
@@ -105,6 +116,7 @@ export const SPELLS: Record<string, SpellDef> = {
     targeting: { kind: "self", range: 0 },
     effects: [{ type: "applyAura", auraId: "battle_fury", landsOn: "caster" }],
     requiredLevel: 2,
+    triggersGcd: false,
   },
   backstab: {
     id: "backstab",
@@ -208,6 +220,7 @@ export const SPELLS: Record<string, SpellDef> = {
     effects: [{ type: "damage", base: 8, powerScale: 2.0, damageType: "holy" }],
     requiredLevel: 1,
     allowedWeaponTypes: ["mace", "sword", "polearm"],
+    threatMult: 1.5,
   },
   divine_favor: {
     id: "divine_favor",
@@ -218,6 +231,7 @@ export const SPELLS: Record<string, SpellDef> = {
     targeting: { kind: "self", range: 0 },
     effects: [{ type: "applyAura", auraId: "divine_favor", landsOn: "caster" }],
     requiredLevel: 2,
+    triggersGcd: false,
   },
   whirlwind: {
     id: "whirlwind",
@@ -297,6 +311,7 @@ export const SPELLS: Record<string, SpellDef> = {
     effects: [{ type: "damage", base: 6, powerScale: 1.3, damageType: "holy" }],
     requiredLevel: 4,
     allowedWeaponTypes: ["mace", "sword", "polearm"],
+    threatMult: 1.35,
   },
   execute: {
     id: "execute",
@@ -318,6 +333,7 @@ export const SPELLS: Record<string, SpellDef> = {
     targeting: { kind: "self", range: 0 },
     effects: [{ type: "applyAura", auraId: "shield_wall", landsOn: "caster" }],
     requiredLevel: 8,
+    triggersGcd: false,
   },
   arcane_blast: {
     id: "arcane_blast",
@@ -481,10 +497,72 @@ export const SPELLS: Record<string, SpellDef> = {
     summon: { petType: "wolf" },
     requiredLevel: 3,
   },
+  recklessness: {
+    id: "recklessness",
+    name: "Recklessness",
+    castTimeS: 0,
+    resourceCost: 25,
+    cooldownS: 45,
+    targeting: { kind: "self", range: 0 },
+    effects: [{ type: "applyAura", auraId: "recklessness", landsOn: "caster" }],
+    requiredLevel: 4,
+    triggersGcd: false,
+  },
+  steam_blast: {
+    id: "steam_blast",
+    name: "Steam Blast",
+    castTimeS: 1.0,
+    resourceCost: 22,
+    cooldownS: 4,
+    targeting: { kind: "projectile", range: 26, projectileSpeed: 28 },
+    effects: [
+      { type: "damage", base: 10, powerScale: 1.7, damageType: "fire" },
+      { type: "applyAura", auraId: "burning" },
+    ],
+    requiredLevel: 1,
+    allowedWeaponTypes: ["wrench", "staff"],
+  },
+  repair_pulse: {
+    id: "repair_pulse",
+    name: "Repair Pulse",
+    castTimeS: 0,
+    resourceCost: 28,
+    cooldownS: 8,
+    targeting: { kind: "aoe", range: 0, radius: 10 },
+    effects: [{ type: "heal", base: 14, powerScale: 1.4 }],
+    requiredLevel: 2,
+  },
+  steam_focus: {
+    id: "steam_focus",
+    name: "Steam Focus",
+    castTimeS: 0,
+    resourceCost: 20,
+    cooldownS: 30,
+    targeting: { kind: "self", range: 0 },
+    effects: [{ type: "applyAura", auraId: "steam_focus", landsOn: "caster" }],
+    requiredLevel: 3,
+    triggersGcd: false,
+  },
+  overcharge: {
+    id: "overcharge",
+    name: "Overcharge",
+    castTimeS: 0,
+    resourceCost: 18,
+    cooldownS: 6,
+    targeting: { kind: "melee", range: 2.8 },
+    effects: [{ type: "damage", base: 12, powerScale: 2.2, damageType: "arcane" }],
+    requiredLevel: 5,
+    allowedWeaponTypes: ["wrench", "sword", "axe"],
+  },
 };
 
 export function spellDef(id: string): SpellDef {
   const def = SPELLS[id];
   if (!def) throw new Error(`Unknown spell: ${id}`);
   return def;
+}
+
+/** True unless the spell explicitly opts out of the global cooldown. */
+export function spellTriggersGcd(spell: SpellDef): boolean {
+  return spell.triggersGcd !== false;
 }

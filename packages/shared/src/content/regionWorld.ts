@@ -202,21 +202,38 @@ export function regionsNearWorld(
  * Assign packed world origins for regions that lack them — lay out left→right
  * by half-span so authored neighbors share an edge for seamless streaming.
  * Mutates blueprints in place; stable order by id.
+ *
+ * An "authored" origin (already set on the blueprint, e.g. persisted from a
+ * previous save made before other regions existed) is kept as-is *only* if it
+ * doesn't overlap anything already placed earlier in this same pass —
+ * otherwise it's nudged past the running cursor. Two regions saved at
+ * different times, each with the *catalog as it looked then*, can otherwise
+ * end up with origins whose world-space bounds genuinely overlap (verified:
+ * this happened for real between two authored regions in this project's own
+ * region files) — since RegionContinent mounts every region whose bounds
+ * contain the player, an overlap means whichever layer iterates first wins,
+ * independent of which region the player/server actually think they're in.
+ * Re-checking on every call (rather than trusting "already has a value")
+ * means this self-heals the moment both regions are seen together, without
+ * needing a one-off migration of already-saved JSON.
  */
 export function ensureRegionWorldOrigins(regions: RegionBlueprint[]): void {
   const list = [...regions].sort((a, b) => a.id.localeCompare(b.id));
   let cursor = 0;
   for (const bp of list) {
-    if (bp.worldOriginX !== undefined && bp.worldOriginZ !== undefined) {
-      // Keep authored placement; advance cursor past its right edge so
-      // subsequent auto-placed regions don't overlap it.
-      const b = regionWorldBounds(bp);
-      cursor = Math.max(cursor, b.maxX);
-      continue;
-    }
     const half = regionHalfSpan(bp);
+    if (bp.worldOriginX !== undefined && bp.worldOriginZ !== undefined) {
+      const minX = bp.worldOriginX - half;
+      if (minX >= cursor) {
+        // Doesn't overlap anything placed so far -- keep the authored spot.
+        cursor = Math.max(cursor, bp.worldOriginX + half);
+        continue;
+      }
+      // Would overlap an earlier region in this pass -- fall through and
+      // re-place it past the cursor instead of trusting the stale value.
+    }
     bp.worldOriginX = cursor + half;
-    bp.worldOriginZ = 0;
+    bp.worldOriginZ = bp.worldOriginZ ?? 0;
     cursor += half * 2;
   }
 }

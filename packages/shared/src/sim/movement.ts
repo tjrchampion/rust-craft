@@ -79,7 +79,28 @@ export interface MoveInput {
   groundAt?: (x: number, z: number) => number;
   /** Water column depth in the same space as `groundAt`. */
   waterDepthAt?: (x: number, z: number) => number;
+  /**
+   * True-geometry (BVH) collision hooks, injected by the caller so this
+   * THREE-free module never imports three.js (see
+   * @rustcraft/shared/collision). They cover only the assets NOT present in
+   * `regionAssets` — callers partition meshed vs analytic to avoid double
+   * collision.
+   *
+   * `meshGroundBelow` returns the highest up-facing asset surface under the
+   * feet within reach (so you stand on a bridge deck / rooftop), or null (→
+   * terrain ground). `meshResolve` depenetrates the body capsule out of asset
+   * geometry, returning corrected feet + whether it was pushed up (standing).
+   */
+  meshGroundBelow?: (x: number, z: number, fromY: number, maxDrop: number) => number | null;
+  meshResolve?: (
+    x: number,
+    y: number,
+    z: number,
+  ) => { x: number; y: number; z: number; grounded: boolean; moved: number };
 }
+
+/** How far below the feet the mesh ground probe looks for a standable surface. */
+const MESH_GROUND_DROP = 6;
 
 /** Water surface Y and column depth at (x,z). Depth 0 means dry / bridged. */
 export function waterAt(
@@ -210,6 +231,13 @@ export function stepMovement(state: MoveState, input: MoveInput, dt: number): Mo
         ground = asset.topY;
       }
     }
+    // Mesh (BVH) decks count as walkable ground for the cliff check too, so
+    // stepping from a bank onto a bridge span over a trench isn't rejected as
+    // a cliff into the riverbed.
+    if (input.meshGroundBelow) {
+      const s = input.meshGroundBelow(wx, wz, maxSurface, MESH_GROUND_DROP);
+      if (s !== null && s <= maxSurface && s > ground) ground = s;
+    }
     return ground;
   };
 
@@ -339,6 +367,16 @@ export function stepMovement(state: MoveState, input: MoveInput, dt: number): Mo
     }
   }
 
+  // BVH mesh support: the highest up-facing asset triangle under the feet
+  // becomes ground when within step reach — this is what lets a player stand
+  // on a bridge deck / rooftop. When they are BELOW a deck (swimming under it),
+  // the downward probe from y+STEP_UP never reaches the deck above, so ground
+  // stays at the terrain/riverbed and they pass under it.
+  if (input.meshGroundBelow) {
+    const s = input.meshGroundBelow(x, z, y + STEP_UP, MESH_GROUND_DROP);
+    if (s !== null && s <= y + STEP_UP && s > ground) ground = s;
+  }
+
   const waterNext = waterAt(x, z, input.regionHeightmap, input.groundAt, input.waterDepthAt);
   const activeWaterLevel = waterNext.surface;
   const waterColumn = waterNext.depth;
@@ -432,6 +470,25 @@ export function stepMovement(state: MoveState, input: MoveInput, dt: number): Mo
     ) {
       y = activeWaterLevel - SWIM_FLOAT_OFFSET;
       vy = 0;
+    }
+  }
+
+  // Final true-geometry depenetration: push the body capsule out of asset
+  // walls/pillars/rock faces (horizontal), and up onto a surface it is
+  // embedded in. Runs last so it corrects whatever terrain/water/gravity
+  // produced. Ground-standing on decks is already handled above via
+  // meshGroundBelow; here meshResolve mainly stops you walking through walls
+  // and passes cleanly through window/arch openings (no triangles there).
+  if (input.meshResolve) {
+    const res = input.meshResolve(x, y, z);
+    if (res.moved > 1e-4) {
+      x = res.x;
+      z = res.z;
+      if (res.grounded && res.y > y) {
+        y = res.y;
+        if (vy < 0) vy = 0;
+        grounded = true;
+      }
     }
   }
 

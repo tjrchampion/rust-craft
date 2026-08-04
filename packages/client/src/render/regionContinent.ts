@@ -13,9 +13,21 @@ import {
   regionAllAssets,
   REGION_STREAM_RADIUS_METERS,
   ADT_RING,
+  PLAYER_BODY_RADIUS,
   type RegionAssetCollider,
 } from "@rustcraft/shared";
+import {
+  buildRegionCollisionBVH,
+  resolveCapsule,
+  sampleGroundBelow,
+  disposeRegionCollision,
+  type RegionCollision,
+  type PlacedCollider,
+} from "@rustcraft/shared/collision";
+import { preloadCollision, getCollisionMesh, collisionModelKey } from "./collisionData";
 import { RegionInteriorRenderer, preloadRegionAssets } from "./regionInterior";
+
+const CAPSULE_HEIGHT = 1.7;
 
 export interface ContinentLayer {
   id: string;
@@ -34,6 +46,11 @@ export class RegionContinent {
   private loading = new Set<string>();
   private nameMap: ReadonlyMap<string, string>;
   private colliderCache: RegionAssetCollider[] | null = null;
+  /** True-geometry (BVH) collision per mounted region, world-baked with its
+   *  origin so it matches the authoritative server's per-region BVH. Built
+   *  async on mount (needs the offline meshes fetched); until ready the layer's
+   *  solids fall back to the analytic colliders in collidersWorld(). */
+  private bvhCache = new Map<string, RegionCollision | null>();
   private graphicsOpts = {
     streamRing: ADT_RING,
     grassDrawDistance: 90,
@@ -76,6 +93,9 @@ export class RegionContinent {
     // are read from renderer.blueprint, not only layer.blueprint.
     layer.renderer.replaceBlueprint(bp);
     this.colliderCache = null;
+    // Re-bake this region's collision BVH so an editor save (moved/scaled
+    // assets) updates collision live.
+    void this.buildLayerCollision(bp);
   }
 
   get mountedIds(): string[] {
@@ -126,14 +146,20 @@ export class RegionContinent {
     return 0;
   }
 
-  /** Collision shapes for every mounted region, in world space. */
+  /** Collision shapes for every mounted region, in world space. Solids whose
+   *  mesh is baked into that region's BVH are excluded (collided via the BVH
+   *  closures below) to avoid double collision. */
   collidersWorld(): RegionAssetCollider[] {
     if (this.colliderCache) return this.colliderCache;
     const out: RegionAssetCollider[] = [];
     for (const layer of this.layers.values()) {
       const o = regionWorldOrigin(layer.blueprint);
+      const bvhReady = this.bvhCache.get(layer.id) != null;
+      const analyticAssets = regionAllAssets(layer.blueprint).filter(
+        (a) => !(bvhReady && a.solid && getCollisionMesh(collisionModelKey(a.category, a.model)) != null),
+      );
       const local = [
-        ...regionAssetColliders(regionAllAssets(layer.blueprint)),
+        ...regionAssetColliders(analyticAssets),
         ...regionVolumeColliders(layer.blueprint.terrainVolumes ?? []),
         ...regionBarrierColliders(layer.blueprint.barrierVolumes),
       ];
@@ -152,6 +178,74 @@ export class RegionContinent {
     }
     this.colliderCache = out;
     return out;
+  }
+
+  /** Depenetrate the body capsule out of every mounted region's mesh geometry
+   *  (walls/pillars/rock faces). Passed to stepMovement as meshResolve. */
+  meshResolveWorld = (
+    x: number,
+    y: number,
+    z: number,
+  ): { x: number; y: number; z: number; grounded: boolean; moved: number } => {
+    let cx = x, cy = y, cz = z, grounded = false, moved = 0;
+    for (const col of this.bvhCache.values()) {
+      if (!col) continue;
+      const r = resolveCapsule(col, cx, cy, cz, { radius: PLAYER_BODY_RADIUS, height: CAPSULE_HEIGHT });
+      if (r.moved > 1e-4) {
+        cx = r.x; cy = r.y; cz = r.z;
+        moved += r.moved;
+        if (r.grounded) grounded = true;
+      }
+    }
+    return { x: cx, y: cy, z: cz, grounded, moved };
+  };
+
+  /** Highest up-facing mesh surface under the feet across mounted regions (so
+   *  you stand on a deck / rooftop). Passed to stepMovement as meshGroundBelow. */
+  meshGroundBelowWorld = (x: number, z: number, fromY: number, maxDrop: number): number | null => {
+    let best: number | null = null;
+    for (const col of this.bvhCache.values()) {
+      if (!col) continue;
+      const s = sampleGroundBelow(col, x, z, fromY, PLAYER_BODY_RADIUS, maxDrop);
+      if (s !== null && (best === null || s > best)) best = s;
+    }
+    return best;
+  };
+
+  /** True when at least one mounted region has a built mesh BVH. */
+  hasMeshCollision(): boolean {
+    for (const c of this.bvhCache.values()) if (c) return true;
+    return false;
+  }
+
+  /** Build (or rebuild) a mounted region's world-baked collision BVH from its
+   *  solid assets. Async: fetches the offline meshes first. */
+  private async buildLayerCollision(bp: RegionBlueprint): Promise<void> {
+    const placed: PlacedCollider[] = [];
+    const keys = new Set<string>();
+    for (const a of regionAllAssets(bp)) {
+      if (!a.solid) continue;
+      const key = collisionModelKey(a.category, a.model);
+      keys.add(key);
+      placed.push({
+        modelKey: key,
+        x: a.localX,
+        y: a.localY,
+        z: a.localZ,
+        yaw: a.yaw,
+        scaleX: a.scaleX ?? a.scale ?? 1,
+        scaleY: a.scaleY ?? a.scale ?? 1,
+        scaleZ: a.scaleZ ?? a.scale ?? 1,
+      });
+    }
+    await preloadCollision(keys);
+    if (!this.layers.has(bp.id)) return; // unmounted while fetching
+    const origin = regionWorldOrigin(bp);
+    const next = buildRegionCollisionBVH(placed, getCollisionMesh, { x: origin.x, z: origin.z });
+    const prev = this.bvhCache.get(bp.id);
+    if (prev) disposeRegionCollision(prev);
+    this.bvhCache.set(bp.id, next);
+    this.colliderCache = null; // partition changed
   }
 
   /**
@@ -238,6 +332,8 @@ export class RegionContinent {
       this.scene.add(group);
       this.layers.set(blueprint.id, layer);
       this.colliderCache = null;
+      // Build true-geometry (BVH) collision for this region's solids (async).
+      void this.buildLayerCollision(blueprint);
       await layer.ready;
       // Warm around local player projection once we know them — caller updates.
     } finally {
@@ -264,6 +360,9 @@ export class RegionContinent {
     this.scene.remove(layer.group);
     layer.renderer.destroy();
     this.layers.delete(id);
+    const col = this.bvhCache.get(id);
+    if (col) disposeRegionCollision(col);
+    this.bvhCache.delete(id);
     this.colliderCache = null;
   }
 

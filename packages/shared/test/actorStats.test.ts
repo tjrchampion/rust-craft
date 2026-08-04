@@ -35,6 +35,22 @@ describe("computeActorStats", () => {
     expect(stats.critChance).toBeLessThanOrEqual(0.75);
   });
 
+  it("converts secondary ratings into haste, hit, mastery, and GCD", () => {
+    const plain = computeActorStats(base, 10, [], []);
+    const rated = computeActorStats(
+      base,
+      10,
+      [{ hasteRating: 200, hitRating: 80, masteryRating: 150, critRating: 100 }],
+      [],
+    );
+    expect(rated.hastePct).toBeGreaterThan(plain.hastePct);
+    expect(rated.hitChance).toBeGreaterThan(plain.hitChance);
+    expect(rated.masteryPct).toBeGreaterThan(plain.masteryPct);
+    expect(rated.critChance).toBeGreaterThan(plain.critChance);
+    expect(rated.gcdS).toBeLessThan(plain.gcdS);
+    expect(rated.gcdS).toBeGreaterThanOrEqual(0.75);
+  });
+
   it("every class template has distinct, sane base stats", () => {
     expect(CLASS_IDS.length).toBe(10);
     for (const id of CLASS_IDS) {

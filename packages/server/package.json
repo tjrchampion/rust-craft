@@ -18,11 +18,14 @@
     "drizzle-orm": "^0.45.2",
     "h3": "1.15.11",
     "nitropack": "^2.13.4",
-    "pg": "^8.22.0"
+    "pg": "^8.22.0",
+    "three": "^0.185.1",
+    "three-mesh-bvh": "^0.9.14"
   },
   "devDependencies": {
     "@types/node": "^26.1.1",
     "@types/pg": "^8.20.0",
+    "@types/three": "^0.185.1",
     "drizzle-kit": "^0.31.10",
     "typescript": "^7.0.2"
   }

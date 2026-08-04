@@ -35,6 +35,15 @@ const MIN_SPAWN_DENSITY = 0.02;
 
 const MAX_PATCHES = 520;
 
+/** Density grid target spacing (meters) — decoupled from the terrain
+ *  heightmap's own pitch (often 6m+ on an authored region), which was too
+ *  coarse to rasterize a brush-radius-scale paint/erase circle without it
+ *  reading as a blocky grid. Clamped to a sane resolution range regardless
+ *  of region size. */
+const DENSITY_TARGET_PITCH = 1.5;
+const DENSITY_MIN_GRID = 32;
+const DENSITY_MAX_GRID = 256;
+
 export interface QuickGrassHeightmap {
   gridSize: number;
   pitch: number;
@@ -280,6 +289,13 @@ export function createQuickGrassField(
   const cursor = { high: 0, low: 0 };
 
   let heightmapState: { gridSize: number; pitch: number; heights: Float32Array } | null = null;
+  // Density has its own grid, independent of (and much finer than) the
+  // terrain heightmap's — reusing the heightmap's own pitch (often 6m+ on an
+  // authored region) meant a brush-sized paint/erase circle only rasterized
+  // into 2-3 samples across its diameter, which read as a blocky "grid"
+  // instead of a soft circle once bilinear-sampled by the shader.
+  let densityGridSize = 0;
+  let densityPitch = 0;
   let densityBuffer: Float32Array | null = null;
   let densityTexture: THREE.DataTexture | null = null;
   let heightTexture: THREE.DataTexture | null = null;
@@ -330,8 +346,14 @@ export function createQuickGrassField(
     needsRebuild = false;
   }
 
-  function ensureDensityBuffer(gridSize: number): void {
-    if (densityBuffer && densityBuffer.length === gridSize * gridSize) return;
+  function ensureDensityBuffer(worldSpan: number): void {
+    const gridSize = Math.min(
+      DENSITY_MAX_GRID,
+      Math.max(DENSITY_MIN_GRID, Math.ceil(worldSpan / DENSITY_TARGET_PITCH) + 1),
+    );
+    if (densityBuffer && densityGridSize === gridSize) return;
+    densityGridSize = gridSize;
+    densityPitch = gridSize > 1 ? worldSpan / (gridSize - 1) : worldSpan;
     densityBuffer = new Float32Array(gridSize * gridSize);
     densityTexture?.dispose();
     densityTexture = makeFloatTexture(densityBuffer, gridSize);
@@ -342,7 +364,8 @@ export function createQuickGrassField(
    *  GrassExclusion holes) into the CPU density buffer, then upload it. */
   function rasterizeDensity(): void {
     if (!heightmapState || !densityBuffer || !densityTexture) return;
-    const { gridSize, pitch } = heightmapState;
+    const gridSize = densityGridSize;
+    const pitch = densityPitch;
     const half = ((gridSize - 1) * pitch) / 2;
     densityBuffer.fill(0);
 
@@ -393,7 +416,8 @@ export function createQuickGrassField(
    *  dabs that didn't land on the 10 m grid point, so nothing ever spawned. */
   function sampleDensityInCell(cx: number, cz: number, size: number): number {
     if (!heightmapState || !densityBuffer) return 0;
-    const { gridSize, pitch } = heightmapState;
+    const gridSize = densityGridSize;
+    const pitch = densityPitch;
     const half = ((gridSize - 1) * pitch) / 2;
     const halfCell = size * 0.5;
     const gx0 = Math.max(0, Math.floor((cx - halfCell + half) / pitch));
@@ -639,7 +663,7 @@ export function createQuickGrassField(
       U.uMapTexel.value.set(1 / hm.gridSize, 1 / hm.gridSize);
       syncMapRectWorld();
 
-      ensureDensityBuffer(hm.gridSize);
+      ensureDensityBuffer((hm.gridSize - 1) * hm.pitch);
       rasterizeDensity();
     },
     setCoverage(patches, exclusions) {

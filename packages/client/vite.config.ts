@@ -26,6 +26,11 @@ export default defineConfig({
   define: {
     __APP_VERSION__: JSON.stringify(appVersion),
   },
+  // three-mesh-bvh monkeypatches THREE's prototypes, so client + shared must
+  // resolve to a SINGLE three instance or the BVH extension won't apply.
+  resolve: {
+    dedupe: ["three", "three-mesh-bvh"],
+  },
   server: {
     host: "127.0.0.1",
     port: 5175,
@@ -37,6 +42,8 @@ export default defineConfig({
       ignored: [
         "**/packages/shared/src/content/dungeonBlueprints/**",
         "**/packages/shared/src/content/regionBlueprints/**",
+        // Generated collision binaries (35MB); pure function of source models.
+        "**/packages/client/public/assets/collision/**",
       ],
     },
   },

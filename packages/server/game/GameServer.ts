@@ -1,6 +1,8 @@
 import {
   TICK_MS,
   TICK_DT,
+  TICK_RATE,
+  SNAPSHOT_RATE,
   INTEREST_RADIUS,
   SPAWN_POINT,
   WATER_LEVEL,
@@ -90,6 +92,14 @@ import {
   aggregateAuraModifiers,
   moveSpeedMultFromAuras,
   collectDueTicks,
+  spellTriggersGcd,
+  hasteTimeMult,
+  rollSpellHit,
+  rollMeleeHit,
+  shouldSwitchThreat,
+  isInSpellQueueWindow,
+  HEAL_THREAT_FRAC,
+  SPELL_QUEUE_WINDOW_MS,
   type ClientMsg,
   type ServerMsg,
   type MoveState,
@@ -113,9 +123,13 @@ import {
   type SpellEffect,
   type SpellDef,
   type ActiveAura,
+  type ComputedStats,
+  type CombatOutcome,
+  type LevelRewardChest,
   type PoiSpec,
   type DungeonLayoutSpec,
   type RegionBlueprint,
+  levelUpRewards,
   sampleRegionHeight,
   regionAssetColliders,
   regionAllAssets,
@@ -133,8 +147,23 @@ import {
   sampleRegionWaterDepthWorld,
   REGION_STREAM_RADIUS_METERS,
   worldNodesFromRegion,
+  PLAYER_BODY_RADIUS,
   ClientMsg as ClientMsgSchema,
+  InputMsg,
 } from "@rustcraft/shared";
+import {
+  buildRegionCollisionBVH,
+  resolveCapsule,
+  sampleGroundBelow,
+  disposeRegionCollision,
+  type RegionCollision,
+  type PlacedCollider,
+} from "@rustcraft/shared/collision";
+import {
+  getServerCollisionMesh,
+  hasServerCollisionMesh,
+  collisionModelKey,
+} from "../utils/collision";
 import {
   type InvItem,
   type Container,
@@ -250,11 +279,30 @@ interface PlayerState {
    *  entries at once. selfState() surfaces only queue[0] to the client. */
   dodgeChargeQueue: number[];
   spellCooldowns: Map<string, number>; // spellId -> ready-at ms
+  /** Global cooldown ready-at (server ms). */
+  gcdReadyAt: number;
+  /** One-slot spell queue (WoW SQW) — flushed when cast/GCD ends. */
+  spellQueue: { spellId: string; queuedAt: number } | null;
   meleeReadyAt: number;
   gatherReadyAt: number;
   actionAnim: AnimState | null;
   actionAnimUntil: number;
   dirty: boolean;
+  /** Cached computeActorStats result — cleared on gear/aura/level changes. */
+  statsCache: ComputedStats | null;
+  /** Cached equip/held ids for snapshots — cleared on inventory/hotbar changes. */
+  gearCache: {
+    weaponId: string | null;
+    heldItemId: string | null;
+    headId: string | null;
+    chestId: string | null;
+    armsId: string | null;
+    legsId: string | null;
+    feetId: string | null;
+    shouldersId: string | null;
+    neckId: string | null;
+    selectedSlot: number;
+  } | null;
   pvp: boolean;
   mount: "horse" | "raft" | null;
   blocking: boolean;
@@ -266,6 +314,8 @@ interface PlayerState {
   /** Lifetime achievement counters + unlock timestamps. */
   achievements: Map<string, { progress: number; unlockedAt: number | null }>;
   activeAuras: ActiveAura[];
+  /** Unclaimed level-up care packages — claimed via claimLevelReward, auto-granted on logout. */
+  pendingLevelRewards: LevelRewardChest[];
   currentTargetId: string | null;
   /** Which dungeon run this player is currently inside, or null while in
    *  the open world -- see the sameInstance guard threaded through every
@@ -288,6 +338,8 @@ interface MobState {
   homeX: number;
   homeZ: number;
   targetId: string | null;
+  /** Threat table: attacker character id → threat value. */
+  threat: Map<string, number>;
   attackReadyAt: number;
   respawnAt: number | null; // set while dead
   wanderTx: number;
@@ -352,6 +404,7 @@ interface Projectile {
   traveled: number;
   maxRange: number;
   effects: SpellEffect[];
+  threatMult: number;
   speed: number;
   /** Homing target: a mob id or a (pvp) player id, or null for a straight shot. */
   homingId: string | null;
@@ -415,6 +468,14 @@ export class GameServer {
    *  once loaded -- needed on every tick a region mob moves (ground height
    *  comes from its own heightmap, not the open-world terrain function). */
   private regionBlueprints = new Map<string, RegionBlueprint>();
+  /** True-geometry (BVH) collision per region, world-baked with the region's
+   *  origin. Built lazily on first movement tick that needs it; invalidated
+   *  (set to undefined via delete) on blueprint save / origin change /
+   *  unregister so an editor edit re-bakes. `null` = built but nothing to
+   *  collide (all assets un-meshed). Headless three-mesh-bvh. */
+  private regionCollisionCache = new Map<string, RegionCollision | null>();
+  /** Capsule feet→head height (matches movement.ts's 1.7m head offset). */
+  private static readonly PLAYER_CAPSULE_HEIGHT = 1.7;
   /** Regions whose NPCs/nodes/events (and dormant mob roster) are live.
    *  Region mobs stay in `dormantRegionMobs` until a player is nearby, then
    *  wake into `mobs` (see streamRegionMobs). */
@@ -457,6 +518,7 @@ export class GameServer {
         nextWanderAt: 0,
         actionAnimUntil: 0,
         activeAuras: [],
+        threat: new Map(),
         instanceId: null,
         hpMult: 1,
         dmgMult: 1,
@@ -519,6 +581,7 @@ export class GameServer {
         nextWanderAt: 0,
         actionAnimUntil: 0,
         activeAuras: [],
+        threat: new Map(),
         instanceId: null,
         hpMult: 1,
         dmgMult: 1,
@@ -630,11 +693,15 @@ export class GameServer {
       dodgeCharges: DODGE_MAX_CHARGES,
       dodgeChargeQueue: [],
       spellCooldowns: new Map(),
+      gcdReadyAt: 0,
+      spellQueue: null,
       meleeReadyAt: 0,
       gatherReadyAt: 0,
       actionAnim: null,
       actionAnimUntil: 0,
       dirty: true,
+      statsCache: null,
+      gearCache: null,
       pvp: false,
       mount: null,
       blocking: false,
@@ -650,6 +717,7 @@ export class GameServer {
         ]),
       ),
       activeAuras: [],
+      pendingLevelRewards: [],
       currentTargetId: null,
       instanceId,
     };
@@ -749,6 +817,7 @@ export class GameServer {
       npcs: this.npcs.map((n) => this.npcSnapFor(n, player)),
       questLog: this.questLogFor(player),
       achievements: this.achievementsFor(player),
+      levelRewards: player.pendingLevelRewards,
       serverTime: Date.now(),
       dayLengthS: DAY_LENGTH_S,
       timeOfDay: this.timeOfDay(),
@@ -778,6 +847,8 @@ export class GameServer {
       if (mob.targetId === charId) mob.targetId = null;
     }
     if (save) {
+      // Dump unclaimed level chests into bags so logout never voids awards.
+      this.flushPendingLevelRewards(player);
       // Alive: persist exact world coords. Dead: wake at nearest village so
       // the next login isn't a corpse at the death spot.
       this.applyLogoutSpawn(player);
@@ -820,33 +891,44 @@ export class GameServer {
   }
 
   handleMessage(peer: PeerLike, raw: unknown): void {
-    if (typeof raw === "string" && raw.includes("lootCorpse")) {
-      console.log("[Server Raw Msg] Received raw lootCorpse msg from peer:", peer.id, "raw:", raw);
-    }
-    let parsed: ClientMsg;
+    let json: unknown;
     try {
-      const json = typeof raw === "string" ? JSON.parse(raw) : raw;
-      parsed = ClientMsgSchema.parse(json);
-    } catch (err) {
-      console.error("[Server Msg Error] ClientMsgSchema parse failed for raw:", raw, err);
+      json = typeof raw === "string" ? JSON.parse(raw) : raw;
+    } catch {
       this.sendTo(peer, { t: "error", message: "Bad message" });
       return;
     }
+
     const charId = this.peerToChar.get(peer.id);
-    if (!charId) {
-      console.log("[Server Msg Error] peerToChar.get returned null for peer:", peer.id);
+    if (!charId) return;
+    const player = this.players.get(charId);
+    if (!player) return;
+
+    // Hot path: 20Hz movement inputs — validate with the narrow Input schema
+    // instead of walking the full ClientMsg discriminated union.
+    if (json && typeof json === "object" && (json as { t?: string }).t === "input") {
+      const input = InputMsg.safeParse(json);
+      if (!input.success) {
+        this.sendTo(peer, { t: "error", message: "Bad message" });
+        return;
+      }
+      const parsed = input.data;
+      player.yaw = parsed.yaw;
+      if (player.inputQueue.length < MAX_INPUT_QUEUE) player.inputQueue.push(parsed);
       return;
     }
-    const player = this.players.get(charId);
-    if (!player) {
-      console.log("[Server Msg Error] players.get returned null for charId:", charId);
+
+    let parsed: ClientMsg;
+    try {
+      parsed = ClientMsgSchema.parse(json);
+    } catch {
+      this.sendTo(peer, { t: "error", message: "Bad message" });
       return;
     }
 
     switch (parsed.t) {
       case "input":
-        // Apply facing immediately so a same-frame attack/cast uses the
-        // client's target-facing yaw rather than last tick's.
+        // Unreachable — handled above — kept for exhaustiveness.
         player.yaw = parsed.yaw;
         if (player.inputQueue.length < MAX_INPUT_QUEUE) player.inputQueue.push(parsed);
         break;
@@ -881,12 +963,14 @@ export class GameServer {
       case "moveItem":
         if (moveItem(player.inventory, parsed.fromContainer, parsed.fromSlot, parsed.toContainer, parsed.toSlot, parsed.qty)) {
           player.dirty = true;
+          this.invalidatePlayerCaches(player);
           this.sendInventory(player);
         }
         break;
       case "selectSlot":
         if (parsed.slot < HOTBAR_SLOTS) {
           player.selectedSlot = parsed.slot;
+          player.gearCache = null;
           this.sendInventory(player);
         }
         break;
@@ -919,6 +1003,9 @@ export class GameServer {
         break;
       case "lootCorpse":
         this.handleLootCorpse(player, parsed.mobId, parsed.slot, parsed.lootAll);
+        break;
+      case "claimLevelReward":
+        this.handleClaimLevelReward(player, parsed.rewardId ?? null);
         break;
       case "quest":
         this.handleQuestAction(player, parsed.action, parsed.questId);
@@ -1937,6 +2024,7 @@ export class GameServer {
         nextWanderAt: 0,
         actionAnimUntil: 0,
         activeAuras: [],
+        threat: new Map(),
         instanceId,
         hpMult: mult,
         dmgMult: mult,
@@ -2249,6 +2337,7 @@ export class GameServer {
         nextWanderAt: 0,
         actionAnimUntil: 0,
         activeAuras: [],
+        threat: new Map(),
         instanceId,
         hpMult: scale,
         dmgMult: scale,
@@ -2298,6 +2387,9 @@ export class GameServer {
 
   registerRegionBlueprint(blueprint: RegionBlueprint): void {
     this.regionBlueprints.set(blueprint.id, blueprint);
+    // Editor saves re-register live — drop the stale BVH so it re-bakes with
+    // the new asset placements/shapes on the next movement tick.
+    this.invalidateRegionCollision(blueprint.id);
     this.regionPortals.set(blueprint.id, {
       id: blueprint.id,
       name: blueprint.name,
@@ -2362,6 +2454,7 @@ export class GameServer {
     }
 
     this.regionBlueprints.delete(regionId);
+    this.invalidateRegionCollision(regionId);
     this.regionPortals.delete(regionId);
     this.activeRegionIds.delete(regionId);
   }
@@ -2377,6 +2470,7 @@ export class GameServer {
     bp.worldOriginX = worldOriginX;
     bp.worldOriginZ = worldOriginZ;
     this.regionBlueprints.set(regionId, bp);
+    this.invalidateRegionCollision(regionId); // world-baked BVH must re-origin
     if (dx === 0 && dz === 0) return;
 
     const instanceId = `region_${regionId}`;
@@ -2569,8 +2663,13 @@ export class GameServer {
     const out: ReturnType<typeof regionAssetColliders> = [];
     for (const bp of near) {
       const o = regionWorldOrigin(bp);
+      // Solid assets whose mesh is baked into the region BVH are collided
+      // there; keep them out of the analytic set to avoid double collision.
+      const analyticAssets = regionAllAssets(bp).filter(
+        (a) => !(a.solid && hasServerCollisionMesh(collisionModelKey(a.category, a.model))),
+      );
       for (const c of [
-        ...regionAssetColliders(regionAllAssets(bp)),
+        ...regionAssetColliders(analyticAssets),
         ...regionVolumeColliders(bp.terrainVolumes ?? []),
         ...regionBarrierColliders(bp.barrierVolumes),
       ]) {
@@ -2582,6 +2681,48 @@ export class GameServer {
       }
     }
     return out;
+  }
+
+  /** Lazily build (and cache) the world-baked BVH collision for a region's
+   *  solid assets. Returns null when the region has no meshed solids. */
+  private getRegionCollision(regionId: string): RegionCollision | null {
+    const cached = this.regionCollisionCache.get(regionId);
+    if (cached !== undefined) return cached;
+    const bp = this.regionBlueprints.get(regionId);
+    if (!bp) {
+      this.regionCollisionCache.set(regionId, null);
+      return null;
+    }
+    const placed: PlacedCollider[] = [];
+    for (const a of regionAllAssets(bp)) {
+      if (!a.solid) continue;
+      const key = collisionModelKey(a.category, a.model);
+      if (!hasServerCollisionMesh(key)) continue;
+      const sx = a.scaleX ?? a.scale ?? 1;
+      const sy = a.scaleY ?? a.scale ?? 1;
+      const sz = a.scaleZ ?? a.scale ?? 1;
+      placed.push({
+        modelKey: key,
+        x: a.localX,
+        y: a.localY,
+        z: a.localZ,
+        yaw: a.yaw,
+        scaleX: sx,
+        scaleY: sy,
+        scaleZ: sz,
+      });
+    }
+    const origin = regionWorldOrigin(bp);
+    const col = buildRegionCollisionBVH(placed, getServerCollisionMesh, { x: origin.x, z: origin.z });
+    this.regionCollisionCache.set(regionId, col);
+    return col;
+  }
+
+  /** Drop a region's cached BVH so the next movement tick re-bakes it. */
+  private invalidateRegionCollision(regionId: string): void {
+    const cached = this.regionCollisionCache.get(regionId);
+    if (cached) disposeRegionCollision(cached);
+    this.regionCollisionCache.delete(regionId);
   }
 
   private handleRegionPortal(player: PlayerState, targetRegionId: string, portalId?: string): void {
@@ -2766,6 +2907,7 @@ export class GameServer {
       nextWanderAt: 0,
       actionAnimUntil: 0,
       activeAuras: [],
+      threat: new Map(),
       instanceId: rt.instanceId,
       hpMult: scale,
       dmgMult: scale,
@@ -2813,15 +2955,7 @@ export class GameServer {
           this.sendEvent(player, { t: "event", kind: "loot", itemId: r.itemId, amount: r.qty });
         }
         const xpGain = Math.round((tier === "gold" ? 80 : tier === "silver" ? 45 : 20) * rt.def.lootAmount);
-        player.xp += xpGain;
-        while (player.level < MAX_LEVEL && player.xp >= xpForLevel(player.level)) {
-          player.xp -= xpForLevel(player.level);
-          player.level++;
-          player.hp = this.maxHp(player);
-          player.mana = this.maxMana(player);
-          this.sendEvent(player, { t: "event", kind: "levelup", amount: player.level });
-        }
-        this.sendEvent(player, { t: "event", kind: "xp", amount: xpGain });
+        this.grantXp(player, xpGain);
         this.sendTo(player.peer, {
           t: "chat",
           channel: "system",
@@ -2830,7 +2964,6 @@ export class GameServer {
         });
         this.bumpAchievementCounter(player, "world_event", rt.def.id, 1);
         this.sendInventory(player);
-        this.sendSelf(player);
         player.dirty = true;
       }
     } else {
@@ -2960,13 +3093,39 @@ export class GameServer {
     this.cancelCast(player);
 
     const held = this.heldItem(player);
-    const damage = held ? (itemDef(held.itemId).damage ?? UNARMED_DAMAGE) : UNARMED_DAMAGE;
+    const baseDamage = held ? (itemDef(held.itemId).damage ?? UNARMED_DAMAGE) : UNARMED_DAMAGE;
+    const stats = this.computeStats(player);
+    const roll = rollMeleeHit(stats.critChance);
+    const damage = baseDamage * roll.mult * (1 + stats.masteryPct * 0.5);
 
     const { mob: bestMob, foe: bestFoe } = this.findMeleeTarget(player, MELEE_RANGE);
     if (!bestMob && !bestFoe) return;
+    if (roll.outcome === "miss" || roll.outcome === "dodge") {
+      const tx = bestMob?.x ?? bestFoe!.move.x;
+      const ty = (bestMob?.y ?? bestFoe!.move.y) + 1;
+      const tz = bestMob?.z ?? bestFoe!.move.z;
+      const tid = bestMob?.id ?? bestFoe!.id;
+      this.broadcastNear(
+        tx,
+        tz,
+        {
+          t: "event",
+          kind: "damage",
+          sourceId: player.id,
+          targetId: tid,
+          amount: 0,
+          outcome: roll.outcome,
+          x: tx,
+          y: ty,
+          z: tz,
+        },
+        player.instanceId,
+      );
+      return;
+    }
     if (held && itemDef(held.itemId).maxDurability) damageDurability(player.inventory, held, 1);
-    if (bestFoe) this.damagePlayer(bestFoe, damage, player.id);
-    else if (bestMob) this.damageMob(bestMob, damage, player);
+    if (bestFoe) this.damagePlayer(bestFoe, damage, player.id, roll.outcome);
+    else if (bestMob) this.damageMob(bestMob, damage, player, roll.outcome, 1, false);
   }
 
   /** dirX/dirZ is a world-space direction from the client (see DodgeMsg) --
@@ -3016,7 +3175,7 @@ export class GameServer {
   }
 
   private handleCastStart(player: PlayerState, spellId: string): void {
-    if (player.dead || player.casting) return;
+    if (player.dead) return;
     this.dismountForCombat(player);
     if (!player.learnedSpells.includes(spellId)) {
       this.sendEvent(player, { t: "event", kind: "error", message: "Spell not learned" });
@@ -3046,21 +3205,37 @@ export class GameServer {
       this.sendEvent(player, { t: "event", kind: "error", message: "Not enough resource" });
       return;
     }
-    // Instant spells (melee/self abilities) resolve immediately -- no cast bar.
-    if (spell.castTimeS <= 0) {
+
+    const triggersGcd = spellTriggersGcd(spell);
+    const busyUntil = Math.max(player.casting?.endsAt ?? 0, triggersGcd ? player.gcdReadyAt : 0);
+    if (player.casting || (triggersGcd && now < player.gcdReadyAt)) {
+      // Spell queue window: buffer one ability to fire when cast/GCD ends.
+      if (isInSpellQueueWindow(busyUntil, now) || busyUntil - now <= SPELL_QUEUE_WINDOW_MS) {
+        player.spellQueue = { spellId, queuedAt: now };
+        this.sendSelf(player);
+      }
+      return;
+    }
+
+    this.beginSpell(player, spell, now);
+  }
+
+  private beginSpell(player: PlayerState, spell: SpellDef, now: number): void {
+    const stats = this.computeStats(player);
+    const castMult = hasteTimeMult(stats.hastePct);
+    const castMs = spell.castTimeS <= 0 ? 0 : spell.castTimeS * 1000 * castMult;
+
+    if (castMs <= 0) {
       this.resolveSpell(player, spell);
       return;
     }
-    player.casting = {
-      spellId,
-      endsAt: now + spell.castTimeS * 1000,
-    };
-    this.setActionAnim(player, "cast", spell.castTimeS * 1000);
+    player.casting = { spellId: spell.id, endsAt: now + castMs };
+    this.setActionAnim(player, "cast", castMs);
     this.sendSelf(player);
     this.broadcastNear(
       player.move.x,
       player.move.z,
-      { t: "event", kind: "castStart", sourceId: player.id, spellId },
+      { t: "event", kind: "castStart", sourceId: player.id, spellId: spell.id },
       player.instanceId,
     );
   }
@@ -3069,6 +3244,7 @@ export class GameServer {
     if (!player.casting) return;
     player.casting = null;
     player.actionAnim = null;
+    player.spellQueue = null;
     this.sendSelf(player);
   }
 
@@ -3078,21 +3254,32 @@ export class GameServer {
     this.resolveSpell(player, spellDef(casting.spellId));
   }
 
-  /** Deduct cost/cooldown, then resolve the spell per its targeting kind. */
+  /** After a spell resolves (or GCD ends), fire the queued ability if ready. */
+  private flushSpellQueue(player: PlayerState): void {
+    const queued = player.spellQueue;
+    if (!queued) return;
+    const now = Date.now();
+    if (now < player.gcdReadyAt || player.casting) return;
+    player.spellQueue = null;
+    // Re-validate through the normal entry (mana/CD/silence may have changed).
+    this.handleCastStart(player, queued.spellId);
+  }
+
+  /** Deduct cost/cooldown/GCD, then resolve the spell per its targeting kind. */
   private resolveSpell(player: PlayerState, spell: SpellDef): void {
+    const stats = this.computeStats(player);
+    const now = Date.now();
     player.mana = clamp(player.mana - spell.resourceCost, 0, this.maxMana(player));
-    player.spellCooldowns.set(spell.id, Date.now() + spell.cooldownS * 1000);
+    const cdMult = hasteTimeMult(stats.hastePct);
+    player.spellCooldowns.set(spell.id, now + spell.cooldownS * 1000 * cdMult);
+    if (spellTriggersGcd(spell)) {
+      player.gcdReadyAt = now + stats.gcdS * 1000;
+    }
     player.dirty = true;
 
     if (spell.targeting.kind === "self") {
-      this.applySpellEffects(player, null, spell.effects);
+      this.applySpellEffects(player, null, spell.effects, spell);
       if (spell.summon) this.spawnPet(player, spell.summon.petType);
-      // Instant self spells (e.g. Battle Fury) have no cast bar and no
-      // damage/heal number of their own to confirm they fired — without
-      // this, casting one is completely silent and looks like nothing
-      // happened. Mirror the swing animation + a burst of spell-colored
-      // particles around the caster that projectile/channeled spells
-      // already get for free.
       this.setActionAnim(player, "attack");
       this.broadcastNear(
         player.move.x,
@@ -3101,16 +3288,13 @@ export class GameServer {
         player.instanceId,
       );
       this.sendSelf(player);
+      this.flushSpellQueue(player);
       return;
     }
 
     if (spell.targeting.kind === "melee") {
       const target = this.findMeleeTarget(player, spell.targeting.range);
-      if (target.mob || target.foe) this.applySpellEffects(player, target, spell.effects);
-      // Same reasoning as above: instant melee spells (Rend, Backstab,
-      // Poison Strike) never triggered a swing animation, sound, or
-      // particle burst before, unlike a plain attack — pressing the spell
-      // key looked like it did nothing, especially with no target in range.
+      if (target.mob || target.foe) this.applySpellEffects(player, target, spell.effects, spell);
       this.setActionAnim(player, "attack");
       this.broadcastNear(
         player.move.x,
@@ -3119,6 +3303,7 @@ export class GameServer {
         player.instanceId,
       );
       this.sendSelf(player);
+      this.flushSpellQueue(player);
       return;
     }
 
@@ -3129,12 +3314,12 @@ export class GameServer {
         // Allies (self + same party) within radius -- a damage aoe hits
         // enemies, so a heal aoe should hit friends instead of reusing the
         // same enemy-collection loop.
-        this.applySpellEffects(player, { mob: null, foe: player }, spell.effects);
+        this.applySpellEffects(player, { mob: null, foe: player }, spell.effects, spell);
         for (const other of this.players.values()) {
           if (other.id === player.id || !player.partyId || other.partyId !== player.partyId) continue;
           if (!this.sameInstance(player, other)) continue;
           if (dist2D(player.move.x, player.move.z, other.move.x, other.move.z) > r) continue;
-          this.applySpellEffects(player, { mob: null, foe: other }, spell.effects);
+          this.applySpellEffects(player, { mob: null, foe: other }, spell.effects, spell);
         }
       } else {
         // Every enemy in range takes the hit -- no single-best-match here,
@@ -3142,7 +3327,7 @@ export class GameServer {
         for (const mob of this.mobs.values()) {
           if (!this.sameInstance(player, mob)) continue;
           if (mob.respawnAt === null && dist2D(player.move.x, player.move.z, mob.x, mob.z) <= r) {
-            this.applySpellEffects(player, { mob, foe: null }, spell.effects);
+            this.applySpellEffects(player, { mob, foe: null }, spell.effects, spell);
           }
         }
         if (player.pvp) {
@@ -3150,7 +3335,7 @@ export class GameServer {
             if (other.id === player.id || other.dead || !other.pvp) continue;
             if (!this.sameInstance(player, other)) continue;
             if (dist2D(player.move.x, player.move.z, other.move.x, other.move.z) > r) continue;
-            this.applySpellEffects(player, { mob: null, foe: other }, spell.effects);
+            this.applySpellEffects(player, { mob: null, foe: other }, spell.effects, spell);
           }
         }
       }
@@ -3162,6 +3347,7 @@ export class GameServer {
         player.instanceId,
       );
       this.sendSelf(player);
+      this.flushSpellQueue(player);
       return;
     }
 
@@ -3186,11 +3372,13 @@ export class GameServer {
       // A curving path is longer than a straight one — give homing shots slack.
       maxRange: homingId ? range * 1.7 : range,
       effects: spell.effects,
+      threatMult: spell.threatMult ?? 1,
       speed: spell.targeting.projectileSpeed ?? 24,
       homingId,
       instanceId: player.instanceId,
     });
     this.sendSelf(player);
+    this.flushSpellQueue(player);
   }
 
   /** Nearest enemy (mob, or pvp player if caster is flagged) within range and
@@ -3551,25 +3739,95 @@ export class GameServer {
 
   // ============================ combat ============================
 
-  private grantXp(player: PlayerState, amount: number, opts?: { skipAchievements?: boolean }): void {
-    if (player.level >= MAX_LEVEL) return;
+  private grantXp(player: PlayerState, amount: number, opts?: { skipAchievements?: boolean; deferSelf?: boolean }): void {
+    if (player.level >= MAX_LEVEL || amount <= 0) return;
     player.xp += amount;
     this.sendEvent(player, { t: "event", kind: "xp", amount });
+    let leveled = false;
     while (player.level < MAX_LEVEL && player.xp >= xpForLevel(player.level)) {
       player.xp -= xpForLevel(player.level);
       player.level += 1;
       player.hp = this.maxHp(player); // level-up heals
       player.mana = this.maxMana(player);
-      this.sendEvent(player, { t: "event", kind: "levelup", amount: player.level });
+      player.statsCache = null;
+      leveled = true;
+      this.queueLevelReward(player, player.level);
+      this.sendEvent(player, { t: "event", kind: "levelup", amount: player.level, x: player.move.x, y: player.move.y + 1, z: player.move.z });
       this.broadcastChat("system", `${player.name} reached level ${player.level}!`);
-      this.setActionAnim(player, "cheer", 1500);
+      this.setActionAnim(player, "cheer", 1800);
     }
     player.dirty = true;
-    this.sendSelf(player);
+    if (!opts?.deferSelf) this.sendSelf(player);
+    if (leveled) this.sendLevelRewards(player);
     if (!opts?.skipAchievements) this.checkAndUnlockAchievements(player);
   }
 
-  private damagePlayer(player: PlayerState, rawAmount: number, sourceId: string): void {
+  private queueLevelReward(player: PlayerState, level: number): void {
+    const items = levelUpRewards(level);
+    if (items.length === 0) return;
+    const chest: LevelRewardChest = {
+      id: `lr_${player.id}_${level}_${Date.now().toString(36)}`,
+      level,
+      items,
+    };
+    player.pendingLevelRewards.push(chest);
+    this.sendEvent(player, {
+      t: "event",
+      kind: "levelReward",
+      amount: level,
+      message: `Level ${level} reward ready — open the chest!`,
+    });
+  }
+
+  private sendLevelRewards(player: PlayerState): void {
+    this.sendTo(player.peer, { t: "levelRewards", chests: player.pendingLevelRewards });
+  }
+
+  private handleClaimLevelReward(player: PlayerState, rewardId: string | null): void {
+    if (player.pendingLevelRewards.length === 0) return;
+    const idx = rewardId
+      ? player.pendingLevelRewards.findIndex((c) => c.id === rewardId)
+      : 0;
+    if (idx < 0) return;
+    const [chest] = player.pendingLevelRewards.splice(idx, 1);
+    if (!chest) return;
+    for (const item of chest.items) {
+      const overflow = addItem(player.inventory, item.itemId, item.qty);
+      const granted = item.qty - overflow;
+      if (granted > 0) {
+        this.sendEvent(player, { t: "event", kind: "loot", itemId: item.itemId, amount: granted });
+      }
+      if (overflow > 0) {
+        this.sendEvent(player, {
+          t: "event",
+          kind: "error",
+          message: `Inventory full — lost ${overflow}× ${item.itemId}`,
+        });
+      }
+    }
+    player.dirty = true;
+    this.invalidatePlayerCaches(player);
+    this.sendInventory(player);
+    this.sendLevelRewards(player);
+  }
+
+  /** Move every pending chest into inventory (used on logout). */
+  private flushPendingLevelRewards(player: PlayerState): void {
+    if (player.pendingLevelRewards.length === 0) return;
+    for (const chest of player.pendingLevelRewards) {
+      for (const item of chest.items) {
+        addItem(player.inventory, item.itemId, item.qty);
+      }
+    }
+    player.pendingLevelRewards = [];
+  }
+
+  private damagePlayer(
+    player: PlayerState,
+    rawAmount: number,
+    sourceId: string,
+    outcome: CombatOutcome = "hit",
+  ): void {
     if (player.dead) return;
     // Single choke point for all incoming damage (melee, mob attacks, spells,
     // aura DoTs) so equipped armor passively mitigates everything uniformly.
@@ -3582,7 +3840,17 @@ export class GameServer {
     this.broadcastNear(
       player.move.x,
       player.move.z,
-      { t: "event", kind: "damage", sourceId, targetId: player.id, amount, x: player.move.x, y: player.move.y + 1.5, z: player.move.z },
+      {
+        t: "event",
+        kind: "damage",
+        sourceId,
+        targetId: player.id,
+        amount,
+        outcome,
+        x: player.move.x,
+        y: player.move.y + 1.5,
+        z: player.move.z,
+      },
       player.instanceId,
     );
     if (player.hp <= 0) {
@@ -3634,6 +3902,9 @@ export class GameServer {
       // channeling, matching modern MMO combat instead of forcing a stop.
       // Taking damage still interrupts a cast (see damagePlayer).
       if (player.casting && now >= player.casting.endsAt) this.finishCast(player);
+      else if (!player.casting && player.spellQueue && now >= player.gcdReadyAt) {
+        this.flushSpellQueue(player);
+      }
       if (player.actionAnim && now > player.actionAnimUntil) player.actionAnim = null;
     }
 
@@ -3645,13 +3916,14 @@ export class GameServer {
     this.tickEscortNpcs(TICK_DT);
     if (this.tickCount % 20 === 0) this.tickWorldEvents(now);
 
-    // Full 20Hz broadcast (sendSnapshots already includes each viewer's own
-    // self-ack) -- previously throttled to every 2nd tick, but that 100ms
-    // cadence forced a large client-side interpolation buffer to avoid
-    // stutter, which in turn made remote mobs/pets feel visibly laggy next
-    // to the player's own zero-latency prediction. Halving the cadence gap
-    // lets the buffer shrink back down without reintroducing the stutter.
-    this.sendSnapshots();
+    // World snapshots at SNAPSHOT_RATE (10Hz). Self-ack still goes every tick
+    // so client prediction / dodge ackSeq stays 20Hz without the fat AOI JSON.
+    const snapEvery = Math.max(1, Math.round(TICK_RATE / SNAPSHOT_RATE));
+    if (this.tickCount % snapEvery === 0) {
+      this.sendSnapshots();
+    } else {
+      for (const player of this.players.values()) this.sendSelf(player);
+    }
     // Party frames refresh at 0.5 Hz — enough for out-of-range member HP.
     if (this.tickCount % 40 === 0) {
       for (const partyId of this.parties.keys()) this.broadcastPartyState(partyId);
@@ -3676,12 +3948,30 @@ export class GameServer {
     const regionAssets = inContinent
       ? this.continentCollidersNear(player.move.x, player.move.z)
       : undefined;
+    // Authoritative true-geometry (BVH) collision — reproduces the client's
+    // capsule-vs-mesh result headless so meshed solids can't be walked through
+    // and bridge decks are standable / passable-under. Uses the player's
+    // current region BVH (built lazily, world-baked with its origin).
+    const regionCol = inContinent && regionId ? this.getRegionCollision(regionId) : null;
+    const meshResolve = regionCol
+      ? (x: number, y: number, z: number) =>
+          resolveCapsule(regionCol, x, y, z, {
+            radius: PLAYER_BODY_RADIUS,
+            height: GameServer.PLAYER_CAPSULE_HEIGHT,
+          })
+      : undefined;
+    const meshGroundBelow = regionCol
+      ? (x: number, z: number, fromY: number, maxDrop: number) =>
+          sampleGroundBelow(regionCol, x, z, fromY, PLAYER_BODY_RADIUS, maxDrop)
+      : undefined;
     const moveOpts = {
       mount: player.mount,
       inDungeon,
       groundAt,
       waterDepthAt,
       regionAssets,
+      meshResolve,
+      meshGroundBelow,
     };
     if (inputs.length === 0) {
       // Keep physics ticking (falling, water) even without fresh input.
@@ -3842,7 +4132,9 @@ export class GameServer {
   }
 
   private tickProjectiles(): void {
-    for (const proj of [...this.projectiles.values()]) {
+    const HIT_R2 = 2.2 * 2.2;
+    const toDelete: string[] = [];
+    for (const proj of this.projectiles.values()) {
       // Homing: curve the velocity toward the locked target at a capped turn
       // rate so the bolt bends in rather than snapping.
       if (proj.homingId) {
@@ -3856,9 +4148,9 @@ export class GameServer {
           const len = Math.hypot(dirX, dirY, dirZ) || 1;
           // Curve harder when the target is close so fast bolts still bend in.
           const MAX_TURN = len < 8 ? 0.55 : 0.32;
-          proj.dx += ((dirX / len) - proj.dx) * MAX_TURN;
-          proj.dy += ((dirY / len) - proj.dy) * MAX_TURN;
-          proj.dz += ((dirZ / len) - proj.dz) * MAX_TURN;
+          proj.dx += (dirX / len - proj.dx) * MAX_TURN;
+          proj.dy += (dirY / len - proj.dy) * MAX_TURN;
+          proj.dz += (dirZ / len - proj.dz) * MAX_TURN;
           const n = Math.hypot(proj.dx, proj.dy, proj.dz) || 1;
           proj.dx /= n;
           proj.dy /= n;
@@ -3874,10 +4166,46 @@ export class GameServer {
 
       let hit = false;
       const owner = this.players.get(proj.ownerId);
-      for (const mob of this.mobs.values()) {
-        if (mob.hp <= 0 || mob.respawnAt !== null || !this.sameInstance(proj, mob)) continue;
-        if (dist2D(proj.x, proj.z, mob.x, mob.z) < 2.2 && Math.abs(proj.y - (mob.y + 0.8)) < 4.5) {
-          if (owner) this.applySpellEffects(owner, { mob, foe: null }, proj.effects);
+
+      // Locked homing target: only test that entity (O(1) vs O(mobs)).
+      if (proj.homingId) {
+        const mob = this.mobs.get(proj.homingId);
+        if (mob && mob.hp > 0 && mob.respawnAt === null && this.sameInstance(proj, mob)) {
+          const dx = proj.x - mob.x;
+          const dz = proj.z - mob.z;
+          if (dx * dx + dz * dz < HIT_R2 && Math.abs(proj.y - (mob.y + 0.8)) < 4.5) {
+            if (owner) this.applySpellEffects(owner, { mob, foe: null }, proj.effects, spellDef(proj.spellId));
+            this.broadcastNear(
+              proj.x,
+              proj.z,
+              { t: "event", kind: "spellHit", spellId: proj.spellId, x: proj.x, y: proj.y, z: proj.z },
+              proj.instanceId,
+            );
+            hit = true;
+          }
+        } else if (owner?.pvp) {
+          const other = this.players.get(proj.homingId);
+          if (other && other.id !== proj.ownerId && !other.dead && other.pvp && this.sameInstance(proj, other)) {
+            if (dist3D(proj.x, proj.y, proj.z, other.move.x, other.move.y + 1.2, other.move.z) < 1.7) {
+              if (owner) this.applySpellEffects(owner, { mob: null, foe: other }, proj.effects, spellDef(proj.spellId));
+              this.broadcastNear(
+                proj.x,
+                proj.z,
+                { t: "event", kind: "spellHit", spellId: proj.spellId, x: proj.x, y: proj.y, z: proj.z },
+                proj.instanceId,
+              );
+              hit = true;
+            }
+          }
+        }
+      } else {
+        for (const mob of this.mobs.values()) {
+          if (mob.hp <= 0 || mob.respawnAt !== null || !this.sameInstance(proj, mob)) continue;
+          const dx = proj.x - mob.x;
+          const dz = proj.z - mob.z;
+          if (dx * dx + dz * dz >= HIT_R2) continue;
+          if (Math.abs(proj.y - (mob.y + 0.8)) >= 4.5) continue;
+          if (owner) this.applySpellEffects(owner, { mob, foe: null }, proj.effects, spellDef(proj.spellId));
           this.broadcastNear(
             proj.x,
             proj.z,
@@ -3887,30 +4215,32 @@ export class GameServer {
           hit = true;
           break;
         }
-      }
-      // PvP: firebolts strike flagged players when the caster is flagged too.
-      if (!hit && owner?.pvp) {
-        for (const other of this.players.values()) {
-          if (other.id === proj.ownerId || other.dead || !other.pvp) continue;
-          if (!this.sameInstance(proj, other)) continue;
-          if (dist3D(proj.x, proj.y, proj.z, other.move.x, other.move.y + 1.2, other.move.z) < 1.7) {
-            if (owner) this.applySpellEffects(owner, { mob: null, foe: other }, proj.effects);
-            this.broadcastNear(
-              proj.x,
-              proj.z,
-              { t: "event", kind: "spellHit", spellId: proj.spellId, x: proj.x, y: proj.y, z: proj.z },
-              proj.instanceId,
-            );
-            hit = true;
-            break;
+        // PvP: firebolts strike flagged players when the caster is flagged too.
+        if (!hit && owner?.pvp) {
+          for (const other of this.players.values()) {
+            if (other.id === proj.ownerId || other.dead || !other.pvp) continue;
+            if (!this.sameInstance(proj, other)) continue;
+            if (dist3D(proj.x, proj.y, proj.z, other.move.x, other.move.y + 1.2, other.move.z) < 1.7) {
+              if (owner) this.applySpellEffects(owner, { mob: null, foe: other }, proj.effects, spellDef(proj.spellId));
+              this.broadcastNear(
+                proj.x,
+                proj.z,
+                { t: "event", kind: "spellHit", spellId: proj.spellId, x: proj.x, y: proj.y, z: proj.z },
+                proj.instanceId,
+              );
+              hit = true;
+              break;
+            }
           }
         }
       }
+
       const groundHit = proj.y < terrainHeight(proj.x, proj.z);
       if (hit || groundHit || proj.traveled >= proj.maxRange) {
-        this.projectiles.delete(proj.id);
+        toDelete.push(proj.id);
       }
     }
+    for (const id of toDelete) this.projectiles.delete(id);
   }
 
   /**
@@ -4219,6 +4549,7 @@ export class GameServer {
     const def = mobDef(mob.type);
     mob.hp = 0;
     mob.targetId = null;
+    mob.threat.clear();
     mob.deathAt = Date.now();
     mob.respawnAt = mob.eventId ? Infinity : null;
 
@@ -4241,16 +4572,8 @@ export class GameServer {
     }
 
     const xpGained = Math.round((def.xp ?? 20) * (mob.hpMult ?? 1));
-    killer.xp += xpGained;
-    const xpReq = xpForLevel(killer.level);
-    if (killer.xp >= xpReq) {
-      killer.xp -= xpReq;
-      killer.level++;
-      killer.hp = this.maxHp(killer);
-      killer.mana = this.maxMana(killer);
-      this.sendEvent(killer, { t: "event", kind: "levelup", amount: killer.level });
-    }
-    this.sendEvent(killer, { t: "event", kind: "xp", amount: xpGained });
+    // Defer sendSelf — end-of-tick snapshots already push dirty self state.
+    this.grantXp(killer, xpGained, { deferSelf: true });
     this.addQuestKillProgress(killer, mob.type);
 
     this.broadcastNear(
@@ -4260,15 +4583,20 @@ export class GameServer {
       mob.instanceId,
     );
 
-    // XP/level land on the end-of-tick sendSelf in sendSnapshots — avoid a
-    // second full self payload mid-hit (felt as hitch on every kill).
     killer.dirty = true;
   }
 
-  private damageMob(mob: MobState, amount: number, attacker: PlayerState): void {
+  private damageMob(
+    mob: MobState,
+    amount: number,
+    attacker: PlayerState,
+    outcome: CombatOutcome = "hit",
+    threatMult = 1,
+    ranged = false,
+  ): void {
     if (mob.hp <= 0) return;
     mob.hp -= amount;
-    mob.targetId = attacker.id;
+    this.addThreat(mob, attacker.id, amount * threatMult, ranged);
     if (mob.eventId) {
       const key = this.worldEventKeyForMob(mob);
       const rt = key ? this.worldEvents.get(key) : undefined;
@@ -4277,7 +4605,17 @@ export class GameServer {
     this.broadcastNear(
       mob.x,
       mob.z,
-      { t: "event", kind: "damage", sourceId: attacker.id, targetId: mob.id, amount, x: mob.x, y: mob.y + 1, z: mob.z },
+      {
+        t: "event",
+        kind: "damage",
+        sourceId: attacker.id,
+        targetId: mob.id,
+        amount,
+        outcome,
+        x: mob.x,
+        y: mob.y + 1,
+        z: mob.z,
+      },
       mob.instanceId,
     );
     if (mob.hp <= 0) {
@@ -4285,29 +4623,37 @@ export class GameServer {
     }
   }
 
+  /** Accumulate threat and switch target when the challenger exceeds the lock ratio. */
+  private addThreat(mob: MobState, attackerId: string, amount: number, ranged: boolean): void {
+    if (!(amount > 0)) return;
+    const next = (mob.threat.get(attackerId) ?? 0) + amount;
+    mob.threat.set(attackerId, next);
+    const currentId = mob.targetId;
+    const currentThreat = currentId ? (mob.threat.get(currentId) ?? 0) : 0;
+    if (shouldSwitchThreat(currentId, currentThreat, attackerId, next, ranged)) {
+      mob.targetId = attackerId;
+    }
+  }
+
   private handleLootCorpse(player: PlayerState, mobId: string, slot: number | undefined, lootAll: boolean | undefined): void {
-    console.log("[Server Loot Debug] Received handleLootCorpse request from player:", player.name, "mobId:", mobId, "slot:", slot, "lootAll:", lootAll);
     if (player.dead) return;
     const mob = this.mobs.get(mobId);
-    if (!mob || mob.hp > 0) {
-      console.log("[Server Loot Debug] Mob not found or mob is still alive:", mobId, "mobExists:", !!mob, "hp:", mob?.hp);
-      return;
-    }
+    if (!mob || mob.hp > 0) return;
     const dist = dist2D(player.move.x, player.move.z, mob.x, mob.z);
     if (dist > 7.5) {
-      console.log("[Server Loot Debug] Player too far from corpse. dist:", dist, "playerPos:", player.move.x, player.move.z, "mobPos:", mob.x, mob.z);
       this.sendEvent(player, { t: "event", kind: "error", message: "Too far from corpse" });
       return;
     }
     if (!mob.loot) mob.loot = [];
-    console.log("[Server Loot Debug] Sending corpseLoot payload to player:", player.name, "peer:", player.peer.id, "mobId:", mobId, "itemsCount:", mob.loot.length);
 
     if (lootAll) {
       const remainingLoot: InvItem[] = [];
+      let anyTaken = false;
       for (const item of mob.loot) {
         const overflow = addItem(player.inventory, item.itemId, item.qty);
         const taken = item.qty - overflow;
         if (taken > 0) {
+          anyTaken = true;
           this.sendEvent(player, { t: "event", kind: "loot", itemId: item.itemId, amount: taken });
         }
         if (overflow > 0) {
@@ -4315,14 +4661,17 @@ export class GameServer {
         }
       }
       mob.loot = remainingLoot;
-      player.dirty = true;
-      this.sendInventory(player);
+      if (anyTaken) {
+        player.dirty = true;
+        this.invalidatePlayerCaches(player);
+        this.sendInventory(player);
+      }
 
       if (mob.loot.length === 0) {
         const def = mobDef(mob.type);
         mob.deathAt = Date.now();
         mob.respawnAt = this.isDungeonInstance(mob.instanceId) ? Infinity : Date.now() + def.respawnS * 1000;
-      } else {
+      } else if (anyTaken) {
         this.sendEvent(player, { t: "event", kind: "error", message: "Inventory full" });
       }
       this.sendTo(player.peer, { t: "corpseLoot", mobId: mob.id, mobType: mob.type, items: mob.loot });
@@ -4341,6 +4690,7 @@ export class GameServer {
           mob.loot.splice(slot, 1);
         }
         player.dirty = true;
+        this.invalidatePlayerCaches(player);
         this.sendInventory(player);
       } else {
         this.sendEvent(player, { t: "event", kind: "error", message: "Inventory full" });
@@ -4365,14 +4715,25 @@ export class GameServer {
     if (mob.hp <= 0) return;
     mob.hp -= amount;
     mob.targetId = pet.id;
+    const owner = this.players.get(pet.ownerId);
+    if (owner) this.addThreat(mob, owner.id, amount, false);
     this.broadcastNear(
       mob.x,
       mob.z,
-      { t: "event", kind: "damage", sourceId: pet.id, targetId: mob.id, amount, x: mob.x, y: mob.y + 1, z: mob.z },
+      {
+        t: "event",
+        kind: "damage",
+        sourceId: pet.id,
+        targetId: mob.id,
+        amount,
+        outcome: "hit",
+        x: mob.x,
+        y: mob.y + 1,
+        z: mob.z,
+      },
       mob.instanceId,
     );
     if (mob.hp <= 0) {
-      const owner = this.players.get(pet.ownerId);
       if (owner) {
         this.killMob(mob, owner);
       } else {
@@ -4585,14 +4946,20 @@ export class GameServer {
   }
 
   /** The dynamic stat calculation engine: base (from class) + level growth +
-   *  equipped gear + active auras, recomputed on demand -- nothing here is
-   *  ever persisted. */
+   *  equipped gear + active auras. Cached until inventory/aura/level changes. */
+  private invalidatePlayerCaches(player: PlayerState): void {
+    player.statsCache = null;
+    player.gearCache = null;
+  }
+
   private computeStats(player: PlayerState) {
+    if (player.statsCache) return player.statsCache;
     const gearMods = EQUIP_SLOTS.map((_, slot) => findItem(player.inventory, "equip", slot))
       .filter((it): it is InvItem => !!it)
       .map((it) => itemDef(it.itemId).statModifiers ?? {});
     const auraMods = aggregateAuraModifiers(player.activeAuras);
-    return computeActorStats(classDef(player.classId).baseStats, player.level, gearMods, auraMods);
+    player.statsCache = computeActorStats(classDef(player.classId).baseStats, player.level, gearMods, auraMods);
+    return player.statsCache;
   }
 
   private maxHp(player: PlayerState): number {
@@ -4603,11 +4970,35 @@ export class GameServer {
     return this.computeStats(player).maxMana;
   }
 
+  private playerGearSnap(player: PlayerState): NonNullable<PlayerState["gearCache"]> {
+    if (player.gearCache && player.gearCache.selectedSlot === player.selectedSlot) {
+      return player.gearCache;
+    }
+    const heldItem = findItem(player.inventory, "hotbar", player.selectedSlot);
+    const gear = {
+      weaponId: findItem(player.inventory, "equip", 0)?.itemId ?? null,
+      heldItemId: heldItem && !heldItem.itemId.startsWith("spell:") ? heldItem.itemId : null,
+      headId: findItem(player.inventory, "equip", EQUIP_SLOTS.indexOf("head"))?.itemId ?? null,
+      chestId: findItem(player.inventory, "equip", EQUIP_SLOTS.indexOf("chest"))?.itemId ?? null,
+      armsId: findItem(player.inventory, "equip", EQUIP_SLOTS.indexOf("arms"))?.itemId ?? null,
+      legsId: findItem(player.inventory, "equip", EQUIP_SLOTS.indexOf("legs"))?.itemId ?? null,
+      feetId: findItem(player.inventory, "equip", EQUIP_SLOTS.indexOf("feet"))?.itemId ?? null,
+      shouldersId: findItem(player.inventory, "equip", EQUIP_SLOTS.indexOf("shoulders"))?.itemId ?? null,
+      neckId: findItem(player.inventory, "equip", EQUIP_SLOTS.indexOf("neck"))?.itemId ?? null,
+      selectedSlot: player.selectedSlot,
+    };
+    player.gearCache = gear;
+    return gear;
+  }
+
   /** Expire auras and resolve any due periodic ticks (DoT/HoT) for a player. */
   private tickPlayerAuras(player: PlayerState, now: number): void {
+    const beforeLen = player.activeAuras.length;
     player.activeAuras = expireAuras(player.activeAuras, now);
+    if (player.activeAuras.length !== beforeLen) this.invalidatePlayerCaches(player);
     const due = collectDueTicks(player.activeAuras, now);
     if (due.length === 0) return;
+    this.invalidatePlayerCaches(player);
     const stats = this.computeStats(player);
     for (const { tick } of due) {
       const amount = (tick.base ?? 0) + stats.power * (tick.powerScale ?? 0);
@@ -4615,7 +5006,7 @@ export class GameServer {
       else player.hp = Math.min(this.maxHp(player), player.hp + amount);
     }
     player.dirty = true;
-    this.sendSelf(player);
+    // Self HP is already pushed every tick via sendSelf — avoid a duplicate WS frame.
   }
 
   /** Expire auras and resolve any due periodic ticks (DoT) for a mob, crediting the aura's source. */
@@ -4672,14 +5063,20 @@ export class GameServer {
     caster: PlayerState,
     target: { mob: MobState | null; foe: PlayerState | null } | null,
     effects: SpellEffect[],
+    spell?: SpellDef,
   ): void {
     const stats = this.computeStats(caster);
     const now = Date.now();
+    const threatMult = spell?.threatMult ?? 1;
+    const ranged = spell?.targeting.kind === "projectile" || spell?.targeting.kind === "aoe";
+    const isMeleeAbility = spell?.targeting.kind === "melee";
+
     for (const effect of effects) {
       const landsOnCaster = effect.landsOn === "caster";
       if (effect.type === "damage") {
         if (landsOnCaster) continue; // damage always needs a real target
         let amount = (effect.base ?? 0) + stats.power * (effect.powerScale ?? 0);
+        amount *= 1 + stats.masteryPct * 0.35;
         if (effect.executeScale) {
           const targetMaxHp = target?.mob ? mobDef(target.mob.type).maxHp : target?.foe ? this.maxHp(target.foe) : null;
           const targetHp = target?.mob ? target.mob.hp : (target?.foe?.hp ?? null);
@@ -4688,10 +5085,40 @@ export class GameServer {
             amount *= 1 + effect.executeScale * missingFrac;
           }
         }
-        if (Math.random() < stats.critChance) amount *= 1.5;
-        if (target?.mob) this.damageMob(target.mob, amount, caster);
-        else if (target?.foe) this.damagePlayer(target.foe, amount, caster.id);
-        if (effect.lifestealPct) {
+
+        // Melee abilities use the single-roll table; spells use two-roll.
+        const roll = isMeleeAbility
+          ? rollMeleeHit(stats.critChance)
+          : rollSpellHit(stats.hitChance, stats.critChance);
+        if (roll.outcome === "miss" || roll.outcome === "dodge") {
+          const tx = target?.mob?.x ?? target?.foe?.move.x ?? caster.move.x;
+          const ty = (target?.mob?.y ?? target?.foe?.move.y ?? caster.move.y) + 1;
+          const tz = target?.mob?.z ?? target?.foe?.move.z ?? caster.move.z;
+          const tid = target?.mob?.id ?? target?.foe?.id;
+          this.broadcastNear(
+            tx,
+            tz,
+            {
+              t: "event",
+              kind: "damage",
+              sourceId: caster.id,
+              targetId: tid,
+              amount: 0,
+              outcome: roll.outcome,
+              spellId: spell?.id,
+              x: tx,
+              y: ty,
+              z: tz,
+            },
+            caster.instanceId,
+          );
+          continue;
+        }
+        amount *= roll.mult;
+
+        if (target?.mob) this.damageMob(target.mob, amount, caster, roll.outcome, threatMult, ranged);
+        else if (target?.foe) this.damagePlayer(target.foe, amount, caster.id, roll.outcome);
+        if (effect.lifestealPct && roll.mult > 0) {
           caster.hp = Math.min(this.maxHp(caster), caster.hp + amount * effect.lifestealPct);
           caster.dirty = true;
           this.sendSelf(caster);
@@ -4699,7 +5126,12 @@ export class GameServer {
       } else if (effect.type === "heal") {
         const healTarget = landsOnCaster ? caster : (target?.foe ?? null);
         if (!healTarget) continue;
-        const rawAmount = (effect.base ?? 0) + stats.power * (effect.powerScale ?? 0);
+        const healRoll = rollSpellHit(stats.hitChance, stats.critChance);
+        if (healRoll.outcome === "miss") continue;
+        const rawAmount =
+          ((effect.base ?? 0) + stats.power * (effect.powerScale ?? 0)) *
+          (1 + stats.masteryPct * 0.35) *
+          healRoll.mult;
         // A self-heal with an active pet out splits its pool between the two
         // instead of stacking a free splash heal on top of the usual amount.
         const pet = landsOnCaster ? this.findPetByOwner(caster.id) : undefined;
@@ -4709,17 +5141,46 @@ export class GameServer {
         this.broadcastNear(
           healTarget.move.x,
           healTarget.move.z,
-          { t: "event", kind: "heal", sourceId: caster.id, targetId: healTarget.id, amount, x: healTarget.move.x, y: healTarget.move.y + 1.5, z: healTarget.move.z },
+          {
+            t: "event",
+            kind: "heal",
+            sourceId: caster.id,
+            targetId: healTarget.id,
+            amount,
+            outcome: healRoll.outcome,
+            x: healTarget.move.x,
+            y: healTarget.move.y + 1.5,
+            z: healTarget.move.z,
+          },
           healTarget.instanceId,
         );
         if (healTarget !== caster) this.sendSelf(healTarget);
+        // Healing threat: sprinkle onto nearby engaged mobs.
+        const healThreat = amount * (spell?.threatMult ?? HEAL_THREAT_FRAC);
+        if (healThreat > 0) {
+          for (const mob of this.mobs.values()) {
+            if (mob.hp <= 0 || mob.respawnAt !== null || !this.sameInstance(caster, mob)) continue;
+            if (dist2D(caster.move.x, caster.move.z, mob.x, mob.z) > 30) continue;
+            if (mob.targetId) this.addThreat(mob, caster.id, healThreat, true);
+          }
+        }
         if (pet) {
           const petAmount = rawAmount * 0.35;
           pet.hp = Math.min(mobDef(pet.type).maxHp, pet.hp + petAmount);
           this.broadcastNear(
             pet.x,
             pet.z,
-            { t: "event", kind: "heal", sourceId: caster.id, targetId: pet.id, amount: petAmount, x: pet.x, y: pet.y + 1.5, z: pet.z },
+            {
+              t: "event",
+              kind: "heal",
+              sourceId: caster.id,
+              targetId: pet.id,
+              amount: petAmount,
+              outcome: healRoll.outcome,
+              x: pet.x,
+              y: pet.y + 1.5,
+              z: pet.z,
+            },
             pet.instanceId,
           );
         }
@@ -4732,7 +5193,17 @@ export class GameServer {
               this.broadcastNear(
                 rNpc.x,
                 rNpc.z,
-                { t: "event", kind: "heal", sourceId: caster.id, targetId: `rnpc_${rNpcId}`, amount: healAmt, x: rNpc.x, y: rNpc.y + 1.5, z: rNpc.z },
+                {
+                  t: "event",
+                  kind: "heal",
+                  sourceId: caster.id,
+                  targetId: `rnpc_${rNpcId}`,
+                  amount: healAmt,
+                  outcome: healRoll.outcome,
+                  x: rNpc.x,
+                  y: rNpc.y + 1.5,
+                  z: rNpc.z,
+                },
                 caster.instanceId,
               );
             }
@@ -4741,10 +5212,12 @@ export class GameServer {
       } else if (effect.type === "applyAura" && effect.auraId) {
         if (landsOnCaster) {
           caster.activeAuras = applyAura(caster.activeAuras, effect.auraId, caster.id, now);
+          this.invalidatePlayerCaches(caster);
         } else if (target?.mob) {
           target.mob.activeAuras = applyAura(target.mob.activeAuras, effect.auraId, caster.id, now);
         } else if (target?.foe) {
           target.foe.activeAuras = applyAura(target.foe.activeAuras, effect.auraId, caster.id, now);
+          this.invalidatePlayerCaches(target.foe);
           this.sendSelf(target.foe);
         }
       }
@@ -4811,6 +5284,8 @@ export class GameServer {
       spellCooldowns: [...player.spellCooldowns]
         .filter(([, readyAt]) => readyAt > Date.now())
         .map(([spellId, readyAt]) => ({ spellId, readyAt })),
+      gcdReadyAt: player.gcdReadyAt,
+      queuedSpellId: player.spellQueue?.spellId ?? null,
       dodgeCharges: player.dodgeCharges,
       dodgeNextChargeAt: player.dodgeChargeQueue[0] ?? null,
     };
@@ -4833,7 +5308,7 @@ export class GameServer {
       for (const other of allPlayers) {
         if (!this.sameInstance(viewer, other)) continue;
         if (dist2D(px, pz, other.move.x, other.move.z) > INTEREST_RADIUS) continue;
-        const heldItem = findItem(other.inventory, "hotbar", other.selectedSlot);
+        const gear = this.playerGearSnap(other);
         players.push({
           id: other.id,
           name: other.name,
@@ -4853,15 +5328,15 @@ export class GameServer {
           anim: this.playerAnim(other),
           pvp: other.pvp,
           mount: other.mount,
-          weaponId: findItem(other.inventory, "equip", 0)?.itemId ?? null,
-          heldItemId: heldItem && !heldItem.itemId.startsWith("spell:") ? heldItem.itemId : null,
-          headId: findItem(other.inventory, "equip", EQUIP_SLOTS.indexOf("head"))?.itemId ?? null,
-          chestId: findItem(other.inventory, "equip", EQUIP_SLOTS.indexOf("chest"))?.itemId ?? null,
-          armsId: findItem(other.inventory, "equip", EQUIP_SLOTS.indexOf("arms"))?.itemId ?? null,
-          legsId: findItem(other.inventory, "equip", EQUIP_SLOTS.indexOf("legs"))?.itemId ?? null,
-          feetId: findItem(other.inventory, "equip", EQUIP_SLOTS.indexOf("feet"))?.itemId ?? null,
-          shouldersId: findItem(other.inventory, "equip", EQUIP_SLOTS.indexOf("shoulders"))?.itemId ?? null,
-          neckId: findItem(other.inventory, "equip", EQUIP_SLOTS.indexOf("neck"))?.itemId ?? null,
+          weaponId: gear.weaponId,
+          heldItemId: gear.heldItemId,
+          headId: gear.headId,
+          chestId: gear.chestId,
+          armsId: gear.armsId,
+          legsId: gear.legsId,
+          feetId: gear.feetId,
+          shouldersId: gear.shouldersId,
+          neckId: gear.neckId,
           debuffs: this.dotDebuffs(other.activeAuras),
         });
       }
@@ -4956,6 +5431,7 @@ export class GameServer {
   }
 
   private sendInventory(player: PlayerState): void {
+    this.invalidatePlayerCaches(player);
     this.sendTo(player.peer, {
       t: "inventory",
       items: toSnaps(player.inventory),
@@ -5100,6 +5576,7 @@ export class GameServer {
       nextWanderAt: 0,
       actionAnimUntil: 0,
       activeAuras: [],
+      threat: new Map(),
       instanceId: player.instanceId,
       hpMult: 1,
       dmgMult: 1,
@@ -5114,6 +5591,15 @@ export class GameServer {
     addItem(player.inventory, itemId, qty);
     player.dirty = true;
     this.sendInventory(player);
+    return true;
+  }
+
+  /** Dev-only: grant XP directly (verification tooling -- triggering a
+   *  level-up without a long grind). */
+  debugGrantXp(charId: string, amount: number): boolean {
+    const player = this.players.get(charId);
+    if (!player) return false;
+    this.grantXp(player, amount);
     return true;
   }
 

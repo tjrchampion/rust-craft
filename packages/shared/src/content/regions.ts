@@ -89,6 +89,11 @@ export interface RegionAsset {
    *  center offsets are model-local (pre-scale); yaw/position come from the
    *  placement. Prefer this over the circular model override. */
   solidBox?: RegionAssetSolidBox;
+  /** Forces the "thin walkable deck, no side walls" treatment regardless of
+   *  the model name (see isWalkablePlatformAssetModel). Set on a bridge-like
+   *  custom asset the name heuristic misses; leave unset otherwise -- solid
+   *  buildings/walls/rocks hard-block by default. */
+  walkableOnly?: boolean;
 }
 
 /** Resolve authored placement scale (supports legacy uniform `scale`). */
@@ -841,6 +846,17 @@ export function isRockLikeAssetModel(model: string): boolean {
   return false;
 }
 
+/** True for bridge/dock/walkway/platform meshes -- wide spans meant to be
+ *  walked ON, not blocked BY. Everything else that's marked solid (walls,
+ *  buildings, rocks) hard-blocks at its measured footprint regardless of
+ *  size; only these span types get the "thin walkable deck" treatment in
+ *  regionAssetColliders(). Authors can force either behavior per-instance
+ *  via RegionAsset.walkableOnly. */
+export function isWalkablePlatformAssetModel(model: string): boolean {
+  const file = model.replace(/^.*\//, "").replace(/\.(glb|gltf)$/i, "");
+  return /bridge|dock|walkway|platform/i.test(file);
+}
+
 /** Returns the per-model override for `model`, falling back to per-category
  *  defaults. Returns `null` if the model explicitly has no collision. */
 export function resolveAssetCollision(
@@ -871,33 +887,36 @@ export function regionAssetColliders(assets: RegionAsset[]): RegionAssetCollider
     const scaleXZ = Math.max(sx, sz);
 
     // Mesh-measured oriented box (authored via Solid in the region editor).
-    // Compact props (rocks): full volume — stand on top, hard-block sides.
-    // Wide / tall spans (bridges): thin walk deck. Prefer a measured thin
-    // solidBox (editor raycast); for legacy full-AABB boxes, estimate the
-    // deck below railing height so players aren't stood on (or blocked by)
-    // the AABB lid.
+    // Default: full volume — stand on top, hard-block sides at the exact
+    // measured shape. Bridge/dock/walkway/platform spans are the deliberate
+    // exception (walked ON, not blocked BY) and get a thin walk deck instead;
+    // prefer a measured thin solidBox (editor raycast), or for legacy
+    // full-AABB boxes estimate the deck below railing height so players
+    // aren't stood on (or blocked by) the AABB lid.
     if (a.solid && a.solidBox) {
       const box = solidBoxColliderFields(a);
       if (box) {
-        const height = box.topY - box.baseY;
-        const compact = Math.max(box.halfX, box.halfZ) < 2.5;
-        if (compact || height <= 1.0) {
+        const walkablePlatform = a.walkableOnly ?? isWalkablePlatformAssetModel(a.model);
+        if (!walkablePlatform) {
           out.push({ ...box, climbable: true, solid: true });
-        } else if (height <= 1.75) {
-          // Short platform slab already (or small mound) — walkable soft floor.
-          out.push({ ...box, climbable: true, solid: false });
         } else {
-          // Legacy tall AABB: deck sits below rails (~25% down from the top).
-          const deckTop = box.topY - Math.min(2.85, height * 0.28);
-          const slab = 0.4;
-          out.push({
-            ...box,
-            baseY: deckTop - slab,
-            topY: deckTop,
-            climbable: true,
-            // Soft floor: no XZ wall through pillars under the span.
-            solid: false,
-          });
+          const height = box.topY - box.baseY;
+          if (height <= 1.75) {
+            // Short platform slab already (or small mound) — walkable soft floor.
+            out.push({ ...box, climbable: true, solid: false });
+          } else {
+            // Legacy tall AABB: deck sits below rails (~25% down from the top).
+            const deckTop = box.topY - Math.min(2.85, height * 0.28);
+            const slab = 0.4;
+            out.push({
+              ...box,
+              baseY: deckTop - slab,
+              topY: deckTop,
+              climbable: true,
+              // Soft floor: no XZ wall through pillars under the span.
+              solid: false,
+            });
+          }
         }
         continue;
       }

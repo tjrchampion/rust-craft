@@ -50,6 +50,7 @@
     type CastleHeight,
     type CastleStyle,
   } from "../render/castleGen";
+  import { FANTASTIC_BUILDING_TYPE_OPTIONS, type FantasticBuildingType } from "../render/fantasticBuildingGen";
   import {
     TERRAIN_VOLUME_SHAPES,
     TERRAIN_VOLUME_MATERIALS,
@@ -421,6 +422,7 @@
     roadPaintActive = false;
     houseToolActive = false;
     castleToolActive = false;
+    fantasticBuildingToolActive = false;
     armedModel = model;
     scene?.armPlacement(model, category);
   }
@@ -440,6 +442,7 @@
     roadPaintActive = false;
     houseToolActive = false;
     castleToolActive = false;
+    fantasticBuildingToolActive = false;
     armedMarker = kind;
     scene?.armMarkerPlacement(kind);
     if (kind === "mobSpawn") {
@@ -465,6 +468,7 @@
     roadPaintActive = false;
     houseToolActive = false;
     castleToolActive = false;
+    fantasticBuildingToolActive = false;
     volumeStampShape = null;
     volumeSculptBrushActive = false;
     volumeClaySculptActive = false;
@@ -481,6 +485,7 @@
     roadPaintActive = false;
     houseToolActive = false;
     castleToolActive = false;
+    fantasticBuildingToolActive = false;
     randomTreeBrushActive = false;
     grassBrushActive = false;
     grassEraseBrushActive = false;
@@ -506,6 +511,7 @@
     roadPaintActive = false;
     houseToolActive = false;
     castleToolActive = false;
+    fantasticBuildingToolActive = false;
     randomTreeBrushActive = false;
     grassBrushActive = false;
     grassEraseBrushActive = false;
@@ -532,6 +538,7 @@
     roadPaintActive = false;
     houseToolActive = false;
     castleToolActive = false;
+    fantasticBuildingToolActive = false;
     randomTreeBrushActive = false;
     grassBrushActive = false;
     grassEraseBrushActive = false;
@@ -581,6 +588,7 @@
     roadPaintActive = false;
     houseToolActive = false;
     castleToolActive = false;
+    fantasticBuildingToolActive = false;
     waterBrushMode = waterBrushMode === mode ? null : mode;
     scene?.setWaterBrushMode(waterBrushMode);
   }
@@ -604,6 +612,7 @@
     waterBrushMode = null;
     houseToolActive = false;
     castleToolActive = false;
+    fantasticBuildingToolActive = false;
     roadPaintActive = !roadPaintActive;
     if (roadPaintActive) scene?.armRoadPainting();
     else scene?.disarm();
@@ -624,6 +633,8 @@
   let castleStyle = $state<CastleStyle>("random");
   let castleSize = $state<CastleSize>(2);
   let castleHeight = $state<CastleHeight>(2);
+  let fantasticBuildingToolActive = $state(false);
+  let fantasticBuildingType = $state<FantasticBuildingType>("random");
 
   function pickRandomTreeBrush(): void {
     armedModel = null;
@@ -639,6 +650,7 @@
     eraseBrushActive = false;
     houseToolActive = false;
     castleToolActive = false;
+    fantasticBuildingToolActive = false;
     randomTreeBrushActive = !randomTreeBrushActive;
     scene?.setRandomTreeBrush(randomTreeBrushActive);
   }
@@ -668,10 +680,12 @@
     armedBarrier = false;
     armedCloudShape = null;
     castleToolActive = false;
+    fantasticBuildingToolActive = false;
     // Re-clicking the same type disarms; picking a different type switches.
     if (houseToolActive && houseType === type) {
       houseToolActive = false;
       castleToolActive = false;
+      fantasticBuildingToolActive = false;
       scene?.disarm();
       return;
     }
@@ -699,6 +713,7 @@
     armedBarrier = false;
     armedCloudShape = null;
     houseToolActive = false;
+    fantasticBuildingToolActive = false;
     if (castleToolActive) {
       castleToolActive = false;
       scene?.disarm();
@@ -710,6 +725,45 @@
       size: castleSize,
       height: castleHeight,
     });
+  }
+
+  /** One-click fantasy-village building generator (see fantasticBuildingGen.ts
+   *  / RegionEditorScene's armFantasticBuildingPlacement): drops a whole
+   *  building (base + capped body shell + door/windows/chimney/etc, sail or
+   *  waterwheel for mill types) wherever you next click, as ordinary editable
+   *  assets sharing a groupId. Stays armed for dropping several in a row. */
+  function pickFantasticBuildingTool(): void {
+    armedModel = null;
+    armedMarker = null;
+    sculptMode = null;
+    volumeStampShape = null;
+    volumeSculptBrushActive = false;
+    volumeClaySculptActive = false;
+    waterBrushMode = null;
+    roadPaintActive = false;
+    randomTreeBrushActive = false;
+    grassBrushActive = false;
+    grassEraseBrushActive = false;
+    eraseBrushActive = false;
+    texturePaintMode = null;
+    armedLightColor = null;
+    armedFogColor = null;
+    armedBarrier = false;
+    armedCloudShape = null;
+    houseToolActive = false;
+    castleToolActive = false;
+    if (fantasticBuildingToolActive) {
+      fantasticBuildingToolActive = false;
+      scene?.disarm();
+      return;
+    }
+    fantasticBuildingToolActive = true;
+    scene?.armFantasticBuildingPlacement(fantasticBuildingType);
+  }
+
+  function syncFantasticBuildingToolOptions(): void {
+    if (!fantasticBuildingToolActive) return;
+    scene?.armFantasticBuildingPlacement(fantasticBuildingType);
   }
 
   function syncCastleToolOptions(): void {
@@ -735,6 +789,7 @@
     eraseBrushActive = false;
     houseToolActive = false;
     castleToolActive = false;
+    fantasticBuildingToolActive = false;
     grassBrushActive = !grassBrushActive;
     scene?.setGrassBrush(grassBrushActive);
   }
@@ -753,6 +808,7 @@
     eraseBrushActive = false;
     houseToolActive = false;
     castleToolActive = false;
+    fantasticBuildingToolActive = false;
     grassEraseBrushActive = !grassEraseBrushActive;
     scene?.setGrassEraseBrush(grassEraseBrushActive);
   }
@@ -776,6 +832,7 @@
     armedCloudShape = null;
     houseToolActive = false;
     castleToolActive = false;
+    fantasticBuildingToolActive = false;
     eraseBrushActive = !eraseBrushActive;
     scene?.setEraseBrush(eraseBrushActive);
   }
@@ -806,6 +863,7 @@
     armedCloudShape = null;
     houseToolActive = false;
     castleToolActive = false;
+    fantasticBuildingToolActive = false;
     texturePaintMode = texturePaintMode === mode ? null : mode;
     scene?.setTexturePaintMode(texturePaintMode);
   }
@@ -826,6 +884,7 @@
     texturePaintMode = null;
     houseToolActive = false;
     castleToolActive = false;
+    fantasticBuildingToolActive = false;
     armedFogColor = null;
     armedBarrier = false;
     armedCloudShape = null;
@@ -850,6 +909,7 @@
     texturePaintMode = null;
     houseToolActive = false;
     castleToolActive = false;
+    fantasticBuildingToolActive = false;
     armedLightColor = null;
     armedBarrier = false;
     armedCloudShape = null;
@@ -876,6 +936,7 @@
     texturePaintMode = null;
     houseToolActive = false;
     castleToolActive = false;
+    fantasticBuildingToolActive = false;
     armedLightColor = null;
     armedFogColor = null;
     armedCloudShape = null;
@@ -900,6 +961,7 @@
     texturePaintMode = null;
     houseToolActive = false;
     castleToolActive = false;
+    fantasticBuildingToolActive = false;
     armedLightColor = null;
     armedFogColor = null;
     armedBarrier = false;
@@ -929,6 +991,7 @@
     armedCloudShape = null;
     houseToolActive = false;
     castleToolActive = false;
+    fantasticBuildingToolActive = false;
     scene?.setRandomTreeBrush(false);
     scene?.setGrassBrush(false);
     scene?.setGrassEraseBrush(false);
@@ -1447,7 +1510,7 @@
         <button
           class="menu-top"
           class:open={activeDropdown === "tools"}
-          class:lit={sculptMode !== null || volumeStampShape !== null || volumeSculptBrushActive || volumeClaySculptActive || waterBrushMode !== null || texturePaintMode !== null || armedLightColor !== null || armedFogColor !== null || armedBarrier || armedCloudShape !== null || roadPaintActive || armedMarker !== null || randomTreeBrushActive || grassBrushActive || grassEraseBrushActive || eraseBrushActive || houseToolActive || castleToolActive}
+          class:lit={sculptMode !== null || volumeStampShape !== null || volumeSculptBrushActive || volumeClaySculptActive || waterBrushMode !== null || texturePaintMode !== null || armedLightColor !== null || armedFogColor !== null || armedBarrier || armedCloudShape !== null || roadPaintActive || armedMarker !== null || randomTreeBrushActive || grassBrushActive || grassEraseBrushActive || eraseBrushActive || houseToolActive || castleToolActive || fantasticBuildingToolActive}
           onclick={() => toggleDropdown("tools")}
         >Tools</button>
         {#if activeDropdown === "tools"}
@@ -1547,6 +1610,21 @@
             </label>
             <button class:active={castleToolActive} onclick={() => menuAction(pickCastleTool)}>
               {castleToolActive ? "Castle tool armed — click terrain" : "Generate Castle"}
+            </button>
+            <div class="menu-section">Fantasy Building</div>
+            <label class="menu-field">
+              Type
+              <select
+                bind:value={fantasticBuildingType}
+                onchange={() => syncFantasticBuildingToolOptions()}
+              >
+                {#each FANTASTIC_BUILDING_TYPE_OPTIONS as opt}
+                  <option value={opt.id}>{opt.label}</option>
+                {/each}
+              </select>
+            </label>
+            <button class:active={fantasticBuildingToolActive} onclick={() => menuAction(pickFantasticBuildingTool)}>
+              {fantasticBuildingToolActive ? "Building tool armed — click terrain" : "Generate Building"}
             </button>
             <button class:active={randomTreeBrushActive} onclick={() => menuAction(pickRandomTreeBrush)}>Tree Brush</button>
             <button class:active={grassBrushActive} onclick={() => menuAction(pickGrassBrush)}>Grass Brush</button>
@@ -2397,12 +2475,13 @@
                 Mesh box { (sel.solidBox.halfX * 2 * (sel.scaleX ?? sel.scale)).toFixed(1) }
                 × { (sel.solidBox.halfY * 2 * (sel.scaleY ?? sel.scale)).toFixed(1) }
                 × { (sel.solidBox.halfZ * 2 * (sel.scaleZ ?? sel.scale)).toFixed(1) } m
-                · walk on top · follows position / yaw / scale
+                · hard-blocks at the exact mesh shape (walk on top too) · follows position / yaw / scale.
+                Bridge / dock / walkway / platform models are the exception — walked on, not blocked by.
               </p>
             {:else if sel.solid}
               <p class="hint">Solid on — using model radius (no mesh measure yet).</p>
             {:else}
-              <p class="hint">On = measure mesh → walkable collision (bridges/rocks). Rocks auto-enable on place.</p>
+              <p class="hint">On = measure mesh → exact-shape collision. Buildings and rocks auto-enable on place.</p>
             {/if}
           {/if}
           {#if sel.kind === "house"}

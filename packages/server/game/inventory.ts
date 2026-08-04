@@ -44,11 +44,22 @@ export function addItem(items: InvItem[], itemId: string, qty: number): number {
     remaining -= take;
   }
 
+  if (remaining <= 0) return 0;
+
+  // Occupancy set once — avoid O(slots × items) findItem scans while filling.
+  const occupied = new Set<string>();
+  for (const item of items) {
+    if (item.container === "inventory" || item.container === "hotbar") {
+      occupied.add(`${item.container}:${item.slot}`);
+    }
+  }
+
   // Fill empty slots: inventory first, then hotbar.
   for (const container of ["inventory", "hotbar"] as const) {
     for (let slot = 0; slot < slotCount(container); slot++) {
       if (remaining <= 0) break;
-      if (findItem(items, container, slot)) continue;
+      const key = `${container}:${slot}`;
+      if (occupied.has(key)) continue;
       const take = Math.min(def.stack, remaining);
       items.push({
         container,
@@ -57,6 +68,7 @@ export function addItem(items: InvItem[], itemId: string, qty: number): number {
         qty: take,
         durability: def.maxDurability ?? null,
       });
+      occupied.add(key);
       remaining -= take;
     }
   }

@@ -1,5 +1,5 @@
 import { defineEventHandler, readBody, createError } from "h3";
-import { slugifyRegionName, type RegionBlueprint } from "@rustcraft/shared";
+import { ensureRegionWorldOrigins, slugifyRegionName, type RegionBlueprint } from "@rustcraft/shared";
 import { listRegionBlueprints, saveRegionBlueprint } from "../../../utils/regions";
 import { IS_DEV } from "../../../utils/env";
 import { getGame } from "../../../game/instance";
@@ -29,6 +29,17 @@ export default defineEventHandler(async (event) => {
     }
   }
   const toSave: RegionBlueprint = { ...blueprint, id };
+  // Bake in a stable worldOrigin now, against the full current catalog,
+  // rather than leaving it to be recomputed transiently on every request --
+  // ensureRegionWorldOrigins packs positions by sorting *all* known regions,
+  // so a value computed later (once more regions exist) can differ from what
+  // was used to mount this region's terrain/teleport targets earlier. Once
+  // set here it's skipped by every future call (see the function's
+  // "keep authored placement" branch), so it never drifts again.
+  if (toSave.worldOriginX === undefined || toSave.worldOriginZ === undefined) {
+    const others = listRegionBlueprints().filter((r) => r.id !== id);
+    ensureRegionWorldOrigins([...others, toSave]);
+  }
   saveRegionBlueprint(id, toSave);
   getGame().registerRegionBlueprint(toSave);
   return { ok: true, id };

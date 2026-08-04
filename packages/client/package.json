@@ -13,6 +13,7 @@
     "@rustcraft/shared": "workspace:*",
     "svelte": "^5.56.4",
     "three": "^0.185.1",
+    "three-mesh-bvh": "^0.9.14",
     "three.quarks": "^0.17.1"
   },
   "devDependencies": {

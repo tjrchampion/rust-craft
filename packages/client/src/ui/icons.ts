@@ -1,4 +1,5 @@
 const ICONS: Record<string, string> = {
+  reward_chest: "🎁",
   wood: "🪵",
   stone: "🪨",
   hide: "🟤",
@@ -161,6 +162,11 @@ const SPELL_ICONS: Record<string, string> = {
   hammer_of_wrath: "🔨",
   holy_shield: "🛡️",
   beast_mastery: "🐺",
+  recklessness: "😡",
+  steam_blast: "♨️",
+  repair_pulse: "🔧",
+  steam_focus: "⚙️",
+  overcharge: "⚡",
 };
 
 const MOB_ICONS: Record<string, string> = {
@@ -205,4 +211,8 @@ export function mobIcon(mobType: string): string {
 
 export function spellIcon(spellId: string): string {
   return SPELL_IMAGES[spellId] ?? SPELL_ICONS[spellId] ?? "✨";
+}
+
+export function rewardChestIcon(): string {
+  return ICONS.reward_chest ?? "🎁";
 }

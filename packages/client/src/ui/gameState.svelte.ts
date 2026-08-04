@@ -6,6 +6,7 @@ import type {
   QuestOfferInfo,
   QuestLogEntry,
   AchievementSnap,
+  LevelRewardChest,
   CharacterGender,
   CharacterAppearance,
   GraphicsSettings,
@@ -189,6 +190,14 @@ class GameState {
   /** Currently active corpse loot items (null when loot window is closed) */
   activeCorpseLoot = $state<{ mobId: string; mobType: string; items: { itemId: string; qty: number }[] } | null>(null);
 
+  /** Unclaimed level-up care packages (right-side HUD chest). */
+  levelRewards = $state<LevelRewardChest[]>([]);
+  /** Which chest panel is open (id), or null when closed. */
+  levelRewardOpenId = $state<string | null>(null);
+  /** Center-screen LEVEL UP banner — fades after a few seconds. */
+  levelUpBanner = $state<{ level: number; key: number } | null>(null);
+  private levelUpBannerTimer = 0;
+
   /** System setting: Auto Loot toggle preference (persisted in localStorage) */
   autoLoot = $state<boolean>(
     typeof localStorage !== "undefined" && localStorage.getItem("rc_autoloot") !== null
@@ -348,6 +357,17 @@ class GameState {
     }, 4200);
   }
 
+  showLevelUpBanner(level: number): void {
+    const key = ++toastId;
+    this.levelUpBanner = { level, key };
+    if (typeof window !== "undefined") {
+      window.clearTimeout(this.levelUpBannerTimer);
+      this.levelUpBannerTimer = window.setTimeout(() => {
+        if (this.levelUpBanner?.key === key) this.levelUpBanner = null;
+      }, 4800);
+    }
+  }
+
   reset(): void {
     this.connected = false;
     this.self = null;
@@ -379,6 +399,9 @@ class GameState {
     this.dungeonState = null;
     this.regionState = null;
     this.worldEvents = [];
+    this.levelRewards = [];
+    this.levelRewardOpenId = null;
+    this.levelUpBanner = null;
     this.loading = false;
     this.loadingProgress = 0;
     this.loadingMessage = "";

@@ -156,6 +156,12 @@ export const LootCorpseMsg = z.object({
   lootAll: z.boolean().optional().nullable(),
 });
 
+/** Claim a pending level-up care package (HUD chest). Omit id to claim oldest. */
+export const ClaimLevelRewardMsg = z.object({
+  t: z.literal("claimLevelReward"),
+  rewardId: z.string().max(64).optional().nullable(),
+});
+
 export const RegionPortalMsg = z.object({
   t: z.literal("regionPortal"),
   regionId: z.string().max(128).optional().nullable(),
@@ -186,6 +192,7 @@ export const ClientMsg = z.discriminatedUnion("t", [
   SelectTargetMsg,
   DungeonMsg,
   LootCorpseMsg,
+  ClaimLevelRewardMsg,
   RegionPortalMsg,
 ]);
 export type ClientMsg = z.infer<typeof ClientMsg>;
@@ -356,6 +363,13 @@ export interface QuestLogEntry {
   waypoints?: { x: number; z: number }[];
 }
 
+/** Unclaimed level-up care package waiting in the HUD chest. */
+export interface LevelRewardChest {
+  id: string;
+  level: number;
+  items: { itemId: string; qty: number }[];
+}
+
 export interface AchievementSnap {
   id: string;
   name: string;
@@ -411,6 +425,10 @@ export interface SelfState {
   sitting: boolean;
   auras: { auraId: string; expiresAt: number }[];
   spellCooldowns: { spellId: string; readyAt: number }[];
+  /** Server time (ms) when the global cooldown ends. */
+  gcdReadyAt: number;
+  /** Spell id buffered in the spell-queue window, if any. */
+  queuedSpellId: string | null;
   dodgeCharges: number;
   /** When the *next* charge refills (server time ms) -- null while already
    *  at DODGE_MAX_CHARGES, since there's nothing left to count down to. */
@@ -438,6 +456,8 @@ export type ServerMsg =
       npcs: NpcSnap[];
       questLog: QuestLogEntry[];
       achievements: AchievementSnap[];
+      /** Unclaimed level-up care packages (HUD chest). */
+      levelRewards?: LevelRewardChest[];
       serverTime: number;
       dayLengthS: number;
       timeOfDay: number; // 0..1
@@ -468,6 +488,7 @@ export type ServerMsg =
         | "loot" // itemId + qty taken from a mob corpse
         | "xp"
         | "levelup"
+        | "levelReward" // a care package was queued (see levelRewards msg)
         | "death"
         | "revive" // sourceId revived targetId
         | "dodge" // sourceId dodged in world-space direction dirX/dirZ
@@ -480,6 +501,8 @@ export type ServerMsg =
       itemId?: string;
       spellId?: string;
       amount?: number;
+      /** Combat hit outcome for damage/heal events (miss omits amount or uses 0). */
+      outcome?: "hit" | "crit" | "miss" | "dodge";
       message?: string;
       x?: number;
       y?: number;
@@ -518,6 +541,11 @@ export type ServerMsg =
       items: { itemId: string; qty: number }[];
     }
   | { t: "dungeonComplete"; tier: number; xp: number; items: { itemId: string; qty: number }[] }
+  | {
+      t: "levelRewards";
+      /** Full list of unclaimed level-up chests (replace client state). */
+      chests: LevelRewardChest[];
+    }
   | { t: "regionState"; inRegion: boolean; regionId: string | null; regionName: string | null }
   | {
       t: "worldEventState";

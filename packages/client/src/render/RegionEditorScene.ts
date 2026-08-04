@@ -103,6 +103,16 @@ import {
   type CastleSize,
   type CastleHeight,
 } from "./castleGen";
+import { generateFantasticBuildingAssets, type FantasticBuildingType } from "./fantasticBuildingGen";
+import {
+  buildRegionCollisionBVH,
+  resolveCapsule,
+  sampleGroundBelow,
+  disposeRegionCollision,
+  type RegionCollision,
+  type PlacedCollider,
+} from "@rustcraft/shared/collision";
+import { preloadCollision, getCollisionMesh, collisionModelKey } from "./collisionData";
 import type { RegionAsset } from "@rustcraft/shared";
 import {
   createTerrainVolumeMesh,
@@ -456,6 +466,11 @@ export class RegionEditorScene {
   private armedCastleStyle: CastleStyle = "random";
   private armedCastleSize: CastleSize = 2;
   private armedCastleHeight: CastleHeight = 2;
+  /** Procedural fantasy-village building tool — next click drops a whole
+   *  building (base + capped body shell + door/windows/etc, see
+   *  fantasticBuildingGen.ts) as ordinary building-category assets. */
+  private armedFantasticBuilding = false;
+  private armedFantasticBuildingType: FantasticBuildingType = "random";
   /** Volume-sculpt brush -- stamps real 3D primitives into the world instead
    *  of deforming the heightmap. `place` drops one shape at a time; `sculpt`
    *  is a continuous drag brush that sprays overlapping stamps along the stroke;
@@ -490,6 +505,13 @@ export class RegionEditorScene {
   private waterBrushMode: WaterBrushMode = null;
   private waterPhysicsSimulating = true;
   private waterHeights: Float32Array = new Float32Array(0);
+  /** Grid-index AABB covering every cell that currently (or recently) had
+   *  water, kept slightly loose (union-grown, never shrunk except on a full
+   *  recompute). stepWaterPhysics() iterates only this region each frame
+   *  instead of the entire heightmap -- unbounded, the flow simulation scanned
+   *  every cell every frame regardless of how small the actual pond was. */
+  private waterActiveBounds: { tx0: number; tx1: number; tz0: number; tz1: number } | null = null;
+  private waterFlowScratch: Float32Array | null = null;
   private waterMeshField: RegionWaterMeshField | null = null;
   private waterParticlesGroup = new THREE.Group();
   private waterParticles: { obj: THREE.Mesh; vel: THREE.Vector3; life: number; maxLife: number }[] = [];
@@ -581,6 +603,12 @@ export class RegionEditorScene {
   private playtestAnimSpeed = 0;
   private playtestVelocityY = 0;
   private playtestGrounded = true;
+  /** True-geometry (BVH) collision for solid assets during playtest; built on
+   *  enterPlaytest from the offline collision meshes, disposed on exit. */
+  private playtestCollision: RegionCollision | null = null;
+  /** Capsule feet→head height for playtest collision (matches movement.ts's
+   *  hard-coded 1.7m head offset). */
+  private static readonly PLAYTEST_CAPSULE_HEIGHT = 1.7;
   private lastFrameTime = performance.now();
   private static readonly PLAYTEST_AVATAR_HEIGHT = 1.75;
   private static readonly PLAYTEST_CAMERA_DISTANCE = 6.5;
@@ -757,7 +785,10 @@ export class RegionEditorScene {
    *  weights (grass/rock/sand/snow/dirt/cobble) from height + local slope, so a
    *  sculpt stroke that carves a cliff immediately shows rock/snow instead
    *  of a flat green plane stretched over the new shape. */
-  private syncTerrainMeshHeights(mesh: THREE.Mesh = this.terrainMesh): void {
+  private syncTerrainMeshHeights(
+    mesh: THREE.Mesh = this.terrainMesh,
+    dirtyRect?: { minX: number; maxX: number; minZ: number; maxZ: number },
+  ): void {
     const half = ((this.gridSize - 1) * this.pitch) / 2;
     const span = (this.gridSize - 1) * this.pitch;
     const pos = mesh.geometry.attributes.position as THREE.BufferAttribute;
@@ -777,6 +808,13 @@ export class RegionEditorScene {
       const z = pos.getZ(i);
       const y = this.heightAt(x, z);
       pos.setY(i, y);
+
+      // Brush calls pass a dirty rect so this skips the (relatively costly)
+      // slope + texture-weight recompute for vertices the brush didn't
+      // touch -- unbounded, this ran for every vertex on every dab.
+      if (dirtyRect && (x < dirtyRect.minX || x > dirtyRect.maxX || z < dirtyRect.minZ || z > dirtyRect.maxZ)) {
+        continue;
+      }
 
       if (terrainUv) terrainUv.setXY(i, (x + span / 2) / span, (z + span / 2) / span);
       if (weightsA && weightsB && tints) {
@@ -814,6 +852,35 @@ export class RegionEditorScene {
     return this.heights[tz * this.gridSize + tx] ?? 0;
   }
 
+  /** Grid index range covering a world-space brush circle, clamped to the
+   *  terrain grid. Sculpt/paint loops iterate only this range instead of the
+   *  full gridSize×gridSize heightmap on every dab -- on a large region the
+   *  unbounded scan was the dominant per-mousemove cost. */
+  private brushGridBounds(
+    hitX: number,
+    hitZ: number,
+    radius: number,
+  ): { tx0: number; tx1: number; tz0: number; tz1: number } {
+    const half = ((this.gridSize - 1) * this.pitch) / 2;
+    const tx0 = Math.max(0, Math.floor((hitX - radius + half) / this.pitch));
+    const tx1 = Math.min(this.gridSize - 1, Math.ceil((hitX + radius + half) / this.pitch));
+    const tz0 = Math.max(0, Math.floor((hitZ - radius + half) / this.pitch));
+    const tz1 = Math.min(this.gridSize - 1, Math.ceil((hitZ + radius + half) / this.pitch));
+    return { tx0, tx1, tz0, tz1 };
+  }
+
+  /** World-space AABB covering a brush circle, padded for slope/neighbor
+   *  sampling -- passed to syncTerrainMeshHeights() so it skips the
+   *  per-vertex texture-weight recompute outside the affected area. */
+  private worldRectFromBrush(
+    hitX: number,
+    hitZ: number,
+    radius: number,
+  ): { minX: number; maxX: number; minZ: number; maxZ: number } {
+    const pad = this.pitch * 2;
+    return { minX: hitX - radius - pad, maxX: hitX + radius + pad, minZ: hitZ - radius - pad, maxZ: hitZ + radius + pad };
+  }
+
   private sculptAt(hitX: number, hitY: number, hitZ: number, mode: SculptMode): void {
     if (!mode) return;
 
@@ -834,14 +901,15 @@ export class RegionEditorScene {
 
     if (mode === "raise" || mode === "lower") {
       const sign = mode === "raise" ? 1 : -1;
-      for (let tz = 0; tz < this.gridSize; tz++) {
+      const { tx0, tx1, tz0, tz1 } = this.brushGridBounds(hitX, hitZ, this.brushRadius);
+      for (let tz = tz0; tz <= tz1; tz++) {
         const wz = tz * this.pitch - half;
-        for (let tx = 0; tx < this.gridSize; tx++) {
+        for (let tx = tx0; tx <= tx1; tx++) {
           const wx = tx * this.pitch - half;
           const d = Math.hypot(wx - hitX, wz - hitZ);
           if (d > this.brushRadius) continue;
           const falloff = 1 - d / this.brushRadius;
-          this.heights[tz * this.gridSize + tx]! += sign * this.brushStrength * falloff * 0.4;
+          this.heights[tz * this.gridSize + tx]! += sign * this.brushStrength * falloff * 0.8;
         }
       }
     } else if (mode === "mold") {
@@ -849,46 +917,61 @@ export class RegionEditorScene {
         this.moldTargetHeight = this.heightAt(hitX, hitZ);
       }
       const targetH = this.moldTargetHeight;
-      for (let tz = 0; tz < this.gridSize; tz++) {
+      const { tx0, tx1, tz0, tz1 } = this.brushGridBounds(hitX, hitZ, this.brushRadius);
+      for (let tz = tz0; tz <= tz1; tz++) {
         const wz = tz * this.pitch - half;
-        for (let tx = 0; tx < this.gridSize; tx++) {
+        for (let tx = tx0; tx <= tx1; tx++) {
           const wx = tx * this.pitch - half;
           const d = Math.hypot(wx - hitX, wz - hitZ);
           if (d > this.brushRadius) continue;
           const falloff = 1 - d / this.brushRadius;
           const idx = tz * this.gridSize + tx;
           const currentH = this.heights[idx]!;
-          const factor = Math.min(0.8, this.brushStrength * falloff * 0.25);
+          const factor = Math.min(0.8, this.brushStrength * falloff * 0.5);
           this.heights[idx] = currentH + (targetH - currentH) * factor;
         }
       }
     } else if (mode === "smooth") {
       const gSize = this.gridSize;
-      const copyHeights = new Float32Array(this.heights);
-      for (let tz = 0; tz < gSize; tz++) {
+      const { tx0, tx1, tz0, tz1 } = this.brushGridBounds(hitX, hitZ, this.brushRadius);
+      // Snapshot only the affected sub-rectangle (padded by 1 cell for
+      // neighbor averaging) instead of copying the entire heightmap.
+      const ptx0 = Math.max(0, tx0 - 1);
+      const ptx1 = Math.min(gSize - 1, tx1 + 1);
+      const ptz0 = Math.max(0, tz0 - 1);
+      const ptz1 = Math.min(gSize - 1, tz1 + 1);
+      const pw = ptx1 - ptx0 + 1;
+      const snapshot = new Float32Array(pw * (ptz1 - ptz0 + 1));
+      for (let tz = ptz0; tz <= ptz1; tz++) {
+        for (let tx = ptx0; tx <= ptx1; tx++) {
+          snapshot[(tz - ptz0) * pw + (tx - ptx0)] = this.heights[tz * gSize + tx]!;
+        }
+      }
+      const snap = (tx: number, tz: number): number => snapshot[(tz - ptz0) * pw + (tx - ptx0)]!;
+      for (let tz = tz0; tz <= tz1; tz++) {
         const wz = tz * this.pitch - half;
-        for (let tx = 0; tx < gSize; tx++) {
+        for (let tx = tx0; tx <= tx1; tx++) {
           const wx = tx * this.pitch - half;
           const d = Math.hypot(wx - hitX, wz - hitZ);
           if (d > this.brushRadius) continue;
           const falloff = 1 - d / this.brushRadius;
           const idx = tz * gSize + tx;
 
-          let sum = copyHeights[idx]!;
+          let sum = snap(tx, tz);
           let count = 1;
-          if (tx > 0) { sum += copyHeights[idx - 1]!; count++; }
-          if (tx < gSize - 1) { sum += copyHeights[idx + 1]!; count++; }
-          if (tz > 0) { sum += copyHeights[idx - gSize]!; count++; }
-          if (tz < gSize - 1) { sum += copyHeights[idx + gSize]!; count++; }
+          if (tx > 0) { sum += snap(tx - 1, tz); count++; }
+          if (tx < gSize - 1) { sum += snap(tx + 1, tz); count++; }
+          if (tz > 0) { sum += snap(tx, tz - 1); count++; }
+          if (tz < gSize - 1) { sum += snap(tx, tz + 1); count++; }
           const avg = sum / count;
 
-          const factor = Math.min(0.8, this.brushStrength * falloff * 0.3);
-          this.heights[idx] = copyHeights[idx]! + (avg - copyHeights[idx]!) * factor;
+          const factor = Math.min(0.8, this.brushStrength * falloff * 0.6);
+          this.heights[idx] = snap(tx, tz) + (avg - snap(tx, tz)) * factor;
         }
       }
     }
 
-    this.syncTerrainMeshHeights();
+    this.syncTerrainMeshHeights(this.terrainMesh, this.worldRectFromBrush(hitX, hitZ, this.brushRadius));
     // No volume selection -- only sculpt the heightmap (volumes need an
     // explicit selection so nearby stamps aren't accidentally reshaped).
     this.triggerChange();
@@ -1132,9 +1215,10 @@ export class RegionEditorScene {
     const half = ((this.gridSize - 1) * this.pitch) / 2;
     let changed = false;
 
-    for (let tz = 0; tz < this.gridSize; tz++) {
+    const { tx0, tx1, tz0, tz1 } = this.brushGridBounds(hitX, hitZ, this.brushRadius);
+    for (let tz = tz0; tz <= tz1; tz++) {
       const wz = tz * this.pitch - half;
-      for (let tx = 0; tx < this.gridSize; tx++) {
+      for (let tx = tx0; tx <= tx1; tx++) {
         const wx = tx * this.pitch - half;
         const d = Math.hypot(wx - hitX, wz - hitZ);
         if (d > this.brushRadius) continue;
@@ -1147,7 +1231,7 @@ export class RegionEditorScene {
     }
 
     if (changed) {
-      this.syncTerrainMeshHeights();
+      this.syncTerrainMeshHeights(this.terrainMesh, this.worldRectFromBrush(hitX, hitZ, this.brushRadius));
       this.triggerChange();
     }
   }
@@ -1825,14 +1909,26 @@ export class RegionEditorScene {
     this.grassPreviewDirty = false;
   }
 
-  /** Refresh density while brushing so paint/erase appear under the cursor. */
+  /** Refresh density while brushing so paint/erase appear under the cursor.
+   *  Coverage-only — skips the heightmap texture re-upload that the full
+   *  rebuildGrassPreview() does, since paint/erase strokes never touch
+   *  terrain heights. This runs on every mousemove while brushing (plus once
+   *  per animation frame), so re-uploading the heightmap texture there was a
+   *  measurable per-stroke GPU cost for no visual benefit. */
   private flushGrassPreviewWhileBrushing(): void {
     if (!this.grassPreviewDirty) return;
-    this.rebuildGrassPreview(true);
+    if (this.grassPatches.length === 0 && !this.grassField) {
+      this.grassPreviewDirty = false;
+      return;
+    }
+    const field = this.ensureQuickGrassField();
+    field.setCoverage(this.grassPatches, this.grassExclusions);
+    this.grassPreviewDirty = false;
   }
 
   clearWater(): void {
     this.waterHeights.fill(0);
+    this.waterActiveBounds = null;
     this.syncWaterMesh();
     this.triggerChange();
   }
@@ -1840,6 +1936,8 @@ export class RegionEditorScene {
   private syncWaterMesh(): void {
     if (this.waterHeights.length !== this.gridSize * this.gridSize) {
       this.waterHeights = new Float32Array(this.gridSize * this.gridSize);
+      this.waterActiveBounds = null;
+      this.waterFlowScratch = null;
     }
     if (!this.waterMeshField) {
       this.waterMeshField = buildRegionWaterMesh(this.gridSize, this.pitch, this.heights, this.waterHeights);
@@ -1887,9 +1985,11 @@ export class RegionEditorScene {
 
     let changed = false;
 
-    for (let tz = 0; tz < this.gridSize; tz++) {
+    const { tx0, tx1, tz0, tz1 } = this.brushGridBounds(hitX, hitZ, this.brushRadius);
+    if (mode === "add") this.growWaterBounds(tx0, tx1, tz0, tz1);
+    for (let tz = tz0; tz <= tz1; tz++) {
       const wz = tz * this.pitch - half;
-      for (let tx = 0; tx < this.gridSize; tx++) {
+      for (let tx = tx0; tx <= tx1; tx++) {
         const wx = tx * this.pitch - half;
         const d = Math.hypot(wx - hitX, wz - hitZ);
         if (d > this.brushRadius) continue;
@@ -1970,40 +2070,79 @@ export class RegionEditorScene {
     }
   }
 
+  /** Expands waterActiveBounds to include the given grid-index rectangle. */
+  private growWaterBounds(tx0: number, tx1: number, tz0: number, tz1: number): void {
+    const b = this.waterActiveBounds;
+    this.waterActiveBounds = b
+      ? { tx0: Math.min(b.tx0, tx0), tx1: Math.max(b.tx1, tx1), tz0: Math.min(b.tz0, tz0), tz1: Math.max(b.tz1, tz1) }
+      : { tx0, tx1, tz0, tz1 };
+  }
+
+  /** Scans the full waterHeights array once for a tight active-water AABB --
+   *  used only after a wholesale load (blueprint import), never per frame. */
+  private recomputeWaterBoundsFull(): void {
+    const gSize = this.gridSize;
+    let tx0 = Infinity, tx1 = -Infinity, tz0 = Infinity, tz1 = -Infinity;
+    for (let tz = 0; tz < gSize; tz++) {
+      for (let tx = 0; tx < gSize; tx++) {
+        if (this.waterHeights[tz * gSize + tx]! > 0.002) {
+          if (tx < tx0) tx0 = tx;
+          if (tx > tx1) tx1 = tx;
+          if (tz < tz0) tz0 = tz;
+          if (tz > tz1) tz1 = tz;
+        }
+      }
+    }
+    this.waterActiveBounds = tx0 <= tx1 ? { tx0, tx1, tz0, tz1 } : null;
+  }
+
   private stepWaterPhysics(dt: number): void {
     if (!this.waterPhysicsSimulating || this.waterHeights.length === 0) return;
-    let hasWater = false;
-    for (let i = 0; i < this.waterHeights.length; i++) {
-      if (this.waterHeights[i]! > 0.002) { hasWater = true; break; }
-    }
-    if (!hasWater) return;
+    const bounds = this.waterActiveBounds;
+    if (!bounds) return;
 
     const gSize = this.gridSize;
+    // Pad by 1 cell so flow can spread just past the tracked bounds; grown
+    // back into waterActiveBounds below when that happens.
+    const tx0 = Math.max(0, bounds.tx0 - 1);
+    const tx1 = Math.min(gSize - 1, bounds.tx1 + 1);
+    const tz0 = Math.max(0, bounds.tz0 - 1);
+    const tz1 = Math.min(gSize - 1, bounds.tz1 + 1);
+
     // Run 3 fast sub-iterations per frame for smooth self-leveling pool surfaces
     const iterations = 3;
     const subDt = Math.min(0.033, dt) / iterations;
     const flowCoeff = subDt * 14.0;
     let totalChanged = false;
 
+    if (!this.waterFlowScratch || this.waterFlowScratch.length !== this.waterHeights.length) {
+      this.waterFlowScratch = new Float32Array(this.waterHeights.length);
+    }
+    const nextWater = this.waterFlowScratch;
+
     for (let iter = 0; iter < iterations; iter++) {
-      const nextWater = new Float32Array(this.waterHeights);
+      // Snapshot only the region this iteration touches (bounded, not O(gridSize^2)).
+      for (let tz = tz0; tz <= tz1; tz++) {
+        const rowStart = tz * gSize;
+        nextWater.set(this.waterHeights.subarray(rowStart + tx0, rowStart + tx1 + 1), rowStart + tx0);
+      }
       let changed = false;
 
-      for (let tz = 0; tz < gSize; tz++) {
-        for (let tx = 0; tx < gSize; tx++) {
+      for (let tz = tz0; tz <= tz1; tz++) {
+        for (let tx = tx0; tx <= tx1; tx++) {
           const idx = tz * gSize + tx;
           const wCurr = this.waterHeights[idx]!;
           if (wCurr <= 0.001) continue;
           const hCurr = this.heights[idx]!;
           const sCurr = hCurr + wCurr;
 
-          const nbrs: number[] = [];
-          if (tx > 0) nbrs.push(tz * gSize + (tx - 1));
-          if (tx < gSize - 1) nbrs.push(tz * gSize + (tx + 1));
-          if (tz > 0) nbrs.push((tz - 1) * gSize + tx);
-          if (tz < gSize - 1) nbrs.push((tz + 1) * gSize + tx);
+          for (let n = 0; n < 4; n++) {
+            let nIdx: number;
+            if (n === 0) { if (tx <= 0) continue; nIdx = idx - 1; }
+            else if (n === 1) { if (tx >= gSize - 1) continue; nIdx = idx + 1; }
+            else if (n === 2) { if (tz <= 0) continue; nIdx = idx - gSize; }
+            else { if (tz >= gSize - 1) continue; nIdx = idx + gSize; }
 
-          for (const nIdx of nbrs) {
             const wNbr = this.waterHeights[nIdx]!;
             const hNbr = this.heights[nIdx]!;
             const sNbr = hNbr + wNbr;
@@ -2025,18 +2164,28 @@ export class RegionEditorScene {
       }
 
       if (changed) {
-        this.waterHeights.set(nextWater);
+        for (let tz = tz0; tz <= tz1; tz++) {
+          const rowStart = tz * gSize;
+          this.waterHeights.set(nextWater.subarray(rowStart + tx0, rowStart + tx1 + 1), rowStart + tx0);
+        }
         totalChanged = true;
+        // Ratchet tracked bounds to cover the padded region flow just
+        // touched, so a spreading pond keeps widening its own pad ring
+        // frame over frame instead of getting capped at the original AABB.
+        this.growWaterBounds(tx0, tx1, tz0, tz1);
       } else {
         break;
       }
     }
 
     // Clean up ultra-thin residual film (< 0.003) so dry terrain stays clean
-    for (let i = 0; i < this.waterHeights.length; i++) {
-      if (this.waterHeights[i]! > 0 && this.waterHeights[i]! < 0.003) {
-        this.waterHeights[i] = 0;
-        totalChanged = true;
+    for (let tz = tz0; tz <= tz1; tz++) {
+      for (let tx = tx0; tx <= tx1; tx++) {
+        const idx = tz * gSize + tx;
+        if (this.waterHeights[idx]! > 0 && this.waterHeights[idx]! < 0.003) {
+          this.waterHeights[idx] = 0;
+          totalChanged = true;
+        }
       }
     }
 
@@ -2405,7 +2554,38 @@ export class RegionEditorScene {
 
     this.playtestActive = true;
     this.onPlaytestChange?.(true);
+    // Build true-geometry (BVH) collision for solid assets (async: fetches the
+    // offline meshes, then swaps in). Until it's ready, solids still collide
+    // via the analytic fallback in playtestColliders().
+    void this.rebuildPlaytestCollision();
     music.play(regionMusicTrackUrl(this.meta.musicTrack), 3000);
+  }
+
+  /** Bake solid assets' offline collision meshes into one region BVH for the
+   *  playtest capsule. Rebuild after asset transform edits or on entry. */
+  private async rebuildPlaytestCollision(): Promise<void> {
+    const placed: PlacedCollider[] = [];
+    const keys = new Set<string>();
+    for (const a of this.assets.values()) {
+      if (!a.solid) continue;
+      const key = collisionModelKey(a.category, a.model);
+      keys.add(key);
+      placed.push({
+        modelKey: key,
+        x: a.obj.position.x,
+        y: a.obj.position.y,
+        z: a.obj.position.z,
+        yaw: a.obj.rotation.y,
+        scaleX: a.obj.scale.x || 1,
+        scaleY: a.obj.scale.y || 1,
+        scaleZ: a.obj.scale.z || 1,
+      });
+    }
+    await preloadCollision(keys);
+    if (!this.playtestActive) return; // exited while fetching
+    const next = buildRegionCollisionBVH(placed, getCollisionMesh, { x: 0, z: 0 });
+    disposeRegionCollision(this.playtestCollision);
+    this.playtestCollision = next;
   }
 
   private async spawnPlaytestAvatar(classId: ClassId): Promise<void> {
@@ -2451,6 +2631,9 @@ export class RegionEditorScene {
       this.scene.remove(this.playtestAvatar.group);
       this.playtestAvatar = null;
     }
+
+    disposeRegionCollision(this.playtestCollision);
+    this.playtestCollision = null;
 
     this.setMarkersVisible(true);
     // Resume whatever navigation mode was active before playtest.
@@ -2862,6 +3045,18 @@ export class RegionEditorScene {
     const regionAssets = this.playtestColliders();
     const groundAt = (x: number, z: number) => this.terrainVolumeGroundAt(x, z);
     const waterDepthAt = (x: number, z: number) => this.sampleWaterDepth(x, z);
+    // True-geometry (BVH) collision for solid assets; the analytic colliders
+    // above cover only the rest (see playtestColliders()).
+    const col = this.playtestCollision;
+    const r = PLAYER_BODY_RADIUS;
+    const h = RegionEditorScene.PLAYTEST_CAPSULE_HEIGHT;
+    const meshResolve = col
+      ? (x: number, y: number, z: number) => resolveCapsule(col, x, y, z, { radius: r, height: h })
+      : undefined;
+    const meshGroundBelow = col
+      ? (x: number, z: number, fromY: number, maxDrop: number) =>
+          sampleGroundBelow(col, x, z, fromY, r, maxDrop)
+      : undefined;
     let state = {
       x: this.playtestPos.x,
       y: this.playtestPos.y,
@@ -2874,7 +3069,7 @@ export class RegionEditorScene {
       const step = Math.min(TICK_DT, remaining);
       state = stepMovement(
         state,
-        { moveX, moveZ, jump: false, sprint, groundAt, waterDepthAt, regionAssets },
+        { moveX, moveZ, jump: false, sprint, groundAt, waterDepthAt, regionAssets, meshResolve, meshGroundBelow },
         step,
       );
       remaining -= step;
@@ -2917,7 +3112,13 @@ export class RegionEditorScene {
 
   /** Live editor colliders for playtest — same bake as client/server movement. */
   private playtestColliders() {
-    const assets: RegionAsset[] = [...this.assets.values()].map((a) => {
+    const bvhActive = this.playtestCollision !== null;
+    const assets: RegionAsset[] = [...this.assets.values()]
+      // Solid assets whose mesh is baked into the BVH are handled there — keep
+      // them out of the analytic set to avoid double collision. Un-meshed
+      // solids (e.g. meshopt rocks) and all non-solid props stay analytic.
+      .filter((a) => !(bvhActive && a.solid && getCollisionMesh(collisionModelKey(a.category, a.model)) != null))
+      .map((a) => {
       const s = regionAssetScaleFields(a.obj.scale.x || 1, a.obj.scale.y || 1, a.obj.scale.z || 1);
       return {
         model: a.model,
@@ -3538,6 +3739,7 @@ export class RegionEditorScene {
     this.armedMarkerKind = null;
     this.armedHouse = false;
     this.armedCastle = false;
+    this.armedFantasticBuilding = false;
     this.clearVolumeStamp();
     this.sculptMode = null;
     this.roadPaintArmed = false;
@@ -3550,6 +3752,7 @@ export class RegionEditorScene {
     this.armedModel = null;
     this.armedHouse = false;
     this.armedCastle = false;
+    this.armedFantasticBuilding = false;
     this.clearVolumeStamp();
     this.sculptMode = null;
     this.roadPaintArmed = false;
@@ -3659,6 +3862,7 @@ export class RegionEditorScene {
     this.roadPaintArmed = false;
     this.clearVolumeStamp();
     this.armedCastle = false;
+    this.armedFantasticBuilding = false;
     this.armedHouse = true;
     this.armedHouseType = type;
     this.orbit.enablePan = false;
@@ -3685,10 +3889,36 @@ export class RegionEditorScene {
     this.roadPaintArmed = false;
     this.clearVolumeStamp();
     this.armedHouse = false;
+    this.armedFantasticBuilding = false;
     this.armedCastle = true;
     this.armedCastleStyle = opts?.style ?? "random";
     this.armedCastleSize = opts?.size ?? 2;
     this.armedCastleHeight = opts?.height ?? 2;
+    this.orbit.enablePan = false;
+    this.transform.detach();
+    this.deselect();
+  }
+
+  /** Arms the procedural fantasy-village building tool — next terrain click
+   *  drops a whole building (see fantasticBuildingGen.ts) as grouped
+   *  building-category assets. Single-click only, same reasoning as houses:
+   *  a building is a dozen-plus pieces, so a drag shouldn't spam them. */
+  armFantasticBuildingPlacement(type: FantasticBuildingType = "random"): void {
+    this.armedModel = null;
+    this.armedMarkerKind = null;
+    this.sculptMode = null;
+    this.waterBrushMode = null;
+    this.texturePaintMode = null;
+    this.randomTreeBrushActive = false;
+    this.grassBrushActive = false;
+    this.grassEraseBrushActive = false;
+    this.eraseBrushActive = false;
+    this.roadPaintArmed = false;
+    this.clearVolumeStamp();
+    this.armedHouse = false;
+    this.armedCastle = false;
+    this.armedFantasticBuilding = true;
+    this.armedFantasticBuildingType = type;
     this.orbit.enablePan = false;
     this.transform.detach();
     this.deselect();
@@ -3699,6 +3929,7 @@ export class RegionEditorScene {
     this.armedMarkerKind = null;
     this.armedHouse = false;
     this.armedCastle = false;
+    this.armedFantasticBuilding = false;
     this.clearVolumeStamp();
     this.armedLightColor = null;
     this.armedFogColor = null;
@@ -4319,6 +4550,11 @@ export class RegionEditorScene {
     } else if (this.armedCastle) {
       const hit = this.terrainHitAt(e);
       if (hit) void this.placeCastleAt(hit.x, hit.y, hit.z);
+      e.preventDefault();
+      e.stopPropagation();
+    } else if (this.armedFantasticBuilding) {
+      const hit = this.terrainHitAt(e);
+      if (hit) void this.placeFantasticBuildingAt(hit.x, hit.y, hit.z);
       e.preventDefault();
       e.stopPropagation();
     } else if (e.shiftKey && document.pointerLockElement !== this.canvas) {
@@ -4954,7 +5190,11 @@ export class RegionEditorScene {
       (isRegionAssetLightModel(model) ? { enabled: true, ...REGION_ASSET_LIGHT_DEFAULTS[model]! } : undefined);
     const entry: AssetEntry = { id, model, category, obj, groupId: opts?.groupId, light };
     this.syncAssetPointLight(entry);
-    if (isRockLikeAssetModel(model)) this.applyMeasuredSolid(entry);
+    // Structural pieces (walls/doors/windows/roofs/towers/houses) and rocks
+    // block movement by default, measured to their exact mesh shape --
+    // matches how regionAssetColliders() treats them (hard block unless the
+    // model name marks it a walkable bridge/dock/walkway/platform span).
+    if (isRockLikeAssetModel(model) || category === "building") this.applyMeasuredSolid(entry);
     this.assets.set(id, entry);
     if (!opts?.skipSelect) {
       this.select("asset", id, false);
@@ -5057,6 +5297,44 @@ export class RegionEditorScene {
         ids.push(id);
       } catch (err) {
         console.warn(`[regionEditor] castle piece failed: ${piece.model}`, err);
+      }
+    }
+    if (ids.length > 0) {
+      this.selectedIds = new Set(ids);
+      this.updateSelectionGroup();
+      this.emitSelection();
+    }
+    this.triggerChange();
+    return ids;
+  }
+
+  /** Places a procedural fantasy-village building (base + capped body shell +
+   *  door/windows/chimney/etc, and a sail or waterwheel for mill types) as
+   *  grouped building-category assets, same wiring as placeCastleAt. */
+  private async placeFantasticBuildingAt(x: number, y: number, z: number): Promise<string[]> {
+    const seed = (Math.random() * 0xffffffff) >>> 0;
+    const groupId = `fbuilding_${this.nextId++}`;
+    const pieces = generateFantasticBuildingAssets(x, z, y, {
+      seed,
+      type: this.armedFantasticBuildingType,
+      groupId,
+    });
+    const ids: string[] = [];
+    for (const piece of pieces) {
+      try {
+        const id = await this.placeAsset(
+          piece.model,
+          piece.category,
+          piece.localX,
+          piece.localY,
+          piece.localZ,
+          piece.yaw,
+          piece.scale ?? 1,
+          { groupId, skipSelect: true },
+        );
+        ids.push(id);
+      } catch (err) {
+        console.warn(`[regionEditor] fantastic building piece failed: ${piece.model}`, err);
       }
     }
     if (ids.length > 0) {
@@ -6416,6 +6694,8 @@ export class RegionEditorScene {
     this.waterBrushMode = null;
     this.customTextures = new Array(this.gridSize * this.gridSize).fill(0);
     this.waterHeights = new Float32Array(0);
+    this.waterActiveBounds = null;
+    this.waterFlowScratch = null;
     if (this.waterMeshField) {
       this.scene.remove(this.waterMeshField.mesh);
       this.waterMeshField.mesh.geometry.dispose();
@@ -6466,6 +6746,8 @@ export class RegionEditorScene {
       } else {
         this.waterHeights = new Float32Array(totalCells);
       }
+      this.waterFlowScratch = null;
+      this.recomputeWaterBoundsFull();
       this.syncWaterMesh();
       this.roads = (bp.roads ?? []).map((r) => ({ points: r.points.map((p) => ({ ...p })), width: r.width }));
       this.grassPatches = (bp.grassPatches ?? []).map((p) => ({ ...p }));
@@ -6531,7 +6813,9 @@ export class RegionEditorScene {
         };
         this.syncAssetPointLight(entry);
         if (entry.solid && !entry.solidBox) this.applyMeasuredSolid(entry);
-        else if (!entry.solid && isRockLikeAssetModel(asset.model)) this.applyMeasuredSolid(entry);
+        else if (!entry.solid && (isRockLikeAssetModel(asset.model) || asset.category === "building")) {
+          this.applyMeasuredSolid(entry);
+        }
         this.assets.set(id, entry);
       }
 

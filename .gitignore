@@ -9,3 +9,8 @@ dist/
 # Raw purchased/downloaded CraftPix source packs (PSDs + full icon sets, ~800MB).
 # Only the curated derivatives we actually ship live in packages/client/public/assets/ui/.
 packages/ui/
+
+# Generated collision geometry (per-model triangle soup for BVH collision).
+# Pure function of the committed source models; regenerated via
+# `pnpm collision:extract` (auto-run on predev/prebuild when missing).
+packages/client/public/assets/collision/
