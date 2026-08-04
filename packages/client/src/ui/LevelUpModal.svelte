@@ -30,8 +30,9 @@
   <div class="modal rc-frame" onclick={(e) => e.stopPropagation()} role="presentation">
     <div class="banner">
       <div class="banner-glow"></div>
-      <button class="close" onclick={onClose}>✕</button>
+      <button class="rc-close close" onclick={onClose} aria-label="Close">✕</button>
       <IconGlyph value={rewardChestIcon()} size={56} />
+      <div class="reached">You've Reached</div>
       <div class="level-title">Level {chest.level}</div>
     </div>
     <div class="rc-divider"></div>
@@ -74,7 +75,8 @@
   .backdrop {
     position: absolute;
     inset: 0;
-    background: rgba(4, 6, 10, 0.6);
+    background: rgba(8, 4, 14, 0.62);
+    backdrop-filter: blur(3px);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -86,44 +88,50 @@
     max-height: 82vh;
     overflow-y: auto;
     padding: 18px 20px 20px;
+    box-shadow:
+      0 0 40px rgba(196, 77, 154, 0.35),
+      0 18px 50px rgba(0, 0, 0, 0.65);
   }
   .banner {
     position: relative;
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 6px;
+    gap: 4px;
     padding: 8px 0 4px;
   }
   .close {
     position: absolute;
     top: 0;
     right: 0;
-    background: none;
-    border: none;
-    color: var(--rc-ink-dim);
-    font-size: 16px;
-    cursor: pointer;
-    padding: 4px;
   }
   .banner-glow {
     position: absolute;
     top: -10px;
     left: 50%;
     transform: translateX(-50%);
-    width: 160px;
+    width: 200px;
     height: 160px;
-    background: radial-gradient(circle, rgba(255, 214, 110, 0.35), transparent 70%);
+    background: radial-gradient(circle, rgba(196, 77, 154, 0.45), transparent 70%);
     pointer-events: none;
+  }
+  .reached {
+    position: relative;
+    font-family: var(--rc-display);
+    font-size: 11px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: var(--rc-ink-dim);
   }
   .level-title {
     position: relative;
     font-family: var(--rc-display);
-    font-size: 22px;
+    font-size: 28px;
     font-weight: 700;
-    letter-spacing: 0.04em;
-    color: var(--rc-gold-bright);
-    text-shadow: 0 0 12px rgba(255, 214, 110, 0.6);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--rc-ink);
+    text-shadow: 0 0 18px rgba(196, 77, 154, 0.7);
   }
   .section {
     margin-top: 14px;

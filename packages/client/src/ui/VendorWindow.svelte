@@ -53,30 +53,26 @@
 
   <div class="vendor-overlay">
     <div class="vendor-window rc-frame">
-      <!-- Header -->
-      <div class="vendor-header">
-        <div class="header-titles">
-          <h2 class="merchant-name">🛒 {vendor.vendorName}</h2>
-          <span class="merchant-title">{vendor.title}</span>
-        </div>
-        <button class="close-btn" onclick={close}>✕</button>
+      <div class="rc-panel-header">
+        <h2 class="rc-frame-title">Vendor</h2>
+        <button class="rc-close" onclick={close} aria-label="Close">✕</button>
       </div>
+      <div class="merchant-sub">{vendor.vendorName} · {vendor.title}</div>
 
-      <!-- Tab Switcher -->
       <div class="vendor-tabs">
         <button
           class="vendor-tab"
           class:active={activeTab === "buy"}
           onclick={() => (activeTab = "buy")}
         >
-          🛒 Merchant Wares
+          Wares
         </button>
         <button
           class="vendor-tab"
           class:active={activeTab === "sell"}
           onclick={() => (activeTab = "sell")}
         >
-          💰 Sell Loot
+          Sell
         </button>
       </div>
 
@@ -217,69 +213,46 @@
     max-height: 85vh;
     display: flex;
     flex-direction: column;
-    background: radial-gradient(circle at 50% 20%, rgba(28, 24, 18, 0.98), rgba(12, 10, 8, 0.99));
-    border: 2px solid var(--rc-gold-bright);
-    border-radius: 8px;
-    box-shadow: 0 16px 48px rgba(0, 0, 0, 0.85);
     overflow: hidden;
+    padding-bottom: 0;
   }
-  .vendor-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 14px 18px;
-    background: linear-gradient(180deg, rgba(201, 162, 75, 0.2), rgba(0, 0, 0, 0.3));
-    border-bottom: 1px solid var(--rc-gold-dim);
-  }
-  .merchant-name {
-    font-family: var(--rc-display);
-    font-size: 17px;
-    font-weight: 700;
-    color: var(--rc-gold-bright);
-    margin: 0;
-  }
-  .merchant-title {
-    font-size: 11px;
-    color: var(--rc-parchment);
-    opacity: 0.8;
-  }
-  .close-btn {
-    background: transparent;
-    border: none;
-    color: var(--rc-parchment);
-    font-size: 18px;
-    cursor: url('/assets/cursors/02.png') 2 2, pointer !important;
-  }
-  .close-btn:hover {
-    color: var(--rc-gold-bright);
+  .merchant-sub {
+    text-align: center;
+    font-size: 12px;
+    color: var(--rc-ink-dim);
+    margin: -4px 0 8px;
+    letter-spacing: 0.5px;
   }
 
   .vendor-tabs {
     display: flex;
-    background: rgba(0, 0, 0, 0.5);
-    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    justify-content: center;
+    gap: 28px;
+    background: transparent;
+    border-bottom: 1px solid rgba(196, 163, 90, 0.25);
+    padding: 0 18px;
   }
   .vendor-tab {
-    flex: 1;
-    padding: 10px;
+    padding: 10px 4px;
     font-family: var(--rc-display);
-    font-size: 12.5px;
+    font-size: 12px;
     font-weight: 700;
-    color: var(--rc-parchment);
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: var(--rc-ink-dim);
     background: transparent;
     border: none;
     border-bottom: 2px solid transparent;
-    cursor: url('/assets/cursors/02.png') 2 2, pointer !important;
+    cursor: pointer;
     transition: all 0.2s ease;
   }
   .vendor-tab:hover {
-    color: var(--rc-gold-bright);
-    background: rgba(255, 255, 255, 0.03);
+    color: var(--rc-ink);
   }
   .vendor-tab.active {
-    color: var(--rc-gold-bright);
-    border-bottom-color: var(--rc-gold-bright);
-    background: rgba(201, 162, 75, 0.12);
+    color: var(--rc-ink);
+    border-bottom-color: var(--rc-magenta);
+    box-shadow: 0 2px 12px rgba(196, 77, 154, 0.35);
   }
 
   .vendor-body {
@@ -299,14 +272,14 @@
     align-items: center;
     gap: 12px;
     padding: 10px 12px;
-    background: rgba(255, 255, 255, 0.03);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: 6px;
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid rgba(196, 163, 90, 0.15);
+    border-radius: 3px;
     transition: all 0.15s ease;
   }
   .ware-card:hover, .sell-card:hover {
-    background: rgba(201, 162, 75, 0.08);
-    border-color: rgba(201, 162, 75, 0.3);
+    background: rgba(80, 40, 110, 0.28);
+    border-color: rgba(196, 163, 90, 0.4);
   }
   .ware-card.unaffordable {
     opacity: 0.6;
@@ -343,7 +316,7 @@
     font-family: var(--rc-display);
     font-size: 13px;
     font-weight: 700;
-    color: var(--rc-gold-bright);
+    color: var(--rc-ink);
   }
   .ware-type {
     font-size: 11px;
@@ -398,13 +371,15 @@
     align-items: center;
     justify-content: space-between;
     padding: 10px 16px;
-    background: rgba(0, 0, 0, 0.6);
-    border-top: 1px solid var(--rc-gold-dim);
+    background: rgba(0, 0, 0, 0.35);
+    border-top: 1px solid rgba(196, 163, 90, 0.3);
   }
   .balance-label {
     font-family: var(--rc-display);
-    font-size: 11.5px;
-    color: var(--rc-gold-bright);
+    font-size: 11px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: var(--rc-gold);
   }
   .balance-badges {
     display: flex;

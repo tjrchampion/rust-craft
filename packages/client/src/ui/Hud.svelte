@@ -194,8 +194,8 @@
     position: fixed;
     inset: 0;
     pointer-events: none;
-    color: #e8f0fa;
-    font-family: system-ui, sans-serif;
+    color: #eef2f6;
+    font-family: var(--rc-body);
   }
   .underwater-tint {
     position: absolute;
@@ -257,12 +257,13 @@
   }
   .interact {
     position: absolute;
-    bottom: 26%;
+    bottom: 30%;
     width: 100%;
     display: flex;
     align-items: center;
     justify-content: center;
     pointer-events: none;
+    z-index: 5;
   }
   .interact .label {
     display: flex;
@@ -298,15 +299,17 @@
   }
   .mounted {
     position: absolute;
-    bottom: 130px;
+    bottom: 150px;
     left: 50%;
     transform: translateX(-50%);
     padding: 5px 14px;
     font-family: var(--rc-display);
     font-weight: 700;
-    font-size: 13px;
+    font-size: 12px;
+    letter-spacing: 1px;
     color: var(--rc-parchment);
     pointer-events: none;
+    z-index: 5;
   }
   .mounted .hint {
     color: var(--rc-ink-dim);
@@ -315,15 +318,17 @@
   }
   .dungeon-chip {
     position: absolute;
-    top: 76px;
+    top: 92px;
     left: 50%;
     transform: translateX(-50%);
     padding: 5px 14px;
-    font-family: var(--rc-display);
-    font-weight: 700;
-    font-size: 13px;
-    color: #c583ff;
+    font-family: var(--rc-body);
+    font-weight: 800;
+    font-size: 12px;
+    letter-spacing: 0.5px;
+    color: var(--rc-ember);
     pointer-events: none;
+    z-index: 5;
   }
   .dungeon-chip .hint {
     color: var(--rc-ink-dim);
@@ -390,30 +395,35 @@
   }
   .castbar {
     position: absolute;
-    bottom: 22%;
+    bottom: 128px;
     left: 50%;
     transform: translateX(-50%);
-    width: 240px;
-    height: 18px;
-    background: rgba(8, 10, 16, 0.8);
-    border: 1px solid rgba(200, 120, 255, 0.6);
-    border-radius: 5px;
+    width: 280px;
+    height: 16px;
+    background: rgba(8, 6, 14, 0.88);
+    border: 1px solid rgba(196, 163, 90, 0.45);
+    border-radius: 2px;
     overflow: hidden;
+    z-index: 5;
+    box-shadow: 0 0 14px rgba(196, 77, 154, 0.2);
   }
   .castbar-fill {
     height: 100%;
-    background: linear-gradient(90deg, #7a3fbf, #c878ff);
+    background: linear-gradient(90deg, #2a9d5a, #6fcf6a);
   }
   .castbar span {
     position: absolute;
     inset: 0;
     text-align: center;
-    font-size: 12px;
-    line-height: 18px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    line-height: 16px;
     text-shadow: 0 1px 2px #000;
+    text-transform: uppercase;
   }
   .revivebar {
-    bottom: 27%;
+    bottom: 150px;
     border-color: rgba(120, 220, 140, 0.6);
   }
   .revivebar .castbar-fill {
@@ -421,12 +431,13 @@
   }
   .app-version {
     position: absolute;
-    bottom: 8px;
-    right: 12px;
+    bottom: 16px;
+    left: 12px;
     font-size: 10px;
     color: var(--rc-ink-dim, rgba(220, 230, 242, 0.45));
     font-family: monospace;
     pointer-events: none;
+    z-index: 7;
     text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
     letter-spacing: 0.5px;
     z-index: 4;

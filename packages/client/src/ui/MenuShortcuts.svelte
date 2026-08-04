@@ -127,8 +127,8 @@
 <style>
   .menu-shortcuts {
     position: absolute;
-    bottom: 26px;
-    right: 10px;
+    bottom: 48px;
+    right: 14px;
     display: flex;
     gap: 4px;
     pointer-events: auto;
@@ -142,13 +142,13 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    color: var(--rc-gold, #c9a24b);
+    color: var(--rc-gold);
     background:
-      linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(0, 0, 0, 0.35)),
-      rgba(14, 12, 9, 0.82);
-    border: 1px solid var(--rc-gold-dim, #8a6f33);
+      linear-gradient(180deg, rgba(80, 50, 110, 0.3), rgba(0, 0, 0, 0.45)),
+      rgba(14, 10, 20, 0.88);
+    border: 1px solid var(--rc-gold-dim);
     outline: 1px solid rgba(0, 0, 0, 0.75);
-    border-radius: 5px;
+    border-radius: 3px;
     cursor: pointer;
     box-shadow: inset 0 0 6px rgba(0, 0, 0, 0.55);
     transition:
@@ -157,14 +157,14 @@
       box-shadow 0.12s ease;
   }
   .shortcut:hover {
-    color: var(--rc-gold-bright, #ffd66e);
-    border-color: var(--rc-gold, #c9a24b);
+    color: var(--rc-gold-bright);
+    border-color: var(--rc-gold);
   }
   .shortcut.active {
-    color: var(--rc-gold-bright, #ffd66e);
-    border-color: var(--rc-gold-bright, #ffd66e);
+    color: var(--rc-gold-bright);
+    border-color: var(--rc-magenta-bright);
     box-shadow:
-      0 0 10px rgba(255, 214, 110, 0.35),
+      0 0 12px rgba(196, 77, 154, 0.45),
       inset 0 0 6px rgba(0, 0, 0, 0.55);
   }
   .glyph {

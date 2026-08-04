@@ -1,106 +1,219 @@
-/* Rust-Craft UI theme — shared frame language for every panel and bar. */
+/* Rust-Craft UI — slick dark-fantasy chrome (plum + gold). */
 @import "@fontsource/cinzel/400.css";
 @import "@fontsource/cinzel/700.css";
 @import "@fontsource/cinzel/900.css";
 
 :root {
   --rc-display: "Cinzel", "Times New Roman", serif;
-  --rc-body: system-ui, -apple-system, sans-serif;
+  --rc-body: system-ui, -apple-system, "Segoe UI", sans-serif;
 
-  --rc-gold: #c9a24b;
-  --rc-gold-bright: #ffd66e;
-  --rc-gold-dim: #8a6f33;
-  --rc-parchment: #e8dcbf;
-  --rc-panel: rgba(14, 12, 9, 0.92);
-  --rc-panel-light: rgba(30, 26, 18, 0.92);
-  --rc-ink: #e9e2d0;
-  --rc-ink-dim: #a99f86;
-  --rc-blood: #b83a3a;
-  --rc-mana: #3a62b8;
+  /* Metallic gold */
+  --rc-gold: #c4a35a;
+  --rc-gold-bright: #e8c878;
+  --rc-gold-dim: #8a6f3a;
+
+  /* Plum panel system */
+  --rc-plum: #1c1524;
+  --rc-plum-deep: #120e18;
+  --rc-plum-lift: #2a2134;
+  --rc-plum-glow: rgba(160, 80, 200, 0.35);
+  --rc-magenta: #c44d9a;
+  --rc-magenta-bright: #e06bb4;
+
+  --rc-parchment: #efe6d4;
+  --rc-panel: rgba(22, 16, 30, 0.94);
+  --rc-panel-light: rgba(36, 28, 48, 0.94);
+  --rc-panel-hud: rgba(12, 10, 18, 0.78);
+  --rc-ink: #ece6f2;
+  --rc-ink-dim: #9a91a8;
+
+  --rc-blood: #c0392b;
+  --rc-blood-bright: #ff5a4a;
+  --rc-mana: #2a9d9a;
+  --rc-mana-bright: #4ed4cf;
   --rc-nature: #6f9c46;
+  --rc-select: #9dff4a;
   --rc-ember: #d97b2e;
+  --rc-xp: #6fcf6a;
+  --rc-metal: #6a6278;
+  --rc-metal-bright: #b8aec8;
+  --rc-danger: #b83a3a;
+  --rc-hud-safe-bottom: 22px;
+
+  --rc-corner: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='48' height='48' viewBox='0 0 48 48' fill='none'><path d='M4 44V18L18 4H44' stroke='%23c4a35a' stroke-width='1.4'/><path d='M8 44V22L22 8H44' stroke='%238a6f3a' stroke-width='1'/><path d='M10 28h8v8h-8zM18 20h8v8h-8zM26 12h8v8h-8z' fill='%23c4a35a' fill-opacity='0.55'/><path d='M12 30h4v4h-4zM20 22h4v4h-4zM28 14h4v4h-4z' fill='%23e8c878' fill-opacity='0.85'/></svg>");
 }
 
-/* Stone Cursor Pack (Wenrexa) — Comprehensive Cursor System */
-html, body, #ui-root, *, ::before, ::after {
-  cursor: url('/assets/cursors/01.png') 2 2, auto;
-}
-
-/* Hover state on interactive elements, links, buttons & slots */
-button, a, select, input, textarea, label, [role="button"], 
-.rc-btn, .clickable, .mode-tab, .slot-btn, .menu-item, .item-slot, 
-.friend-row, .roster-row, .party-member, .tab-btn, .sub-tab-btn,
-button:hover, a:hover, [role="button"]:hover, .rc-btn:hover {
-  cursor: url('/assets/cursors/02.png') 2 2, pointer !important;
-}
-
-/* Active / Mouse-Down / Click state across all elements */
-html:active, body:active, button:active, a:active, .rc-btn:active, .clickable:active, :active {
-  cursor: url('/assets/cursors/03.png') 2 2, pointer !important;
-}
-
-/* Open hand / Grab hover state for draggable items and panels */
-.cursor-grab, [draggable="true"], .draggable, .drag-handle, .slot-item, .inventory-slot, .hotbar-slot {
-  cursor: url('/assets/cursors/08.png') 8 8, grab !important;
-}
-
-/* Closed hand / Grabbing & Dragging active state */
-.cursor-grab:active, [draggable="true"]:active, .dragging, .is-dragging, body.is-dragging * {
-  cursor: url('/assets/cursors/09.png') 8 8, grabbing !important;
-}
-
-/* Contextual Game Cursors */
-.cursor-attack {
-  cursor: url('/assets/cursors/04.png') 2 2, crosshair !important;
-}
-
-.cursor-talk {
-  cursor: url('/assets/cursors/05.png') 2 2, pointer !important;
-}
-
-.cursor-inspect {
-  cursor: url('/assets/cursors/06.png') 2 2, pointer !important;
-}
-
-.cursor-target {
-  cursor: url('/assets/cursors/07.png') 16 16, crosshair !important;
-}
-
-.cursor-disabled, button:disabled, .rc-btn:disabled, [disabled] {
-  cursor: url('/assets/cursors/10.png') 2 2, not-allowed !important;
-}
-
-/* Ornate frame used by panels, cards and bars */
+/* ── Shared modal / window panel ─────────────────────────────── */
 .rc-frame {
+  position: relative;
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(0, 0, 0, 0.25)),
-    var(--rc-panel);
+    radial-gradient(ellipse at 50% 0%, rgba(80, 50, 110, 0.22), transparent 55%),
+    linear-gradient(165deg, rgba(40, 30, 52, 0.97), rgba(16, 12, 22, 0.98));
   border: 1px solid var(--rc-gold-dim);
-  outline: 1px solid rgba(0, 0, 0, 0.8);
+  outline: 1px solid rgba(0, 0, 0, 0.85);
   box-shadow:
-    inset 0 0 0 1px rgba(255, 224, 150, 0.08),
-    0 10px 40px rgba(0, 0, 0, 0.55);
-  border-radius: 6px;
+    inset 0 0 0 1px rgba(232, 200, 120, 0.08),
+    inset 0 0 40px rgba(0, 0, 0, 0.35),
+    0 0 0 1px rgba(196, 163, 90, 0.15),
+    0 18px 50px rgba(0, 0, 0, 0.65);
+  border-radius: 4px;
+  color: var(--rc-ink);
+}
+.rc-frame::before,
+.rc-frame::after {
+  content: "";
+  position: absolute;
+  width: 42px;
+  height: 42px;
+  background: var(--rc-corner) no-repeat center / contain;
+  pointer-events: none;
+  z-index: 2;
+  opacity: 0.9;
+}
+.rc-frame::before {
+  top: 4px;
+  left: 4px;
+}
+.rc-frame::after {
+  top: 4px;
+  right: 4px;
+  transform: scaleX(-1);
 }
 
 .rc-frame-title {
   font-family: var(--rc-display);
   font-weight: 700;
+  letter-spacing: 3px;
+  text-transform: uppercase;
+  color: var(--rc-ink);
+  font-size: 15px;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.8);
+}
+
+/* ── HUD glass panels ───────────────────────────────────────── */
+.rc-hud-panel {
+  background:
+    linear-gradient(180deg, rgba(60, 40, 80, 0.2), rgba(0, 0, 0, 0.35)),
+    var(--rc-panel-hud);
+  border: 1px solid rgba(196, 163, 90, 0.4);
+  outline: 1px solid rgba(0, 0, 0, 0.75);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.04),
+    inset 0 -10px 24px rgba(0, 0, 0, 0.4),
+    0 8px 28px rgba(0, 0, 0, 0.5);
+  border-radius: 3px;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+
+.rc-hud-title {
+  font-family: var(--rc-display);
+  font-weight: 700;
+  font-size: 11px;
   letter-spacing: 2px;
   text-transform: uppercase;
   color: var(--rc-gold);
-  font-size: 13px;
+  text-shadow: 0 1px 3px #000;
 }
 
+/* ── Resource bars (angled / slick) ─────────────────────────── */
+.rc-resource-bar {
+  position: relative;
+  height: 16px;
+  background: rgba(0, 0, 0, 0.72);
+  border: 1px solid rgba(196, 163, 90, 0.28);
+  border-radius: 2px;
+  overflow: hidden;
+  box-shadow: inset 0 1px 4px rgba(0, 0, 0, 0.85);
+}
+.rc-resource-bar.angled {
+  clip-path: polygon(0 0, calc(100% - 14px) 0, 100% 100%, 0 100%);
+  border-right: none;
+}
+.rc-resource-bar.angled-flip {
+  clip-path: polygon(14px 0, 100% 0, 100% 100%, 0 100%);
+  border-left: none;
+}
+.rc-resource-bar > .fill {
+  height: 100%;
+  transition: width 0.18s ease-out;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.22);
+}
+.rc-resource-bar > .label {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--rc-body);
+  font-size: 11px;
+  font-weight: 700;
+  color: #fff;
+  text-shadow: 0 1px 3px #000, 1px 1px 1px #000;
+  pointer-events: none;
+}
+.rc-resource-bar.hp > .fill {
+  background: linear-gradient(180deg, #ff6a58 0%, #d32f2f 42%, #8b1a14 100%);
+}
+.rc-resource-bar.hp.low > .fill {
+  background: linear-gradient(180deg, #ff8a6a 0%, #e74c3c 40%, #962d22 100%);
+}
+.rc-resource-bar.mana > .fill {
+  background: linear-gradient(180deg, #5ee8e0 0%, #2a9d9a 45%, #145e5c 100%);
+}
+.rc-resource-bar.xp > .fill {
+  background: linear-gradient(180deg, #9dff7a 0%, #6fcf6a 50%, #3a8a3a 100%);
+}
+
+/* ── Action slots ───────────────────────────────────────────── */
+.rc-action-slot {
+  position: relative;
+  width: 48px;
+  height: 48px;
+  background:
+    linear-gradient(180deg, rgba(80, 55, 100, 0.25), rgba(0, 0, 0, 0.45)),
+    rgba(14, 10, 20, 0.92);
+  border: 1.5px solid rgba(196, 163, 90, 0.55);
+  outline: 1px solid rgba(0, 0, 0, 0.85);
+  border-radius: 3px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow:
+    inset 0 0 12px rgba(0, 0, 0, 0.7),
+    0 0 0 1px rgba(196, 163, 90, 0.12);
+  padding: 0;
+  cursor: pointer;
+  user-select: none;
+  transition: transform 0.08s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.rc-action-slot:hover {
+  border-color: var(--rc-gold-bright);
+  box-shadow:
+    0 0 14px rgba(196, 163, 90, 0.35),
+    inset 0 0 12px rgba(0, 0, 0, 0.7);
+}
+.rc-action-slot:active {
+  transform: scale(0.94);
+}
+.rc-action-slot.active {
+  border-color: var(--rc-magenta-bright);
+  box-shadow:
+    0 0 16px rgba(196, 77, 154, 0.55),
+    inset 0 0 12px rgba(0, 0, 0, 0.7);
+}
+
+/* ── Buttons ────────────────────────────────────────────────── */
 .rc-btn {
   font-family: var(--rc-display);
   font-weight: 700;
-  letter-spacing: 1px;
-  color: var(--rc-parchment);
-  background: linear-gradient(180deg, #3a3226, #241f16);
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--rc-ink);
+  background: linear-gradient(180deg, #3a2e48, #221a30);
   border: 1px solid var(--rc-gold-dim);
-  border-radius: 5px;
-  padding: 10px 16px;
+  border-radius: 3px;
+  padding: 10px 18px;
   cursor: pointer;
   transition: all 0.12s ease-out;
 }
@@ -108,11 +221,66 @@ html:active, body:active, button:active, a:active, .rc-btn:active, .clickable:ac
 .rc-btn:focus-visible {
   border-color: var(--rc-gold-bright);
   color: #fff;
-  box-shadow: 0 0 14px rgba(255, 214, 110, 0.25);
+  box-shadow: 0 0 16px rgba(196, 163, 90, 0.3);
   outline: none;
 }
 .rc-btn.primary {
-  background: linear-gradient(180deg, #6e5426, #4a3618);
+  background: linear-gradient(180deg, #c44d9a 0%, #7a2868 55%, #4a1840 100%);
+  border-color: var(--rc-gold);
+  color: #fff;
+  box-shadow:
+    0 0 18px rgba(196, 77, 154, 0.4),
+    inset 0 1px 0 rgba(255, 255, 255, 0.18);
+}
+.rc-btn.primary:hover,
+.rc-btn.primary:focus-visible {
+  border-color: var(--rc-gold-bright);
+  box-shadow:
+    0 0 24px rgba(196, 77, 154, 0.55),
+    inset 0 1px 0 rgba(255, 255, 255, 0.22);
+}
+.rc-btn.sm {
+  padding: 5px 10px;
+  font-size: 11px;
+  letter-spacing: 1px;
+}
+.rc-btn.ghost {
+  background: transparent;
+  border-color: rgba(196, 163, 90, 0.4);
+  color: var(--rc-ink-dim);
+}
+.rc-btn.ghost:hover,
+.rc-btn.ghost:focus-visible {
+  color: var(--rc-ink);
+  border-color: var(--rc-gold);
+}
+.rc-btn.danger {
+  background: linear-gradient(180deg, #6a2222, #3a1212);
+  border-color: rgba(200, 80, 70, 0.55);
+  color: #ffb0a8;
+}
+
+.rc-close {
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(180deg, #8a2a2a, #4a1414);
+  border: 1px solid var(--rc-gold-dim);
+  border-radius: 2px;
+  color: #ffd0c8;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+  padding: 0;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45);
+}
+.rc-close:hover {
+  border-color: var(--rc-gold-bright);
+  color: #fff;
+  box-shadow: 0 0 12px rgba(200, 60, 50, 0.45);
 }
 
 .rc-input {
@@ -120,15 +288,16 @@ html:active, body:active, button:active, a:active, .rc-btn:active, .clickable:ac
   width: 100%;
   box-sizing: border-box;
   padding: 10px 12px;
-  border-radius: 5px;
-  border: 1px solid #4a4232;
-  background: rgba(8, 7, 5, 0.8);
+  border-radius: 3px;
+  border: 1px solid rgba(196, 163, 90, 0.35);
+  background: rgba(8, 6, 12, 0.85);
   color: var(--rc-ink);
   font-size: 14px;
 }
 .rc-input:focus {
   border-color: var(--rc-gold);
   outline: none;
+  box-shadow: 0 0 0 1px rgba(196, 163, 90, 0.25);
 }
 
 .rc-divider {
@@ -137,7 +306,46 @@ html:active, body:active, button:active, a:active, .rc-btn:active, .clickable:ac
   background: linear-gradient(90deg, transparent, var(--rc-gold-dim), transparent);
 }
 
-/* Stylized in-game cursor (gold arrow), used in menus. Falls back to auto. */
+.rc-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  padding: 14px 40px 10px;
+}
+.rc-panel-header .rc-close {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+}
+
+/* Stone Cursor Pack (Wenrexa) */
+html, body, #ui-root, *, ::before, ::after {
+  cursor: url('/assets/cursors/01.png') 2 2, auto;
+}
+button, a, select, input, textarea, label, [role="button"],
+.rc-btn, .clickable, .mode-tab, .slot-btn, .menu-item, .item-slot,
+.friend-row, .roster-row, .party-member, .tab-btn, .sub-tab-btn,
+button:hover, a:hover, [role="button"]:hover, .rc-btn:hover {
+  cursor: url('/assets/cursors/02.png') 2 2, pointer !important;
+}
+html:active, body:active, button:active, a:active, .rc-btn:active, .clickable:active, :active {
+  cursor: url('/assets/cursors/03.png') 2 2, pointer !important;
+}
+.cursor-grab, [draggable="true"], .draggable, .drag-handle, .slot-item, .inventory-slot, .hotbar-slot {
+  cursor: url('/assets/cursors/08.png') 8 8, grab !important;
+}
+.cursor-grab:active, [draggable="true"]:active, .dragging, .is-dragging, body.is-dragging * {
+  cursor: url('/assets/cursors/09.png') 8 8, grabbing !important;
+}
+.cursor-attack { cursor: url('/assets/cursors/04.png') 2 2, crosshair !important; }
+.cursor-talk { cursor: url('/assets/cursors/05.png') 2 2, pointer !important; }
+.cursor-inspect { cursor: url('/assets/cursors/06.png') 2 2, pointer !important; }
+.cursor-target { cursor: url('/assets/cursors/07.png') 16 16, crosshair !important; }
+.cursor-disabled, button:disabled, .rc-btn:disabled, [disabled] {
+  cursor: url('/assets/cursors/10.png') 2 2, not-allowed !important;
+}
+
 :root {
   --rc-cursor: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='28' height='28' viewBox='0 0 28 28'><path d='M3 2 L3 22 L9 16 L13 25 L17 23 L13 14 L21 14 Z' fill='%23f5ecd2' stroke='%23191308' stroke-width='1.5' stroke-linejoin='round'/></svg>")
     2 2, auto;
@@ -145,7 +353,6 @@ html:active, body:active, button:active, a:active, .rc-btn:active, .clickable:ac
 body {
   cursor: var(--rc-cursor);
 }
-/* Buttons/links get a pointer-flavored variant. */
 .rc-btn,
 button,
 a,

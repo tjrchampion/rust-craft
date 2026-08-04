@@ -30,9 +30,9 @@
 {#if game.questLog.length > 0}
   <div class="tracker">
     <div class="tracker-header">
-      <div class="tracker-title">Quests</div>
-      <button class="collapse-btn" onclick={toggleCollapsed}>
-        {collapsed ? "[ + ]" : "[ - ]"}
+      <div class="tracker-title">Objectives</div>
+      <button class="collapse-btn" onclick={toggleCollapsed} aria-label={collapsed ? "Expand" : "Collapse"}>
+        {collapsed ? "▸" : "▾"}
       </button>
     </div>
     {#if !collapsed}
@@ -41,9 +41,9 @@
           <div class="entry" class:done={q.status === "complete"}>
             <div class="entry-name">{q.name}</div>
             <div class="entry-obj">
+              <span class="bullet" class:on={q.status === "complete"}>{q.status === "complete" ? "✓" : "•"}</span>
               {objectiveText(q.objectiveKind, q.objectiveTarget)}
               <span class="entry-count">{q.progress}/{q.objectiveCount}</span>
-              {#if q.status === "complete"}<span class="ready">✓</span>{/if}
             </div>
           </div>
         {:else}
@@ -57,40 +57,38 @@
 <style>
   .tracker {
     position: absolute;
-    top: 202px;
-    right: 16px;
-    width: 210px;
-    padding: 6px 8px;
+    top: 214px;
+    right: 14px;
+    width: 220px;
+    padding: 8px 4px;
     pointer-events: auto;
+    z-index: 4;
   }
   .tracker-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: 6px;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    margin-bottom: 8px;
     padding-bottom: 4px;
+    border-bottom: 1px solid rgba(196, 163, 90, 0.28);
   }
   .tracker-title {
     font-family: var(--rc-display);
     font-weight: 700;
-    font-size: 13px;
-    color: var(--rc-gold-bright);
+    font-size: 12px;
+    color: var(--rc-gold);
     text-transform: uppercase;
-    letter-spacing: 0.5px;
-    text-shadow: 0 1px 2px #000;
+    letter-spacing: 2px;
+    text-shadow: 0 1px 3px #000;
   }
   .collapse-btn {
     background: none;
     border: none;
-    color: var(--rc-parchment);
-    font-family: monospace;
-    font-size: 11px;
+    color: var(--rc-gold);
+    font-size: 12px;
     cursor: pointer;
     padding: 0 4px;
-    text-shadow: 0 1px 2px #000;
-    opacity: 0.6;
-    transition: opacity 0.2s;
+    opacity: 0.75;
   }
   .collapse-btn:hover {
     opacity: 1;
@@ -101,44 +99,44 @@
     flex-direction: column;
     gap: 8px;
   }
-  .entry {
-    background: rgba(0, 0, 0, 0.25);
-    border-left: 2px solid var(--rc-gold);
-    padding: 4px 8px;
-    border-radius: 0 4px 4px 0;
-  }
   .entry-name {
     font-family: var(--rc-display);
     font-weight: 700;
     font-size: 12px;
-    color: var(--rc-parchment);
-    text-shadow: 0 1px 2px #000;
+    color: #f0eaf6;
+    text-shadow: 0 1px 3px #000;
+    margin-bottom: 2px;
   }
   .entry-obj {
     font-size: 11px;
+    color: #c8c0d4;
+    text-shadow: 0 1px 2px #000;
+    display: flex;
+    align-items: baseline;
+    gap: 5px;
+    flex-wrap: wrap;
+  }
+  .bullet {
     color: var(--rc-ink-dim);
-    text-shadow: 0 1px 1px #000;
+    font-weight: 800;
+  }
+  .bullet.on {
+    color: #8fd48f;
   }
   .entry-count {
-    color: var(--rc-gold);
+    color: var(--rc-gold-bright);
     font-weight: 700;
   }
-  .entry.done {
-    border-left-color: #8fd48f;
+  .entry.done .entry-name {
+    color: #c5d4c5;
   }
   .entry.done .entry-obj {
     color: #8fd48f;
-  }
-  .ready {
-    color: #ffd400;
-    font-weight: 700;
-    margin-left: 4px;
   }
   .no-tracked {
     font-size: 11px;
     color: var(--rc-ink-dim);
     font-style: italic;
     text-shadow: 0 1px 2px #000;
-    padding-left: 4px;
   }
 </style>

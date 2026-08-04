@@ -78,56 +78,81 @@
     return () => window.removeEventListener("rc:menuNav", onNav);
   });
 
-  const hint = $derived(promptLabel("Ⓐ accept/turn in · Ⓑ close · d-pad select", "Click accept/turn in · click ✕ to close"));
+  const hint = $derived(promptLabel("Ⓐ accept/turn in · Ⓑ close · d-pad select", "Click accept/turn in · Esc to close"));
+  const active = $derived(visible[cursor] ?? null);
 </script>
 
 {#if offer}
   <div class="backdrop">
     <div class="dialog rc-frame">
-      <div class="header">
-        <div class="npc-name">{offer.npcName}</div>
-        <button class="close" onclick={close}>✕</button>
+      <div class="rc-panel-header">
+        <h2 class="rc-frame-title">Dialog</h2>
+        <button class="rc-close" onclick={close} aria-label="Close">✕</button>
       </div>
-      <div class="rc-divider"></div>
+
+      <div class="npc-line">{offer.npcName}</div>
 
       {#if visible.length === 0}
         <div class="empty">No tasks right now. Come back later.</div>
-      {/if}
+      {:else if active}
+        <div class="quest-title">
+          <span class="bang">!</span>
+          {active.name}
+          <span class="tier" style="color: {TIER_COLORS[active.tier]}">{TIER_NAMES[active.tier]}</span>
+        </div>
+        <p class="desc">{active.description}</p>
 
-      {#each visible as o, i (o.id)}
-        <div class="quest" class:locked={o.status === "locked"} class:selected={i === cursor}>
-          <div class="quest-top">
-            <span class="quest-name">{o.name}</span>
-            <span class="tier" style="color: {TIER_COLORS[o.tier]}">{TIER_NAMES[o.tier]}</span>
-          </div>
-          <div class="desc">{o.description}</div>
-          <div class="objective">
-            <span class="obj-icon"><IconGlyph value={objectiveIcon(o)} size={16} /></span>
-            {objectiveText(o)}
-            {#if o.status === "active" || o.status === "complete"}
-              <span class="progress">({o.progress}/{o.objectiveCount})</span>
+        <ul class="objectives">
+          <li>
+            <span class="obj-icon"><IconGlyph value={objectiveIcon(active)} size={16} /></span>
+            {objectiveText(active)}
+            {#if active.status === "active" || active.status === "complete"}
+              <span class="progress">({active.progress}/{active.objectiveCount})</span>
             {/if}
-          </div>
+          </li>
+        </ul>
+
+        <div class="rewards-block">
+          <div class="rewards-label">Rewards</div>
+          <div class="rc-divider"></div>
           <div class="rewards">
-            <span class="reward-xp">+{o.rewardXp} XP</span>
-            {#each o.rewardItems as r (r.itemId)}
-              <span class="reward-item"><IconGlyph value={itemIcon(r.itemId)} size={14} itemId={r.itemId} />{r.qty}</span>
+            <span class="reward-xp">+{active.rewardXp} XP</span>
+            {#each active.rewardItems as r (r.itemId)}
+              <div class="reward-slot" title={itemDef(r.itemId).name}>
+                <IconGlyph value={itemIcon(r.itemId)} size={28} itemId={r.itemId} />
+                {#if r.qty > 1}<span class="qty">{r.qty}</span>{/if}
+              </div>
             {/each}
           </div>
-
-          {#if o.status === "available"}
-            <button class="rc-btn primary" onclick={() => acceptQuest(o.id)}>Accept</button>
-          {:else if o.status === "complete"}
-            <button class="rc-btn primary" onclick={() => turnInQuest(o.id)}>Turn In</button>
-          {:else if o.status === "active"}
-            <div class="in-progress">In Progress</div>
-          {:else if o.status === "locked"}
-            <div class="locked-note">Requires level {o.minLevel}</div>
-          {/if}
         </div>
-      {/each}
 
-      <button class="rc-btn close-btn" onclick={close}>Close</button>
+        {#if active.status === "available"}
+          <button class="rc-btn primary accept" onclick={() => acceptQuest(active.id)}>Accept</button>
+        {:else if active.status === "complete"}
+          <button class="rc-btn primary accept" onclick={() => turnInQuest(active.id)}>Turn In</button>
+        {:else if active.status === "active"}
+          <div class="in-progress">In Progress</div>
+        {:else if active.status === "locked"}
+          <div class="locked-note">Requires level {active.minLevel}</div>
+        {/if}
+
+        {#if visible.length > 1}
+          <div class="quest-picks">
+            {#each visible as o, i (o.id)}
+              <button
+                type="button"
+                class="pick"
+                class:on={i === cursor}
+                class:locked={o.status === "locked"}
+                onclick={() => (cursor = i)}
+              >
+                {o.name}
+              </button>
+            {/each}
+          </div>
+        {/if}
+      {/if}
+
       <div class="hint">{hint}</div>
     </div>
   </div>
@@ -137,135 +162,175 @@
   .backdrop {
     position: absolute;
     inset: 0;
-    background: rgba(4, 6, 10, 0.55);
+    background: rgba(8, 4, 14, 0.62);
+    backdrop-filter: blur(3px);
     display: flex;
     align-items: center;
     justify-content: center;
     pointer-events: auto;
+    z-index: 40;
   }
   .dialog {
     width: 380px;
     max-height: 82vh;
     overflow-y: auto;
-    padding: 18px 22px;
+    padding: 8px 22px 18px;
   }
-  .header {
-    display: flex;
-    justify-content: space-between;
-    align-items: baseline;
-  }
-  .npc-name {
-    font-family: var(--rc-display);
-    font-weight: 700;
-    font-size: 18px;
-    color: var(--rc-gold-bright);
-  }
-  .close {
-    background: none;
-    border: none;
+  .npc-line {
+    text-align: center;
+    font-size: 12px;
     color: var(--rc-ink-dim);
-    font-size: 16px;
-    cursor: pointer;
-    padding: 0;
+    margin-bottom: 12px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
   }
   .empty {
     color: var(--rc-ink-dim);
     font-size: 13px;
     text-align: center;
-    padding: 12px 0;
+    padding: 20px 0;
   }
-  .quest {
-    background: rgba(255, 255, 255, 0.04);
-    border: 1px solid rgba(201, 162, 75, 0.25);
-    border-radius: 6px;
-    padding: 10px 12px;
-    margin-bottom: 10px;
-  }
-  .quest.locked {
-    opacity: 0.55;
-  }
-  .quest.selected {
-    border-color: var(--rc-gold-bright);
-    box-shadow: 0 0 14px rgba(255, 214, 110, 0.25);
-  }
-  .hint {
-    text-align: center;
-    font-size: 11px;
-    color: var(--rc-ink-dim);
-    margin-top: 4px;
-  }
-  .quest-top {
-    display: flex;
-    justify-content: space-between;
-    align-items: baseline;
-    margin-bottom: 4px;
-  }
-  .quest-name {
+  .quest-title {
     font-family: var(--rc-display);
     font-weight: 700;
-    font-size: 14px;
-    color: var(--rc-parchment);
+    font-size: 16px;
+    color: var(--rc-ink);
+    margin-bottom: 10px;
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .bang {
+    color: var(--rc-gold-bright);
+    font-size: 20px;
+    line-height: 1;
   }
   .tier {
+    margin-left: auto;
     font-size: 11px;
     font-weight: 700;
     text-transform: uppercase;
+    letter-spacing: 1px;
   }
   .desc {
-    font-size: 12px;
+    font-size: 13px;
+    line-height: 1.55;
     color: var(--rc-ink-dim);
-    margin-bottom: 6px;
+    margin: 0 0 14px;
   }
-  .objective {
+  .objectives {
+    list-style: none;
+    margin: 0 0 16px;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .objectives li {
     font-size: 13px;
     color: var(--rc-ink);
-    margin-bottom: 6px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
   }
   .obj-icon {
     display: inline-flex;
-    vertical-align: middle;
-    margin-right: 4px;
   }
   .progress {
     color: var(--rc-gold);
     font-weight: 700;
-    margin-left: 4px;
+  }
+  .rewards-block {
+    margin-bottom: 16px;
+  }
+  .rewards-label {
+    font-family: var(--rc-display);
+    font-size: 12px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: var(--rc-gold);
+    text-align: center;
+  }
+  .rewards-block :global(.rc-divider) {
+    margin: 8px 0 12px;
   }
   .rewards {
     display: flex;
-    gap: 8px;
+    gap: 10px;
     align-items: center;
-    font-size: 12px;
-    margin-bottom: 8px;
+    justify-content: center;
+    flex-wrap: wrap;
   }
   .reward-xp {
-    color: #b98fe0;
-    font-weight: 700;
-  }
-  .reward-item {
-    display: inline-flex;
-    align-items: center;
-    gap: 2px;
-    color: var(--rc-ink-dim);
-  }
-  .in-progress {
-    font-size: 11px;
-    color: var(--rc-ink-dim);
-    text-align: center;
-    font-style: italic;
-  }
-  .locked-note {
-    font-size: 11px;
-    color: #ff8a80;
-    text-align: center;
-  }
-  .quest .rc-btn {
-    width: 100%;
-    padding: 6px;
+    color: var(--rc-magenta-bright);
+    font-weight: 800;
     font-size: 13px;
   }
-  .close-btn {
-    width: 100%;
-    margin-top: 4px;
+  .reward-slot {
+    position: relative;
+    width: 44px;
+    height: 44px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0, 0, 0, 0.45);
+    border: 1px solid var(--rc-gold-dim);
+    border-radius: 3px;
+    box-shadow: inset 0 0 10px rgba(0, 0, 0, 0.5);
+  }
+  .qty {
+    position: absolute;
+    right: 2px;
+    bottom: 1px;
+    font-size: 10px;
+    font-weight: 800;
+    color: #fff;
+    text-shadow: 0 1px 2px #000;
+  }
+  .accept {
+    display: block;
+    width: 70%;
+    margin: 0 auto 10px;
+    padding: 12px 20px;
+    font-size: 15px;
+  }
+  .in-progress,
+  .locked-note {
+    text-align: center;
+    font-size: 12px;
+    margin-bottom: 10px;
+  }
+  .in-progress { color: var(--rc-ink-dim); font-style: italic; }
+  .locked-note { color: #ff8a80; }
+  .quest-picks {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-top: 8px;
+    border-top: 1px solid rgba(196, 163, 90, 0.2);
+    padding-top: 10px;
+  }
+  .pick {
+    text-align: left;
+    background: transparent;
+    border: 1px solid transparent;
+    color: var(--rc-ink-dim);
+    font-size: 12px;
+    padding: 6px 8px;
+    border-radius: 3px;
+    cursor: pointer;
+  }
+  .pick.on {
+    background: rgba(80, 40, 110, 0.35);
+    border-color: rgba(196, 163, 90, 0.4);
+    color: var(--rc-ink);
+  }
+  .pick.locked { opacity: 0.5; }
+  .hint {
+    text-align: center;
+    font-size: 11px;
+    color: var(--rc-ink-dim);
+    margin-top: 8px;
   }
 </style>

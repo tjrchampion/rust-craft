@@ -1005,7 +1005,7 @@ export class Game {
   /** The unified action bar: a slot either holds a real item (select it, same
    *  as before) or a spell marker ("spell:<id>", see the assignSpell flow in
    *  CharacterScreen) -- cast it directly instead. */
-  private useHotbarSlot(slot: number): void {
+  useHotbarSlot(slot: number): void {
     const entry = ui.inventory.find((i) => i.container === "hotbar" && i.slot === slot);
     if (entry?.itemId.startsWith("spell:")) {
       const spellId = entry.itemId.slice("spell:".length);

@@ -1974,11 +1974,13 @@
   .screen-bg {
     position: absolute;
     inset: 0;
-    background: rgba(4, 6, 10, 0.6);
+    background: rgba(8, 4, 14, 0.62);
+    backdrop-filter: blur(4px);
     display: flex;
     align-items: center;
     justify-content: center;
     pointer-events: auto;
+    z-index: 30;
   }
   .screen {
     display: flex;
@@ -1986,45 +1988,62 @@
     width: min(1080px, 94vw);
     height: min(680px, 90vh);
     padding: 0;
+    overflow: hidden;
   }
   .tabs {
     display: flex;
     align-items: center;
-    border-bottom: 1px solid var(--rc-gold-dim);
-    background: rgba(0, 0, 0, 0.2);
-    border-radius: 5px 5px 0 0;
-    overflow: hidden;
+    justify-content: center;
+    gap: 4px;
+    border-bottom: 1px solid rgba(196, 163, 90, 0.3);
+    background: rgba(0, 0, 0, 0.25);
+    padding: 4px 48px 0 12px;
+    position: relative;
   }
   .tab {
     background: none;
     border: none;
-    border-right: 1px solid rgba(255, 255, 255, 0.08);
-    color: #9fb0c4;
+    color: var(--rc-ink-dim);
     font-family: var(--rc-display);
-    font-size: 13px;
-    letter-spacing: 1px;
-    padding: 12px 22px;
+    font-size: 12px;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    padding: 14px 16px 12px;
     cursor: pointer;
+    border-bottom: 2px solid transparent;
+    transition: color 0.15s ease, box-shadow 0.15s ease;
   }
   .tab.active {
-    color: var(--rc-gold-bright);
-    background: rgba(255, 214, 110, 0.08);
-    box-shadow: inset 0 -2px 0 var(--rc-gold-bright);
+    color: var(--rc-ink);
+    border-bottom-color: var(--rc-magenta);
+    box-shadow: 0 2px 14px rgba(196, 77, 154, 0.35);
   }
   .tab:hover {
     color: #fff;
   }
   .close-btn {
-    margin-left: auto;
-    background: none;
-    border: none;
-    color: #9fb0c4;
-    font-size: 15px;
+    position: absolute;
+    top: 10px;
+    right: 12px;
+    width: 26px;
+    height: 26px;
+    margin: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: linear-gradient(180deg, #8a2a2a, #4a1414);
+    border: 1px solid var(--rc-gold-dim);
+    border-radius: 2px;
+    color: #ffd0c8;
+    font-size: 13px;
+    font-weight: 700;
     cursor: pointer;
-    padding: 10px 18px;
+    padding: 0;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45);
   }
   .close-btn:hover {
     color: #fff;
+    border-color: var(--rc-gold-bright);
   }
   .content {
     flex: 1;

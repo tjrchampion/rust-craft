@@ -2,10 +2,6 @@
   import { game } from "./gameState.svelte";
   import { auraDef } from "@rustcraft/shared";
 
-  // Auras only change via server snapshots, but their remaining time needs to
-  // keep ticking down (and vanish on expiry) between those -- same clock-skew
-  // handling as the cast bar: expiresAt is a server-clock timestamp, so
-  // serverTimeOffset has to come out before comparing against our own clock.
   let nowTick = $state(Date.now());
   $effect(() => {
     const id = setInterval(() => (nowTick = Date.now()), 200);
@@ -38,32 +34,34 @@
 <style>
   .aura-bar {
     position: absolute;
-    left: 16px;
-    top: 102px;
+    left: 86px;
+    top: 88px;
     display: flex;
     flex-wrap: wrap;
-    gap: 6px;
-    max-width: 260px;
+    gap: 4px;
+    max-width: 220px;
     pointer-events: none;
+    z-index: 4;
   }
   .aura {
     position: relative;
-    width: 34px;
-    height: 34px;
-    border-radius: 6px;
-    background: rgba(10, 12, 18, 0.85);
-    border: 2px solid #5ec46a;
+    width: 28px;
+    height: 28px;
+    border-radius: 3px;
+    background: rgba(12, 10, 18, 0.9);
+    border: 1.5px solid #5ec46a;
     display: flex;
     align-items: center;
     justify-content: center;
-    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.5);
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.55);
   }
   .aura.debuff {
     border-color: #d94f3d;
   }
   .icon {
-    font-size: 18px;
+    font-size: 14px;
     filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.6));
+    line-height: 1;
   }
   .time {
     position: absolute;
@@ -72,10 +70,10 @@
     font-size: 9px;
     font-weight: 700;
     color: #fff;
-    background: rgba(0, 0, 0, 0.8);
-    border-radius: 3px;
+    background: rgba(0, 0, 0, 0.85);
+    border-radius: 2px;
     padding: 0 3px;
-    line-height: 1.4;
+    line-height: 1.35;
     text-shadow: 0 1px 2px #000;
   }
 </style>

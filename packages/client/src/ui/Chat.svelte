@@ -385,20 +385,21 @@
 
 <style>
   .chat {
-    --chat-w: 400px;
+    --chat-w: 380px;
     position: absolute;
     left: 14px;
-    bottom: 18px;
+    bottom: 28px;
     width: var(--chat-w);
     font-family: var(--rc-body);
     pointer-events: none;
-    opacity: 0.34;
-    filter: saturate(0.85);
+    opacity: 0.42;
+    filter: saturate(0.9);
     transition:
       opacity 0.35s ease,
       filter 0.35s ease,
       transform 0.35s cubic-bezier(0.22, 1, 0.36, 1);
     transform: translateY(4px);
+    z-index: 4;
   }
   .chat.active {
     opacity: 0.82;
@@ -440,13 +441,13 @@
   .chat.focused .shell {
     padding: 12px 12px 10px;
     background:
-      radial-gradient(ellipse at 20% 0%, rgba(201, 162, 75, 0.06), transparent 55%),
-      linear-gradient(165deg, rgba(28, 24, 16, 0.72), rgba(10, 9, 7, 0.64));
-    border-color: rgba(138, 111, 51, 0.6);
+      radial-gradient(ellipse at 20% 0%, rgba(160, 80, 200, 0.1), transparent 55%),
+      linear-gradient(165deg, rgba(36, 28, 48, 0.78), rgba(12, 10, 18, 0.7));
+    border-color: rgba(196, 163, 90, 0.5);
     backdrop-filter: blur(6px);
     -webkit-backdrop-filter: blur(6px);
     box-shadow:
-      inset 0 0 0 1px rgba(255, 224, 150, 0.06),
+      inset 0 0 0 1px rgba(232, 200, 120, 0.06),
       inset 0 1px 0 rgba(255, 240, 200, 0.04),
       0 14px 36px rgba(0, 0, 0, 0.35),
       0 0 0 1px rgba(0, 0, 0, 0.4);

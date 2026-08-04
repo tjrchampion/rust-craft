@@ -1,18 +1,29 @@
 <script lang="ts">
-  import { game } from "./gameState.svelte";
+  import { game, parseCoins } from "./gameState.svelte";
+  import { getGame } from "../game/instance";
   import { itemIcon, spellIcon, rewardChestIcon } from "./icons";
   import IconGlyph from "./IconGlyph.svelte";
   import LevelUpModal from "./LevelUpModal.svelte";
   import { promptLabel } from "./padGlyphs";
-  import { HOTBAR_SLOTS, itemDef, spellDef } from "@rustcraft/shared";
+  import { HOTBAR_SLOTS, itemDef, spellDef, CLASSES, type ClassId } from "@rustcraft/shared";
+  import { CLASS_ICONS } from "../render/classModels";
 
   let openChestId = $state<string | null>(null);
   const openChest = $derived(game.levelRewards.find((c) => c.id === openChestId) ?? null);
+  const coins = $derived(parseCoins(game.self?.coins ?? 0));
+  const xpPct = $derived(
+    game.self ? Math.min(100, (game.self.xp / Math.max(1, game.self.xpNext)) * 100) : 0,
+  );
+  const classId = $derived((game.classId || "warrior") as ClassId);
+  const classIcon = $derived(CLASS_ICONS[classId] ?? "⚔️");
+  const hpPct = $derived(
+    game.self ? Math.min(100, (game.self.hp / Math.max(1, game.self.maxHp)) * 100) : 0,
+  );
+  const manaPct = $derived(
+    game.self ? Math.min(100, (game.self.mana / Math.max(1, game.self.maxMana)) * 100) : 0,
+  );
 
   const SPELL_PREFIX = "spell:";
-  // Keyboard: 1-6, then Q/Z/X/C. Gamepad: every slot needs LB or RB as a
-  // modifier since a controller has nowhere near 10 free buttons -- see the
-  // full scheme documented on InputManager.lbHeldSince.
   const KBM_LABELS = ["1", "2", "3", "4", "5", "6", "Q", "Z", "X", "C"];
   const PAD_LABELS = ["LB+A", "LB+B", "LB+X", "LB+Y", "LB+↑", "LB+↓", "LB+←", "LB+→", "RB+A", "RB+B"];
 
@@ -20,18 +31,12 @@
     return promptLabel(PAD_LABELS[i] ?? "", KBM_LABELS[i] ?? "");
   }
 
-  // Cooldown sweeps need a periodic re-render since nothing else about the
-  // slot changes while a spell is on cooldown -- a plain $derived wouldn't
-  // recompute on its own between server snapshots.
   let nowTick = $state(Date.now());
   $effect(() => {
     const id = setInterval(() => (nowTick = Date.now()), 100);
     return () => clearInterval(id);
   });
 
-  // One unified action bar -- a slot either holds a real item (rendered as
-  // before) or a spell marker ("spell:<id>", see the assignSpell flow in
-  // CharacterScreen's Spell Book tab), rendered via the spell icon/name instead.
   const slots = $derived(
     Array.from({ length: HOTBAR_SLOTS }, (_, i) => {
       const item = game.inventory.find((it) => it.container === "hotbar" && it.slot === i);
@@ -51,7 +56,6 @@
         }
         if (def.triggersGcd !== false && game.self?.gcdReadyAt) {
           const gcdLeft = Math.max(0, game.self.gcdReadyAt - currentServerTime);
-          // Approximate GCD length from remaining — display as soft dim, not a full CD.
           gcdFrac = gcdLeft > 0 ? Math.min(0.55, gcdLeft / 1500) : 0;
         }
       }
@@ -59,52 +63,109 @@
       return { item, spellId, cooldownFrac, cooldownLabel, gcdFrac, queued };
     }),
   );
+
+  const leftSlots = $derived(slots.slice(0, 5));
+  const rightSlots = $derived(slots.slice(5));
 </script>
 
-<div class="action-bar-container">
+{#if game.self}
+  <div class="xp-strip" title="XP: {game.self.xp} / {game.self.xpNext}">
+    <div class="xp-fill" style="width: {xpPct}%"></div>
+  </div>
+
+  <div class="currency">
+    <span class="coin gold" title="{coins.gold} Gold"><span class="pip"></span>{coins.gold.toLocaleString()}</span>
+    <span class="coin silver" title="{coins.silver} Silver"><span class="pip"></span>{coins.silver}</span>
+  </div>
+{/if}
+
+<div class="action-cluster">
   {#if game.self}
-    <div class="xp-bar-container" title="XP: {game.self.xp} / {game.self.xpNext}">
-      <div class="xp-fill" style="width: {Math.min(100, (game.self.xp / game.self.xpNext) * 100)}%"></div>
-      <span class="xp-text">{game.self.xp} / {game.self.xpNext} XP</span>
+    <div class="hub">
+      <div class="side-bar left">
+        <div class="rc-resource-bar hp angled" class:low={hpPct < 28}>
+          <div class="fill" style="width: {hpPct}%"></div>
+          <span class="label">{Math.round(hpPct)}% Health</span>
+        </div>
+      </div>
+      <div class="hub-portrait" title={CLASSES[classId]?.name ?? "Adventurer"}>
+        <span class="hub-icon">{classIcon}</span>
+        <span class="hub-level">{game.self.level}</span>
+      </div>
+      <div class="side-bar right">
+        <div class="rc-resource-bar mana angled-flip">
+          <div class="fill" style="width: {manaPct}%"></div>
+          <span class="label">Mana {Math.round(manaPct)}%</span>
+        </div>
+      </div>
     </div>
   {/if}
-  <div class="hotbar">
-    {#each slots as { item, spellId, cooldownFrac, cooldownLabel, gcdFrac, queued }, i (i)}
-      <button
-        type="button"
-        class="slot"
-        class:active={i === game.selectedSlot}
-        class:spell={spellId !== null}
-        class:queued
-        class:first={i === 6}
-        title={spellId ? spellDef(spellId).name : undefined}
-        onclick={() => game.useHotbarSlot(i)}
-      >
-        {#if spellId}
-          <IconGlyph value={spellIcon(spellId)} size={26} />
-          {#if game.self?.castingSpell === spellId}
-            <div class="casting"></div>
+
+  <div class="hotbar-plate">
+    <div class="hotbar-row">
+      {#each leftSlots as { item, spellId, cooldownFrac, cooldownLabel, gcdFrac, queued }, i (i)}
+        <button
+          type="button"
+          class="rc-action-slot"
+          class:active={i === game.selectedSlot}
+          class:spell={spellId !== null}
+          class:queued
+          title={spellId ? spellDef(spellId).name : undefined}
+          onclick={() => getGame()?.useHotbarSlot(i)}
+        >
+          {#if spellId}
+            <IconGlyph value={spellIcon(spellId)} size={28} />
+            {#if game.self?.castingSpell === spellId}<div class="casting"></div>{/if}
+            {#if gcdFrac > 0 && cooldownFrac <= 0}<div class="gcd-dim" style="opacity: {gcdFrac}"></div>{/if}
+            {#if cooldownFrac > 0}
+              <div class="cooldown-sweep" style="--frac: {cooldownFrac}"></div>
+              {#if cooldownLabel}<span class="cooldown-label">{cooldownLabel}</span>{/if}
+            {/if}
+            {#if queued}<div class="queue-pip"></div>{/if}
+          {:else if item}
+            <IconGlyph value={itemIcon(item.itemId)} size={28} itemId={item.itemId} />
+            {#if item.qty > 1}<span class="qty">{item.qty}</span>{/if}
+            {#if item.durability !== null && itemDef(item.itemId).maxDurability}
+              <div class="dura" style="width: {(item.durability / itemDef(item.itemId).maxDurability!) * 100}%"></div>
+            {/if}
           {/if}
-          {#if gcdFrac > 0 && cooldownFrac <= 0}
-            <div class="gcd-dim" style="opacity: {gcdFrac}"></div>
+          <span class="num">{keyLabel(i)}</span>
+        </button>
+      {/each}
+
+      <div class="row-gap"></div>
+
+      {#each rightSlots as { item, spellId, cooldownFrac, cooldownLabel, gcdFrac, queued }, j (j + 5)}
+        {@const i = j + 5}
+        <button
+          type="button"
+          class="rc-action-slot"
+          class:active={i === game.selectedSlot}
+          class:spell={spellId !== null}
+          class:queued
+          title={spellId ? spellDef(spellId).name : undefined}
+          onclick={() => getGame()?.useHotbarSlot(i)}
+        >
+          {#if spellId}
+            <IconGlyph value={spellIcon(spellId)} size={28} />
+            {#if game.self?.castingSpell === spellId}<div class="casting"></div>{/if}
+            {#if gcdFrac > 0 && cooldownFrac <= 0}<div class="gcd-dim" style="opacity: {gcdFrac}"></div>{/if}
+            {#if cooldownFrac > 0}
+              <div class="cooldown-sweep" style="--frac: {cooldownFrac}"></div>
+              {#if cooldownLabel}<span class="cooldown-label">{cooldownLabel}</span>{/if}
+            {/if}
+            {#if queued}<div class="queue-pip"></div>{/if}
+          {:else if item}
+            <IconGlyph value={itemIcon(item.itemId)} size={28} itemId={item.itemId} />
+            {#if item.qty > 1}<span class="qty">{item.qty}</span>{/if}
+            {#if item.durability !== null && itemDef(item.itemId).maxDurability}
+              <div class="dura" style="width: {(item.durability / itemDef(item.itemId).maxDurability!) * 100}%"></div>
+            {/if}
           {/if}
-          {#if cooldownFrac > 0}
-            <div class="cooldown-sweep" style="--frac: {cooldownFrac}"></div>
-            {#if cooldownLabel}<span class="cooldown-label">{cooldownLabel}</span>{/if}
-          {/if}
-          {#if queued}
-            <div class="queue-pip"></div>
-          {/if}
-        {:else if item}
-          <IconGlyph value={itemIcon(item.itemId)} size={26} itemId={item.itemId} />
-          {#if item.qty > 1}<span class="qty">{item.qty}</span>{/if}
-          {#if item.durability !== null && itemDef(item.itemId).maxDurability}
-            <div class="dura" style="width: {(item.durability / itemDef(item.itemId).maxDurability!) * 100}%"></div>
-          {/if}
-        {/if}
-        <span class="num">{keyLabel(i)}</span>
-      </button>
-    {/each}
+          <span class="num">{keyLabel(i)}</span>
+        </button>
+      {/each}
+    </div>
   </div>
 </div>
 
@@ -124,98 +185,160 @@
 {/if}
 
 <style>
-  .action-bar-container {
+  .xp-strip {
     position: absolute;
-    bottom: 16px;
+    left: 50%;
+    bottom: 2px;
+    transform: translateX(-50%);
+    width: min(560px, 90vw);
+    height: 6px;
+    background: rgba(4, 5, 8, 0.85);
+    border: 1px solid rgba(196, 163, 90, 0.3);
+    border-radius: 2px;
+    overflow: hidden;
+    pointer-events: none;
+    z-index: 6;
+  }
+  .xp-fill {
+    height: 100%;
+    background: linear-gradient(180deg, #9dff7a, #6fcf6a 50%, #3a8a3a);
+    transition: width 0.3s ease-out;
+    box-shadow: 0 0 8px rgba(111, 207, 106, 0.45);
+  }
+
+  .currency {
+    position: absolute;
+    right: 14px;
+    bottom: 18px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 4px 10px;
+    background: rgba(12, 10, 18, 0.72);
+    border: 1px solid rgba(196, 163, 90, 0.35);
+    border-radius: 3px;
+    pointer-events: none;
+    z-index: 6;
+  }
+  .coin {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 12px;
+    font-weight: 800;
+    text-shadow: 0 1px 2px #000;
+  }
+  .coin.gold { color: #e8c878; }
+  .coin.silver { color: #d0d7e2; }
+  .pip {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    box-shadow: inset 0 -1px 2px rgba(0, 0, 0, 0.45);
+  }
+  .coin.gold .pip {
+    background: radial-gradient(circle at 35% 30%, #ffe9a0, #c9a24b 55%, #7a5a18);
+  }
+  .coin.silver .pip {
+    background: radial-gradient(circle at 35% 30%, #f2f5f8, #a8b0bc 55%, #5a6270);
+  }
+
+  .action-cluster {
+    position: absolute;
+    bottom: 14px;
     left: 50%;
     transform: translateX(-50%);
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 4px;
-    pointer-events: auto;
+    gap: 8px;
+    pointer-events: none;
+    z-index: 5;
   }
-  .xp-bar-container {
-    position: relative;
-    width: 100%;
-    height: 10px;
-    background: rgba(8, 6, 4, 0.9);
-    border: 1px solid rgba(212, 175, 55, 0.5);
-    border-radius: 3px;
-    overflow: hidden;
-    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.8), inset 0 1px 2px rgba(0, 0, 0, 0.8);
-    pointer-events: auto;
-  }
-  .xp-fill {
-    height: 100%;
-    background: linear-gradient(180deg, #9b59b6, #6c3483);
-    transition: width 0.3s ease-out;
-  }
-  .xp-text {
-    position: absolute;
-    inset: 0;
-    font-size: 8px;
-    font-weight: 700;
-    line-height: 10px;
-    text-align: center;
-    color: #f5eef8;
-    text-shadow: 0 1px 2px #000, 1px 1px 1px #000;
-    font-family: var(--rc-body);
-  }
-  .hotbar {
+
+  .hub {
     display: flex;
-    gap: 6px;
-    pointer-events: auto;
+    align-items: center;
+    gap: 8px;
+    pointer-events: none;
   }
-  .slot {
+  .side-bar {
+    width: 168px;
+  }
+  .side-bar :global(.rc-resource-bar) {
+    height: 22px;
+  }
+  .side-bar :global(.label) {
+    font-size: 11px;
+    letter-spacing: 0.3px;
+  }
+  .hub-portrait {
     position: relative;
-    width: 52px;
-    height: 52px;
-    background:
-      linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(0, 0, 0, 0.3)),
-      rgba(14, 12, 9, 0.88);
-    border: 2px solid var(--rc-gold-dim);
-    outline: 1px solid rgba(0, 0, 0, 0.8);
-    border-radius: 7px;
+    width: 54px;
+    height: 54px;
+    border-radius: 50%;
+    background: radial-gradient(circle at 35% 28%, #4a3558, #120e18 72%);
+    border: 2px solid var(--rc-gold-bright);
+    box-shadow:
+      0 0 16px rgba(196, 77, 154, 0.35),
+      0 4px 12px rgba(0, 0, 0, 0.7),
+      inset 0 0 12px rgba(0, 0, 0, 0.55);
     display: flex;
     align-items: center;
     justify-content: center;
-    box-shadow: inset 0 0 8px rgba(0, 0, 0, 0.6);
-    cursor: pointer;
+    flex-shrink: 0;
+  }
+  .hub-icon {
+    font-size: 24px;
+    line-height: 1;
+    filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.7));
+  }
+  .hub-level {
+    position: absolute;
+    bottom: -3px;
+    right: -3px;
+    min-width: 20px;
+    height: 20px;
+    padding: 0 4px;
+    border-radius: 50%;
+    background: #1a1410;
+    border: 1.5px solid var(--rc-gold);
+    color: var(--rc-gold-bright);
+    font-size: 10px;
+    font-weight: 800;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .hotbar-plate {
+    padding: 6px 8px;
+    background: rgba(12, 10, 18, 0.55);
+    border: 1px solid rgba(196, 163, 90, 0.28);
+    border-radius: 4px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
     pointer-events: auto;
-    user-select: none;
-    padding: 0;
-    transition: transform 0.08s ease, border-color 0.15s ease, box-shadow 0.15s ease;
   }
-  .slot:hover {
-    border-color: var(--rc-gold-bright);
-    box-shadow: 0 0 12px rgba(255, 214, 110, 0.4), inset 0 0 8px rgba(0, 0, 0, 0.6);
+  .hotbar-row {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 4px;
   }
-  .slot:active {
-    transform: scale(0.94);
+  .row-gap {
+    width: 10px;
   }
-  .slot.active {
-    border-color: var(--rc-gold-bright);
-    box-shadow:
-      0 0 14px rgba(255, 214, 110, 0.45),
-      inset 0 0 8px rgba(0, 0, 0, 0.6);
+  .rc-action-slot.spell {
+    border-color: rgba(160, 100, 200, 0.5);
   }
-  .slot.spell {
-    border-color: rgba(200, 120, 255, 0.55);
-  }
-  .slot.spell.queued {
-    border-color: var(--rc-gold-bright);
-    box-shadow:
-      0 0 10px rgba(255, 214, 110, 0.35),
-      inset 0 0 8px rgba(0, 0, 0, 0.6);
-  }
-  .slot.spell.first {
-    margin-left: 12px;
+  .rc-action-slot.spell.queued {
+    border-color: var(--rc-magenta-bright);
+    box-shadow: 0 0 12px rgba(196, 77, 154, 0.45), inset 0 0 10px rgba(0, 0, 0, 0.65);
   }
   .gcd-dim {
     position: absolute;
     inset: 0;
-    border-radius: 6px;
+    border-radius: 2px;
     background: rgba(0, 0, 0, 0.55);
     pointer-events: none;
   }
@@ -226,27 +349,26 @@
     width: 7px;
     height: 7px;
     border-radius: 50%;
-    background: var(--rc-gold-bright);
-    box-shadow: 0 0 6px rgba(255, 214, 110, 0.8);
+    background: var(--rc-magenta-bright);
+    box-shadow: 0 0 6px rgba(224, 107, 180, 0.9);
     pointer-events: none;
   }
   .qty {
     position: absolute;
-    right: 4px;
+    right: 3px;
     bottom: 2px;
-    font-size: 12px;
-    font-weight: 700;
+    font-size: 11px;
+    font-weight: 800;
     color: #fff;
     text-shadow: 0 1px 2px #000;
   }
   .num {
     position: absolute;
-    left: 4px;
-    top: 2px;
-    font-size: 10px;
-    font-family: var(--rc-display);
-    font-weight: 700;
-    color: var(--rc-gold);
+    left: 3px;
+    top: 1px;
+    font-size: 9px;
+    font-weight: 800;
+    color: rgba(232, 200, 120, 0.9);
     text-shadow: 0 1px 2px #000;
   }
   .dura {
@@ -261,78 +383,63 @@
   .casting {
     position: absolute;
     inset: 0;
-    border-radius: 6px;
-    background: rgba(200, 120, 255, 0.3);
+    border-radius: 2px;
+    background: rgba(196, 77, 154, 0.3);
     animation: pulse 0.6s infinite alternate;
   }
   @keyframes pulse {
-    from {
-      opacity: 0.4;
-    }
-    to {
-      opacity: 1;
-    }
+    from { opacity: 0.4; }
+    to { opacity: 1; }
   }
-  /* Radial wipe that recedes as the spell comes off cooldown -- --frac is
-     1 right after casting and counts down to 0 when ready again. */
   .cooldown-sweep {
     position: absolute;
     inset: 0;
-    border-radius: 6px;
+    border-radius: 2px;
     background: conic-gradient(rgba(0, 0, 0, 0.78) calc(var(--frac) * 360deg), transparent 0);
     pointer-events: none;
   }
   .cooldown-label {
     position: absolute;
-    font-family: var(--rc-display);
-    font-size: 15px;
-    font-weight: 700;
+    font-size: 14px;
+    font-weight: 800;
     color: #fff;
     text-shadow: 0 1px 3px #000;
     pointer-events: none;
   }
   .reward-chests {
     position: absolute;
-    bottom: 90px;
+    bottom: 120px;
     right: 18px;
     display: flex;
     flex-direction: column;
     gap: 8px;
     pointer-events: auto;
+    z-index: 5;
   }
   .chest-button {
     position: relative;
-    width: 60px;
-    height: 60px;
-    background:
-      linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(0, 0, 0, 0.4)),
-      rgba(180, 100, 20, 0.4);
-    border: 2px solid rgba(255, 180, 80, 0.6);
-    border-radius: 8px;
+    width: 56px;
+    height: 56px;
+    background: linear-gradient(180deg, rgba(196, 77, 154, 0.25), rgba(0, 0, 0, 0.5));
+    border: 2px solid rgba(232, 200, 120, 0.55);
+    border-radius: 6px;
     display: flex;
     align-items: center;
     justify-content: center;
     cursor: pointer;
-    box-shadow: 0 0 12px rgba(255, 150, 50, 0.4), inset 0 0 8px rgba(0, 0, 0, 0.5);
+    box-shadow: 0 0 14px rgba(196, 77, 154, 0.4);
     transition: all 0.2s;
     font-size: 0;
   }
   .chest-button:hover {
-    border-color: rgb(255, 200, 100);
-    box-shadow:
-      0 0 20px rgba(255, 150, 50, 0.7),
-      inset 0 0 8px rgba(0, 0, 0, 0.5);
+    border-color: var(--rc-gold-bright);
     transform: scale(1.08);
-  }
-  .chest-button:active {
-    transform: scale(0.96);
   }
   .chest-level {
     position: absolute;
     top: 2px;
     right: 3px;
     font-size: 11px;
-    font-family: var(--rc-display);
     font-weight: 700;
     color: #ffd700;
     background: rgba(0, 0, 0, 0.7);

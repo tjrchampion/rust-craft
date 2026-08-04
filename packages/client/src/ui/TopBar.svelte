@@ -7,14 +7,12 @@
   const dir = $derived(DIRS[Math.round(heading / 45) % 8]);
 
   const hour = $derived((game.timeOfDay * 24 + 6) % 24);
-  const isDay = $derived(game.timeOfDay > 0.02 && game.timeOfDay < 0.48);
   const clock = $derived(
     `${String(Math.floor(hour)).padStart(2, "0")}:${String(Math.floor((hour % 1) * 60)).padStart(2, "0")}`,
   );
 </script>
 
-<div class="topbar rc-frame">
-  <span class="icon">{isDay ? "☀️" : "🌙"}</span>
+<div class="topbar rc-hud-panel">
   <span class="clock">{clock}</span>
   <span class="sep"></span>
   <span class="dir">{dir}</span>
@@ -24,39 +22,39 @@
 <style>
   .topbar {
     position: absolute;
-    top: 14px;
+    top: 10px;
     left: 50%;
     transform: translateX(-50%);
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 6px 16px;
+    padding: 4px 12px;
     pointer-events: none;
     font-family: var(--rc-display);
     font-weight: 700;
-  }
-  .icon {
-    font-size: 14px;
+    z-index: 3;
   }
   .clock {
-    font-size: 14px;
-    color: var(--rc-parchment);
+    font-size: 12px;
+    color: var(--rc-ink);
     letter-spacing: 1px;
+    text-shadow: 0 1px 2px #000;
   }
   .sep {
     width: 1px;
-    height: 16px;
-    background: var(--rc-gold-dim);
+    height: 12px;
+    background: rgba(196, 163, 90, 0.4);
   }
   .dir {
-    font-size: 16px;
+    font-size: 13px;
     color: var(--rc-gold-bright);
-    min-width: 26px;
+    min-width: 24px;
     text-align: center;
+    text-shadow: 0 1px 2px #000;
   }
   .deg {
-    font-size: 11px;
+    font-size: 10px;
     color: var(--rc-ink-dim);
-    min-width: 32px;
+    min-width: 28px;
   }
 </style>

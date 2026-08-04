@@ -1,11 +1,12 @@
 <script lang="ts">
   import { game } from "./gameState.svelte";
   const t = $derived(game.target);
+  const hpPct = $derived(t ? Math.min(100, (t.hp / Math.max(1, t.maxHp)) * 100) : 0);
 </script>
 
 {#if t}
   <div
-    class="target rc-frame"
+    class="target"
     class:hostile={t.hostile}
     oncontextmenu={(e) => {
       e.preventDefault();
@@ -18,15 +19,15 @@
       }
     }}
   >
-    <div class="portrait" class:hostile={t.hostile}>
-      <span>{t.kind === "mob" ? "🐺" : "⚔️"}</span>
-    </div>
     <div class="body">
       <div class="name">{t.name}</div>
-      <div class="bar" class:hostile={t.hostile}>
-        <div class="fill" style="width: {Math.min(100, (t.hp / t.maxHp) * 100)}%"></div>
-        <span>{Math.min(Math.ceil(t.hp), t.maxHp)} / {t.maxHp}</span>
+      <div class="rc-resource-bar hp angled-flip" class:hostile={t.hostile}>
+        <div class="fill" style="width: {hpPct}%"></div>
+        <span class="label">{Math.round(hpPct)}%</span>
       </div>
+    </div>
+    <div class="portrait" class:hostile={t.hostile}>
+      <span>{t.kind === "mob" ? "🐺" : "⚔️"}</span>
     </div>
   </div>
 {/if}
@@ -34,80 +35,60 @@
 <style>
   .target {
     position: absolute;
-    top: 96px;
+    top: 48px;
     left: 50%;
     transform: translateX(-50%);
     display: flex;
     align-items: center;
     gap: 10px;
-    padding: 8px 14px 8px 10px;
-    min-width: 220px;
     pointer-events: auto;
     cursor: pointer;
-    background: radial-gradient(circle at 50% 20%, rgba(32, 28, 22, 0.94), rgba(12, 10, 8, 0.98));
-    border: 2px solid #a6823b;
-    border-radius: 8px;
-    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.75), inset 0 0 10px rgba(0, 0, 0, 0.8);
-  }
-  .target.hostile {
-    border-color: #c0392b;
+    z-index: 5;
+    min-width: 240px;
   }
   .portrait {
-    width: 44px;
-    height: 44px;
+    width: 48px;
+    height: 48px;
     border-radius: 50%;
-    background: radial-gradient(circle at 35% 30%, #3d3326, #120e09);
-    border: 2px solid #d4af37;
+    background: radial-gradient(circle at 35% 30%, #3a2a48, #120e18);
+    border: 2px solid var(--rc-gold);
     display: flex;
     align-items: center;
     justify-content: center;
     font-size: 20px;
     flex-shrink: 0;
-    box-shadow: 0 0 8px rgba(0, 0, 0, 0.8);
+    box-shadow: 0 0 14px rgba(160, 80, 200, 0.2), 0 2px 8px rgba(0, 0, 0, 0.7);
   }
   .portrait.hostile {
     border-color: #e74c3c;
+    box-shadow: 0 0 14px rgba(231, 76, 60, 0.35);
   }
   .body {
     flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 3px;
   }
   .name {
     font-family: var(--rc-display);
     font-weight: 700;
-    font-size: 13px;
-    color: #f3e5ab;
-    margin-bottom: 3px;
-    text-shadow: 0 1px 2px #000;
-  }
-  .bar {
-    position: relative;
-    height: 16px;
-    background: rgba(0, 0, 0, 0.8);
-    border: 1px solid rgba(212, 175, 55, 0.4);
-    border-radius: 3px;
+    font-size: 12px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: #f0eaf6;
+    text-shadow: 0 1px 3px #000;
+    white-space: nowrap;
     overflow: hidden;
-    box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.8);
+    text-overflow: ellipsis;
+    max-width: 200px;
   }
-  .bar.hostile {
-    border-color: rgba(231, 76, 60, 0.4);
+  .body :global(.rc-resource-bar) {
+    width: 190px;
+    height: 16px;
   }
-  .fill {
-    height: 100%;
-    background: linear-gradient(180deg, #2ecc71, #1b872d);
-    transition: width 0.2s ease-out;
-  }
-  .bar.hostile .fill {
-    background: linear-gradient(180deg, #e74c3c, #962d22);
-  }
-  .bar span {
-    position: absolute;
-    inset: 0;
-    font-size: 11px;
-    font-weight: 700;
-    line-height: 16px;
-    text-align: center;
-    color: #fff;
-    text-shadow: 0 1px 3px #000, 1px 1px 1px #000;
-    font-family: var(--rc-body);
+  .hostile :global(.rc-resource-bar.hp > .fill) {
+    background: linear-gradient(180deg, #ff6b5a 0%, #c0392b 45%, #8b1e16 100%);
   }
 </style>

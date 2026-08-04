@@ -15,6 +15,12 @@
 
   // Same heading convention as TopBar's compass, so the two always agree.
   const heading = $derived((((-game.compassYaw * 180) / Math.PI) % 360 + 360) % 360);
+  const isDay = $derived(game.timeOfDay > 0.02 && game.timeOfDay < 0.48);
+  const locationName = $derived(
+    game.regionState?.regionName ||
+      game.zoneBanner?.name ||
+      (game.dungeonState ? "Dungeon" : "Wilderness"),
+  );
 
   interface Projected {
     x: number;
@@ -62,19 +68,19 @@
     const party = game.party ?? [];
     const selfId = game.selfId;
     const gameInstance = getGame();
-    
+
     for (const member of party) {
       if (member.id === selfId || !member.online) continue;
-      
+
       let x = member.x ?? 0;
       let z = member.z ?? 0;
-      
+
       const realPos = gameInstance?.entities.entityWorldPos(member.id);
       if (realPos) {
         x = realPos.x;
         z = realPos.z;
       }
-      
+
       list.push({
         id: member.id,
         name: member.name,
@@ -85,108 +91,176 @@
   });
 
   const GLYPH: Record<string, string> = { available: "!", complete: "?", active: "?", escort: "🛡️" };
+
+  function openRegionMap(): void {
+    if (game.self?.dead) return;
+    const g = getGame();
+    if (!g) return;
+    if (game.inventoryOpen || game.questOffer || game.chatOpen) return;
+    g.setWorldMapOpen(!game.worldMapOpen);
+  }
 </script>
 
-<div class="minimap-wrap rc-frame">
-  <svg viewBox="0 0 {SIZE} {SIZE}" class="minimap">
-    <defs>
-      <clipPath id="mm-clip">
-        <circle cx={CENTER} cy={CENTER} r={RADIUS} />
-      </clipPath>
-    </defs>
-    <circle cx={CENTER} cy={CENTER} r={RADIUS} class="mm-bg" />
-    <g clip-path="url(#mm-clip)">
-      {#each villagePoints as v (v.id)}
-        {#if v.p.onMap}
-          <circle cx={v.p.x} cy={v.p.y} r="2.6" class="mm-village" />
-        {/if}
-      {/each}
+<div class="minimap-stack">
+  <div class="location-row">
+    <span class="tod" title={isDay ? "Day" : "Night"}>{isDay ? "☀" : "☾"}</span>
+    <span class="location">{locationName}</span>
+  </div>
+  <div class="minimap-wrap">
+    <svg viewBox="0 0 {SIZE} {SIZE}" class="minimap">
+      <defs>
+        <clipPath id="mm-clip">
+          <circle cx={CENTER} cy={CENTER} r={RADIUS} />
+        </clipPath>
+        <radialGradient id="mm-bg-grad" cx="50%" cy="40%" r="60%">
+          <stop offset="0%" stop-color="rgba(40, 48, 58, 0.75)" />
+          <stop offset="100%" stop-color="rgba(8, 10, 14, 0.88)" />
+        </radialGradient>
+      </defs>
+      <circle cx={CENTER} cy={CENTER} r={RADIUS} class="mm-bg" />
+      <g clip-path="url(#mm-clip)">
+        {#each villagePoints as v (v.id)}
+          {#if v.p.onMap}
+            <circle cx={v.p.x} cy={v.p.y} r="2.6" class="mm-village" />
+          {/if}
+        {/each}
+        {#each questPoints as q (q.id)}
+          {#if q.p.onMap}
+            <circle cx={q.p.x} cy={q.p.y} r="6.5" class="mm-quest-dot mm-{q.marker}" />
+            <text x={q.p.x} y={q.p.y + 3.2} class="mm-quest-glyph">{GLYPH[q.marker] ?? "!"}</text>
+          {/if}
+        {/each}
+        {#each partyPoints as pm (pm.id)}
+          {#if pm.p.onMap}
+            <circle cx={pm.p.x} cy={pm.p.y} r="4" class="mm-party-dot" />
+          {/if}
+        {/each}
+        {#each worldEventPoints as ev (ev.id)}
+          {#if ev.p.onMap}
+            <circle cx={ev.p.x} cy={ev.p.y} r="7" class="mm-event-ring" />
+            <circle cx={ev.p.x} cy={ev.p.y} r="3.5" class="mm-event-dot mm-event-{ev.phase}" />
+          {/if}
+        {/each}
+      </g>
+      <circle cx={CENTER} cy={CENTER} r={RADIUS} class="mm-rim" />
+      <circle cx={CENTER} cy={CENTER} r={RADIUS + 4} class="mm-outer" />
+      <text x={CENTER} y="15" class="mm-cardinal">N</text>
+      <text x={CENTER} y="193" class="mm-cardinal">S</text>
+      <text x="10" y={CENTER + 4} class="mm-cardinal">W</text>
+      <text x="190" y={CENTER + 4} class="mm-cardinal">E</text>
       {#each questPoints as q (q.id)}
-        {#if q.p.onMap}
-          <circle cx={q.p.x} cy={q.p.y} r="6.5" class="mm-quest-dot mm-{q.marker}" />
-          <text x={q.p.x} y={q.p.y + 3.2} class="mm-quest-glyph">{GLYPH[q.marker] ?? "!"}</text>
+        {#if !q.p.onMap}
+          <g transform="translate({q.p.x} {q.p.y}) rotate({q.p.angleDeg})">
+            <path d="M 0 -7 L 5.5 6 L 0 3 L -5.5 6 Z" class="mm-arrow mm-{q.marker}" />
+          </g>
+          <text x={q.p.x} y={q.p.y > CENTER ? q.p.y + 12 : q.p.y - 8} class="mm-dist">
+            {Math.round(q.p.worldDist)}m
+          </text>
         {/if}
       {/each}
       {#each partyPoints as pm (pm.id)}
-        {#if pm.p.onMap}
-          <circle cx={pm.p.x} cy={pm.p.y} r="4" class="mm-party-dot" />
+        {#if !pm.p.onMap}
+          <g transform="translate({pm.p.x} {pm.p.y}) rotate({pm.p.angleDeg})">
+            <path d="M 0 -6 L 4.5 5 L 0 2.5 L -4.5 5 Z" class="mm-party-arrow" />
+          </g>
+          <text x={pm.p.x} y={pm.p.y > CENTER ? pm.p.y + 11 : pm.p.y - 7} class="mm-party-dist">
+            {pm.name.slice(0, 3)}
+          </text>
         {/if}
       {/each}
       {#each worldEventPoints as ev (ev.id)}
-        {#if ev.p.onMap}
-          <circle cx={ev.p.x} cy={ev.p.y} r="7" class="mm-event-ring" />
-          <circle cx={ev.p.x} cy={ev.p.y} r="3.5" class="mm-event-dot mm-event-{ev.phase}" />
+        {#if !ev.p.onMap}
+          <g transform="translate({ev.p.x} {ev.p.y}) rotate({ev.p.angleDeg})">
+            <path d="M 0 -7 L 5.5 6 L 0 3 L -5.5 6 Z" class="mm-event-arrow" />
+          </g>
         {/if}
       {/each}
-    </g>
-    <circle cx={CENTER} cy={CENTER} r={RADIUS} class="mm-rim" />
-    <text x={CENTER} y="15" class="mm-cardinal">N</text>
-    <text x={CENTER} y="193" class="mm-cardinal">S</text>
-    <text x="10" y={CENTER + 4} class="mm-cardinal">W</text>
-    <text x="190" y={CENTER + 4} class="mm-cardinal">E</text>
-    {#each questPoints as q (q.id)}
-      {#if !q.p.onMap}
-        <g transform="translate({q.p.x} {q.p.y}) rotate({q.p.angleDeg})">
-          <path d="M 0 -7 L 5.5 6 L 0 3 L -5.5 6 Z" class="mm-arrow mm-{q.marker}" />
-        </g>
-        <text x={q.p.x} y={q.p.y > CENTER ? q.p.y + 12 : q.p.y - 8} class="mm-dist">
-          {Math.round(q.p.worldDist)}m
-        </text>
-      {/if}
-    {/each}
-    {#each partyPoints as pm (pm.id)}
-      {#if !pm.p.onMap}
-        <g transform="translate({pm.p.x} {pm.p.y}) rotate({pm.p.angleDeg})">
-          <path d="M 0 -6 L 4.5 5 L 0 2.5 L -4.5 5 Z" class="mm-party-arrow" />
-        </g>
-        <text x={pm.p.x} y={pm.p.y > CENTER ? pm.p.y + 11 : pm.p.y - 7} class="mm-party-dist">
-          {pm.name.slice(0, 3)}
-        </text>
-      {/if}
-    {/each}
-    {#each worldEventPoints as ev (ev.id)}
-      {#if !ev.p.onMap}
-        <g transform="translate({ev.p.x} {ev.p.y}) rotate({ev.p.angleDeg})">
-          <path d="M 0 -7 L 5.5 6 L 0 3 L -5.5 6 Z" class="mm-event-arrow" />
-        </g>
-      {/if}
-    {/each}
-    <g transform="translate({CENTER} {CENTER}) rotate({heading})">
-      <path d="M 0 -10 L 7 8 L 0 4 L -7 8 Z" class="mm-player" />
-    </g>
-  </svg>
+      <g transform="translate({CENTER} {CENTER}) rotate({heading})">
+        <path d="M 0 -10 L 7 8 L 0 4 L -7 8 Z" class="mm-player" />
+      </g>
+    </svg>
+    <button type="button" class="region-btn" onclick={openRegionMap} title="Open world map (M)">
+      REGION
+    </button>
+  </div>
 </div>
 
 <style>
-  .minimap-wrap {
+  .minimap-stack {
     position: absolute;
-    top: 14px;
-    right: 16px;
-    width: 180px;
-    height: 180px;
-    padding: 0;
-    border-radius: 50%;
-    overflow: hidden;
+    top: 10px;
+    right: 14px;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 4px;
     pointer-events: none;
+    z-index: 4;
+  }
+  .location-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 8px;
+    max-width: 200px;
+  }
+  .tod {
+    font-size: 13px;
+    color: var(--rc-gold-bright);
+    text-shadow: 0 1px 3px #000;
+    line-height: 1;
+  }
+  .location {
+    font-family: var(--rc-display);
+    font-weight: 700;
+    font-size: 11px;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    color: var(--rc-gold-bright);
+    text-shadow: 0 1px 3px #000, 0 0 8px rgba(0, 0, 0, 0.8);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .minimap-wrap {
+    position: relative;
+    width: 168px;
+    height: 168px;
+    border-radius: 50%;
+    overflow: visible;
+    pointer-events: none;
+    background: rgba(12, 10, 18, 0.55);
+    box-shadow:
+      0 0 0 2px rgba(196, 163, 90, 0.55),
+      0 0 0 4px rgba(20, 14, 28, 0.95),
+      0 0 18px rgba(160, 80, 200, 0.18),
+      0 8px 24px rgba(0, 0, 0, 0.55);
   }
   .minimap {
     display: block;
     width: 100%;
     height: 100%;
+    border-radius: 50%;
+    overflow: hidden;
   }
   .mm-bg {
-    fill: rgba(8, 8, 12, 0.55);
+    fill: url(#mm-bg-grad);
   }
   .mm-rim {
     fill: none;
-    stroke: var(--rc-gold-dim);
+    stroke: rgba(196, 163, 90, 0.75);
     stroke-width: 2.5;
   }
+  .mm-outer {
+    fill: none;
+    stroke: rgba(0, 0, 0, 0.55);
+    stroke-width: 1.2;
+  }
   .mm-cardinal {
-    font-family: var(--rc-display);
-    font-weight: 700;
-    font-size: 11px;
-    fill: var(--rc-gold-bright);
+    font-family: var(--rc-body);
+    font-weight: 800;
+    font-size: 10px;
+    fill: var(--rc-metal-bright);
     text-anchor: middle;
   }
   .mm-village {
@@ -195,7 +269,7 @@
     stroke-width: 0.5;
   }
   .mm-player {
-    fill: var(--rc-gold-bright);
+    fill: var(--rc-magenta-bright);
     stroke: rgba(0, 0, 0, 0.7);
     stroke-width: 0.7;
   }
@@ -234,7 +308,7 @@
     }
   }
   .mm-quest-glyph {
-    font-family: var(--rc-display);
+    font-family: var(--rc-body);
     font-weight: 900;
     font-size: 8px;
     fill: #1a1408;
@@ -292,5 +366,28 @@
     fill: #ff8800;
     stroke: rgba(0, 0, 0, 0.7);
     stroke-width: 0.7;
+  }
+  .region-btn {
+    position: absolute;
+    left: 50%;
+    bottom: -6px;
+    transform: translateX(-50%);
+    pointer-events: auto;
+    font-family: var(--rc-display);
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 1.5px;
+    color: var(--rc-ink);
+    background: linear-gradient(180deg, #3a2e48, #1c1628);
+    border: 1px solid rgba(196, 163, 90, 0.65);
+    border-radius: 2px;
+    padding: 3px 10px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.55);
+    cursor: pointer;
+  }
+  .region-btn:hover {
+    border-color: var(--rc-gold-bright);
+    color: var(--rc-gold-bright);
+    box-shadow: 0 0 12px rgba(196, 77, 154, 0.35);
   }
 </style>

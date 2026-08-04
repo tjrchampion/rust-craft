@@ -1,35 +1,42 @@
 <script lang="ts">
   import { game } from "./gameState.svelte";
+  import { CLASSES, type ClassId } from "@rustcraft/shared";
+  import { CLASS_ICONS } from "../render/classModels";
 
   const self = $derived(game.self);
+  const classId = $derived((game.classId || "warrior") as ClassId);
+  const classIcon = $derived(CLASS_ICONS[classId] ?? "⚔️");
+  const className = $derived(CLASSES[classId]?.name ?? "Adventurer");
+  const hpPct = $derived(self ? Math.min(100, (self.hp / Math.max(1, self.maxHp)) * 100) : 0);
+  const manaPct = $derived(self ? Math.min(100, (self.mana / Math.max(1, self.maxMana)) * 100) : 0);
 </script>
 
 {#if self}
-  <div class="unitframe rc-frame">
-    <div class="portrait">
-      <span class="portrait-icon">⚔️</span>
+  <div class="unitframe">
+    <div class="portrait" title={className}>
+      <span class="portrait-icon">{classIcon}</span>
       <span class="level">{self.level}</span>
     </div>
     <div class="body">
       <div class="name-row">
         <span class="name">{game.selfName}</span>
       </div>
-      <div class="bar hp" class:low={self.hp / self.maxHp < 0.28}>
-        <div class="fill" style="width: {Math.min(100, (self.hp / self.maxHp) * 100)}%"></div>
-        <span>{Math.min(Math.ceil(self.hp), self.maxHp)} / {self.maxHp}</span>
+      <div class="rc-resource-bar hp angled" class:low={hpPct < 28}>
+        <div class="fill" style="width: {hpPct}%"></div>
+        <span class="label">{Math.round(hpPct)}%</span>
       </div>
-      <div class="bar mana">
-        <div class="fill" style="width: {Math.min(100, (self.mana / self.maxMana) * 100)}%"></div>
-        <span>{Math.min(Math.floor(self.mana), self.maxMana)} / {self.maxMana}</span>
+      <div class="rc-resource-bar mana angled">
+        <div class="fill" style="width: {manaPct}%"></div>
+        <span class="label">{Math.round(manaPct)}%</span>
       </div>
       {#if game.underwater || self.oxygen < 99}
         <div
-          class="bar oxygen"
+          class="rc-resource-bar oxygen angled"
           class:critical={self.oxygen < 25}
           title="Breath"
         >
           <div class="fill" style="width: {Math.min(100, self.oxygen)}%"></div>
-          <span>{Math.ceil(self.oxygen)} air</span>
+          <span class="label">{Math.ceil(self.oxygen)} air</span>
         </div>
       {/if}
     </div>
@@ -39,110 +46,94 @@
 <style>
   .unitframe {
     position: absolute;
-    left: 16px;
-    top: 14px;
+    left: 14px;
+    top: 12px;
     display: flex;
     gap: 10px;
     align-items: center;
-    padding: 8px 14px 8px 10px;
+    padding: 0;
     pointer-events: none;
-    min-width: 250px;
-    background: radial-gradient(circle at 50% 20%, rgba(32, 28, 22, 0.94), rgba(12, 10, 8, 0.98));
-    border: 2px solid #a6823b;
-    border-radius: 8px;
-    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.75), inset 0 0 10px rgba(0, 0, 0, 0.8);
+    min-width: 280px;
+    z-index: 4;
   }
   .portrait {
     position: relative;
-    width: 52px;
-    height: 52px;
+    width: 62px;
+    height: 62px;
     border-radius: 50%;
-    background: radial-gradient(circle at 35% 30%, #3d3326, #120e09);
-    border: 2px solid #d4af37;
+    background:
+      radial-gradient(circle at 35% 28%, #4a3558, #120e18 72%);
+    border: 2px solid var(--rc-gold);
+    outline: 2px solid rgba(0, 0, 0, 0.75);
     display: flex;
     align-items: center;
     justify-content: center;
-    box-shadow: 0 0 10px rgba(0, 0, 0, 0.8);
+    box-shadow:
+      0 0 0 1px rgba(232, 200, 120, 0.35),
+      0 0 18px rgba(160, 80, 200, 0.25),
+      0 4px 14px rgba(0, 0, 0, 0.75),
+      inset 0 0 14px rgba(0, 0, 0, 0.55);
     flex-shrink: 0;
   }
   .portrait-icon {
-    font-size: 24px;
+    font-size: 28px;
+    filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.7));
+    line-height: 1;
   }
   .level {
     position: absolute;
-    bottom: -5px;
-    right: -5px;
-    width: 22px;
-    height: 22px;
+    bottom: -2px;
+    left: -2px;
+    min-width: 24px;
+    height: 24px;
+    padding: 0 5px;
     border-radius: 50%;
-    background: #17130c;
-    border: 1.5px solid #ffd700;
-    color: #ffe66d;
-    font-family: var(--rc-display);
-    font-weight: 900;
+    background: linear-gradient(180deg, #3a2e20, #1a1410);
+    border: 1.5px solid var(--rc-gold-bright);
+    color: var(--rc-gold-bright);
+    font-family: var(--rc-body);
+    font-weight: 800;
     font-size: 11px;
     display: flex;
     align-items: center;
     justify-content: center;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.8);
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.85);
   }
   .body {
     display: flex;
     flex-direction: column;
     gap: 4px;
     flex: 1;
+    min-width: 0;
   }
-  .name-row .name {
+  .name {
     font-family: var(--rc-display);
     font-weight: 700;
-    font-size: 14px;
-    letter-spacing: 0.5px;
-    color: #f3e5ab;
-    text-shadow: 0 1px 3px #000, 0 0 5px rgba(0,0,0,0.8);
-  }
-  .bar {
-    position: relative;
-    height: 16px;
-    background: rgba(0, 0, 0, 0.8);
-    border: 1px solid rgba(212, 175, 55, 0.4);
-    border-radius: 3px;
+    font-size: 13px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: #f4eef8;
+    text-shadow: 0 1px 4px #000;
+    white-space: nowrap;
     overflow: hidden;
-    box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.8);
+    text-overflow: ellipsis;
   }
-  .fill {
-    height: 100%;
-    transition: width 0.2s ease-out;
-  }
-  .bar span {
-    position: absolute;
-    inset: 0;
-    font-size: 11px;
-    font-weight: 700;
-    line-height: 16px;
-    text-align: center;
-    color: #ffffff;
-    text-shadow: 0 1px 3px #000, 1px 1px 1px #000;
-    font-family: var(--rc-body);
-  }
-  .hp .fill {
-    background: linear-gradient(180deg, #2ecc71, #1b872d);
-  }
-  .hp.low .fill {
-    background: linear-gradient(180deg, #e74c3c, #962d22);
-  }
-  .mana .fill {
-    background: linear-gradient(180deg, #3498db, #1d5b96);
+  .body :global(.rc-resource-bar) {
+    height: 18px;
+    width: 210px;
   }
   .oxygen {
-    height: 12px;
-    margin-top: 2px;
+    height: 11px !important;
   }
-  .oxygen .fill {
+  .oxygen > :global(.fill) {
     background: linear-gradient(180deg, #7ee0ff, #2a7aa8);
   }
-  .oxygen.critical .fill {
+  .oxygen.critical > :global(.fill) {
     background: linear-gradient(180deg, #ff8a6a, #c43b2a);
     animation: oxygen-pulse 0.7s ease-in-out infinite;
+  }
+  .oxygen :global(.label) {
+    font-size: 9px;
   }
   @keyframes oxygen-pulse {
     50% {
