@@ -64,6 +64,16 @@ export interface SpellDef {
 }
 
 export const SPELLS: Record<string, SpellDef> = {
+  attack: {
+    id: "attack",
+    name: "Attack",
+    castTimeS: 0,
+    resourceCost: 0,
+    cooldownS: 0.8,
+    targeting: { kind: "melee", range: 3.2 },
+    effects: [{ type: "damage", base: 10, powerScale: 1.0, damageType: "physical" }],
+    requiredLevel: 1,
+  },
   firebolt: {
     id: "firebolt",
     name: "Firebolt",

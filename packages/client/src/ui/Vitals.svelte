@@ -14,23 +14,13 @@
       <div class="name-row">
         <span class="name">{game.selfName}</span>
       </div>
-      <div class="bar hp">
+      <div class="bar hp" class:low={self.hp / self.maxHp < 0.28}>
         <div class="fill" style="width: {Math.min(100, (self.hp / self.maxHp) * 100)}%"></div>
         <span>{Math.min(Math.ceil(self.hp), self.maxHp)} / {self.maxHp}</span>
       </div>
       <div class="bar mana">
         <div class="fill" style="width: {Math.min(100, (self.mana / self.maxMana) * 100)}%"></div>
-        <span>{Math.min(Math.floor(self.mana), self.maxMana)}</span>
-      </div>
-      <div class="row">
-        <div class="bar small hunger" title="Hunger">
-          <div class="fill" style="width: {self.hunger}%"></div>
-          <span>🍗</span>
-        </div>
-        <div class="bar small thirst" title="Thirst">
-          <div class="fill" style="width: {self.thirst}%"></div>
-          <span>💧</span>
-        </div>
+        <span>{Math.min(Math.floor(self.mana), self.maxMana)} / {self.maxMana}</span>
       </div>
       {#if game.underwater || self.oxygen < 99}
         <div
@@ -42,9 +32,6 @@
           <span>{Math.ceil(self.oxygen)} air</span>
         </div>
       {/if}
-      <div class="bar xp" title="Experience">
-        <div class="fill" style="width: {(self.xp / self.xpNext) * 100}%"></div>
-      </div>
     </div>
   </div>
 {/if}
@@ -57,21 +44,25 @@
     display: flex;
     gap: 10px;
     align-items: center;
-    padding: 10px 14px 10px 10px;
+    padding: 8px 14px 8px 10px;
     pointer-events: none;
-    min-width: 240px;
+    min-width: 250px;
+    background: radial-gradient(circle at 50% 20%, rgba(32, 28, 22, 0.94), rgba(12, 10, 8, 0.98));
+    border: 2px solid #a6823b;
+    border-radius: 8px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.75), inset 0 0 10px rgba(0, 0, 0, 0.8);
   }
   .portrait {
     position: relative;
     width: 52px;
     height: 52px;
     border-radius: 50%;
-    background: radial-gradient(circle at 35% 30%, #4a4232, #17130c);
-    border: 2px solid var(--rc-gold);
+    background: radial-gradient(circle at 35% 30%, #3d3326, #120e09);
+    border: 2px solid #d4af37;
     display: flex;
     align-items: center;
     justify-content: center;
-    box-shadow: 0 0 12px rgba(0, 0, 0, 0.6);
+    box-shadow: 0 0 10px rgba(0, 0, 0, 0.8);
     flex-shrink: 0;
   }
   .portrait-icon {
@@ -79,82 +70,68 @@
   }
   .level {
     position: absolute;
-    bottom: -6px;
-    right: -6px;
+    bottom: -5px;
+    right: -5px;
     width: 22px;
     height: 22px;
     border-radius: 50%;
     background: #17130c;
-    border: 1.5px solid var(--rc-gold);
-    color: var(--rc-gold-bright);
+    border: 1.5px solid #ffd700;
+    color: #ffe66d;
     font-family: var(--rc-display);
     font-weight: 900;
-    font-size: 12px;
+    font-size: 11px;
     display: flex;
     align-items: center;
     justify-content: center;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.8);
   }
   .body {
     display: flex;
     flex-direction: column;
-    gap: 3px;
+    gap: 4px;
     flex: 1;
   }
   .name-row .name {
     font-family: var(--rc-display);
     font-weight: 700;
     font-size: 14px;
-    letter-spacing: 1px;
-    color: var(--rc-parchment);
-    text-shadow: 0 1px 2px #000;
-  }
-  .row {
-    display: flex;
-    gap: 3px;
+    letter-spacing: 0.5px;
+    color: #f3e5ab;
+    text-shadow: 0 1px 3px #000, 0 0 5px rgba(0,0,0,0.8);
   }
   .bar {
     position: relative;
-    height: 15px;
-    background: rgba(0, 0, 0, 0.65);
-    border: 1px solid rgba(201, 162, 75, 0.35);
+    height: 16px;
+    background: rgba(0, 0, 0, 0.8);
+    border: 1px solid rgba(212, 175, 55, 0.4);
     border-radius: 3px;
     overflow: hidden;
+    box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.8);
   }
   .fill {
     height: 100%;
-    transition: width 0.25s ease-out;
+    transition: width 0.2s ease-out;
   }
   .bar span {
     position: absolute;
     inset: 0;
-    font-size: 10px;
-    line-height: 15px;
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 16px;
     text-align: center;
-    color: #fff;
-    text-shadow: 0 1px 2px #000;
+    color: #ffffff;
+    text-shadow: 0 1px 3px #000, 1px 1px 1px #000;
     font-family: var(--rc-body);
   }
   .hp .fill {
-    background: linear-gradient(180deg, #d95252, #8f2626);
+    background: linear-gradient(180deg, #2ecc71, #1b872d);
+  }
+  .hp.low .fill {
+    background: linear-gradient(180deg, #e74c3c, #962d22);
   }
   .mana .fill {
-    background: linear-gradient(180deg, #5a82d8, #26418f);
-  }
-  .small {
-    flex: 1;
-    height: 11px;
-  }
-  .small span {
-    line-height: 11px;
-    font-size: 8px;
-    text-align: left;
-    padding-left: 3px;
-  }
-  .hunger .fill {
-    background: linear-gradient(180deg, #d8a052, #8f6126);
-  }
-  .thirst .fill {
-    background: linear-gradient(180deg, #52c4d8, #26718f);
+    background: linear-gradient(180deg, #3498db, #1d5b96);
   }
   .oxygen {
     height: 12px;
@@ -171,11 +148,5 @@
     50% {
       opacity: 0.65;
     }
-  }
-  .xp {
-    height: 5px;
-  }
-  .xp .fill {
-    background: linear-gradient(180deg, #b98fe0, #6b3f9c);
   }
 </style>

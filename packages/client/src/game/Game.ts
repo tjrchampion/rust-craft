@@ -332,6 +332,31 @@ export class Game {
     this.entities.prewarmVfx(this.renderer, this.camera);
     this.input = new InputManager(canvas);
 
+    canvas.addEventListener("contextmenu", (e) => {
+      const hit = this.entities.raycastPlayer(this.camera, e.clientX, e.clientY);
+      if (hit) {
+        e.preventDefault();
+        this.selectTarget(hit.id);
+        ui.playerContextMenu = {
+          x: e.clientX,
+          y: e.clientY,
+          playerName: hit.name,
+          playerLevel: hit.level,
+          playerClass: hit.classId,
+        };
+      }
+    });
+
+    canvas.addEventListener("mousedown", (e) => {
+      if (e.button === 0) {
+        const hit = this.entities.raycastPlayer(this.camera, e.clientX, e.clientY);
+        if (hit) {
+          this.selectTarget(hit.id);
+          sound.play("target");
+        }
+      }
+    });
+
     window.addEventListener("resize", this.onResize);
 
     this.unsubscribe = this.connection.onMessage((msg) => this.onServerMsg(msg));
@@ -618,13 +643,13 @@ export class Game {
         break;
       case "party":
         ui.party = msg.members;
-        // inviteFrom is only ever set on the one message meant to show the
-        // prompt -- every other party update (accept confirmation, leave,
-        // disband, the periodic refresh) omits it, so clearing unless it's
-        // present is always correct (was previously gated on `!msg.members`
-        // too, which never fired on accept since the join confirmation
-        // *has* members, leaving the stale invite banner stuck on screen).
-        ui.pendingInvite = msg.inviteFrom ?? null;
+        if (msg.inviteFrom) {
+          ui.pendingInvite = msg.inviteFrom;
+          ui.toast(`⚔️ Party invite received from ${msg.inviteFrom}!`);
+        }
+        break;
+      case "friends":
+        ui.friends = (msg as any).friends ?? [];
         break;
       case "pvp":
         ui.pvpEnabled = msg.enabled;
@@ -635,6 +660,11 @@ export class Game {
         break;
       case "questOffer":
         ui.questOffer = { npcId: msg.npcId, npcName: msg.npcName, offers: msg.offers };
+        this.setUiMode(true);
+        break;
+      case "vendorStock":
+        ui.vendorWares = msg as any;
+        ui.vendorOpen = true;
         this.setUiMode(true);
         break;
       case "questLog":
@@ -1014,7 +1044,7 @@ export class Game {
     if (def.castTimeS <= 0) {
       this.avatar.play("attack");
       const school = def.effects.find((e) => e.type === "damage")?.damageType;
-      if (school === "physical") {
+      if (school === "physical" || spellId === "attack") {
         const ranged =
           this.equippedWeaponDef?.weaponType === "bow" || this.equippedWeaponDef?.weaponType === "crossbow";
         sound.play(ranged ? "bowShot" : "swing", { classId: this.selfClassId });
@@ -2244,12 +2274,31 @@ export class Game {
     this.connection.send({ t: "chat", channel, text });
   }
 
-  sendParty(action: "invite" | "accept" | "decline" | "leave" | "disband", name?: string): void {
-    this.connection.send({ t: "party", action, name });
+  sendParty(action: "invite" | "accept" | "decline" | "leave" | "disband" | "tag", name?: string, tag?: string): void {
+    if (action === "accept" || action === "decline") {
+      ui.pendingInvite = null;
+    }
+    this.connection.send({ t: "party", action, name, tag });
+  }
+
+  sendPartyTag(targetName: string, tag: string): void {
+    this.connection.send({ t: "party", action: "tag", name: targetName, tag });
+  }
+
+  sendFriend(action: "add" | "accept" | "decline" | "remove", targetName: string): void {
+    this.connection.send({ t: "friend", action, targetName });
   }
 
   sendPvp(enabled: boolean): void {
     this.connection.send({ t: "pvp", enabled });
+  }
+
+  sendVendorBuy(npcId: string, itemId: string, qty = 1): void {
+    this.connection.send({ t: "vendor", action: "buy", npcId, itemId, qty });
+  }
+
+  sendVendorSell(npcId: string, container: string, slot: number, qty = 1): void {
+    this.connection.send({ t: "vendor", action: "sell", npcId, container, slot, qty });
   }
 
   /** Push Display → nameplate toggles to the local plate + remote entities. */

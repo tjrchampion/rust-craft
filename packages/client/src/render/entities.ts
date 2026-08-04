@@ -11,7 +11,8 @@ import type {
   CharacterAppearance,
 } from "@rustcraft/shared";
 import { wrapAngle, mobDef, itemDef, auraDef } from "@rustcraft/shared";
-import { buildNameplate, buildCampfire, buildHorse, buildRaft } from "./models";
+import { buildNameplate, buildCampfire, buildHorse, buildRaft, buildPartyTagSprite } from "./models";
+import { game } from "../ui/gameState.svelte";
 import { AnimatedModel, PLAYER_ANIMS, mobModelSpec, logicalFromState, dodgeLogicalFor } from "./gltf";
 import { playerModelUrl, CLASS_WEAPON_NODES } from "./classModels";
 import { applyModularGearFromSnapAsync } from "./modularGear";
@@ -75,6 +76,8 @@ interface RemoteEntity {
   pendingLoad: { url: string; height: number; tint?: number } | null;
   nameplate?: THREE.Sprite;
   hpBar?: THREE.Sprite;
+  partyTag?: string;
+  partyTagSprite?: THREE.Sprite;
   debuffIcons: THREE.Sprite;
   lastDebuffKey: string;
   ring?: THREE.Mesh;
@@ -689,6 +692,34 @@ export class EntityManager {
       entity.samples.push({ t: now, x: snap.x, y: snap.y, z: snap.z, yaw: snap.yaw });
       if (entity.samples.length > 12) entity.samples.shift();
       this.updateDebuffs(entity, snap.hp > 0 ? snap.debuffs : []);
+
+      // Sync Party Tag (Overhead Leader Crown or Tag)
+      if (entity.kind === "player") {
+        const partyMember = (game.party ?? []).find(
+          (m) => m.id === entity.id || m.name.toLowerCase() === entity.name.toLowerCase(),
+        );
+        const desiredTag = partyMember?.tag;
+        if (entity.partyTag !== desiredTag) {
+          entity.partyTag = desiredTag;
+          if (entity.partyTagSprite) {
+            entity.group.remove(entity.partyTagSprite);
+            (entity.partyTagSprite.material as THREE.SpriteMaterial).map?.dispose();
+            entity.partyTagSprite.material.dispose();
+            entity.partyTagSprite = undefined;
+          }
+          if (desiredTag) {
+            const sprite = buildPartyTagSprite(desiredTag);
+            if (sprite) {
+              sprite.position.set(0, 2.7, 0);
+              entity.group.add(sprite);
+              entity.partyTagSprite = sprite;
+            }
+          }
+        }
+        if (entity.partyTagSprite) {
+          entity.partyTagSprite.visible = snap.hp > 0;
+        }
+      }
     }
   }
 
@@ -1109,8 +1140,39 @@ export class EntityManager {
     this.damageNumbers.push({ sprite, born: performance.now() });
   }
 
+  syncPartyTags(): void {
+    for (const entity of this.entities.values()) {
+      if (entity.kind !== "player") continue;
+      const partyMember = (game.party ?? []).find(
+        (m) => m.id === entity.id || m.name.toLowerCase() === entity.name.toLowerCase(),
+      );
+      const desiredTag = partyMember?.tag;
+      if (entity.partyTag !== desiredTag) {
+        entity.partyTag = desiredTag;
+        if (entity.partyTagSprite) {
+          entity.group.remove(entity.partyTagSprite);
+          (entity.partyTagSprite.material as THREE.SpriteMaterial).map?.dispose();
+          entity.partyTagSprite.material.dispose();
+          entity.partyTagSprite = undefined;
+        }
+        if (desiredTag) {
+          const sprite = buildPartyTagSprite(desiredTag);
+          if (sprite) {
+            sprite.position.set(0, 2.7, 0);
+            entity.group.add(sprite);
+            entity.partyTagSprite = sprite;
+          }
+        }
+      }
+      if (entity.partyTagSprite) {
+        entity.partyTagSprite.visible = entity.hp > 0;
+      }
+    }
+  }
+
   /** Advance interpolation + animation. Call once per frame. */
   update(now: number, dt: number, camera?: THREE.Camera): void {
+    this.syncPartyTags();
     const renderT = now - INTERP_DELAY_MS;
     if (camera) {
       this.cullMatrix.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
@@ -1526,5 +1588,34 @@ export class EntityManager {
     this.levelUpPillars.length = 0;
     this.damageNumbers.length = 0;
     this.setTarget(null);
+  }
+
+  raycastPlayer(camera: THREE.Camera, mouseX: number, mouseY: number): { id: string; name: string; classId: string; level: number } | null {
+    const raycaster = new THREE.Raycaster();
+    const mouse = new THREE.Vector2(
+      (mouseX / window.innerWidth) * 2 - 1,
+      -(mouseY / window.innerHeight) * 2 + 1
+    );
+    raycaster.setFromCamera(mouse, camera);
+    const groups: THREE.Group[] = [];
+    const groupToPlayer = new Map<THREE.Group, RemoteEntity>();
+    for (const entity of this.entities.values()) {
+      if (entity.kind === "player" && entity.group) {
+        groups.push(entity.group);
+        groupToPlayer.set(entity.group, entity);
+      }
+    }
+    const intersects = raycaster.intersectObjects(groups, true);
+    if (intersects.length > 0) {
+      let curr: THREE.Object3D | null = intersects[0]!.object;
+      while (curr) {
+        if (curr instanceof THREE.Group && groupToPlayer.has(curr)) {
+          const p = groupToPlayer.get(curr)!;
+          return { id: p.id, name: p.name ?? "Adventurer", classId: p.classId, level: p.level ?? 1 };
+        }
+        curr = curr.parent;
+      }
+    }
+    return null;
   }
 }

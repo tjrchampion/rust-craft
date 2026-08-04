@@ -1,0 +1,1 @@
+ALTER TABLE "characters" ADD COLUMN "coins" integer DEFAULT 100 NOT NULL;

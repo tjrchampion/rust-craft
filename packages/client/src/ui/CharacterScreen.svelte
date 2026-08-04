@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { game, type CharacterTab } from "./gameState.svelte";
+  import { game, parseCoins, type CharacterTab } from "./gameState.svelte";
   import { app } from "./appState.svelte";
   import { getGame } from "../game/instance";
   import { itemIcon, spellIcon } from "./icons";
@@ -17,6 +17,7 @@
   function keyLabel(i: number): string {
     return promptLabel(PAD_LABELS[i] ?? "", KBM_LABELS[i] ?? "");
   }
+  let friendInputName = $state("");
   import {
     RECIPES,
     itemDef,
@@ -54,6 +55,7 @@
     { id: "spellbook", label: "Spell Book" },
     { id: "craft", label: "Crafting" },
     { id: "party", label: "Party" },
+    { id: "social", label: "Social & Friends" },
     { id: "system", label: "System" },
   ];
   const EQUIP_LABELS: Record<GearSlot, string> = {
@@ -650,8 +652,6 @@
     if (def.restore) {
       if (def.restore.hp) consumableLines.push(`Restores ${def.restore.hp} HP`);
       if (def.restore.mana) consumableLines.push(`Restores ${def.restore.mana} Resource`);
-      if (def.restore.hunger) consumableLines.push(`Restores ${def.restore.hunger} Hunger`);
-      if (def.restore.thirst) consumableLines.push(`Restores ${def.restore.thirst} Thirst`);
     }
     if (def.applyAuraOnConsume) consumableLines.push(`Applies ${auraDef(def.applyAuraOnConsume).name}`);
     const toolLines: string[] = [];
@@ -1118,6 +1118,17 @@
               </button>
             {/each}
           </div>
+          <div class="soec-currency-bar">
+            <div class="soec-label">Shadows of Eldor Coin (SoEC)</div>
+            {#if game.self}
+              {@const coins = parseCoins(game.self.coins)}
+              <div class="soec-badges">
+                <span class="coin-badge gold" title="{coins.gold} Gold"><span class="coin-icon">🟡</span> <strong>{coins.gold}</strong>g</span>
+                <span class="coin-badge silver" title="{coins.silver} Silver"><span class="coin-icon">⚪</span> <strong>{coins.silver}</strong>s</span>
+                <span class="coin-badge copper" title="{coins.copper} Copper"><span class="coin-icon">🟠</span> <strong>{coins.copper}</strong>c</span>
+              </div>
+            {/if}
+          </div>
         </div>
       {:else if game.activeTab === "quests"}
         <div class="quests-tab">
@@ -1430,7 +1441,7 @@
           </div>
         </div>
       {:else if game.activeTab === "party"}
-        <div class="col party-tab-col">
+        <div class="col party-tab-col full-width">
           <h3>Your Party</h3>
           {#if game.pendingInvite}
             <div class="pending-invite-box rc-frame">
@@ -1446,13 +1457,30 @@
             <div class="party-list">
               {#each game.party as member (member.id)}
                 <div class="party-member" class:offline={!member.online}>
-                  <span class="pm-name">
-                    {#if member.leader}<span class="crown" title="Party leader">👑</span>{/if}
-                    {member.name} <span class="lvl">lv{member.level}</span>
-                  </span>
-                  <div class="pm-bar">
-                    <div class="pm-fill" style="width: {Math.min(100, (member.hp / member.maxHp) * 100)}%"></div>
+                  <div class="pm-info">
+                    <span class="pm-name">
+                      {#if member.leader}<span class="crown" title="Party Leader">👑</span>{/if}
+                      {#if member.tag && member.tag !== "crown"}
+                        <span class="pm-tag-icon" title="Party Tag: {member.tag}">
+                          {member.tag === "target" ? "⚔️" : member.tag === "shield" ? "🛡️" : member.tag === "star" ? "⭐" : member.tag === "skull" ? "💀" : member.tag === "diamond" ? "💎" : "🏷️"}
+                        </span>
+                      {/if}
+                      {member.name} <span class="lvl">lv{member.level}</span>
+                    </span>
+                    <div class="pm-bar">
+                      <div class="pm-fill" style="width: {Math.min(100, (member.hp / member.maxHp) * 100)}%"></div>
+                    </div>
                   </div>
+                  {#if amLeader && !member.leader}
+                    <div class="pm-tag-picker">
+                      <button class="tag-sm" onclick={() => getGame()?.sendPartyTag(member.name, "target")} title="Tag Target">⚔️</button>
+                      <button class="tag-sm" onclick={() => getGame()?.sendPartyTag(member.name, "shield")} title="Tag Shield">🛡️</button>
+                      <button class="tag-sm" onclick={() => getGame()?.sendPartyTag(member.name, "star")} title="Tag Star">⭐</button>
+                      <button class="tag-sm" onclick={() => getGame()?.sendPartyTag(member.name, "skull")} title="Tag Skull">💀</button>
+                      <button class="tag-sm" onclick={() => getGame()?.sendPartyTag(member.name, "diamond")} title="Tag Diamond">💎</button>
+                      <button class="tag-sm clear" onclick={() => getGame()?.sendPartyTag(member.name, "clear")} title="Clear Tag">✕</button>
+                    </div>
+                  {/if}
                 </div>
               {/each}
             </div>
@@ -1462,16 +1490,85 @@
               <button class="rc-btn ghost leave-btn" onclick={() => getGame()?.sendParty("leave")}>Leave Party</button>
             {/if}
           {:else}
-            <div class="empty-note">You're not in a party yet.</div>
+            <div class="empty-note">You are not currently in a party. Invite friends or realm players from the Social tab!</div>
           {/if}
         </div>
+      {:else if game.activeTab === "social"}
+        <div class="col social-tab-col">
+          <h3>Friends & Contacts</h3>
+          <div class="add-friend-form">
+            <input
+              type="text"
+              class="rc-input"
+              placeholder="Enter adventurer name..."
+              bind:value={friendInputName}
+              onkeydown={(e) => {
+                if (e.key === "Enter" && friendInputName.trim()) {
+                  getGame()?.sendFriend("add", friendInputName.trim());
+                  friendInputName = "";
+                }
+              }}
+            />
+            <button
+              class="rc-btn primary"
+              onclick={() => {
+                if (friendInputName.trim()) {
+                  getGame()?.sendFriend("add", friendInputName.trim());
+                  friendInputName = "";
+                }
+              }}
+            >
+              Add Friend
+            </button>
+          </div>
+
+          <div class="friends-list">
+            {#each game.friends as friend (friend.name)}
+              <div class="friend-row" class:offline={!friend.online}>
+                <div class="friend-info">
+                  <span class="status-dot" class:online={friend.online}></span>
+                  <div class="friend-text">
+                    <span class="friend-name">{friend.name}</span>
+                    {#if friend.online}
+                      <span class="friend-meta">lv{friend.level} · {friend.regionName ?? "Online"}</span>
+                    {:else}
+                      <span class="friend-meta offline">Offline</span>
+                    {/if}
+                  </div>
+                </div>
+                <div class="friend-actions">
+                  {#if friend.online}
+                    <button class="rc-btn primary sm" onclick={() => getGame()?.sendParty("invite", friend.name)} title="Start Party">
+                      ⚔️ Party
+                    </button>
+                    <button class="rc-btn ghost sm" onclick={() => { game.chatOpen = true; getGame()?.sendChat(`/w ${friend.name} `); }} title="Direct Message">
+                      💬 Whisper
+                    </button>
+                  {/if}
+                  <button class="rc-btn danger sm icon-only" onclick={() => getGame()?.sendFriend("remove", friend.name)} title="Remove Friend">
+                    ✕
+                  </button>
+                </div>
+              </div>
+            {/each}
+            {#if game.friends.length === 0}
+              <div class="empty-note">No friends added yet. Type a player's name above to add them!</div>
+            {/if}
+          </div>
+        </div>
+
         <div class="col roster-col">
-          <h3>Online Players</h3>
+          <h3>Online Realm Adventurers</h3>
           <div class="roster-list">
             {#each invitablePlayers as p (p.id)}
               <div class="roster-row">
                 <span class="roster-name">{p.name} <span class="lvl">lv{p.level}</span></span>
-                <button class="rc-btn invite-btn" onclick={() => getGame()?.sendParty("invite", p.name)}>Invite</button>
+                <div class="roster-actions">
+                  {#if !game.friends.some((f) => f.name.toLowerCase() === p.name.toLowerCase())}
+                    <button class="rc-btn ghost sm" onclick={() => getGame()?.sendFriend("add", p.name)}>+ Friend</button>
+                  {/if}
+                  <button class="rc-btn invite-btn sm" onclick={() => getGame()?.sendParty("invite", p.name)}>Invite</button>
+                </div>
               </div>
             {/each}
             {#if invitablePlayers.length === 0}
@@ -2310,9 +2407,184 @@
   .cell.big.first {
     margin-left: 16px;
   }
-  /* ---- Party tab ---- */
+  /* ---- SoEC Currency Bar ---- */
+  .soec-currency-bar {
+    margin-top: 12px;
+    padding: 8px 12px;
+    background: radial-gradient(circle at 50% 30%, rgba(32, 26, 18, 0.95), rgba(14, 12, 9, 0.98));
+    border: 1px solid var(--rc-gold-dim);
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.5);
+  }
+  .soec-label {
+    font-family: var(--rc-display);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    color: var(--rc-gold-bright);
+    text-transform: uppercase;
+  }
+  .soec-badges {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .coin-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    font-size: 12px;
+    padding: 2px 7px;
+    border-radius: 4px;
+    background: rgba(0, 0, 0, 0.45);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+  }
+  .coin-badge strong {
+    font-size: 13px;
+  }
+  .coin-badge.gold {
+    color: #ffd700;
+    border-color: rgba(255, 215, 0, 0.35);
+  }
+  .coin-badge.silver {
+    color: #e0e0e0;
+    border-color: rgba(224, 224, 224, 0.35);
+  }
+  .coin-badge.copper {
+    color: #d9822b;
+    border-color: rgba(217, 130, 43, 0.35);
+  }
+  /* ---- Party & Friends tab ---- */
   .party-tab-col {
-    width: 260px;
+    width: 360px;
+  }
+  .social-tab-col {
+    flex: 1.4;
+    min-width: 440px;
+  }
+  .party-tab-col.full-width {
+    flex: 1;
+    width: 100%;
+  }
+  .add-friend-form {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+  .add-friend-form input {
+    flex: 1;
+    height: 38px;
+    font-size: 13px;
+    border-radius: 4px;
+  }
+  .add-friend-form button {
+    height: 38px;
+    padding: 0 16px;
+    font-family: var(--rc-display);
+    font-size: 12px;
+    letter-spacing: 1px;
+  }
+  .friends-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-height: 420px;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding-right: 6px;
+    margin-bottom: 12px;
+  }
+  .friends-list::-webkit-scrollbar, .roster-list::-webkit-scrollbar {
+    width: 6px;
+  }
+  .friends-list::-webkit-scrollbar-track, .roster-list::-webkit-scrollbar-track {
+    background: rgba(0, 0, 0, 0.4);
+    border-radius: 3px;
+  }
+  .friends-list::-webkit-scrollbar-thumb, .roster-list::-webkit-scrollbar-thumb {
+    background: var(--rc-gold-dim);
+    border-radius: 3px;
+  }
+  .friend-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 14px;
+    background: radial-gradient(circle at 50% 20%, rgba(28, 24, 18, 0.95), rgba(14, 12, 9, 0.98));
+    border: 1px solid var(--rc-gold-dim);
+    border-radius: 6px;
+    gap: 12px;
+    margin-bottom: 4px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+    overflow: hidden;
+  }
+  .friend-row.offline {
+    opacity: 0.55;
+  }
+  .friend-info {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex: 1;
+    min-width: 0;
+  }
+  .friend-text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+  .status-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: #666;
+    flex-shrink: 0;
+  }
+  .status-dot.online {
+    background: #4cd964;
+    box-shadow: 0 0 8px #4cd964;
+  }
+  .friend-name {
+    font-family: var(--rc-display);
+    font-size: 13.5px;
+    font-weight: 700;
+    color: var(--rc-gold-bright);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .friend-meta {
+    font-size: 11px;
+    color: var(--rc-parchment);
+    opacity: 0.85;
+    white-space: nowrap;
+  }
+  .friend-meta.offline {
+    color: #888;
+  }
+  .friend-actions, .roster-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+  }
+  .rc-btn.sm {
+    padding: 4px 10px;
+    font-size: 11px;
+    height: 28px;
+    white-space: nowrap;
+    border-radius: 4px;
+  }
+  .rc-btn.sm.icon-only {
+    width: 28px;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
   }
   .pending-invite-box {
     display: flex;
@@ -2347,22 +2619,38 @@
     gap: 6px;
   }
   .party-member {
-    background: rgba(255, 255, 255, 0.04);
-    border: 2px solid rgba(255, 255, 255, 0.1);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: radial-gradient(circle at 50% 20%, rgba(28, 24, 18, 0.95), rgba(14, 12, 9, 0.98));
+    border: 1px solid var(--rc-gold-dim);
     border-radius: 6px;
     padding: 8px 12px;
+    gap: 12px;
   }
   .party-member.offline {
     opacity: 0.45;
   }
+  .pm-info {
+    flex: 1;
+    min-width: 0;
+  }
   .pm-name {
-    display: block;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-family: var(--rc-display);
     font-size: 13px;
-    color: #dce6f2;
-    margin-bottom: 5px;
+    font-weight: 700;
+    color: var(--rc-gold-bright);
+    margin-bottom: 4px;
   }
   .crown {
     font-size: 11px;
+    margin-right: 2px;
+  }
+  .pm-tag-icon {
+    font-size: 12px;
     margin-right: 2px;
   }
   .pm-bar {
@@ -2375,6 +2663,40 @@
     height: 100%;
     background: linear-gradient(180deg, #5ec46a, #2e8a3a);
     transition: width 0.3s ease-out;
+  }
+  .pm-tag-picker {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    padding: 2px 4px;
+    background: rgba(0, 0, 0, 0.4);
+    border: 1px solid rgba(201, 162, 75, 0.2);
+    border-radius: 4px;
+    flex-shrink: 0;
+  }
+  .tag-sm {
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    font-size: 11px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 3px;
+    cursor: url('/assets/cursors/02.png') 2 2, pointer !important;
+    transition: all 0.1s ease;
+  }
+  .tag-sm:hover {
+    background: rgba(201, 162, 75, 0.35);
+    border-color: var(--rc-gold-bright);
+    transform: scale(1.1);
+  }
+  .tag-sm.clear {
+    color: #ff6666;
+    font-size: 10px;
+    font-weight: bold;
   }
   .leave-btn {
     margin-top: 4px;

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { SPELLS, spellDef } from "../src/content/spells";
-import { CLASS_IDS, classDef, startingHotbarLoadout, STARTING_HOTBAR_ATTACK_SLOT, STARTING_HOTBAR_HEAL_SLOT } from "../src/content/classes";
+import { CLASS_IDS, classDef, startingHotbarLoadout, STARTING_HOTBAR_ATTACK_SLOT, STARTING_HOTBAR_HEAL_SLOT, STARTING_HOTBAR_X_ATTACK_SLOT } from "../src/content/classes";
 import { auraDef } from "../src/content/auras";
 import { itemDef } from "../src/content/items";
 
@@ -20,13 +20,14 @@ describe("spells", () => {
     }
   });
 
-  it("starting hotbar puts first attack on 1 and Heal on Q", () => {
+  it("starting hotbar puts first attack on 1, Heal on Q, and Attack on X", () => {
     for (const id of CLASS_IDS) {
       const loadout = startingHotbarLoadout(classDef(id));
       const bySlot = Object.fromEntries(loadout.map((h) => [h.slot, h.spellId]));
       expect(bySlot[STARTING_HOTBAR_ATTACK_SLOT]).toBeDefined();
       expect(bySlot[STARTING_HOTBAR_ATTACK_SLOT]).not.toBe("heal");
       expect(bySlot[STARTING_HOTBAR_HEAL_SLOT]).toBe("heal");
+      expect(bySlot[STARTING_HOTBAR_X_ATTACK_SLOT]).toBe("attack");
     }
   });
 

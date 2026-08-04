@@ -102,6 +102,8 @@ export interface ItemDef {
     shoulders?: string;
     neck?: string;
   };
+  /** Base merchant buy price in SoEC Copper (100c = 1s, 10,000c = 1g). */
+  vendorPrice?: number;
   /** Gear (chest slot only): a static, unskinned armor prop bone-parented
    *  onto the torso (see AnimatedModel.setArmorProp), for chest pieces from
    *  packs (e.g. Ultimate RPG Items) that ship rigid meshes rather than

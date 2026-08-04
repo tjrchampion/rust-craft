@@ -165,23 +165,20 @@ export class InputManager {
       if (e.button === 2) this.rightDown = true;
       this.lastMouseX = e.clientX;
       this.lastMouseY = e.clientY;
-      // Either mouse button held over the game viewport engages the camera
-      // "action cam" (pointer lock hides the OS cursor and gives unlimited
-      // relative movement for the drag) -- released the moment both buttons
-      // come back up, so the cursor is free again for clicking UI the rest
-      // of the time, instead of staying locked for the whole session.
-      if (!this.uiMode && !this.pointerLocked && (e.target === canvas || canvas.contains(e.target as Node))) {
+      // Right mouse button held over the game viewport engages the camera control
+      // (pointer lock hides OS cursor for camera rotation). Left mouse is reserved
+      // for UI elements and spell bar interactions.
+      if (!this.uiMode && !this.pointerLocked && e.button === 2 && (e.target === canvas || canvas.contains(e.target as Node))) {
         void canvas.requestPointerLock();
       }
       if (e.button === 0) {
         this.lastDevice = "kbm";
-        this.mouseAttackQueued = true;
       }
     });
     window.addEventListener("mouseup", (e) => {
       if (e.button === 0) this.leftDown = false;
       if (e.button === 2) this.rightDown = false;
-      if (!this.leftDown && !this.rightDown) this.releasePointer();
+      if (!this.rightDown) this.releasePointer();
     });
     window.addEventListener("contextmenu", (e) => {
       if (e.target === canvas || canvas.contains(e.target as Node)) {

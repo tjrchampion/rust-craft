@@ -31,7 +31,7 @@ const GRASS_FEATHER_START = 0.55;
 /** Density threshold below which a patch cell isn't worth a draw call (its
  *  blades would mostly collapse to zero height anyway — see shaders.ts's
  *  `dens < 0.02` blade-collapse rule). */
-const MIN_SPAWN_DENSITY = 0.02;
+const MIN_SPAWN_DENSITY = 0.0001;
 
 const MAX_PATCHES = 520;
 
@@ -40,9 +40,9 @@ const MAX_PATCHES = 520;
  *  coarse to rasterize a brush-radius-scale paint/erase circle without it
  *  reading as a blocky grid. Clamped to a sane resolution range regardless
  *  of region size. */
-const DENSITY_TARGET_PITCH = 1.5;
+const DENSITY_TARGET_PITCH = 0.9;
 const DENSITY_MIN_GRID = 32;
-const DENSITY_MAX_GRID = 256;
+const DENSITY_MAX_GRID = 512;
 
 export interface QuickGrassHeightmap {
   gridSize: number;
@@ -99,15 +99,14 @@ function createGrassGeometry(segments: number, count: number, patchSize: number)
   const vertID = new Float32Array(VERTICES * 2);
   for (let i = 0; i < VERTICES * 2; ++i) vertID[i] = i;
 
-  const rand = mulberry32(1337);
   const offsets = new Float32Array(count * 3);
   const cols = Math.ceil(Math.sqrt(count));
   const cell = patchSize / cols;
   for (let i = 0; i < count; ++i) {
     const cx = i % cols;
     const cz = Math.floor(i / cols);
-    offsets[i * 3 + 0] = -patchSize * 0.5 + (cx + rand()) * cell;
-    offsets[i * 3 + 1] = -patchSize * 0.5 + (cz + rand()) * cell; // read as world Z
+    offsets[i * 3 + 0] = -patchSize * 0.5 + (cx + 0.5) * cell;
+    offsets[i * 3 + 1] = -patchSize * 0.5 + (cz + 0.5) * cell; // read as world Z
     offsets[i * 3 + 2] = 0;
   }
 
@@ -381,8 +380,9 @@ export function createQuickGrassField(
           const wx = gx * pitch - half;
           const ratio = dist2D(wx, wz, patch.localX, patch.localZ) / patch.radius;
           if (ratio > 1) continue;
-          const edgeFalloff =
-            ratio <= GRASS_FEATHER_START ? 1 : 1 - smoothstep((ratio - GRASS_FEATHER_START) / (1 - GRASS_FEATHER_START));
+          const baseFalloff = ratio <= 0.35 ? 1 : Math.exp(-3.2 * (ratio - 0.35) * (ratio - 0.35));
+          const organicEdgeNoise = 0.88 + 0.24 * Math.sin(wx * 0.45 + wz * 0.65);
+          const edgeFalloff = Math.min(1, baseFalloff * organicEdgeNoise);
           const dens = patch.density * edgeFalloff;
           const idx = gz * gridSize + gx;
           if (dens > densityBuffer[idx]!) densityBuffer[idx] = dens;
@@ -419,7 +419,7 @@ export function createQuickGrassField(
     const gridSize = densityGridSize;
     const pitch = densityPitch;
     const half = ((gridSize - 1) * pitch) / 2;
-    const halfCell = size * 0.5;
+    const halfCell = size * 0.85;
     const gx0 = Math.max(0, Math.floor((cx - halfCell + half) / pitch));
     const gx1 = Math.min(gridSize - 1, Math.ceil((cx + halfCell + half) / pitch));
     const gz0 = Math.max(0, Math.floor((cz - halfCell + half) / pitch));
@@ -556,7 +556,7 @@ export function createQuickGrassField(
     camLocalXZ.set(camWorldPos.x - groupWorldPos.x, 0, camWorldPos.z - groupWorldPos.z);
 
     const half = ((heightmapState.gridSize - 1) * heightmapState.pitch) / 2;
-    const boundPad = size * 0.5;
+    const boundPad = size * 3.0;
 
     const bx = Math.floor(camLocalXZ.x / size) * size;
     const bz = Math.floor(camLocalXZ.z / size) * size;

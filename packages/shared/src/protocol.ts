@@ -101,9 +101,17 @@ export const PvpMsg = z.object({
 
 export const PartyMsg = z.object({
   t: z.literal("party"),
-  action: z.enum(["invite", "accept", "decline", "leave", "disband"]),
-  /** Target character name for invite. */
+  action: z.enum(["invite", "accept", "decline", "leave", "disband", "tag"]),
+  /** Target character name for invite or tag. */
   name: z.string().max(24).optional(),
+  /** Tag identifier: "target" | "shield" | "star" | "skull" | "diamond" | "clear" */
+  tag: z.string().max(24).optional(),
+});
+
+export const FriendMsg = z.object({
+  t: z.literal("friend"),
+  action: z.enum(["add", "accept", "decline", "remove"]),
+  targetName: z.string().max(24),
 });
 
 export const MountMsg = z.object({ t: z.literal("mount") });
@@ -168,6 +176,16 @@ export const RegionPortalMsg = z.object({
   portalId: z.string().max(128).optional().nullable(),
 });
 
+export const VendorMsg = z.object({
+  t: z.literal("vendor"),
+  action: z.enum(["buy", "sell", "browse"]),
+  npcId: z.string().max(64),
+  itemId: z.string().max(64).optional(),
+  container: z.enum(["inventory", "hotbar", "equip", "crafting"]).optional(),
+  slot: z.number().int().min(0).max(31).optional(),
+  qty: z.number().int().min(1).max(99).optional(),
+});
+
 export const ClientMsg = z.discriminatedUnion("t", [
   InputMsg,
   InteractMsg,
@@ -183,6 +201,7 @@ export const ClientMsg = z.discriminatedUnion("t", [
   RespawnMsg,
   PvpMsg,
   PartyMsg,
+  FriendMsg,
   MountMsg,
   QuestMsg,
   ShareQuestMsg,
@@ -194,8 +213,18 @@ export const ClientMsg = z.discriminatedUnion("t", [
   LootCorpseMsg,
   ClaimLevelRewardMsg,
   RegionPortalMsg,
+  VendorMsg,
 ]);
 export type ClientMsg = z.infer<typeof ClientMsg>;
+
+export interface FriendEntry {
+  id: string;
+  name: string;
+  className: string;
+  level: number;
+  online: boolean;
+  regionName?: string;
+}
 
 // ============ Server -> Client (plain types; server is trusted) ============
 
@@ -260,6 +289,7 @@ export interface PartyMemberSnap {
   maxHp: number;
   online: boolean;
   leader: boolean;
+  tag?: string;
   x?: number;
   z?: number;
 }
@@ -411,6 +441,7 @@ export interface SelfState {
   xp: number;
   xpNext: number;
   level: number;
+  coins: number;
   dead: boolean;
   ackSeq: number;
   castingSpell: string | null;

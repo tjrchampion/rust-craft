@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { GLTFLoader, type GLTF } from "three/examples/jsm/loaders/GLTFLoader.js";
+import type { RegionBlueprint } from "@rustcraft/shared";
 import { buildRock, buildBerryBush, buildBiomeTree } from "./models";
 
 /**
@@ -13,10 +14,17 @@ import { buildRock, buildBerryBush, buildBiomeTree } from "./models";
 
 const BUILDING_DIR = "/assets/models/buildings";
 const BUILDING_HEIGHTS: Record<string, number> = {
-  church: 11,
-  tower_A: 15,
-  home_A: 6.2,
-  home_B: 6.6,
+  church: 14,
+  tower_A: 17,
+  home_A: 7.0,
+  home_B: 7.5,
+  tavern: 9.5,
+  blacksmith: 7.5,
+  windmill: 18.0,
+  lumbermill: 8.5,
+  market: 5.5,
+  well: 4.0,
+  bridge_A: 4.5,
 };
 
 const loader = new GLTFLoader();
@@ -61,16 +69,15 @@ async function placeBuilding(
   }
 }
 
-/** Cheap hash-based bump so the ground isn't a dead-flat plane, without
- *  pulling in the real terrain heightmap this scene deliberately avoids. */
+/** Cheap hash-based bump so the ground isn't a dead-flat plane */
 function groundHeight(x: number, z: number): number {
   const n = Math.sin(x * 0.08) * Math.cos(z * 0.11) + Math.sin(x * 0.21 + z * 0.17) * 0.4;
   return n * 1.1;
 }
 
 function buildGround(): THREE.Mesh {
-  const size = 260;
-  const segments = 96;
+  const size = 320;
+  const segments = 120;
   const geo = new THREE.PlaneGeometry(size, size, segments, segments);
   geo.rotateX(-Math.PI / 2);
   const pos = geo.attributes.position!;
@@ -80,29 +87,51 @@ function buildGround(): THREE.Mesh {
     pos.setY(i, groundHeight(x, z));
   }
   geo.computeVertexNormals();
-  const mat = new THREE.MeshLambertMaterial({ color: 0x2c3a24 });
+  const mat = new THREE.MeshLambertMaterial({ color: 0x273420 });
   const mesh = new THREE.Mesh(geo, mat);
   mesh.receiveShadow = true;
   return mesh;
 }
 
+/** Cobblestone Village Road connecting houses, tavern, market, and church */
+function buildRoads(): THREE.Mesh {
+  const points = [
+    new THREE.Vector3(-45, 0.15, -60),
+    new THREE.Vector3(-25, 0.15, -45),
+    new THREE.Vector3(-10, 0.15, -30),
+    new THREE.Vector3(0, 0.15, -25),
+    new THREE.Vector3(15, 0.15, -28),
+    new THREE.Vector3(30, 0.15, -40),
+    new THREE.Vector3(48, 0.15, -55),
+  ];
+  const curve = new THREE.CatmullRomCurve3(points);
+  const roadGeo = new THREE.TubeGeometry(curve, 64, 3.8, 8, false);
+  const roadMat = new THREE.MeshStandardMaterial({
+    color: 0x4d3e2e,
+    roughness: 0.85,
+    metalness: 0.1,
+  });
+  const roadMesh = new THREE.Mesh(roadGeo, roadMat);
+  roadMesh.scale.set(1, 0.05, 1);
+  roadMesh.receiveShadow = true;
+  return roadMesh;
+}
+
 function buildMoon(): THREE.Mesh {
   const mesh = new THREE.Mesh(
-    new THREE.SphereGeometry(9, 24, 24),
+    new THREE.SphereGeometry(10, 24, 24),
     new THREE.MeshBasicMaterial({ color: 0xfbf3d8 }),
   );
-  mesh.position.set(-70, 78, -160);
+  mesh.position.set(-80, 85, -180);
   return mesh;
 }
 
-/** Soft glow disc behind the moon -- a plain emissive sphere alone reads as
- *  a flat cutout against the fog; this fakes the atmospheric halo cheaply. */
 function buildMoonGlow(): THREE.Mesh {
   const mesh = new THREE.Mesh(
-    new THREE.SphereGeometry(16, 16, 16),
+    new THREE.SphereGeometry(18, 16, 16),
     new THREE.MeshBasicMaterial({ color: 0xfbf3d8, transparent: true, opacity: 0.12, depthWrite: false }),
   );
-  mesh.position.set(-70, 78, -160);
+  mesh.position.set(-80, 85, -180);
   return mesh;
 }
 
@@ -111,25 +140,23 @@ interface EmberField {
   update(dt: number): void;
 }
 
-/** Slow-drifting warm motes rising past the village -- the one bit of
- *  motion in an otherwise held, static-camera shot. */
 function buildEmbers(): EmberField {
-  const count = 140;
+  const count = 180;
   const geo = new THREE.BufferGeometry();
   const positions = new Float32Array(count * 3);
   const speeds = new Float32Array(count);
   for (let i = 0; i < count; i++) {
-    positions[i * 3] = (Math.random() - 0.5) * 90;
-    positions[i * 3 + 1] = Math.random() * 22;
-    positions[i * 3 + 2] = (Math.random() - 0.5) * 70 - 10;
+    positions[i * 3] = (Math.random() - 0.5) * 120;
+    positions[i * 3 + 1] = Math.random() * 28;
+    positions[i * 3 + 2] = (Math.random() - 0.5) * 100 - 20;
     speeds[i] = 0.4 + Math.random() * 0.8;
   }
   geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
   const material = new THREE.PointsMaterial({
     color: 0xffb84d,
-    size: 0.22,
+    size: 0.25,
     transparent: true,
-    opacity: 0.75,
+    opacity: 0.8,
     depthWrite: false,
     blending: THREE.AdditiveBlending,
   });
@@ -141,7 +168,7 @@ function buildEmbers(): EmberField {
       for (let i = 0; i < count; i++) {
         const yi = i * 3 + 1;
         arr[yi] = (arr[yi] ?? 0) + speeds[i]! * dt;
-        if (arr[yi]! > 24) arr[yi] = 0;
+        if (arr[yi]! > 30) arr[yi] = 0;
       }
       geo.attributes.position!.needsUpdate = true;
     },
@@ -158,60 +185,98 @@ export class TitleScene {
   private embers: EmberField;
   private windowLights: THREE.PointLight[] = [];
 
-  constructor(canvas: HTMLCanvasElement) {
+  private titleCamConfig?: { x: number; y: number; z: number; pitch: number; yaw: number };
+
+  constructor(canvas: HTMLCanvasElement, titleCamera?: { x: number; y: number; z: number; pitch: number; yaw: number }) {
+    this.titleCamConfig = titleCamera;
+    void this.loadRegionTitleCamera();
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.setSize(window.innerWidth, window.innerHeight);
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
-    this.camera = new THREE.PerspectiveCamera(42, window.innerWidth / window.innerHeight, 0.1, 500);
+    this.camera = new THREE.PerspectiveCamera(42, window.innerWidth / window.innerHeight, 0.1, 600);
 
     const fogColor = 0x141a2e;
-    this.scene.fog = new THREE.Fog(fogColor, 60, 240);
+    this.scene.fog = new THREE.Fog(fogColor, 70, 280);
     this.scene.background = new THREE.Color(fogColor);
 
-    // Cool moonlight key + a dim indigo ambient fill -- the only warmth in
-    // the shot comes from the village windows/embers, not the sky.
-    const moonlight = new THREE.DirectionalLight(0x9fb4ff, 1.1);
-    moonlight.position.set(-70, 78, -160);
+    const moonlight = new THREE.DirectionalLight(0x9fb4ff, 1.25);
+    moonlight.position.set(-80, 85, -180);
     moonlight.castShadow = true;
     moonlight.shadow.mapSize.set(2048, 2048);
-    moonlight.shadow.camera.left = -70;
-    moonlight.shadow.camera.right = 70;
-    moonlight.shadow.camera.top = 70;
-    moonlight.shadow.camera.bottom = -70;
+    moonlight.shadow.camera.left = -90;
+    moonlight.shadow.camera.right = 90;
+    moonlight.shadow.camera.top = 90;
+    moonlight.shadow.camera.bottom = -90;
     moonlight.shadow.camera.near = 1;
-    moonlight.shadow.camera.far = 300;
+    moonlight.shadow.camera.far = 350;
     moonlight.shadow.bias = -0.0015;
-    this.scene.add(moonlight, moonlight.target, new THREE.AmbientLight(0x33406e, 0.65));
+    this.scene.add(moonlight, moonlight.target, new THREE.AmbientLight(0x384878, 0.7));
 
     this.scene.add(buildGround());
+    this.scene.add(buildRoads());
     this.scene.add(buildMoon());
     this.scene.add(buildMoonGlow());
 
-    // Village cluster, mid-ground -- church as the tall focal silhouette,
-    // tower behind/beside it, two homes filling out the base.
-    void placeBuilding(this.scene, "church", 6, -38, Math.PI * 0.15);
-    void placeBuilding(this.scene, "tower_A", -14, -46, -Math.PI * 0.1);
-    void placeBuilding(this.scene, "home_A", 20, -30, -Math.PI * 0.35);
-    void placeBuilding(this.scene, "home_B", -2, -24, Math.PI * 0.6);
+    // Fantastic Village Pack: Tavern, Blacksmith, Windmill, Market, Lumbermill, Church, Well & Homes
+    void placeBuilding(this.scene, "church", 0, -32, Math.PI * 0.15);
+    void placeBuilding(this.scene, "tavern", -22, -26, Math.PI * 0.4);
+    void placeBuilding(this.scene, "blacksmith", 24, -28, -Math.PI * 0.3);
+    void placeBuilding(this.scene, "windmill", -42, -58, Math.PI * 0.1);
+    void placeBuilding(this.scene, "lumbermill", 42, -62, -Math.PI * 0.2);
+    void placeBuilding(this.scene, "market", 10, -18, Math.PI * 0.05);
+    void placeBuilding(this.scene, "well", 0, -16, 0);
+    void placeBuilding(this.scene, "tower_A", -28, -48, -Math.PI * 0.1);
+    void placeBuilding(this.scene, "home_A", 28, -44, -Math.PI * 0.35);
+    void placeBuilding(this.scene, "home_B", -16, -42, Math.PI * 0.6);
+    void placeBuilding(this.scene, "home_A", -36, -20, Math.PI * 0.25);
+    void placeBuilding(this.scene, "home_B", 36, -20, -Math.PI * 0.5);
 
-    // Warm window-glow -- the building models have no emissive windows of
-    // their own, so a few small point lights at roughly window height fake it.
+    // Warm glowing windows & flickering village lanterns
     for (const [x, z] of [
-      [6, -38],
-      [-2, -24],
-      [20, -30],
+      [0, -32],
+      [-22, -26],
+      [24, -28],
+      [10, -18],
+      [0, -16],
+      [-42, -58],
+      [42, -62],
+      [-28, -48],
+      [28, -44],
     ] as const) {
-      const light = new THREE.PointLight(0xffb454, 3.5, 14, 2);
-      light.position.set(x, 3, z);
+      const light = new THREE.PointLight(0xffb454, 4.0, 18, 2);
+      light.position.set(x, 3.8, z);
       this.scene.add(light);
       this.windowLights.push(light);
     }
 
-    // Forest framing the village and, closer in, a few large trees flanking
-    // the camera itself for foreground silhouette depth.
+    // Towering Giant Trees framing the region (scales 3.5x to 5.5x)
+    const giantTreeSpots: Array<[number, number, "forest" | "mountain", number]> = [
+      [-52, -70, "forest", 4.8],
+      [52, -75, "forest", 5.2],
+      [-65, -35, "mountain", 4.5],
+      [65, -40, "mountain", 4.9],
+      [-45, 15, "forest", 5.5],
+      [45, 20, "forest", 5.0],
+      [-15, -90, "forest", 4.6],
+      [20, -95, "mountain", 4.7],
+      [-30, 35, "mountain", 5.2],
+      [32, 35, "forest", 5.1],
+    ];
+    for (const [x, z, biome, scaleMult] of giantTreeSpots) {
+      const tree = buildBiomeTree(biome, Math.random());
+      tree.position.set(x, groundHeight(x, z), z);
+      tree.rotation.y = Math.random() * Math.PI * 2;
+      tree.scale.setScalar(scaleMult);
+      tree.traverse((o) => {
+        if ((o as THREE.Mesh).isMesh) o.castShadow = true;
+      });
+      this.scene.add(tree);
+    }
+
+    // Medium Forest Tree canopy framing roads & outskirts
     const forestSpots: Array<[number, number, "forest" | "mountain"]> = [
       [-35, -55, "forest"],
       [-48, -30, "mountain"],
@@ -221,38 +286,36 @@ export class TitleScene {
       [15, -75, "forest"],
       [-55, -10, "forest"],
       [50, -5, "mountain"],
+      [-38, 10, "forest"],
+      [38, 15, "forest"],
     ];
     for (const [x, z, biome] of forestSpots) {
       const tree = buildBiomeTree(biome, Math.random());
-      tree.position.set(x, 0, z);
+      tree.position.set(x, groundHeight(x, z), z);
       tree.rotation.y = Math.random() * Math.PI * 2;
-      const s = 0.85 + Math.random() * 0.4;
-      tree.scale.setScalar(s);
+      tree.scale.setScalar(2.2 + Math.random() * 0.8);
       tree.traverse((o) => {
         if ((o as THREE.Mesh).isMesh) o.castShadow = true;
       });
       this.scene.add(tree);
     }
-    const foregroundFrame: Array<[number, number]> = [
-      [-16, 14],
-      [17, 16],
-    ];
-    for (const [x, z] of foregroundFrame) {
-      const tree = buildBiomeTree("mountain", Math.random());
-      tree.position.set(x, 0, z);
-      tree.scale.setScalar(2.2);
-      this.scene.add(tree);
-    }
 
-    for (let i = 0; i < 10; i++) {
+    // Rocks, foliage & berry bushes
+    for (let i = 0; i < 24; i++) {
       const rock = buildRock(Math.random());
-      rock.position.set((Math.random() - 0.5) * 70, 0, -10 - Math.random() * 50);
+      const rx = (Math.random() - 0.5) * 140;
+      const rz = (Math.random() - 0.5) * 140 - 20;
+      rock.position.set(rx, groundHeight(rx, rz), rz);
       rock.rotation.y = Math.random() * Math.PI * 2;
+      rock.scale.setScalar(1.5 + Math.random() * 1.2);
       this.scene.add(rock);
     }
-    for (let i = 0; i < 8; i++) {
+    for (let i = 0; i < 20; i++) {
       const bush = buildBerryBush(Math.random());
-      bush.position.set((Math.random() - 0.5) * 60, 0, -5 - Math.random() * 45);
+      const bx = (Math.random() - 0.5) * 120;
+      const bz = (Math.random() - 0.5) * 120 - 15;
+      bush.position.set(bx, groundHeight(bx, bz), bz);
+      bush.scale.setScalar(1.3 + Math.random() * 0.6);
       this.scene.add(bush);
     }
 
@@ -273,17 +336,99 @@ export class TitleScene {
 
     this.embers.update(dt);
     for (const light of this.windowLights) {
-      light.intensity = 3.2 + Math.sin(t * 2.3 + light.position.x) * 0.4;
+      light.intensity = 3.6 + Math.sin(t * 2.3 + light.position.x) * 0.6;
     }
 
-    // A held shot, not a flyover -- just enough drift (slow sway + a barely
-    // perceptible breathing zoom) to keep it from looking like a screenshot.
-    const swayX = Math.sin(t * 0.05) * 3;
-    const swayY = Math.sin(t * 0.037) * 1.1;
-    this.camera.position.set(swayX, 9 + swayY, 34 + Math.sin(t * 0.02) * 2);
-    this.camera.lookAt(4, 6, -35);
+    if (this.titleCamConfig) {
+      // Use the author-set camera location & orientation from the region blueprint
+      const breathX = Math.sin(t * 0.04) * 0.15;
+      const breathY = Math.cos(t * 0.032) * 0.1;
+      this.camera.position.set(
+        this.titleCamConfig.x + breathX,
+        this.titleCamConfig.y + breathY,
+        this.titleCamConfig.z,
+      );
+      this.camera.rotation.set(this.titleCamConfig.pitch, this.titleCamConfig.yaw, 0);
+    } else {
+      // Fixed cinematic shot facing key region assets (houses, well, tavern, trees) -- no rotation
+      const swayX = Math.sin(t * 0.04) * 2.2;
+      const swayY = Math.cos(t * 0.03) * 0.8;
+      this.camera.position.set(swayX, 14 + swayY, 28 + Math.sin(t * 0.02) * 1.5);
+      this.camera.lookAt(0, 5, -28);
+    }
+
     this.renderer.render(this.scene, this.camera);
   };
+
+  private async loadRegionTitleCamera(): Promise<void> {
+    try {
+      const lastRegionId = localStorage.getItem("rustcraft_last_region_id");
+      let bp: RegionBlueprint | undefined;
+      if (lastRegionId) {
+        const res = await fetch(`/api/regions/${lastRegionId}`);
+        if (res.ok) {
+          const data = (await res.json()) as { blueprint?: RegionBlueprint };
+          bp = data.blueprint;
+        }
+      }
+      if (!bp) {
+        const res = await fetch("/api/regions");
+        if (res.ok) {
+          const data = (await res.json()) as { regions?: Array<{ id: string }> };
+          const firstId = data.regions?.[0]?.id;
+          if (firstId) {
+            const rRes = await fetch(`/api/regions/${firstId}`);
+            if (rRes.ok) {
+              const rData = (await rRes.json()) as { blueprint?: RegionBlueprint };
+              bp = rData.blueprint;
+            }
+          }
+        }
+      }
+      if (bp) {
+        if (bp.titleCamera) {
+          this.titleCamConfig = bp.titleCamera;
+        }
+        if (bp.assets && bp.assets.length > 0) {
+          void this.loadRegionAssets(bp);
+        }
+      }
+    } catch (err) {
+      console.warn("[TitleScene] Failed to load region titleCamera", err);
+    }
+  }
+
+  private async loadRegionAssets(bp: RegionBlueprint): Promise<void> {
+    const ASSET_DIR: Record<string, string> = {
+      building: "buildings",
+      foliage: "foliage",
+      prop: "props",
+    };
+    for (const a of bp.assets) {
+      const dir = ASSET_DIR[a.category] || "props";
+      const url = `/assets/models/${dir}/${a.model}`;
+      try {
+        const gltf = await loadGltf(url);
+        const model = gltf.scene.clone(true);
+        model.position.set(a.localX, a.localY, a.localZ);
+        model.rotation.y = a.yaw;
+        if (a.scaleX !== undefined) {
+          model.scale.set(a.scaleX, a.scaleY, a.scaleZ);
+        } else {
+          model.scale.setScalar(a.scale ?? 1);
+        }
+        model.traverse((o) => {
+          if ((o as THREE.Mesh).isMesh) {
+            o.castShadow = true;
+            o.receiveShadow = true;
+          }
+        });
+        this.scene.add(model);
+      } catch {
+        // Skip unavailable models
+      }
+    }
+  }
 
   private onResize = (): void => {
     this.camera.aspect = window.innerWidth / window.innerHeight;

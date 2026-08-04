@@ -63,7 +63,7 @@
 
   let canvas: HTMLCanvasElement;
   let fileInput: HTMLInputElement;
-  let scene: RegionEditorScene | null = null;
+  let scene = $state<RegionEditorScene | null>(null);
 
   let regionList = $state<
     {
@@ -138,6 +138,9 @@
   let deleteInProgress = $state(false);
   type MenuId = "file" | "edit" | "region" | "tools" | "world";
   let activeDropdown = $state<MenuId | null>(null);
+  let toolSearchQuery = $state("");
+  let toolCategoryFilter = $state<string>("all");
+  let floatingToolbarCollapsed = $state(false);
 
   function toggleDropdown(name: MenuId): void {
     activeDropdown = activeDropdown === name ? null : name;
@@ -334,6 +337,9 @@
     });
     const onResize = () => scene?.resize();
     const onKeyDown = (e: KeyboardEvent) => {
+      const activeTag = (document.activeElement?.tagName || "").toUpperCase();
+      const isEditingText = ["INPUT", "TEXTAREA", "SELECT"].includes(activeTag);
+
       if (e.key === "Escape") {
         if (deleteConfirmOpen) {
           if (!deleteInProgress) deleteConfirmOpen = false;
@@ -361,6 +367,27 @@
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") {
         if (e.shiftKey) scene?.redo();
         else scene?.undo();
+      }
+
+      // Fast Tool Hotkeys when not typing in text fields
+      if (!isEditingText && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        const k = e.key.toLowerCase();
+        if (k === "g") {
+          if (e.shiftKey) pickGrassEraseBrush();
+          else pickGrassBrush();
+        } else if (k === "t") {
+          pickRandomTreeBrush();
+        } else if (k === "c") {
+          pickVolumeClaySculpt();
+        } else if (k === "r") {
+          pickRoadTool();
+        } else if (k === "p") {
+          pickTexture(1);
+        } else if (k === "l") {
+          scene?.toggleGizmoSpace();
+        } else if (k === "v") {
+          cancelArmed();
+        }
       }
     };
     const onPointerDownCapture = (e: PointerEvent) => {
@@ -891,6 +918,16 @@
     armedLightColor = armedLightColor === color ? null : color;
     if (armedLightColor) scene?.armLightPlacement(armedLightColor);
     else scene?.disarm();
+  }
+
+  function realignBounds(): void {
+    scene?.realignSelectedBounds();
+    selection = scene?.getSelection() ?? [];
+  }
+
+  function toggleGizmo(): void {
+    scene?.toggleGizmoSpace();
+    selection = scene?.getSelection() ?? [];
   }
 
   function pickFogTool(color: string, shape: "sphere" | "box" = "sphere"): void {
@@ -1502,6 +1539,17 @@
               />
               <span>Starting Town</span>
             </label>
+            <div class="menu-sep"></div>
+            <button
+              onclick={() =>
+                menuAction(() => {
+                  if (!scene) return;
+                  const cam = scene.setTitleCameraFromCurrent();
+                  status = `Title screen camera saved to current view (${cam.x}, ${cam.y}, ${cam.z}).`;
+                })}
+            >
+              📷 Set Title Screen Camera
+            </button>
           </div>
         {/if}
       </div>
@@ -1514,129 +1562,119 @@
           onclick={() => toggleDropdown("tools")}
         >Tools</button>
         {#if activeDropdown === "tools"}
-          <div class="menu-panel tools-panel">
-            <div class="menu-section">Assets</div>
-            <button onclick={() => menuAction(() => { showAssetExplorer = true; })}>Asset Explorer…</button>
+          <div class="menu-panel tools-panel searchable-tools-panel">
+            <div class="tools-search-bar">
+              <input
+                type="text"
+                placeholder="Search 40+ tools (e.g. grass, water, clay, house)..."
+                bind:value={toolSearchQuery}
+                class="tools-search-input"
+              />
+              {#if toolSearchQuery}
+                <button type="button" class="tools-search-clear" onclick={() => (toolSearchQuery = "")}>✕</button>
+              {/if}
+            </div>
 
-            <div class="menu-section">Terrain</div>
-            <button class:active={sculptMode === "raise"} onclick={() => menuAction(() => pickSculpt("raise"))}>Raise</button>
-            <button class:active={sculptMode === "lower"} onclick={() => menuAction(() => pickSculpt("lower"))}>Lower</button>
-            <button class:active={sculptMode === "mold"} onclick={() => menuAction(() => pickSculpt("mold"))}>Mould / Flatten</button>
-            <button class:active={sculptMode === "smooth"} onclick={() => menuAction(() => pickSculpt("smooth"))}>Smooth</button>
-            <button class:active={sculptMode === "carve"} onclick={() => menuAction(() => pickSculpt("carve"))}>Carve Hole</button>
-            <button class:active={volumeSculptBrushActive} onclick={() => menuAction(pickVolumeSculptBrush)}>Volume Drag Brush</button>
-            <button class:active={volumeClaySculptActive} onclick={() => menuAction(pickVolumeClaySculpt)} title="Blender-style add/sub on the 3D surface">Clay Sculpt (3D)</button>
-            {#each TERRAIN_VOLUME_SHAPES as shape}
-              <button class:active={volumeStampShape === shape.id && !volumeSculptBrushActive && !volumeClaySculptActive} onclick={() => menuAction(() => pickVolumeStamp(shape.id))}>{shape.label}</button>
-            {/each}
+            <div class="tools-category-tabs">
+              <button type="button" class:active={toolCategoryFilter === "all"} onclick={() => (toolCategoryFilter = "all")}>All</button>
+              <button type="button" class:active={toolCategoryFilter === "terrain"} onclick={() => (toolCategoryFilter = "terrain")}>Terrain</button>
+              <button type="button" class:active={toolCategoryFilter === "foliage"} onclick={() => (toolCategoryFilter = "foliage")}>Grass & Trees</button>
+              <button type="button" class:active={toolCategoryFilter === "water"} onclick={() => (toolCategoryFilter = "water")}>Water & Environment</button>
+              <button type="button" class:active={toolCategoryFilter === "structures"} onclick={() => (toolCategoryFilter = "structures")}>Structures</button>
+              <button type="button" class:active={toolCategoryFilter === "markers"} onclick={() => (toolCategoryFilter = "markers")}>Markers</button>
+            </div>
 
-            <div class="menu-section">Water</div>
-            <button class:active={waterBrushMode === "add"} onclick={() => menuAction(() => pickWaterBrush("add"))}>Drop Water</button>
-            <button class:active={waterBrushMode === "remove"} onclick={() => menuAction(() => pickWaterBrush("remove"))}>Drain Water</button>
-            <button class:active={waterPhysicsSimulating} onclick={() => toggleWaterPhysics()}>Physics: {waterPhysicsSimulating ? "On" : "Off"}</button>
-            <button onclick={() => menuAction(clearWater)}>Clear All Water</button>
+            <div class="tools-filtered-body">
+              {#if toolCategoryFilter === "all" || toolCategoryFilter === "terrain" || toolSearchQuery}
+                {#if !toolSearchQuery || "terrain sculpt raise lower smooth mold clay 3d stamp".includes(toolSearchQuery.toLowerCase())}
+                  <div class="menu-section">Terrain & Sculpting</div>
+                  <button class:active={sculptMode === "raise"} onclick={() => menuAction(() => pickSculpt("raise"))}>Raise Terrain [S]</button>
+                  <button class:active={sculptMode === "lower"} onclick={() => menuAction(() => pickSculpt("lower"))}>Lower Terrain</button>
+                  <button class:active={sculptMode === "mold"} onclick={() => menuAction(() => pickSculpt("mold"))}>Mould / Flatten</button>
+                  <button class:active={sculptMode === "smooth"} onclick={() => menuAction(() => pickSculpt("smooth"))}>Smooth Terrain</button>
+                  <button class:active={sculptMode === "carve"} onclick={() => menuAction(() => pickSculpt("carve"))}>Carve Hole</button>
+                  <button class:active={volumeSculptBrushActive} onclick={() => menuAction(pickVolumeSculptBrush)}>Volume Drag Brush</button>
+                  <button class:active={volumeClaySculptActive} onclick={() => menuAction(pickVolumeClaySculpt)} title="Blender-style add/sub on the 3D surface">Clay Sculpt 3D [C]</button>
+                  {#each TERRAIN_VOLUME_SHAPES as shape}
+                    <button class:active={volumeStampShape === shape.id && !volumeSculptBrushActive && !volumeClaySculptActive} onclick={() => menuAction(() => pickVolumeStamp(shape.id))}>Stamp: {shape.label}</button>
+                  {/each}
+                {/if}
+              {/if}
 
-            <div class="menu-section">Paint</div>
-            <button class:active={texturePaintMode === 0} onclick={() => menuAction(() => pickTexture(0))}>Auto / Biome</button>
-            <button class:active={texturePaintMode === 1} onclick={() => menuAction(() => pickTexture(1))}>Grass</button>
-            <button class:active={texturePaintMode === 2} onclick={() => menuAction(() => pickTexture(2))}>Dirt</button>
-            <button class:active={texturePaintMode === 3} onclick={() => menuAction(() => pickTexture(3))}>Cobble</button>
-            <button class:active={texturePaintMode === 4} onclick={() => menuAction(() => pickTexture(4))}>Snow</button>
-            <button class:active={texturePaintMode === 5} onclick={() => menuAction(() => pickTexture(5))}>Rock</button>
-            <button class:active={texturePaintMode === 6} onclick={() => menuAction(() => pickTexture(6))}>Sand</button>
+              {#if toolCategoryFilter === "all" || toolCategoryFilter === "foliage" || toolSearchQuery}
+                {#if !toolSearchQuery || "grass foliage tree vegetation erase brush quick".includes(toolSearchQuery.toLowerCase())}
+                  <div class="menu-section">Foliage & Vegetation</div>
+                  <button class:active={grassBrushActive} onclick={() => menuAction(pickGrassBrush)}>Grass Brush [G]</button>
+                  <button class:active={grassEraseBrushActive} onclick={() => menuAction(pickGrassEraseBrush)}>Erase Grass [Shift+G]</button>
+                  <button class:active={randomTreeBrushActive} onclick={() => menuAction(pickRandomTreeBrush)}>Tree Brush [T]</button>
+                  <button class:active={showGrassPanel} onclick={() => menuAction(() => { showGrassPanel = true; })}>Grass Settings Panel…</button>
+                {/if}
+              {/if}
 
-            <div class="menu-section">Lights</div>
-            <button class:active={armedLightColor === "#ff9933"} onclick={() => menuAction(() => pickLightColor("#ff9933"))}>Torch Amber</button>
-            <button class:active={armedLightColor === "#ffffff"} onclick={() => menuAction(() => pickLightColor("#ffffff"))}>Daylight</button>
-            <button class:active={armedLightColor === "#00d4ff"} onclick={() => menuAction(() => pickLightColor("#00d4ff"))}>Mystic Cyan</button>
-            <button class:active={armedLightColor === "#a055ff"} onclick={() => menuAction(() => pickLightColor("#a055ff"))}>Arcane Violet</button>
-            <button class:active={armedLightColor === "#33ff77"} onclick={() => menuAction(() => pickLightColor("#33ff77"))}>Emerald</button>
+              {#if toolCategoryFilter === "all" || toolCategoryFilter === "water" || toolCategoryFilter === "terrain" || toolSearchQuery}
+                {#if !toolSearchQuery || "paint texture road dirt cobble snow rock sand auto".includes(toolSearchQuery.toLowerCase())}
+                  <div class="menu-section">Ground Texture & Roads</div>
+                  <button class:active={texturePaintMode === 0} onclick={() => menuAction(() => pickTexture(0))}>Auto / Biome Texture</button>
+                  <button class:active={texturePaintMode === 1} onclick={() => menuAction(() => pickTexture(1))}>Grass Texture [P]</button>
+                  <button class:active={texturePaintMode === 2} onclick={() => menuAction(() => pickTexture(2))}>Dirt Texture</button>
+                  <button class:active={texturePaintMode === 3} onclick={() => menuAction(() => pickTexture(3))}>Cobble Texture</button>
+                  <button class:active={texturePaintMode === 4} onclick={() => menuAction(() => pickTexture(4))}>Snow Texture</button>
+                  <button class:active={texturePaintMode === 5} onclick={() => menuAction(() => pickTexture(5))}>Rock Texture</button>
+                  <button class:active={texturePaintMode === 6} onclick={() => menuAction(() => pickTexture(6))}>Sand Texture</button>
+                  <button class:active={roadPaintActive} onclick={() => menuAction(pickRoadTool)}>Dirt Road Painter [R]</button>
+                {/if}
+              {/if}
 
-            <div class="menu-section">Fog</div>
-            <button class:active={armedFogColor === "#c8dce8" && armedFogShape === "sphere"} onclick={() => menuAction(() => pickFogTool("#c8dce8", "sphere"))}>Mist Sphere</button>
-            <button class:active={armedFogColor === "#c8dce8" && armedFogShape === "box"} onclick={() => menuAction(() => pickFogTool("#c8dce8", "box"))}>Mist Box</button>
-            <button class:active={armedFogColor === "#9bb8a0" && armedFogShape === "sphere"} onclick={() => menuAction(() => pickFogTool("#9bb8a0", "sphere"))}>Swamp Haze</button>
-            <button class:active={armedFogColor === "#d4a878" && armedFogShape === "sphere"} onclick={() => menuAction(() => pickFogTool("#d4a878", "sphere"))}>Dust Cloud</button>
-            <button class:active={armedFogColor === "#b090e0" && armedFogShape === "sphere"} onclick={() => menuAction(() => pickFogTool("#b090e0", "sphere"))}>Arcane Fog</button>
+              {#if toolCategoryFilter === "all" || toolCategoryFilter === "water" || toolSearchQuery}
+                {#if !toolSearchQuery || "water light fog mist cloud physics atmosphere".includes(toolSearchQuery.toLowerCase())}
+                  <div class="menu-section">Water & Environment</div>
+                  <button class:active={waterBrushMode === "add"} onclick={() => menuAction(() => pickWaterBrush("add"))}>Drop Water [W]</button>
+                  <button class:active={waterBrushMode === "remove"} onclick={() => menuAction(() => pickWaterBrush("remove"))}>Drain Water</button>
+                  <button class:active={waterPhysicsSimulating} onclick={() => toggleWaterPhysics()}>Water Physics: {waterPhysicsSimulating ? "On" : "Off"}</button>
+                  <button onclick={() => menuAction(clearWater)}>Clear All Water</button>
 
-            <div class="menu-section">Place</div>
-            <button class:active={armedBarrier} onclick={() => menuAction(pickBarrierTool)}>Invisible Barrier</button>
-            <button class:active={armedCloudShape === "cumulus"} onclick={() => menuAction(() => pickCloudTool("cumulus"))}>Cloud: Cumulus</button>
-            <button class:active={armedCloudShape === "wispy"} onclick={() => menuAction(() => pickCloudTool("wispy"))}>Cloud: Wispy</button>
-            <button class:active={armedCloudShape === "flat"} onclick={() => menuAction(() => pickCloudTool("flat"))}>Cloud: Flat</button>
-            <button class:active={roadPaintActive} onclick={() => menuAction(pickRoadTool)}>Dirt Road</button>
-            {#each HOUSE_TYPE_OPTIONS as opt}
-              <button class:active={houseToolActive && houseType === opt.id} onclick={() => menuAction(() => pickHouseTool(opt.id))}>{opt.label}</button>
-            {/each}
-            <div class="menu-section">Castle</div>
-            <label class="menu-field">
-              Style
-              <select
-                bind:value={castleStyle}
-                onchange={() => syncCastleToolOptions()}
-              >
-                {#each CASTLE_STYLE_OPTIONS as opt}
-                  <option value={opt.id}>{opt.label}</option>
-                {/each}
-              </select>
-            </label>
-            <label class="menu-field">
-              Size
-              <select
-                bind:value={castleSize}
-                onchange={() => {
-                  castleSize = Number(castleSize) as CastleSize;
-                  syncCastleToolOptions();
-                }}
-              >
-                {#each CASTLE_SIZE_OPTIONS as opt}
-                  <option value={opt.id}>{opt.label}</option>
-                {/each}
-              </select>
-            </label>
-            <label class="menu-field">
-              Height
-              <select
-                bind:value={castleHeight}
-                onchange={() => {
-                  castleHeight = Number(castleHeight) as CastleHeight;
-                  syncCastleToolOptions();
-                }}
-              >
-                {#each CASTLE_HEIGHT_OPTIONS as opt}
-                  <option value={opt.id}>{opt.label}</option>
-                {/each}
-              </select>
-            </label>
-            <button class:active={castleToolActive} onclick={() => menuAction(pickCastleTool)}>
-              {castleToolActive ? "Castle tool armed — click terrain" : "Generate Castle"}
-            </button>
-            <div class="menu-section">Fantasy Building</div>
-            <label class="menu-field">
-              Type
-              <select
-                bind:value={fantasticBuildingType}
-                onchange={() => syncFantasticBuildingToolOptions()}
-              >
-                {#each FANTASTIC_BUILDING_TYPE_OPTIONS as opt}
-                  <option value={opt.id}>{opt.label}</option>
-                {/each}
-              </select>
-            </label>
-            <button class:active={fantasticBuildingToolActive} onclick={() => menuAction(pickFantasticBuildingTool)}>
-              {fantasticBuildingToolActive ? "Building tool armed — click terrain" : "Generate Building"}
-            </button>
-            <button class:active={randomTreeBrushActive} onclick={() => menuAction(pickRandomTreeBrush)}>Tree Brush</button>
-            <button class:active={grassBrushActive} onclick={() => menuAction(pickGrassBrush)}>Grass Brush</button>
-            <button class:active={grassEraseBrushActive} onclick={() => menuAction(pickGrassEraseBrush)}>Erase Grass</button>
-            <button class:active={eraseBrushActive} onclick={() => menuAction(pickEraseBrush)}>Erase Brush</button>
-            <button class:active={armedMarker === "mobSpawn"} onclick={() => menuAction(() => pickMarker("mobSpawn"))}>Mob Spawn</button>
-            <button class:active={armedMarker === "resourceNode"} onclick={() => menuAction(() => pickMarker("resourceNode"))}>Resource Node</button>
-            <button class:active={armedMarker === "village"} onclick={() => menuAction(() => pickMarker("village"))}>Village Marker</button>
-            <button class:active={armedMarker === "entry"} onclick={() => menuAction(() => pickMarker("entry"))}>Entry Spawn</button>
-            <button class:active={armedMarker === "portal"} onclick={() => menuAction(() => pickMarker("portal"))}>Region Portal</button>
-            <button class:active={armedMarker === "npc"} onclick={() => menuAction(() => pickMarker("npc"))}>Quest Giver</button>
-            <button class:active={armedMarker === "worldEvent"} onclick={() => menuAction(() => pickMarker("worldEvent"))}>World Event</button>
+                  <div class="menu-section">Lights & Fog</div>
+                  <button class:active={armedLightColor === "#ff9933"} onclick={() => menuAction(() => pickLightColor("#ff9933"))}>Light: Torch Amber</button>
+                  <button class:active={armedLightColor === "#ffffff"} onclick={() => menuAction(() => pickLightColor("#ffffff"))}>Light: Daylight</button>
+                  <button class:active={armedLightColor === "#00d4ff"} onclick={() => menuAction(() => pickLightColor("#00d4ff"))}>Light: Mystic Cyan</button>
+                  <button class:active={armedLightColor === "#a055ff"} onclick={() => menuAction(() => pickLightColor("#a055ff"))}>Light: Arcane Violet</button>
+                  <button class:active={armedFogColor === "#c8dce8" && armedFogShape === "sphere"} onclick={() => menuAction(() => pickFogTool("#c8dce8", "sphere"))}>Mist Sphere</button>
+                  <button class:active={armedFogColor === "#c8dce8" && armedFogShape === "box"} onclick={() => menuAction(() => pickFogTool("#c8dce8", "box"))}>Mist Box</button>
+                  <button class:active={armedCloudShape === "cumulus"} onclick={() => menuAction(() => pickCloudTool("cumulus"))}>Cloud: Cumulus</button>
+                  <button class:active={armedCloudShape === "wispy"} onclick={() => menuAction(() => pickCloudTool("wispy"))}>Cloud: Wispy</button>
+                {/if}
+              {/if}
+
+              {#if toolCategoryFilter === "all" || toolCategoryFilter === "structures" || toolSearchQuery}
+                {#if !toolSearchQuery || "house castle building structure barrier asset explorer".includes(toolSearchQuery.toLowerCase())}
+                  <div class="menu-section">Structures & Buildings</div>
+                  <button onclick={() => menuAction(() => { showAssetExplorer = true; })}>Asset Explorer…</button>
+                  <button class:active={armedBarrier} onclick={() => menuAction(pickBarrierTool)}>Invisible Barrier</button>
+                  {#each HOUSE_TYPE_OPTIONS as opt}
+                    <button class:active={houseToolActive && houseType === opt.id} onclick={() => menuAction(() => pickHouseTool(opt.id))}>House: {opt.label}</button>
+                  {/each}
+                  <button class:active={castleToolActive} onclick={() => menuAction(pickCastleTool)}>
+                    {castleToolActive ? "Castle Tool Armed" : "Generate Castle"}
+                  </button>
+                  <button class:active={fantasticBuildingToolActive} onclick={() => menuAction(pickFantasticBuildingTool)}>
+                    {fantasticBuildingToolActive ? "Building Tool Armed" : "Generate Fantasy Building"}
+                  </button>
+                {/if}
+              {/if}
+
+              {#if toolCategoryFilter === "all" || toolCategoryFilter === "markers" || toolSearchQuery}
+                {#if !toolSearchQuery || "marker spawn mob node village portal npc quest event".includes(toolSearchQuery.toLowerCase())}
+                  <div class="menu-section">World Markers</div>
+                  <button class:active={armedMarker === "mobSpawn"} onclick={() => menuAction(() => pickMarker("mobSpawn"))}>Mob Spawn</button>
+                  <button class:active={armedMarker === "resourceNode"} onclick={() => menuAction(() => pickMarker("resourceNode"))}>Resource Node</button>
+                  <button class:active={armedMarker === "village"} onclick={() => menuAction(() => pickMarker("village"))}>Village Marker</button>
+                  <button class:active={armedMarker === "entry"} onclick={() => menuAction(() => pickMarker("entry"))}>Entry Spawn</button>
+                  <button class:active={armedMarker === "portal"} onclick={() => menuAction(() => pickMarker("portal"))}>Region Portal</button>
+                  <button class:active={armedMarker === "npc"} onclick={() => menuAction(() => pickMarker("npc"))}>Quest Giver NPC</button>
+                  <button class:active={armedMarker === "worldEvent"} onclick={() => menuAction(() => pickMarker("worldEvent"))}>World Event</button>
+                {/if}
+              {/if}
+            </div>
           </div>
         {/if}
       </div>
@@ -1952,7 +1990,17 @@
               <span>{brushStrength}x</span>
             </label>
           {/if}
-          {#if grassBrushActive}
+          {#if grassBrushActive || grassEraseBrushActive}
+            <label class="context-field">
+              Preset
+              <select onchange={(e) => applyGrassPreset((e.target as HTMLSelectElement).value)}>
+                <option value="">(Custom Preset)</option>
+                {#each Object.keys(QUICK_GRASS_PRESETS) as presetName}
+                  <option value={presetName}>{presetName}</option>
+                {/each}
+                <option value="__reset__">Default Reset</option>
+              </select>
+            </label>
             <label class="context-field">
               Bottom
               <input type="color" bind:value={grassColor.bottom} oninput={applyGrassColor} />
@@ -1966,8 +2014,8 @@
               <input type="range" min="0.4" max="2.5" step="0.05" bind:value={grassLength} oninput={applyGrassLength} />
               <span>{grassLength.toFixed(2)}x</span>
             </label>
-            <button class="menu-action" type="button" onclick={() => { showGrassPanel = true; }}>
-              Open Grass Settings…
+            <button class="menu-action" class:active={showGrassPanel} type="button" onclick={() => { showGrassPanel = !showGrassPanel; }}>
+              {showGrassPanel ? "Hide Settings Panel" : "Grass Settings…"}
             </button>
           {/if}
         {:else if roadPaintActive}
@@ -2095,7 +2143,172 @@
       {/each}
     </div>
 
-    <canvas bind:this={canvas} class="viewport"></canvas>
+    <div class="viewport-canvas-container">
+      <canvas bind:this={canvas} class="viewport"></canvas>
+
+      <!-- Photoshop-style Floating Tools Dock (sits inside canvas window on left hand side) -->
+      <div class="photoshop-dock" class:collapsed={floatingToolbarCollapsed}>
+        <div class="photoshop-dock-header">
+          <span class="photoshop-dock-title">TOOLS</span>
+          <button
+            type="button"
+            class="photoshop-dock-toggle"
+            onclick={() => (floatingToolbarCollapsed = !floatingToolbarCollapsed)}
+            title={floatingToolbarCollapsed ? "Expand Tools (Photoshop Dock)" : "Collapse Dock"}
+          >
+            {floatingToolbarCollapsed ? "»" : "«"}
+          </button>
+        </div>
+        {#if !floatingToolbarCollapsed}
+          <div class="photoshop-dock-buttons">
+            <button
+              type="button"
+              class="photoshop-tool-btn"
+              class:active={!sculptMode && !volumeSculptBrushActive && !volumeClaySculptActive && !waterBrushMode && !texturePaintMode && !roadPaintActive && !grassBrushActive && !grassEraseBrushActive && !randomTreeBrushActive && !houseToolActive && !castleToolActive && !fantasticBuildingToolActive && !armedMarker}
+              onclick={() => cancelArmed()}
+              title="Select / Pointer (Esc or V)"
+            >
+              <span class="dock-icon">🖐️</span>
+              <span class="dock-label">Select</span>
+            </button>
+
+            <div class="dock-sep"></div>
+
+            <button
+              type="button"
+              class="photoshop-tool-btn"
+              class:active={sculptMode === "raise"}
+              onclick={() => pickSculpt("raise")}
+              title="Raise Terrain [S]"
+            >
+              <span class="dock-icon">⛰️</span>
+              <span class="dock-label">Raise</span>
+            </button>
+
+            <button
+              type="button"
+              class="photoshop-tool-btn"
+              class:active={volumeClaySculptActive}
+              onclick={pickVolumeClaySculpt}
+              title="3D Clay Sculpt [C]"
+            >
+              <span class="dock-icon">🏺</span>
+              <span class="dock-label">Clay 3D</span>
+            </button>
+
+            <div class="dock-sep"></div>
+
+            <button
+              type="button"
+              class="photoshop-tool-btn"
+              class:active={grassBrushActive}
+              onclick={pickGrassBrush}
+              title="Paint Quick Grass [G]"
+            >
+              <span class="dock-icon">🌿</span>
+              <span class="dock-label">Grass</span>
+            </button>
+
+            <button
+              type="button"
+              class="photoshop-tool-btn"
+              class:active={grassEraseBrushActive}
+              onclick={pickGrassEraseBrush}
+              title="Erase Quick Grass [Shift+G]"
+            >
+              <span class="dock-icon">🧹</span>
+              <span class="dock-label">Erase G.</span>
+            </button>
+
+            <button
+              type="button"
+              class="photoshop-tool-btn"
+              class:active={randomTreeBrushActive}
+              onclick={pickRandomTreeBrush}
+              title="Tree Brush [T]"
+            >
+              <span class="dock-icon">🌲</span>
+              <span class="dock-label">Trees</span>
+            </button>
+
+            <div class="dock-sep"></div>
+
+            <button
+              type="button"
+              class="photoshop-tool-btn"
+              class:active={texturePaintMode !== null}
+              onclick={() => pickTexture(1)}
+              title="Texture Paint [P]"
+            >
+              <span class="dock-icon">🎨</span>
+              <span class="dock-label">Paint</span>
+            </button>
+
+            <button
+              type="button"
+              class="photoshop-tool-btn"
+              class:active={roadPaintActive}
+              onclick={pickRoadTool}
+              title="Dirt Road Painter [R]"
+            >
+              <span class="dock-icon">🛤️</span>
+              <span class="dock-label">Road</span>
+            </button>
+
+            <button
+              type="button"
+              class="photoshop-tool-btn"
+              class:active={waterBrushMode !== null}
+              onclick={() => {
+                if (waterBrushMode !== null) cancelArmed();
+                else pickWaterBrush("add");
+              }}
+              title="Drop / Drain Water (Toggle)"
+            >
+              <span class="dock-icon">💧</span>
+              <span class="dock-label">Water</span>
+            </button>
+
+            <div class="dock-sep"></div>
+
+            <button
+              type="button"
+              class="photoshop-tool-btn"
+              class:active={fantasticBuildingToolActive || castleToolActive || houseToolActive}
+              onclick={pickFantasticBuildingTool}
+              title="Generate Buildings & Castles"
+            >
+              <span class="dock-icon">🏰</span>
+              <span class="dock-label">Build</span>
+            </button>
+
+            <button
+              type="button"
+              class="photoshop-tool-btn"
+              class:active={armedMarker !== null}
+              onclick={() => pickMarker("mobSpawn")}
+              title="Place Spawn/Marker"
+            >
+              <span class="dock-icon">📍</span>
+              <span class="dock-label">Marker</span>
+            </button>
+
+            <div class="dock-sep"></div>
+
+            <button
+              type="button"
+              class="photoshop-tool-btn"
+              class:active={showGrassPanel}
+              onclick={() => (showGrassPanel = !showGrassPanel)}
+              title="Quick Grass Settings Panel"
+            >
+              <span class="dock-icon">⚙️</span>
+              <span class="dock-label">Settings</span>
+            </button>
+          </div>
+        {/if}
+      </div>
+    </div>
 
     <AssetExplorer
       open={showAssetExplorer}
@@ -2461,6 +2674,26 @@
           {:else}
             <label>Scale <input type="number" step="0.05" value={sel.scale} onchange={(e) => applyPatch({ scale: Number((e.target as HTMLInputElement).value) })} /></label>
           {/if}
+          <div class="align-buttons-row" style="display: flex; gap: 6px; margin-top: 6px;">
+            <button
+              type="button"
+              class="build-village-btn realign-btn"
+              style="flex: 1; margin-top: 0; background: #2563eb;"
+              onclick={realignBounds}
+              title="Re-computes local oriented bounding box and aligns selection box & gizmo handles to asset's rotated orientation"
+            >
+              🎯 Reset & Align Box
+            </button>
+            <button
+              type="button"
+              class="build-village-btn space-toggle-btn"
+              style="flex: 1; margin-top: 0; background: #475569;"
+              onclick={toggleGizmo}
+              title="Toggle transform gizmo handles between Local space (aligned with rotated asset [L]) and World space (aligned with grid axes)"
+            >
+              🔄 {scene?.gizmoSpace === "world" ? "World Handles" : "Local Handles"}
+            </button>
+          </div>
           {#if sel.kind === "asset"}
             <label>
               <input
@@ -3446,7 +3679,7 @@
   .properties,
   .color-panel {
     position: absolute;
-    top: 16px;
+    top: 50px;
     right: 16px;
     width: 240px;
     background: rgba(26, 29, 36, 0.95);
@@ -3457,8 +3690,9 @@
     display: flex;
     flex-direction: column;
     gap: 8px;
-    z-index: 10;
+    z-index: 200;
     backdrop-filter: blur(4px);
+    pointer-events: auto;
   }
   .color-panel {
     top: 16px;
@@ -3739,5 +3973,200 @@
     color: #dce6f2;
     pointer-events: none;
     z-index: 10;
+  }
+
+  .viewport-canvas-container {
+    position: relative;
+    flex: 1;
+    height: 100%;
+    overflow: hidden;
+  }
+  .viewport-canvas-container .viewport {
+    width: 100%;
+    height: 100%;
+    display: block;
+  }
+
+  /* Photoshop-Style Floating Tool Palette sitting inside the canvas window */
+  .photoshop-dock {
+    position: absolute;
+    left: 14px;
+    top: 14px;
+    z-index: 60;
+    background: rgba(18, 22, 30, 0.88);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 8px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+    display: flex;
+    flex-direction: column;
+    width: 62px;
+    padding: 6px;
+    transition: width 0.2s ease, padding 0.2s ease;
+    user-select: none;
+  }
+  .photoshop-dock.collapsed {
+    width: 38px;
+    padding: 4px;
+  }
+  .photoshop-dock-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 2px 4px 6px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    margin-bottom: 4px;
+  }
+  .photoshop-dock-title {
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.8px;
+    color: #94a3b8;
+  }
+  .photoshop-dock.collapsed .photoshop-dock-title {
+    display: none;
+  }
+  .photoshop-dock-toggle {
+    background: transparent;
+    border: none;
+    color: #94a3b8;
+    font-size: 11px;
+    cursor: pointer;
+    padding: 0 2px;
+  }
+  .photoshop-dock-toggle:hover {
+    color: #f8fafc;
+  }
+  .photoshop-dock-buttons {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+  .photoshop-tool-btn {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid transparent;
+    border-radius: 6px;
+    color: #cbd5e1;
+    padding: 5px 2px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+  .photoshop-tool-btn:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: #ffffff;
+    border-color: rgba(255, 255, 255, 0.2);
+  }
+  .photoshop-tool-btn.active {
+    background: rgba(184, 217, 74, 0.22);
+    border-color: #b8d94a;
+    color: #b8d94a;
+    box-shadow: 0 0 10px rgba(184, 217, 74, 0.3);
+  }
+  .dock-icon {
+    font-size: 16px;
+    line-height: 1;
+  }
+  .dock-label {
+    font-size: 8px;
+    font-weight: 500;
+    margin-top: 2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 48px;
+  }
+  .dock-sep {
+    height: 1px;
+    background: rgba(255, 255, 255, 0.08);
+    margin: 2px 4px;
+  }
+
+  /* Searchable & Tabbed Tools Dropdown (Overriding grid layout) */
+  .menu-panel.tools-panel.searchable-tools-panel {
+    display: flex !important;
+    flex-direction: column !important;
+    grid-template-columns: none !important;
+    width: 340px;
+    min-width: 340px;
+    max-height: min(75vh, 500px);
+    padding: 0 !important;
+    gap: 0 !important;
+    overflow: hidden;
+  }
+  .tools-search-bar {
+    position: relative;
+    padding: 8px;
+    background: #141720;
+    border-bottom: 1px solid #2a3142;
+    flex-shrink: 0;
+    box-sizing: border-box;
+  }
+  .tools-search-input {
+    width: 100%;
+    background: rgba(0, 0, 0, 0.4);
+    border: 1px solid #3a4459;
+    border-radius: 6px;
+    color: #f8fafc;
+    font-size: 12px;
+    padding: 6px 26px 6px 10px;
+    box-sizing: border-box;
+  }
+  .tools-search-input:focus {
+    outline: none;
+    border-color: #3b82f6;
+  }
+  .tools-search-clear {
+    position: absolute;
+    right: 14px;
+    top: 50%;
+    transform: translateY(-50%);
+    background: none;
+    border: none;
+    color: #94a3b8;
+    font-size: 11px;
+    cursor: pointer;
+  }
+  .tools-category-tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    padding: 6px 8px;
+    background: #181c26;
+    border-bottom: 1px solid #2a3142;
+    flex-shrink: 0;
+    box-sizing: border-box;
+  }
+  .tools-category-tabs button {
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 12px;
+    color: #a0aec0;
+    font-size: 10.5px;
+    padding: 3px 8px;
+    cursor: pointer;
+    transition: all 0.12s;
+  }
+  .tools-category-tabs button:hover {
+    color: #f8fafc;
+    border-color: rgba(255, 255, 255, 0.2);
+  }
+  .tools-category-tabs button.active {
+    background: #2563eb;
+    border-color: #3b82f6;
+    color: #ffffff;
+    font-weight: 600;
+  }
+  .tools-filtered-body {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 6px;
+    overflow-y: auto;
+    max-height: 380px;
   }
 </style>

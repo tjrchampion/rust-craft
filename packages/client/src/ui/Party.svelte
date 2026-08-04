@@ -53,9 +53,16 @@
 
 <!-- Party invite prompt -->
 {#if showOverlay && game.pendingInvite}
-  <div class="invite">
-    <div class="invite-text">
-      <strong>{game.pendingInvite}</strong> invites you. Press <strong>Tab</strong> to accept! ({countdown}s)
+  <div class="invite-banner rc-frame">
+    <div class="invite-info">
+      <span class="invite-icon">⚔️</span>
+      <div class="invite-text">
+        <strong>{game.pendingInvite}</strong> invited you to a party! <span class="countdown">({countdown}s)</span>
+      </div>
+    </div>
+    <div class="invite-actions">
+      <button class="rc-btn primary sm" onclick={acceptInvite}>✔ Accept</button>
+      <button class="rc-btn ghost sm" onclick={declineInvite}>✕ Decline</button>
     </div>
   </div>
 {/if}
@@ -101,26 +108,46 @@
   .swords {
     color: #ff5040;
   }
-  .invite {
+  .invite-banner {
     position: absolute;
-    top: 16px;
+    top: 24px;
     left: 50%;
     transform: translateX(-50%);
-    padding: 8px 14px;
+    padding: 10px 16px;
     display: flex;
     align-items: center;
-    gap: 12px;
+    gap: 16px;
     pointer-events: auto;
-    z-index: 100;
+    z-index: 1000;
     border-radius: 8px;
-    background: rgba(14, 18, 24, 0.95);
-    border: 2px solid var(--rc-gold-dim);
-    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.6), 0 0 15px rgba(255, 214, 110, 0.15);
+    background: radial-gradient(circle at 50% 20%, rgba(26, 22, 16, 0.98), rgba(12, 10, 8, 0.99));
+    border: 2px solid var(--rc-gold-bright);
+    box-shadow: 0 8px 30px rgba(0, 0, 0, 0.9), 0 0 20px rgba(255, 214, 110, 0.25);
+  }
+  .invite-info {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .invite-icon {
+    font-size: 18px;
   }
   .invite-text {
     color: var(--rc-parchment);
-    font-size: 12.5px;
+    font-size: 13px;
     white-space: nowrap;
+  }
+  .invite-text strong {
+    color: var(--rc-gold-bright);
+  }
+  .countdown {
+    font-size: 11px;
+    color: var(--rc-ink-dim);
+    margin-left: 4px;
+  }
+  .invite-actions {
+    display: flex;
+    gap: 8px;
   }
   .invite-text strong {
     color: var(--rc-gold-bright);

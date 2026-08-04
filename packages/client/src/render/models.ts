@@ -593,3 +593,44 @@ export function buildHealthNameplate(name: string, hp: number, maxHp: number, co
   sprite.scale.set(2.2, 0.68, 1);
   return sprite;
 }
+
+export const PARTY_TAG_ICONS: Record<string, { symbol: string; color: string; label: string }> = {
+  crown: { symbol: "👑", color: "#ffd700", label: "Party Leader" },
+  target: { symbol: "⚔️", color: "#ff5040", label: "Target / Crosshair" },
+  shield: { symbol: "🛡️", color: "#4cd964", label: "Tank / Shield" },
+  star: { symbol: "⭐", color: "#ffdd44", label: "Star" },
+  skull: { symbol: "💀", color: "#ffffff", label: "Skull" },
+  diamond: { symbol: "💎", color: "#33b5e5", label: "Diamond" },
+};
+
+export function buildPartyTagSprite(tag: string): THREE.Sprite | null {
+  const info = PARTY_TAG_ICONS[tag];
+  if (!info) return null;
+  const canvas = document.createElement("canvas");
+  canvas.width = 128;
+  canvas.height = 128;
+  const ctx = canvas.getContext("2d")!;
+
+  const grad = ctx.createRadialGradient(64, 64, 5, 64, 64, 56);
+  grad.addColorStop(0, info.color + "88");
+  grad.addColorStop(0.6, info.color + "33");
+  grad.addColorStop(1, "rgba(0,0,0,0)");
+  ctx.fillStyle = grad;
+  ctx.beginPath();
+  ctx.arc(64, 64, 56, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.font = "bold 56px 'Segoe UI Emoji', 'Apple Color Emoji', 'Noto Color Emoji', sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.shadowColor = "rgba(0,0,0,0.95)";
+  ctx.shadowBlur = 10;
+  ctx.fillText(info.symbol, 64, 64);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  const sprite = new THREE.Sprite(
+    new THREE.SpriteMaterial({ map: texture, transparent: true, depthWrite: false }),
+  );
+  sprite.scale.set(0.7, 0.7, 1);
+  return sprite;
+}

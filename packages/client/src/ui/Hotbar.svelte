@@ -61,41 +61,51 @@
   );
 </script>
 
-<div class="hotbar">
-  {#each slots as { item, spellId, cooldownFrac, cooldownLabel, gcdFrac, queued }, i (i)}
-    <div
-      class="slot"
-      class:active={i === game.selectedSlot}
-      class:spell={spellId !== null}
-      class:queued
-      class:first={i === 6}
-      title={spellId ? spellDef(spellId).name : undefined}
-    >
-      {#if spellId}
-        <IconGlyph value={spellIcon(spellId)} size={26} />
-        {#if game.self?.castingSpell === spellId}
-          <div class="casting"></div>
-        {/if}
-        {#if gcdFrac > 0 && cooldownFrac <= 0}
-          <div class="gcd-dim" style="opacity: {gcdFrac}"></div>
-        {/if}
-        {#if cooldownFrac > 0}
-          <div class="cooldown-sweep" style="--frac: {cooldownFrac}"></div>
-          {#if cooldownLabel}<span class="cooldown-label">{cooldownLabel}</span>{/if}
-        {/if}
-        {#if queued}
-          <div class="queue-pip"></div>
-        {/if}
-      {:else if item}
-        <IconGlyph value={itemIcon(item.itemId)} size={26} itemId={item.itemId} />
-        {#if item.qty > 1}<span class="qty">{item.qty}</span>{/if}
-        {#if item.durability !== null && itemDef(item.itemId).maxDurability}
-          <div class="dura" style="width: {(item.durability / itemDef(item.itemId).maxDurability!) * 100}%"></div>
-        {/if}
-      {/if}
-      <span class="num">{keyLabel(i)}</span>
+<div class="action-bar-container">
+  {#if game.self}
+    <div class="xp-bar-container" title="XP: {game.self.xp} / {game.self.xpNext}">
+      <div class="xp-fill" style="width: {Math.min(100, (game.self.xp / game.self.xpNext) * 100)}%"></div>
+      <span class="xp-text">{game.self.xp} / {game.self.xpNext} XP</span>
     </div>
-  {/each}
+  {/if}
+  <div class="hotbar">
+    {#each slots as { item, spellId, cooldownFrac, cooldownLabel, gcdFrac, queued }, i (i)}
+      <button
+        type="button"
+        class="slot"
+        class:active={i === game.selectedSlot}
+        class:spell={spellId !== null}
+        class:queued
+        class:first={i === 6}
+        title={spellId ? spellDef(spellId).name : undefined}
+        onclick={() => game.useHotbarSlot(i)}
+      >
+        {#if spellId}
+          <IconGlyph value={spellIcon(spellId)} size={26} />
+          {#if game.self?.castingSpell === spellId}
+            <div class="casting"></div>
+          {/if}
+          {#if gcdFrac > 0 && cooldownFrac <= 0}
+            <div class="gcd-dim" style="opacity: {gcdFrac}"></div>
+          {/if}
+          {#if cooldownFrac > 0}
+            <div class="cooldown-sweep" style="--frac: {cooldownFrac}"></div>
+            {#if cooldownLabel}<span class="cooldown-label">{cooldownLabel}</span>{/if}
+          {/if}
+          {#if queued}
+            <div class="queue-pip"></div>
+          {/if}
+        {:else if item}
+          <IconGlyph value={itemIcon(item.itemId)} size={26} itemId={item.itemId} />
+          {#if item.qty > 1}<span class="qty">{item.qty}</span>{/if}
+          {#if item.durability !== null && itemDef(item.itemId).maxDurability}
+            <div class="dura" style="width: {(item.durability / itemDef(item.itemId).maxDurability!) * 100}%"></div>
+          {/if}
+        {/if}
+        <span class="num">{keyLabel(i)}</span>
+      </button>
+    {/each}
+  </div>
 </div>
 
 {#if game.levelRewards.length > 0}
@@ -114,14 +124,48 @@
 {/if}
 
 <style>
-  .hotbar {
+  .action-bar-container {
     position: absolute;
-    bottom: 18px;
+    bottom: 16px;
     left: 50%;
     transform: translateX(-50%);
     display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    pointer-events: auto;
+  }
+  .xp-bar-container {
+    position: relative;
+    width: 100%;
+    height: 10px;
+    background: rgba(8, 6, 4, 0.9);
+    border: 1px solid rgba(212, 175, 55, 0.5);
+    border-radius: 3px;
+    overflow: hidden;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.8), inset 0 1px 2px rgba(0, 0, 0, 0.8);
+    pointer-events: auto;
+  }
+  .xp-fill {
+    height: 100%;
+    background: linear-gradient(180deg, #9b59b6, #6c3483);
+    transition: width 0.3s ease-out;
+  }
+  .xp-text {
+    position: absolute;
+    inset: 0;
+    font-size: 8px;
+    font-weight: 700;
+    line-height: 10px;
+    text-align: center;
+    color: #f5eef8;
+    text-shadow: 0 1px 2px #000, 1px 1px 1px #000;
+    font-family: var(--rc-body);
+  }
+  .hotbar {
+    display: flex;
     gap: 6px;
-    pointer-events: none;
+    pointer-events: auto;
   }
   .slot {
     position: relative;
@@ -137,6 +181,18 @@
     align-items: center;
     justify-content: center;
     box-shadow: inset 0 0 8px rgba(0, 0, 0, 0.6);
+    cursor: pointer;
+    pointer-events: auto;
+    user-select: none;
+    padding: 0;
+    transition: transform 0.08s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+  }
+  .slot:hover {
+    border-color: var(--rc-gold-bright);
+    box-shadow: 0 0 12px rgba(255, 214, 110, 0.4), inset 0 0 8px rgba(0, 0, 0, 0.6);
+  }
+  .slot:active {
+    transform: scale(0.94);
   }
   .slot.active {
     border-color: var(--rc-gold-bright);

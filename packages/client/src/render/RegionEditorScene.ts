@@ -271,7 +271,99 @@ export interface EditorSelection {
   scale: number;
 }
 
-export type EditorContextMenuActionId = "assignResource" | "delete";
+export type EditorContextMenuActionId = "assignResource" | "realignBounds" | "delete";
+
+export class OrientedBoxHelper extends THREE.LineSegments {
+  public target: THREE.Object3D;
+  public localBox = new THREE.Box3();
+
+  constructor(object: THREE.Object3D, color: number = 0x00ffaa) {
+    const indices = new Uint16Array([
+      0, 1, 1, 2, 2, 3, 3, 0, // bottom face
+      4, 5, 5, 6, 6, 7, 7, 4, // top face
+      0, 4, 1, 5, 2, 6, 3, 7  // 4 vertical edges
+    ]);
+    const positions = new Float32Array(8 * 3);
+    const geometry = new THREE.BufferGeometry();
+    geometry.setIndex(new THREE.BufferAttribute(indices, 1));
+    geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+
+    const material = new THREE.LineBasicMaterial({
+      color,
+      linewidth: 1,
+      toneMapped: false,
+      depthTest: false,
+      transparent: true,
+      opacity: 0.9,
+    });
+    super(geometry, material);
+
+    this.target = object;
+    this.renderOrder = 999;
+    this.recomputeLocalBounds();
+    this.update();
+  }
+
+  public recomputeLocalBounds(): void {
+    this.localBox.makeEmpty();
+    this.target.updateMatrixWorld(true);
+    const invWorld = this.target.matrixWorld.clone().invert();
+
+    this.target.traverse((child) => {
+      if ((child as THREE.Mesh).isMesh) {
+        const mesh = child as THREE.Mesh;
+        if (mesh.geometry) {
+          if (!mesh.geometry.boundingBox) mesh.geometry.computeBoundingBox();
+          if (mesh.geometry.boundingBox) {
+            const b = mesh.geometry.boundingBox.clone();
+            const meshToTarget = mesh.matrixWorld.clone().premultiply(invWorld);
+            b.applyMatrix4(meshToTarget);
+            this.localBox.union(b);
+          }
+        }
+      }
+    });
+
+    if (this.localBox.isEmpty()) {
+      this.localBox.set(new THREE.Vector3(-0.5, 0, -0.5), new THREE.Vector3(0.5, 1, 0.5));
+    }
+  }
+
+  public update(): void {
+    this.target.updateMatrixWorld(true);
+    const min = this.localBox.min;
+    const max = this.localBox.max;
+
+    const corners = [
+      new THREE.Vector3(min.x, min.y, min.z),
+      new THREE.Vector3(max.x, min.y, min.z),
+      new THREE.Vector3(max.x, min.y, max.z),
+      new THREE.Vector3(min.x, min.y, max.z),
+      new THREE.Vector3(min.x, max.y, min.z),
+      new THREE.Vector3(max.x, max.y, min.z),
+      new THREE.Vector3(max.x, max.y, max.z),
+      new THREE.Vector3(min.x, max.y, max.z),
+    ];
+
+    const posAttr = this.geometry.attributes.position as THREE.BufferAttribute;
+    const array = posAttr.array as Float32Array;
+
+    for (let i = 0; i < 8; i++) {
+      corners[i]!.applyMatrix4(this.target.matrixWorld);
+      array[i * 3 + 0] = corners[i]!.x;
+      array[i * 3 + 1] = corners[i]!.y;
+      array[i * 3 + 2] = corners[i]!.z;
+    }
+
+    posAttr.needsUpdate = true;
+    this.geometry.computeBoundingSphere();
+  }
+
+  public dispose(): void {
+    this.geometry.dispose();
+    (this.material as THREE.Material).dispose();
+  }
+}
 
 export interface EditorContextMenuState {
   x: number;
@@ -417,6 +509,7 @@ export class RegionEditorScene {
     isStartingRegion: false,
     musicTrack: null as string | null,
   };
+  public titleCamera?: { x: number; y: number; z: number; pitch: number; yaw: number };
 
   private gridSize = DEFAULT_GRID_SIZE;
   private pitch = DEFAULT_PITCH;
@@ -552,7 +645,7 @@ export class RegionEditorScene {
 
   private selectedIds = new Set<string>();
   private selectionGroup = new THREE.Group();
-  private selectionHelpers = new Map<string, THREE.BoxHelper>();
+  private selectionHelpers = new Map<string, OrientedBoxHelper>();
   private nextId = 1;
 
   private isDraggingToPlace = false;
@@ -713,7 +806,7 @@ export class RegionEditorScene {
 
     this.transform = new TransformControls(this.camera, canvas);
     this.transform.setMode("translate");
-    this.transform.setSpace("world");
+    this.transform.setSpace("local");
     this.applyTransformSnap(true);
     this.scene.add(this.transform.getHelper());
     this.transform.addEventListener("dragging-changed", (e) => {
@@ -1839,11 +1932,6 @@ export class RegionEditorScene {
 
   /** Appends one GrassPatch dab; density texture refreshes on the frame loop / mouseup. */
   private paintGrassPatchAt(hitX: number, hitZ: number): void {
-    if (!this.acceptGrassStrokeSample(hitX, hitZ)) return;
-
-    const waterDepth = this.sampleWaterDepth(hitX, hitZ);
-    if (waterDepth > 0.05) return;
-
     // Paint wins over erase: drop exclusions that overlap this dab so grass can
     // grow again in previously erased / empty-looking ground.
     const brushR = this.brushRadius;
@@ -1851,13 +1939,16 @@ export class RegionEditorScene {
       return Math.hypot(ex.localX - hitX, ex.localZ - hitZ) >= brushR + ex.radius;
     });
 
+    const jitterAmount = brushR * 0.15;
+    const jX = hitX + (Math.random() - 0.5) * jitterAmount;
+    const jZ = hitZ + (Math.random() - 0.5) * jitterAmount;
     const id = `grass_${this.nextId++}`;
     this.grassPatches.push({
       id,
-      localX: hitX,
-      localZ: hitZ,
-      radius: brushR,
-      density: Math.min(1, Math.max(0.1, this.brushStrength / 3)),
+      localX: jX,
+      localZ: jZ,
+      radius: brushR * (0.92 + Math.random() * 0.16),
+      density: Math.min(1, Math.max(0.1, (this.brushStrength / 3) * (0.88 + Math.random() * 0.24))),
       seed: hashString(id),
       lengthScale: this.grassLength,
     });
@@ -3793,9 +3884,50 @@ export class RegionEditorScene {
       this.convertSelectedFoliageToResourceNodes();
       return;
     }
+    if (actionId === "realignBounds") {
+      this.realignSelectedBounds();
+      return;
+    }
     if (actionId === "delete") {
       this.deleteSelected();
     }
+  }
+
+  public gizmoSpace: "local" | "world" = "local";
+
+  setGizmoSpace(space: "local" | "world"): void {
+    this.gizmoSpace = space;
+    this.transform.setSpace(space);
+    this.emitStatus(`Transform Handles aligned to: ${space.toUpperCase()} space`);
+  }
+
+  toggleGizmoSpace(): "local" | "world" {
+    const next = this.gizmoSpace === "local" ? "world" : "local";
+    this.setGizmoSpace(next);
+    return next;
+  }
+
+  /** Re-calculates local oriented bounding boxes for selected objects and updates solid collision bounds if applicable. */
+  realignSelectedBounds(): void {
+    if (this.selectedIds.size === 0) return;
+    let count = 0;
+    for (const id of this.selectedIds) {
+      const helper = this.selectionHelpers.get(id);
+      if (helper) {
+        helper.recomputeLocalBounds();
+        helper.update();
+        count++;
+      }
+      const asset = this.assets.get(id);
+      if (asset && asset.solid) {
+        const box = measureSolidBox(asset.obj);
+        if (box) asset.solidBox = box;
+      }
+    }
+    this.bakeSelectionYaw();
+    this.setGizmoSpace("local");
+    this.scheduleSave();
+    this.emitStatus(`Re-aligned bounding box & gizmo handles to LOCAL space for ${count} selected asset${count === 1 ? "" : "s"}`);
   }
 
   /** Convert selected foliage props into gatherable resource nodes (keeps model). */
@@ -4357,6 +4489,7 @@ export class RegionEditorScene {
         }
       }
     }
+    actions.push({ id: "realignBounds", label: "Reset & Align Bounding Box" });
     actions.push({ id: "delete", label: "Delete" });
     const title = a ? a.model.replace(/\.(glb|gltf)$/i, "") : hit.kind;
     this.onContextMenuUi?.({
@@ -4464,7 +4597,7 @@ export class RegionEditorScene {
       e.preventDefault();
       e.stopPropagation();
     } else if (this.waterBrushMode) {
-      const hit = this.terrainHitAt(e);
+      const hit = this.volumeSurfaceHitAt(e) ?? this.terrainHitAt(e);
       if (!hit) return;
       this.isWatering = true;
       this.dragStart = { x: e.clientX, y: e.clientY };
@@ -4472,7 +4605,7 @@ export class RegionEditorScene {
       e.preventDefault();
       e.stopPropagation();
     } else if (this.randomTreeBrushActive) {
-      const hit = this.terrainHitAt(e);
+      const hit = this.volumeSurfaceHitAt(e) ?? this.terrainHitAt(e);
       if (!hit) return;
       this.isTreeBrushing = true;
       this.dragStart = { x: e.clientX, y: e.clientY };
@@ -4481,7 +4614,7 @@ export class RegionEditorScene {
       e.preventDefault();
       e.stopPropagation();
     } else if (this.grassBrushActive) {
-      const hit = this.terrainHitAt(e);
+      const hit = this.volumeSurfaceHitAt(e) ?? this.terrainHitAt(e);
       if (!hit) return;
       this.isGrassBrushing = true;
       this.dragStart = { x: e.clientX, y: e.clientY };
@@ -4492,7 +4625,7 @@ export class RegionEditorScene {
       e.preventDefault();
       e.stopPropagation();
     } else if (this.grassEraseBrushActive) {
-      const hit = this.terrainHitAt(e);
+      const hit = this.volumeSurfaceHitAt(e) ?? this.terrainHitAt(e);
       if (!hit) return;
       this.isErasingGrass = true;
       this.dragStart = { x: e.clientX, y: e.clientY };
@@ -4503,7 +4636,7 @@ export class RegionEditorScene {
       e.preventDefault();
       e.stopPropagation();
     } else if (this.eraseBrushActive) {
-      const hit = this.terrainHitAt(e);
+      const hit = this.volumeSurfaceHitAt(e) ?? this.terrainHitAt(e);
       if (!hit) return;
       this.isErasing = true;
       this.dragStart = { x: e.clientX, y: e.clientY };
@@ -4627,22 +4760,22 @@ export class RegionEditorScene {
       e.preventDefault();
       e.stopPropagation();
     } else if (this.isWatering && this.waterBrushMode) {
-      const hit = this.terrainHitAt(e);
+      const hit = this.volumeSurfaceHitAt(e) ?? this.terrainHitAt(e);
       if (hit) this.dropWaterAt(hit.x, hit.z, this.waterBrushMode);
       e.preventDefault();
       e.stopPropagation();
     } else if (this.isTexturePainting && this.texturePaintMode !== null) {
-      const hit = this.terrainHitAt(e);
+      const hit = this.volumeSurfaceHitAt(e) ?? this.terrainHitAt(e);
       if (hit) this.paintTextureAt(hit.x, hit.z, this.texturePaintMode);
       e.preventDefault();
       e.stopPropagation();
     } else if (this.isTreeBrushing && this.randomTreeBrushActive) {
-      const hit = this.terrainHitAt(e);
+      const hit = this.volumeSurfaceHitAt(e) ?? this.terrainHitAt(e);
       if (hit) this.scatterRandomTreesAt(hit.x, hit.z);
       e.preventDefault();
       e.stopPropagation();
     } else if (this.isGrassBrushing && this.grassBrushActive) {
-      const hit = this.terrainHitAt(e);
+      const hit = this.volumeSurfaceHitAt(e) ?? this.terrainHitAt(e);
       if (hit) {
         this.paintGrassPatchAt(hit.x, hit.z);
         this.flushGrassPreviewWhileBrushing();
@@ -4650,7 +4783,7 @@ export class RegionEditorScene {
       e.preventDefault();
       e.stopPropagation();
     } else if (this.isErasingGrass && this.grassEraseBrushActive) {
-      const hit = this.terrainHitAt(e);
+      const hit = this.volumeSurfaceHitAt(e) ?? this.terrainHitAt(e);
       if (hit) {
         this.eraseGrassAt(hit.x, hit.z);
         this.flushGrassPreviewWhileBrushing();
@@ -4658,7 +4791,7 @@ export class RegionEditorScene {
       e.preventDefault();
       e.stopPropagation();
     } else if (this.isErasing && this.eraseBrushActive) {
-      const hit = this.terrainHitAt(e);
+      const hit = this.volumeSurfaceHitAt(e) ?? this.terrainHitAt(e);
       if (hit) this.eraseAssetsAt(hit.x, hit.z);
       e.preventDefault();
       e.stopPropagation();
@@ -5869,11 +6002,15 @@ export class RegionEditorScene {
       return;
     }
     center.divideScalar(objs.length);
-    if (objs.length === 1) center.copy(objs[0]!.position);
-
-    this.selectionGroup.position.copy(center);
-    this.selectionGroup.rotation.set(0, 0, 0);
     this.selectionGroup.scale.set(1, 1, 1);
+    if (objs.length === 1) {
+      center.copy(objs[0]!.position);
+      this.selectionGroup.position.copy(center);
+      this.selectionGroup.rotation.copy(objs[0]!.rotation);
+    } else {
+      this.selectionGroup.position.copy(center);
+      this.selectionGroup.rotation.set(0, 0, 0);
+    }
 
     for (const [id, helper] of this.selectionHelpers.entries()) {
       if (!this.selectedIds.has(id)) {
@@ -5887,7 +6024,7 @@ export class RegionEditorScene {
       const id = obj.userData.editorId as string;
       if (!this.selectionHelpers.has(id)) {
         const isBarrier = this.barrierVolumes.has(id);
-        const helper = new THREE.BoxHelper(obj, isBarrier ? 0xffe066 : 0x00ffaa);
+        const helper = new OrientedBoxHelper(obj, isBarrier ? 0xffe066 : 0x00ffaa);
         this.scene.add(helper);
         this.selectionHelpers.set(id, helper);
       }
@@ -6736,6 +6873,7 @@ export class RegionEditorScene {
         isStartingRegion: bp.isStartingRegion ?? false,
         musicTrack: bp.musicTrack ?? null,
       };
+      this.titleCamera = bp.titleCamera ? { ...bp.titleCamera } : undefined;
       this.gridSize = bp.gridSize;
       this.pitch = bp.pitch;
       this.heights = [...bp.heights];
@@ -7236,8 +7374,22 @@ export class RegionEditorScene {
       barrierVolumes: barrierVolumes.length > 0 ? barrierVolumes : undefined,
       clouds: clouds.length > 0 ? clouds : undefined,
       terrainVolumes: terrainVolumes.length > 0 ? terrainVolumes : undefined,
+      titleCamera: this.titleCamera ? { ...this.titleCamera } : undefined,
       musicTrack: meta.musicTrack,
     };
+  }
+
+  setTitleCameraFromCurrent(): { x: number; y: number; z: number; pitch: number; yaw: number } {
+    const pos = this.camera.position;
+    const rot = this.camera.rotation;
+    this.titleCamera = {
+      x: Math.round(pos.x * 100) / 100,
+      y: Math.round(pos.y * 100) / 100,
+      z: Math.round(pos.z * 100) / 100,
+      pitch: Math.round(rot.x * 1000) / 1000,
+      yaw: Math.round(rot.y * 1000) / 1000,
+    };
+    return this.titleCamera;
   }
 
   private frame = (): void => {

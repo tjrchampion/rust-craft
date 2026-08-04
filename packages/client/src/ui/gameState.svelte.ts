@@ -11,6 +11,7 @@ import type {
   CharacterAppearance,
   GraphicsSettings,
   AccountSettings,
+  FriendEntry,
 } from "@rustcraft/shared";
 import {
   clampGraphicsSettings,
@@ -44,7 +45,7 @@ function persistGraphicsLocal(settings: GraphicsSettings): void {
 }
 
 export type ChatChannel = "realm" | "region" | "party" | "system";
-export type CharacterTab = "inventory" | "quests" | "achievements" | "spellbook" | "craft" | "party" | "system";
+export type CharacterTab = "inventory" | "quests" | "achievements" | "spellbook" | "craft" | "party" | "social" | "system";
 
 export interface ChatLine {
   channel: ChatChannel;
@@ -136,6 +137,8 @@ class GameState {
   pvpEnabled = $state(false);
   target = $state<TargetInfo | null>(null);
   party = $state<PartyMemberSnap[] | null>(null);
+  friends = $state<FriendEntry[]>([]);
+  playerContextMenu = $state<{ x: number; y: number; playerName: string; playerLevel?: number; playerClass?: string } | null>(null);
   pendingInvite = $state<string | null>(null);
   /** Every currently-connected player in the realm, for the Party tab's
    *  invite list -- distinct from `party`, which is just the current group. */
@@ -144,6 +147,8 @@ class GameState {
   /** id -> display name, for combat-log attribution (not reactive). */
   names = new Map<string, string>();
   questOffer = $state<{ npcId: string; npcName: string; offers: QuestOfferInfo[] } | null>(null);
+  vendorOpen = $state(false);
+  vendorWares = $state<{ npcId: string; vendorName: string; title: string; items: { itemId: string; price: number }[] } | null>(null);
   questLog = $state<QuestLogEntry[]>([]);
   achievements = $state<AchievementSnap[]>([]);
   untrackedQuests = $state<Set<string>>(new Set(typeof localStorage !== "undefined" ? JSON.parse(localStorage.getItem("rc:untracked-quests") ?? "[]") : []));
@@ -386,6 +391,7 @@ class GameState {
     this.pvpEnabled = false;
     this.target = null;
     this.party = null;
+    this.friends = [];
     this.pendingInvite = null;
     this.roster = [];
     this.combatLog = [];
@@ -406,6 +412,14 @@ class GameState {
     this.loadingProgress = 0;
     this.loadingMessage = "";
   }
+}
+
+export function parseCoins(totalCopper: number): { gold: number; silver: number; copper: number } {
+  const copperVal = Math.max(0, Math.floor(totalCopper || 0));
+  const gold = Math.floor(copperVal / 10000);
+  const silver = Math.floor((copperVal % 10000) / 100);
+  const copper = copperVal % 100;
+  return { gold, silver, copper };
 }
 
 export const game = new GameState();

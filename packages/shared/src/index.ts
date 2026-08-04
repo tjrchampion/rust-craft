@@ -31,3 +31,4 @@ export * from "./content/houseGen";
 export * from "./content/castleGen";
 export * from "./content/fantasticBuildingGen";
 export * from "./content/appearance";
+export * from "./content/vendors";

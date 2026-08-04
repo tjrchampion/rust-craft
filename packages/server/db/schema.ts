@@ -70,6 +70,8 @@ export const characters = pgTable(
     hunger: real("hunger").notNull().default(100),
     thirst: real("thirst").notNull().default(100),
     learnedSpells: jsonb("learned_spells").notNull().default([]).$type<string[]>(),
+    friends: jsonb("friends").notNull().default([]).$type<string[]>(),
+    coins: integer("coins").notNull().default(100),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     lastSeen: timestamp("last_seen", { withTimezone: true }).notNull().defaultNow(),
   },

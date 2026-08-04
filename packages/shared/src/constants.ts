@@ -76,10 +76,10 @@ export const HP_PER_LEVEL = 5;
 export const MANA_PER_LEVEL = 5;
 export const MANA_REGEN_PER_S = 2.5;
 export const SIT_MANA_REGEN_MULT = 4; // resting at a campfire
-export const HP_REGEN_PER_S = 0.5; // only while fed & watered
-export const HUNGER_DECAY_PER_S = 100 / (25 * 60); // empty in ~25 min
-export const THIRST_DECAY_PER_S = 100 / (18 * 60); // empty in ~18 min
-export const STARVATION_DPS = 1.5; // hp/s while a vital is at 0
+export const HP_REGEN_PER_S = 1.0; // out of combat hp regen
+export const HUNGER_DECAY_PER_S = 0; // disabled (survival hunger removed)
+export const THIRST_DECAY_PER_S = 0; // disabled (survival thirst removed)
+export const STARVATION_DPS = 0; // disabled
 export const DRINK_RESTORE = 45; // drinking from open water
 export const WATER_PROXIMITY = 3; // meters from water to drink
 

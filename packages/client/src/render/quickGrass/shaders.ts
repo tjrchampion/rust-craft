@@ -69,12 +69,33 @@ uniform vec2 uMapTexel; // 1/gridSize, 1/gridSize
 float sampleHeight(vec2 xz){
   vec2 uv = (xz - uMapRect.xy) / uMapRect.zw;
   uv = clamp(uv, vec2(0.001), vec2(0.999));
-  return texture2D(uHeightMap, uv).r;
+  vec2 texelSize = uMapTexel;
+  vec2 coord = uv / texelSize - vec2(0.5);
+  vec2 f = fract(coord);
+  vec2 i = (floor(coord) + vec2(0.5)) * texelSize;
+
+  float h00 = texture2D(uHeightMap, i).r;
+  float h10 = texture2D(uHeightMap, i + vec2(texelSize.x, 0.0)).r;
+  float h01 = texture2D(uHeightMap, i + vec2(0.0, texelSize.y)).r;
+  float h11 = texture2D(uHeightMap, i + texelSize).r;
+
+  return mix(mix(h00, h10, f.x), mix(h01, h11, f.x), f.y);
 }
+
 float sampleDensity(vec2 xz){
   vec2 uv = (xz - uMapRect.xy) / uMapRect.zw;
   uv = clamp(uv, vec2(0.001), vec2(0.999));
-  return texture2D(uDensityMap, uv).r;
+  vec2 texelSize = uMapTexel;
+  vec2 coord = uv / texelSize - vec2(0.5);
+  vec2 f = fract(coord);
+  vec2 i = (floor(coord) + vec2(0.5)) * texelSize;
+
+  float d00 = texture2D(uDensityMap, i).r;
+  float d10 = texture2D(uDensityMap, i + vec2(texelSize.x, 0.0)).r;
+  float d01 = texture2D(uDensityMap, i + vec2(0.0, texelSize.y)).r;
+  float d11 = texture2D(uDensityMap, i + texelSize).r;
+
+  return mix(mix(d00, d10, f.x), mix(d01, d11, f.x), f.y);
 }
 `;
 
@@ -116,7 +137,7 @@ export const GRASS_VS = COMMON + SKY + `
 uniform vec2  uGrassSize;     // width, height
 uniform vec4  uGrassParams;   // segments, vertices, heightVariation, tipTaper
 uniform vec2  uGrassDraw;     // detailDistance, drawDistance
-uniform float uPatchSize;     // meters; used to scramble + overlap blade slots
+uniform float uPatchSize;     // meters; used to align blade slots
 uniform vec4  uWind;          // strength, speed, gustScale, drift
 uniform vec3  uPlayerPos;
 uniform vec2  uPush;          // radius, strength
@@ -138,16 +159,23 @@ varying vec4 vGrassParams;   // heightPercent, worldY, lodBlend, xSide
 varying vec3 vWorldPosition;
 
 void main(){
-  // Instanced position.xy is only a per-blade seed. Scramble by patch world
-  // origin so every 10 m cell does not tile the same jittered layout (visible
-  // grid). Overlap slightly past patchSize so neighbouring cells seal seams.
+  // Deriving blade position from continuous world coordinates guarantees that
+  // blade placements, heights, and tilts are 100% seamless across patch boundaries.
   vec3 patchOrigin = vec3(modelMatrix[3][0], modelMatrix[3][1], modelMatrix[3][2]);
-  vec2 slot = hash22(position.xy * 47.13 + patchOrigin.xz * 0.173);
-  float place = uPatchSize * 1.18;
-  vec3 grassOffset = vec3((slot.x - 0.5) * place, 0.0, (slot.y - 0.5) * place);
-  vec3 bladeWorld = (modelMatrix * vec4(grassOffset, 1.0)).xyz;
+  vec2 W_nominal = patchOrigin.xz + position.xy;
+
+  // Multi-frequency organic cell jitter breaks out of rigid grid rows completely
+  vec2 cellIndex = floor(W_nominal * 3.8);
+  vec2 cellJitter = (hash22(cellIndex) - vec2(0.5)) * 0.65;
+  vec2 organicNoise = vec2(
+    noise12(W_nominal * 0.7),
+    noise12(W_nominal * 0.7 + vec2(17.3, 31.7))
+  ) * 0.35;
+  vec2 seamlessWorldXZ = W_nominal + cellJitter + organicNoise;
+
+  vec3 bladeWorld = vec3(seamlessWorldXZ.x, 0.0, seamlessWorldXZ.y);
   float dens = sampleDensity(bladeWorld.xz);
-  // Tiny lift avoids z-fight shimmer against the terrain mesh.
+  // Lift slightly above terrain heightmap to avoid z-fighting
   bladeWorld.y = sampleHeight(bladeWorld.xz) + 0.04;
 
   vec4 h = hash42(bladeWorld.xz);
@@ -157,9 +185,13 @@ void main(){
 
   float randomAngle  = h.x * 2.0 * PI;
   float randomShade  = remap(h.y, 0.0, 1.0, 1.0 - 0.5 * uColourVar, 1.0);
+  float densFactor   = smoothstep(0.001, 0.06, dens) * dens;
+  
+  // Organic meadow clumping (natural height & width variation)
+  float clumpNoise = noise12(bladeWorld.xz * 0.28) * 0.5 + 0.5;
+  float heightClump = mix(0.72, 1.28, clumpNoise);
   float randomHeight = remap(h.z, 0.0, 1.0, 1.0 - uGrassParams.z * 0.55, 1.0 + uGrassParams.z * 0.45)
-                       * (1.0 - fadeOut) * dens;
-  if (dens < 0.02) randomHeight = 0.0;
+                       * heightClump * (1.0 - fadeOut) * densFactor;
   float randomLean   = remap(h.w, 0.0, 1.0, 0.15, 1.0) * uCurve;
 
   float SEGMENTS = uGrassParams.x;
@@ -220,7 +252,8 @@ void main(){
   vec3 vpos = vec3(x, y, 0.0);
   vpos = rotateX(curveAmount) * vpos;
   vpos = grassMat * vpos;
-  vpos += grassOffset;
+  vpos.x += (seamlessWorldXZ.x - patchOrigin.x);
+  vpos.z += (seamlessWorldXZ.y - patchOrigin.z);
   vpos.y += bladeWorld.y;
 
   // ---- colour ----

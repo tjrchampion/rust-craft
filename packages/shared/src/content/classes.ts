@@ -30,7 +30,7 @@ export const CLASSES: Record<ClassId, ClassTemplate> = {
     description: "A frontline fighter who trades spells for raw steel and grit.",
     resourceLabel: "Stamina",
     baseStats: { power: 8, armor: 10, agility: 4, vitality: 8 },
-    startingSpells: ["rend", "charge", "heal", "whirlwind", "execute", "shield_wall"],
+    startingSpells: ["attack", "rend", "charge", "heal", "whirlwind", "execute", "shield_wall"],
     startingGear: [{ slot: "weapon", itemId: "iron_sword" }],
   },
   mage: {
@@ -39,7 +39,7 @@ export const CLASSES: Record<ClassId, ClassTemplate> = {
     description: "Channels elemental power at range, fragile up close.",
     resourceLabel: "Mana",
     baseStats: { power: 10, armor: 2, agility: 3, vitality: 4 },
-    startingSpells: ["firebolt", "frostbolt", "heal", "flame_nova", "arcane_blast", "blizzard"],
+    startingSpells: ["attack", "firebolt", "frostbolt", "heal", "flame_nova", "arcane_blast", "blizzard"],
     startingGear: [{ slot: "weapon", itemId: "apprentice_staff" }],
   },
   rogue: {
@@ -48,7 +48,7 @@ export const CLASSES: Record<ClassId, ClassTemplate> = {
     description: "Fast and precise, striking hardest from the shadows.",
     resourceLabel: "Energy",
     baseStats: { power: 7, armor: 4, agility: 10, vitality: 5 },
-    startingSpells: ["backstab", "poison_strike", "heal", "fan_of_knives", "eviscerate", "garrote"],
+    startingSpells: ["attack", "backstab", "poison_strike", "heal", "fan_of_knives", "eviscerate", "garrote"],
     startingGear: [{ slot: "weapon", itemId: "twin_daggers" }],
   },
   cleric: {
@@ -57,7 +57,7 @@ export const CLASSES: Record<ClassId, ClassTemplate> = {
     description: "A healer who mends allies and smites the wicked.",
     resourceLabel: "Mana",
     baseStats: { power: 8, armor: 5, agility: 3, vitality: 6 },
-    startingSpells: ["heal", "smite", "circle_of_healing", "holy_fire", "renew"],
+    startingSpells: ["attack", "heal", "smite", "circle_of_healing", "holy_fire", "renew"],
     startingGear: [{ slot: "weapon", itemId: "blessed_mace" }],
   },
   ranger: {
@@ -66,7 +66,7 @@ export const CLASSES: Record<ClassId, ClassTemplate> = {
     description: "A keen-eyed hunter who strikes from afar with bow and blade.",
     resourceLabel: "Focus",
     baseStats: { power: 9, armor: 3, agility: 9, vitality: 5 },
-    startingSpells: ["quick_shot", "piercing_shot", "heal", "volley", "aimed_shot", "serpent_sting", "beast_mastery"],
+    startingSpells: ["attack", "quick_shot", "piercing_shot", "heal", "volley", "aimed_shot", "serpent_sting", "beast_mastery"],
     startingGear: [{ slot: "weapon", itemId: "hunting_bow" }],
   },
   druid: {
@@ -75,7 +75,7 @@ export const CLASSES: Record<ClassId, ClassTemplate> = {
     description: "A shaper of growth and decay, mending allies and calling down nature's wrath.",
     resourceLabel: "Harmony",
     baseStats: { power: 8, armor: 4, agility: 5, vitality: 6 },
-    startingSpells: ["wrath", "regrowth", "heal", "thorn_burst", "moonfire", "entangling_roots"],
+    startingSpells: ["attack", "wrath", "regrowth", "heal", "thorn_burst", "moonfire", "entangling_roots"],
     startingGear: [{ slot: "weapon", itemId: "grove_staff" }],
   },
   paladin: {
@@ -84,7 +84,7 @@ export const CLASSES: Record<ClassId, ClassTemplate> = {
     description: "A holy knight who smites foes up close and shields allies with faith.",
     resourceLabel: "Faith",
     baseStats: { power: 8, armor: 8, agility: 4, vitality: 9 },
-    startingSpells: ["crusader_strike", "divine_favor", "heal", "consecration", "hammer_of_wrath", "holy_shield"],
+    startingSpells: ["attack", "crusader_strike", "divine_favor", "heal", "consecration", "hammer_of_wrath", "holy_shield"],
     startingGear: [{ slot: "weapon", itemId: "sunforged_blade" }],
   },
   berserker: {
@@ -93,7 +93,7 @@ export const CLASSES: Record<ClassId, ClassTemplate> = {
     description: "A gigantic barbarian variant that channels fury into crushing strikes.",
     resourceLabel: "Rage",
     baseStats: { power: 10, armor: 6, agility: 3, vitality: 10 },
-    startingSpells: ["rend", "charge", "heal", "whirlwind", "execute", "recklessness"],
+    startingSpells: ["attack", "rend", "charge", "heal", "whirlwind", "execute", "recklessness"],
     startingGear: [{ slot: "weapon", itemId: "axe_2handed_large" }],
   },
   assassin: {
@@ -102,7 +102,7 @@ export const CLASSES: Record<ClassId, ClassTemplate> = {
     description: "A hooded rogue variant specializing in poison and silent critical strikes.",
     resourceLabel: "Energy",
     baseStats: { power: 8, armor: 4, agility: 11, vitality: 5 },
-    startingSpells: ["backstab", "poison_strike", "heal", "fan_of_knives", "eviscerate", "garrote"],
+    startingSpells: ["attack", "backstab", "poison_strike", "heal", "fan_of_knives", "eviscerate", "garrote"],
     startingGear: [{ slot: "weapon", itemId: "dagger" }],
   },
   engineer: {
@@ -111,7 +111,7 @@ export const CLASSES: Record<ClassId, ClassTemplate> = {
     description: "A master mechanic that repairs allies and builds tech in combat.",
     resourceLabel: "Steam",
     baseStats: { power: 8, armor: 8, agility: 5, vitality: 7 },
-    startingSpells: ["steam_blast", "repair_pulse", "heal", "steam_focus", "overcharge", "shield_wall"],
+    startingSpells: ["attack", "steam_blast", "repair_pulse", "heal", "steam_focus", "overcharge", "shield_wall"],
     startingGear: [{ slot: "weapon", itemId: "wrench" }],
   },
 };
@@ -122,20 +122,22 @@ export const CLASS_IDS = Object.keys(CLASSES) as ClassId[];
 export const STARTING_HOTBAR_ATTACK_SLOT = 0;
 /** Hotbar slot for Heal (keyboard `Q`). */
 export const STARTING_HOTBAR_HEAL_SLOT = 6;
+/** Hotbar slot for default Attack (keyboard `X`). */
+export const STARTING_HOTBAR_X_ATTACK_SLOT = 8;
 
 /**
  * Default hotbar loadout at character creation: primary combat spell on `1`,
- * Heal on `Q`. Cleric's list leads with Heal — their first non-heal (Smite)
- * still goes on `1`.
+ * Heal on `Q`, default Attack spell on `X`.
  */
 export function startingHotbarLoadout(
   template: ClassTemplate,
 ): { slot: number; spellId: string }[] {
-  const attack = template.startingSpells.find((id) => id !== "heal");
+  const attack = template.startingSpells.find((id) => id !== "heal" && id !== "attack");
   const heal = template.startingSpells.find((id) => id === "heal");
   const out: { slot: number; spellId: string }[] = [];
   if (attack) out.push({ slot: STARTING_HOTBAR_ATTACK_SLOT, spellId: attack });
   if (heal) out.push({ slot: STARTING_HOTBAR_HEAL_SLOT, spellId: heal });
+  out.push({ slot: STARTING_HOTBAR_X_ATTACK_SLOT, spellId: "attack" });
   return out;
 }
 

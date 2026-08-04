@@ -1,6 +1,6 @@
-export const wikiMarkdown = `# RustCraft Game Wiki
+export const wikiMarkdown = `# Shadows of Eldor Game Wiki
 
-Welcome to the RustCraft Wiki! Below is the comprehensive guide to all systems, features, classes, and recipes in the realm.
+Welcome to the Shadows of Eldor Wiki! Below is the comprehensive guide to all systems, features, classes, and recipes in the realm.
 
 ---
 

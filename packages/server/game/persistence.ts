@@ -37,6 +37,8 @@ export interface PersistedPlayer {
   hunger: number;
   thirst: number;
   learnedSpells: string[];
+  friends: string[];
+  coins: number;
   inventory: InvItem[];
   questProgress: QuestProgressEntry[];
   achievements: AchievementProgressEntry[];
@@ -77,7 +79,9 @@ export async function loadPlayer(characterId: string): Promise<PersistedPlayer |
     mana: character.mana,
     hunger: character.hunger,
     thirst: character.thirst,
-    learnedSpells: character.learnedSpells,
+    learnedSpells: character.learnedSpells ?? [],
+    friends: character.friends ?? [],
+    coins: character.coins ?? 100,
     inventory: items.map((i) => ({
       container: i.container as InvItem["container"],
       slot: i.slot,
@@ -114,6 +118,8 @@ export async function savePlayer(p: PersistedPlayer): Promise<void> {
         hunger: p.hunger,
         thirst: p.thirst,
         learnedSpells: p.learnedSpells,
+        friends: p.friends,
+        coins: p.coins,
         lastSeen: new Date(),
       })
       .where(eq(schema.characters.id, p.id));

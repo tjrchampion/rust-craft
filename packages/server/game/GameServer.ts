@@ -72,6 +72,8 @@ import {
   hash2,
   itemDef,
   RECIPES,
+  VENDORS,
+  vendorDef,
   spellDef,
   mobDef,
   auraDef,
@@ -159,6 +161,8 @@ import {
   type RegionCollision,
   type PlacedCollider,
 } from "@rustcraft/shared/collision";
+import { eq } from "drizzle-orm";
+import { db, schema } from "../db/client";
 import {
   getServerCollisionMesh,
   hasServerCollisionMesh,
@@ -261,6 +265,8 @@ interface PlayerState {
   xp: number;
   level: number;
   learnedSpells: string[];
+  friends: string[];
+  coins: number;
   inventory: InvItem[];
   selectedSlot: number;
   dead: boolean;
@@ -453,7 +459,7 @@ export class GameServer {
   // Persists until the leader explicitly disbands it -- an ordinary member
   // leaving just removes them; if the leader leaves, leadership passes to
   // another member rather than ending the party (see leaveParty).
-  private parties = new Map<string, { leaderId: string; members: Set<string> }>();
+  private parties = new Map<string, { leaderId: string; members: Set<string>; tags: Map<string, string> }>();
   private partySeq = 0;
   private dungeonPortals = new Map<string, PoiSpec>();
   private dungeonInstances = new Map<string, DungeonInstance>();
@@ -682,6 +688,8 @@ export class GameServer {
       learnedSpells: [
         ...new Set([...persisted.learnedSpells, ...classDef((persisted.classId as ClassId) ?? "warrior").startingSpells]),
       ],
+      friends: persisted.friends ?? [],
+      coins: persisted.coins ?? 100,
       inventory: persisted.inventory,
       selectedSlot: 0,
       dead,
@@ -734,6 +742,12 @@ export class GameServer {
     this.players.set(player.id, player);
     this.peerToChar.set(peer.id, player.id);
     this.broadcastRoster();
+    this.sendFriendListUpdate(player);
+    for (const other of this.players.values()) {
+      if (other.id !== player.id && other.friends.some((f) => f.toLowerCase() === player.name.toLowerCase())) {
+        this.sendFriendListUpdate(other);
+      }
+    }
 
     // Disconnecting doesn't remove you from your party (see leaveParty) --
     // reconnecting just needs to re-link this fresh PlayerState back to
@@ -993,7 +1007,10 @@ export class GameServer {
         this.handlePvpToggle(player, parsed.enabled);
         break;
       case "party":
-        this.handleParty(player, parsed.action, parsed.name);
+        this.handleParty(player, parsed.action, parsed.name, parsed.tag);
+        break;
+      case "friend":
+        this.handleFriend(player, parsed.action, parsed.targetName);
         break;
       case "mount":
         this.handleMount(player);
@@ -1018,6 +1035,9 @@ export class GameServer {
         break;
       case "dungeon":
         this.handleDungeonLeave(player);
+        break;
+      case "vendor":
+        this.handleVendorAction(player, parsed);
         break;
     }
   }
@@ -1340,6 +1360,20 @@ export class GameServer {
       const npcW = regionLocalToWorld(bp, rNpc.localX, rNpc.localZ);
       if (dist2D(player.move.x, player.move.z, npcW.x, npcW.z) > 8) return;
 
+      // ---- Vendor NPCs: open the merchant window ----
+      if (rNpc.vendorId) {
+        const vDef = vendorDef(rNpc.vendorId);
+        if (!vDef) return;
+        this.sendTo(player.peer, {
+          t: "vendorStock",
+          npcId: rNpc.vendorId,
+          vendorName: rNpc.name,
+          title: vDef.title,
+          items: vDef.items,
+        } as any);
+        return;
+      }
+
       const offers: QuestOfferInfo[] = [];
 
       for (const q of rNpc.quests ?? []) {
@@ -1512,6 +1546,8 @@ export class GameServer {
 
       player.questProgress.set(quest.id, { status: "completed", progress: quest.objectiveCount });
       this.grantXp(player, quest.rewardXp);
+      const coinReward = Math.max(50, quest.rewardXp * 2 + (quest.minLevel || 1) * 100);
+      player.coins += coinReward;
       const rewards: { itemId: string; qty: number }[] = [];
       for (const item of quest.rewardItems) {
         addItem(player.inventory, item.itemId, item.qty);
@@ -1519,7 +1555,14 @@ export class GameServer {
       }
       player.dirty = true;
       this.sendInventory(player);
+      this.sendSelf(player);
       this.sendTo(player.peer, { t: "questLog", quests: this.questLogFor(player) });
+      this.sendTo(player.peer, {
+        t: "chat",
+        channel: "system",
+        from: "system",
+        text: `Quest completed! Received +${this.formatCoinsText(coinReward)}.`,
+      });
       this.checkAndUnlockAchievements(player);
       this.sendTo(player.peer, {
         t: "questComplete",
@@ -1534,6 +1577,107 @@ export class GameServer {
         mobId: `quest_${quest.id}`,
         mobType: quest.name,
         items: rewards,
+      });
+    }
+  }
+
+  private formatCoinsText(copper: number): string {
+    const g = Math.floor(copper / 10000);
+    const s = Math.floor((copper % 10000) / 100);
+    const c = copper % 100;
+    const parts: string[] = [];
+    if (g > 0) parts.push(`${g}g`);
+    if (s > 0) parts.push(`${s}s`);
+    if (c > 0 || parts.length === 0) parts.push(`${c}c`);
+    return parts.join(" ");
+  }
+
+  private handleVendorAction(
+    player: PlayerState,
+    msg: { action: "buy" | "sell" | "browse"; npcId: string; itemId?: string; container?: any; slot?: number; qty?: number },
+  ): void {
+    const vendor = vendorDef(msg.npcId) ?? VENDORS.vendor_merchant;
+
+    if (msg.action === "browse") {
+      this.sendTo(player.peer, {
+        t: "vendorStock",
+        npcId: vendor.id,
+        vendorName: vendor.name,
+        title: vendor.title,
+        items: vendor.items,
+      } as any);
+      return;
+    }
+
+    if (msg.action === "buy") {
+      const itemId = msg.itemId;
+      if (!itemId) return;
+      const ware = vendor.items.find((i) => i.itemId === itemId);
+      const unitPrice = ware ? ware.price : (itemDef(itemId).vendorPrice ?? 100);
+      const qty = Math.max(1, msg.qty ?? 1);
+      const totalPrice = unitPrice * qty;
+
+      if (player.coins < totalPrice) {
+        this.sendEvent(player, { t: "event", kind: "error", message: `Not enough SoEC coins! Need ${this.formatCoinsText(totalPrice)}.` });
+        return;
+      }
+
+      const overflow = addItem(player.inventory, itemId, qty);
+      if (overflow === qty) {
+        this.sendEvent(player, { t: "event", kind: "error", message: "Inventory is full!" });
+        return;
+      }
+
+      const purchasedQty = qty - overflow;
+      const finalCost = unitPrice * purchasedQty;
+      player.coins -= finalCost;
+      player.dirty = true;
+      this.sendInventory(player);
+      this.sendSelf(player);
+
+      const itemName = itemDef(itemId).name;
+      this.sendTo(player.peer, {
+        t: "chat",
+        channel: "system",
+        from: "system",
+        text: `Bought ${purchasedQty}x ${itemName} for ${this.formatCoinsText(finalCost)}.`,
+      });
+      return;
+    }
+
+    if (msg.action === "sell") {
+      const containerName = msg.container ?? "inventory";
+      const slotIndex = msg.slot ?? 0;
+      const targetContainer = player.inventory;
+      const item = targetContainer.find((i) => i.container === containerName && i.slot === slotIndex);
+
+      if (!item) {
+        this.sendEvent(player, { t: "event", kind: "error", message: "Item not found in inventory." });
+        return;
+      }
+
+      const def = itemDef(item.itemId);
+      const basePrice = def.vendorPrice ?? 40;
+      const sellUnitPrice = Math.max(1, Math.floor(basePrice * 0.25));
+      const qtyToSell = Math.min(item.qty, msg.qty ?? item.qty);
+      const totalEarned = sellUnitPrice * qtyToSell;
+
+      // Remove qtyToSell from the slot
+      item.qty -= qtyToSell;
+      if (item.qty <= 0) {
+        const idx = targetContainer.indexOf(item);
+        if (idx >= 0) targetContainer.splice(idx, 1);
+      }
+      player.coins += totalEarned;
+      player.dirty = true;
+      this.sendInventory(player);
+      this.sendSelf(player);
+
+      this.sendTo(player.peer, {
+        t: "chat",
+        channel: "system",
+        from: "system",
+        text: `Sold ${qtyToSell}x ${def.name} for +${this.formatCoinsText(totalEarned)}.`,
       });
     }
   }
@@ -1710,8 +1854,9 @@ export class GameServer {
 
   private handleParty(
     player: PlayerState,
-    action: "invite" | "accept" | "decline" | "leave" | "disband",
+    action: "invite" | "accept" | "decline" | "leave" | "disband" | "tag",
     name?: string,
+    tag?: string,
   ): void {
     switch (action) {
       case "invite": {
@@ -1751,7 +1896,7 @@ export class GameServer {
         let partyId = inviter.partyId;
         if (!partyId) {
           partyId = `party_${++this.partySeq}`;
-          this.parties.set(partyId, { leaderId: inviter.id, members: new Set([inviter.id]) });
+          this.parties.set(partyId, { leaderId: inviter.id, members: new Set([inviter.id]), tags: new Map() });
           inviter.partyId = partyId;
         }
         const party = this.parties.get(partyId)!;
@@ -1805,7 +1950,138 @@ export class GameServer {
       case "leave":
         this.leaveParty(player, false);
         break;
+      case "tag": {
+        const partyId = player.partyId;
+        if (!partyId) return;
+        const party = this.parties.get(partyId);
+        if (!party) return;
+        if (party.leaderId !== player.id) {
+          this.sendEvent(player, { t: "event", kind: "error", message: "Only party leader can assign tags" });
+          return;
+        }
+        const targetName = name ?? "";
+        const targetPlayer = [...this.players.values()].find((p) => p.name.toLowerCase() === targetName.toLowerCase());
+        if (!targetPlayer || !party.members.has(targetPlayer.id)) return;
+
+        if (tag === "clear" || !tag) {
+          party.tags.delete(targetPlayer.id);
+        } else {
+          party.tags.set(targetPlayer.id, tag);
+        }
+        this.broadcastPartyState(partyId);
+        break;
+      }
     }
+  }
+
+  private async handleFriend(
+    player: PlayerState,
+    action: "add" | "accept" | "decline" | "remove",
+    targetName: string,
+  ): Promise<void> {
+    const trimmedTarget = targetName.trim();
+    if (!trimmedTarget || trimmedTarget.toLowerCase() === player.name.toLowerCase()) return;
+
+    if (action === "add") {
+      // 1. Add target to initiating player's friends list
+      if (!player.friends.some((f) => f.toLowerCase() === trimmedTarget.toLowerCase())) {
+        player.friends.push(trimmedTarget);
+        this.savePlayerFriends(player);
+        this.sendTo(player.peer, {
+          t: "chat",
+          channel: "system",
+          from: "system",
+          text: `Added ${trimmedTarget} to your friends list.`,
+        });
+      }
+      this.sendFriendListUpdate(player);
+
+      // 2. Notify target player if online & add reciprocating friend entry
+      const onlineTarget = [...this.players.values()].find((p) => p.name.toLowerCase() === trimmedTarget.toLowerCase());
+      if (onlineTarget) {
+        if (!onlineTarget.friends.some((f) => f.toLowerCase() === player.name.toLowerCase())) {
+          onlineTarget.friends.push(player.name);
+          this.savePlayerFriends(onlineTarget);
+        }
+        this.sendTo(onlineTarget.peer, {
+          t: "chat",
+          channel: "system",
+          from: "system",
+          text: `🌟 ${player.name} added you as a friend!`,
+        });
+        this.sendEvent(onlineTarget, {
+          t: "event",
+          kind: "info",
+          message: `${player.name} added you as a friend!`,
+        });
+        this.sendFriendListUpdate(onlineTarget);
+      } else {
+        // Target is offline: update their DB record so they see friendship when logging in
+        const dbChar = await db.query.characters.findFirst({
+          where: eq(schema.characters.name, trimmedTarget),
+        }).catch(() => null);
+        if (dbChar) {
+          const currentFriends: string[] = (dbChar.friends as string[]) ?? [];
+          if (!currentFriends.some((f) => f.toLowerCase() === player.name.toLowerCase())) {
+            currentFriends.push(player.name);
+            await db
+              .update(schema.characters)
+              .set({ friends: currentFriends })
+              .where(eq(schema.characters.id, dbChar.id))
+              .catch(() => {});
+          }
+        }
+      }
+    } else if (action === "remove") {
+      player.friends = player.friends.filter((f) => f.toLowerCase() !== trimmedTarget.toLowerCase());
+      this.savePlayerFriends(player);
+      this.sendTo(player.peer, {
+        t: "chat",
+        channel: "system",
+        from: "system",
+        text: `Removed ${trimmedTarget} from your friends list.`,
+      });
+      this.sendFriendListUpdate(player);
+
+      const onlineTarget = [...this.players.values()].find((p) => p.name.toLowerCase() === trimmedTarget.toLowerCase());
+      if (onlineTarget) {
+        onlineTarget.friends = onlineTarget.friends.filter((f) => f.toLowerCase() !== player.name.toLowerCase());
+        this.savePlayerFriends(onlineTarget);
+        this.sendFriendListUpdate(onlineTarget);
+      }
+    }
+  }
+
+  private savePlayerFriends(player: PlayerState): void {
+    void db
+      .update(schema.characters)
+      .set({ friends: player.friends })
+      .where(eq(schema.characters.id, player.id))
+      .catch(() => {});
+  }
+
+  private sendFriendListUpdate(player: PlayerState): void {
+    const list: FriendEntry[] = player.friends.map((name) => {
+      const onlineTarget = [...this.players.values()].find((p) => p.name.toLowerCase() === name.toLowerCase());
+      if (onlineTarget) {
+        return {
+          id: onlineTarget.id,
+          name: onlineTarget.name,
+          className: onlineTarget.classId,
+          level: onlineTarget.level,
+          online: true,
+          regionName: this.regionIdFromInstance(onlineTarget.instanceId) ?? onlineTarget.lastRegionId ?? "Overworld",
+        };
+      }
+      return {
+        id: `offline_${name}`,
+        name,
+        className: "warrior",
+        level: 1,
+        online: false,
+      };
+    });
+    this.sendTo(player.peer, { t: "friends", friends: list });
   }
 
   /** A regular member leaving just removes them -- the party persists for
@@ -1864,6 +2140,9 @@ export class GameServer {
     if (!party) return null;
     return [...party.members].map((id) => {
       const member = this.players.get(id);
+      const isLeader = id === party.leaderId;
+      const assignedTag = party.tags.get(id);
+      const tag = isLeader ? "crown" : assignedTag;
       return member
         ? {
             id: member.id,
@@ -1872,11 +2151,12 @@ export class GameServer {
             hp: member.hp,
             maxHp: this.maxHp(member),
             online: true,
-            leader: id === party.leaderId,
+            leader: isLeader,
+            tag,
             x: member.move.x,
             z: member.move.z,
           }
-        : { id, name: "…", level: 0, hp: 0, maxHp: 1, online: false, leader: id === party.leaderId, x: 0, z: 0 };
+        : { id, name: "…", level: 0, hp: 0, maxHp: 1, online: false, leader: isLeader, tag, x: 0, z: 0 };
     });
   }
 
@@ -3805,9 +4085,19 @@ export class GameServer {
         });
       }
     }
+    // Grant SoEC coins scaled by level (100c × level, so level 10 = 10s, level 50 = 5g)
+    const coinBonus = chest.level * 100;
+    player.coins += coinBonus;
+    this.sendTo(player.peer, {
+      t: "chat",
+      channel: "system",
+      from: "system",
+      text: `🌟 Level-up bonus: +${this.formatCoinsText(coinBonus)} SoEC`,
+    });
     player.dirty = true;
     this.invalidatePlayerCaches(player);
     this.sendInventory(player);
+    this.sendSelf(player);
     this.sendLevelRewards(player);
   }
 
@@ -4082,9 +4372,8 @@ export class GameServer {
   }
 
   private tickVitals(player: PlayerState, now: number): void {
-    if (player.dead) return;
-    player.hunger = clamp(player.hunger - HUNGER_DECAY_PER_S * TICK_DT, 0, 100);
-    player.thirst = clamp(player.thirst - THIRST_DECAY_PER_S * TICK_DT, 0, 100);
+    player.hunger = 100;
+    player.thirst = 100;
     const manaMult = player.sitting !== null ? SIT_MANA_REGEN_MULT : 1;
     player.mana = clamp(player.mana + MANA_REGEN_PER_S * manaMult * TICK_DT, 0, this.maxMana(player));
 
@@ -4104,17 +4393,7 @@ export class GameServer {
       player.oxygen = clamp(player.oxygen + OXYGEN_REGEN_PER_S * TICK_DT, 0, MAX_OXYGEN);
     }
 
-    if (player.hunger <= 0 || player.thirst <= 0) {
-      player.hp -= STARVATION_DPS * TICK_DT;
-      if (player.hp <= 0) {
-        player.hp = 0;
-        player.dead = true;
-        player.mount = null;
-        this.sendEvent(player, { t: "event", kind: "death" });
-        this.broadcastChat("system", `${player.name} starved to death.`);
-        if (player.instanceId) this.checkDungeonWipe(player.instanceId);
-      }
-    } else if (player.hunger > 30 && player.thirst > 30) {
+    if (!player.dead) {
       player.hp = clamp(player.hp + HP_REGEN_PER_S * TICK_DT, 0, this.maxHp(player));
     }
 
@@ -5272,6 +5551,7 @@ export class GameServer {
       xp: player.xp,
       xpNext: xpForLevel(player.level),
       level: player.level,
+      coins: player.coins,
       dead: player.dead,
       ackSeq: player.lastAckSeq,
       castingSpell: player.casting?.spellId ?? null,
@@ -5511,6 +5791,8 @@ export class GameServer {
       hunger: player.hunger,
       thirst: player.thirst,
       learnedSpells: player.learnedSpells,
+      friends: player.friends,
+      coins: player.coins,
       inventory: player.inventory,
       questProgress: [...player.questProgress.entries()].map(([questId, e]) => ({
         questId,

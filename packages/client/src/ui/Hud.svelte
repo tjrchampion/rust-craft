@@ -19,6 +19,8 @@
   import WorldMap from "./WorldMap.svelte";
   import LootModal from "./LootModal.svelte";
   import MenuShortcuts from "./MenuShortcuts.svelte";
+  import PlayerContextMenu from "./PlayerContextMenu.svelte";
+  import VendorWindow from "./VendorWindow.svelte";
 
   const interactKey = $derived(promptLabel("Ⓧ", "E"));
 
@@ -71,7 +73,7 @@
   {#if game.loading && !game.disconnected}
     <div class="loading-overlay">
       <div class="loading-content">
-        <h1 class="loading-title">RUSTCRAFT</h1>
+        <img src="/assets/ui/logo_eldor.png" alt="Shadows of Eldor" class="loading-logo" />
         <div class="progress-container">
           <div class="progress-bar">
             <div class="progress-fill" style="width: {game.loadingProgress}%"></div>
@@ -168,8 +170,19 @@
     <CharacterScreen />
   {/if}
   <QuestDialog />
+  <VendorWindow />
   <WorldMap />
   <LootModal />
+  {#if game.playerContextMenu}
+    <PlayerContextMenu
+      x={game.playerContextMenu.x}
+      y={game.playerContextMenu.y}
+      playerName={game.playerContextMenu.playerName}
+      playerLevel={game.playerContextMenu.playerLevel}
+      playerClass={game.playerContextMenu.playerClass}
+      onClose={() => (game.playerContextMenu = null)}
+    />
+  {/if}
 
   <div class="app-version">
     {__APP_VERSION__}
@@ -424,8 +437,8 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    background: radial-gradient(circle at center, rgba(14, 18, 28, 0.98) 0%, rgba(6, 8, 12, 1) 100%);
-    backdrop-filter: blur(10px);
+    background: #080605 url('/assets/ui/loading_bg.jpg') no-repeat center center;
+    background-size: cover;
     pointer-events: auto;
     z-index: 9999;
   }
@@ -433,76 +446,75 @@
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 20px;
-    width: 320px;
+    gap: 16px;
+    width: 440px;
+    margin-top: 260px;
   }
-  .loading-title {
-    font-family: var(--rc-display, 'Cinzel', serif);
-    font-size: 38px;
-    font-weight: 700;
-    color: transparent;
-    background: linear-gradient(135deg, var(--rc-gold-bright, #ffe9a8) 0%, var(--rc-gold, #cda15f) 100%);
-    -webkit-background-clip: text;
-    background-clip: text;
-    letter-spacing: 6px;
-    text-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
-    margin: 0;
-    animation: pulseTitle 2s ease-in-out infinite alternate;
+  .loading-logo {
+    max-width: 340px;
+    height: auto;
+    filter: drop-shadow(0 0 25px rgba(255, 170, 0, 0.65));
+    animation: pulseLogo 3s ease-in-out infinite alternate;
   }
   .progress-container {
     position: relative;
     width: 100%;
-    height: 6px;
-    margin-top: 10px;
+    height: 12px;
+    background: rgba(10, 8, 6, 0.88);
+    border: 2px solid #d4af37;
+    border-radius: 6px;
+    box-shadow: 0 0 15px rgba(212, 175, 55, 0.4), inset 0 0 8px rgba(0, 0, 0, 0.9);
   }
   .progress-bar {
     width: 100%;
     height: 100%;
-    background: rgba(255, 255, 255, 0.05);
-    border: 1px solid rgba(255, 255, 255, 0.1);
     border-radius: 4px;
     overflow: hidden;
   }
   .progress-fill {
     height: 100%;
-    background: linear-gradient(90deg, #7a3fbf, #ffe9a8);
+    background: linear-gradient(90deg, #b8511f 0%, #ffaa00 50%, #ffe57f 100%);
     border-radius: 4px;
     transition: width 0.3s ease-out;
+    box-shadow: 0 0 10px rgba(255, 170, 0, 0.8);
   }
   .progress-glow {
     position: absolute;
-    top: 0;
+    top: -2px;
     left: 0;
-    height: 100%;
-    background: linear-gradient(90deg, #7a3fbf, #ffe9a8);
-    filter: blur(8px);
-    opacity: 0.6;
+    height: 16px;
+    background: linear-gradient(90deg, #b8511f, #ffaa00, #ffe57f);
+    filter: blur(10px);
+    opacity: 0.75;
     pointer-events: none;
     transition: width 0.3s ease-out;
   }
   .loading-status {
-    font-size: 13px;
-    color: var(--rc-parchment, #e3d2b7);
-    opacity: 0.85;
-    font-family: var(--rc-display, serif);
-    letter-spacing: 1px;
+    font-size: 14px;
+    color: #fce8a6;
+    font-family: var(--rc-display, 'Cinzel', serif);
+    letter-spacing: 2.5px;
     text-align: center;
-    min-height: 18px;
+    text-shadow: 0 2px 6px #000, 0 0 10px rgba(0, 0, 0, 0.9);
+    min-height: 20px;
+    font-weight: 700;
   }
   .loading-percentage {
-    font-family: monospace;
-    font-size: 11px;
-    color: rgba(255, 255, 255, 0.4);
-    letter-spacing: 1px;
+    font-family: var(--rc-display, serif);
+    font-size: 12px;
+    font-weight: 700;
+    color: #d4af37;
+    letter-spacing: 2px;
+    text-shadow: 0 1px 3px #000;
   }
-  @keyframes pulseTitle {
+  @keyframes pulseLogo {
     from {
       transform: scale(0.98);
-      filter: drop-shadow(0 0 2px rgba(255, 233, 168, 0.2));
+      filter: drop-shadow(0 0 15px rgba(255, 170, 0, 0.4));
     }
     to {
       transform: scale(1.02);
-      filter: drop-shadow(0 0 10px rgba(205, 161, 95, 0.4));
+      filter: drop-shadow(0 0 30px rgba(255, 200, 80, 0.8));
     }
   }
 </style>

@@ -1427,6 +1427,8 @@ export interface RegionNPC {
   dialogue?: string;
   quests?: RegionQuest[];
   generateProceduralQuests?: boolean;
+  /** If set, interacting opens the vendor window for this merchant id. */
+  vendorId?: string;
 }
 
 /** A placeable dynamic world event (GW2-style simple fight). Authored in the
@@ -1507,6 +1509,14 @@ export interface RegionBlueprint {
    *  Absent → treated as (0,0), or packed by ensureRegionWorldOrigins(). */
   worldOriginX?: number;
   worldOriginZ?: number;
+  /** Optional -- Authored camera position & orientation for the Title / Login screen. */
+  titleCamera?: {
+    x: number;
+    y: number;
+    z: number;
+    pitch: number;
+    yaw: number;
+  };
   /** Optional -- If true, this region is designated as the default Starting Town where new players spawn. */
   isStartingRegion?: boolean;
   /** Optional -- Authored inter-region portals placed inside this region. */

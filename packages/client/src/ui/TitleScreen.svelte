@@ -119,7 +119,7 @@
     </div>
   </div>
 
-  <div class="footer">RustCraft pre-alpha · a persistent world of survival &amp; sorcery</div>
+  <div class="footer">Shadows of Eldor pre-alpha · a persistent realm of magic & adventure</div>
 </div>
 
 <style>
@@ -133,11 +133,15 @@
     pointer-events: auto;
     font-family: var(--rc-body);
     color: var(--rc-ink);
+    background: #080605 url('/assets/ui/loading_bg.jpg') no-repeat center center;
+    background-size: cover;
   }
   .vignette {
     position: absolute;
     inset: 0;
-    background: radial-gradient(ellipse at center 38%, transparent 0%, rgba(8, 5, 2, 0.55) 100%);
+    background:
+      radial-gradient(ellipse at center 40%, transparent 20%, rgba(6, 4, 3, 0.45) 75%, rgba(4, 2, 1, 0.82) 100%),
+      linear-gradient(180deg, rgba(8, 6, 4, 0.2) 0%, transparent 40%, rgba(6, 4, 3, 0.4) 100%);
     pointer-events: none;
   }
   .content {
