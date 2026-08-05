@@ -138,6 +138,18 @@ class GameState {
   target = $state<TargetInfo | null>(null);
   party = $state<PartyMemberSnap[] | null>(null);
   friends = $state<FriendEntry[]>([]);
+  isRightClickDragging = $state(false);
+  /** Virtual (software) cursor position in viewport px. While the pointer is
+   *  locked this is driven by mouse *movement* deltas (the OS cursor is hidden
+   *  and frozen); while unlocked it mirrors the real cursor. GameCursor renders
+   *  the on-screen gauntlet here, and InputManager re-dispatches clicks to
+   *  whatever DOM/canvas element sits under it. */
+  cursorX = $state(0);
+  cursorY = $state(0);
+  /** True while the pointer is locked to the game canvas (persistent capture).
+   *  Panels flip this off (via InputManager.uiMode) so menus use the real
+   *  cursor with full native hover. */
+  pointerCaptured = $state(false);
   playerContextMenu = $state<{ x: number; y: number; playerName: string; playerLevel?: number; playerClass?: string } | null>(null);
   pendingInvite = $state<string | null>(null);
   /** Every currently-connected player in the realm, for the Party tab's

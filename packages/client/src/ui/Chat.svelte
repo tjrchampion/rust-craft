@@ -188,8 +188,16 @@
       case "pvp":
         g.sendPvp(!game.pvpEnabled);
         return true;
+      case "allspells":
+      case "spells":
+      case "unlockspells":
+      case "gmspells":
+      case "all":
+        g.sendChat(raw, "realm");
+        return true;
       default:
-        game.toast(`Unknown command: /${cmd}`);
+        // Pass unhandled slash commands to the server
+        g.sendChat(raw, "realm");
         return true;
     }
   }

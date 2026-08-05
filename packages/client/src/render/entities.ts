@@ -18,6 +18,7 @@ import { playerModelUrl, CLASS_WEAPON_NODES } from "./classModels";
 import { applyModularGearFromSnapAsync } from "./modularGear";
 import { buildSchoolProjectile, recycleSchoolProjectile, buildSchoolParticle, SCHOOL_VFX, schoolProfile, spellSchool, type School, projectilePools } from "./vfx";
 import { SpellVfxSystem } from "./spellVfx";
+import { CharacterAuras } from "./characterAuras";
 import { SchoolFlashSystem } from "./schoolFlash";
 import { sound } from "../game/sound";
 import type * as QUARKS from "three.quarks";
@@ -311,6 +312,10 @@ export class EntityManager {
    *  alone read weak for the instantaneous punch a hit wants, this adds a
    *  school-parametrized noise/ring/spoke flash at the impact point. */
   private schoolFlash: SchoolFlashSystem;
+  /** Lasting spell auras parented to a character (heal HoTs, shields, buff
+   *  glows) -- follow the body instead of firing once at the impact point.
+   *  See CharacterAuras; driven from Game via syncSelfBuffs / spawnHealAura. */
+  private characterAuras = new CharacterAuras();
   /** Client Display settings -- toggled from System → Settings. */
   showPlayerNameplates = true;
   showMobNameplates = true;
@@ -843,6 +848,11 @@ export class EntityManager {
     if (key !== entity.lastDebuffKey) {
       entity.lastDebuffKey = key;
       paintDebuffIcons(entity.debuffIcons, debuffs);
+      // Mirror ticking debuffs (burning, poison, moonfire, entangle, …) as
+      // body auras -- the same lasting-effect visuals the player gets, now on
+      // whatever the spell landed on. chilled/frozen are skipped in
+      // auraVisualFor since the ice overlay below already renders them.
+      this.characterAuras.syncBuffs(entity.group, debuffs);
     }
 
     const isFrozen = debuffs.includes("frozen") || debuffs.includes("chilled");
@@ -904,7 +914,7 @@ export class EntityManager {
    *  directly around the caster instead, using the same school profile
    *  projectile impacts do. */
   spawnSpellBurst(x: number, y: number, z: number, spellId: string, intensity = 1): void {
-    this.spawnBurst(new THREE.Vector3(x, y, z), spellSchool(spellId), intensity);
+    this.spawnBurst(new THREE.Vector3(x, y, z), spellSchool(spellId), intensity, spellId);
   }
 
   /** Golden pillar-of-light + multi-wave particle celebration when the local
@@ -913,7 +923,8 @@ export class EntityManager {
    *  zoomed-out camera, instead of blending into the sky like the old
    *  single small burst did. */
   spawnLevelUpVfx(x: number, y: number, z: number): void {
-    const base = new THREE.Vector3(x, y + 0.4, z);
+    const groundY = this.groundYAt(x, z, y);
+    const base = new THREE.Vector3(x, groundY, z);
     this.spawnLevelUpPillar(base);
     // Staggered waves of particle bursts + ground rings read as a build-up
     // rather than one instant blip.
@@ -924,8 +935,8 @@ export class EntityManager {
         this.spawnBurst(new THREE.Vector3(x, y + 1.2 + delay / 400, z), "buff", 1.8);
       }, delay);
     }
-    this.spawnGroundRing(base, 0xffe9a8, 1400, "holy");
-    window.setTimeout(() => this.spawnGroundRing(base, 0xffd27a, 1200, "buff"), 200);
+    this.spawnGroundRing(x, groundY, z, 0xffe9a8, 1400, "holy");
+    window.setTimeout(() => this.spawnGroundRing(x, groundY, z, 0xffd27a, 1200, "buff"), 200);
   }
 
   /** A tall additive-blended cylinder that shoots up from the player's feet
@@ -944,7 +955,7 @@ export class EntityManager {
       blending: THREE.AdditiveBlending,
     });
     const mesh = new THREE.Mesh(geo, material);
-    mesh.position.set(base.x, base.y - 0.9 + height / 2, base.z);
+    mesh.position.set(base.x, base.y + height / 2, base.z);
     this.scene.add(mesh);
 
     const ringGeo = new THREE.RingGeometry(0.3, 1.4, 32);
@@ -958,7 +969,7 @@ export class EntityManager {
     });
     const ring = new THREE.Mesh(ringGeo, ringMaterial);
     ring.rotation.x = -Math.PI / 2;
-    ring.position.set(base.x, base.y - 0.9, base.z);
+    ring.position.set(base.x, base.y + 0.05, base.z);
     this.scene.add(ring);
 
     this.levelUpPillars.push({ mesh, ring, born: performance.now(), lifeMs });
@@ -1021,29 +1032,43 @@ export class EntityManager {
    *  hover/implode) comes from the school's profile, so Fire embers float
    *  up, Frost shards shatter down, Arcane glitter hangs and spins, and
    *  Shadow wisps look like they're being sucked toward the impact point. */
-  private spawnBurst(pos: THREE.Vector3, school: School, intensity = 1): void {
+  private spawnBurst(pos: THREE.Vector3, school: School, intensity = 1, spellId?: string): void {
     const profile = schoolProfile(school);
-    // Every school's hit burst now goes through SpellVfxSystem -- a real
-    // three.quarks particle system, either the school's extracted Hovl
-    // Studio effect (see loadEffect calls in the constructor) or, absent
-    // one, a procedural quarks system built straight from this school's
-    // SCHOOL_VFX profile (see buildProceduralParticleSystem in spellVfx.ts).
-    // The ground ring stays a separate, simpler procedural shockwave either way.
-    this.spellVfx.spawnForSchool(school, pos);
+    const groundY = this.groundYAt(pos.x, pos.z, pos.y);
+    if (spellId) {
+      this.spellVfx.painter.handleSpellImpact(spellId, pos, school, groundY);
+    } else {
+      this.spellVfx.spawnForSchool(school, pos);
+      this.spawnGroundRing(pos.x, groundY, pos.z, profile.ringColor, profile.ringDuration * (intensity > 1.05 ? 1.2 : 1), school);
+    }
     this.schoolFlash.spawn(school, pos, intensity);
-    this.spawnGroundRing(pos, profile.ringColor, profile.ringDuration * (intensity > 1.05 ? 1.2 : 1), school);
+  }
+
+  /** Foot/terrain height under a burst. Impact events resolve against the
+   *  torso (server sends y = feet + ~1, projectiles fly at chest height), so
+   *  ground-plane VFX (decals, shockwave rings) must drop to the actual
+   *  floor. Uses the live terrain sampler when we have one (open world),
+   *  otherwise falls back to ~1m below the impact -- matching the server's
+   *  torso offset -- for regions/dungeons where no sampler is bound. */
+  private groundYAt(x: number, z: number, fallbackImpactY: number): number {
+    const sampled = this.heightSampler?.(x, z);
+    // Clamp the sampled terrain so an impact on raised geometry (a deck or
+    // bridge, whose terrain sample sits far below) doesn't drop the decal
+    // through the platform -- keep it within ~2m under the torso either way.
+    if (sampled !== undefined) return Math.max(sampled, fallbackImpactY - 2.0);
+    return fallbackImpactY - 1.0;
   }
 
   /** Flat ring that expands outward on the ground and fades — a shockwave
    *  accompanying every burst (projectile impact, melee/self spellcast). */
-  private spawnGroundRing(pos: THREE.Vector3, color: number, lifeMs: number, school: School): void {
+  private spawnGroundRing(x: number, groundY: number, z: number, color: number, lifeMs: number, school: School): void {
     const pool = this.groundBurstPools.get(school);
     const groundBurst = pool?.pop();
     if (groundBurst) {
       groundBurst.mesh.visible = true;
       (groundBurst.mesh.material as THREE.MeshBasicMaterial).color.set(color);
       (groundBurst.mesh.material as THREE.MeshBasicMaterial).opacity = 1;
-      groundBurst.mesh.position.set(pos.x, pos.y - 0.9, pos.z);
+      groundBurst.mesh.position.set(x, groundY + 0.03, z);
       groundBurst.mesh.scale.set(1, 1, 1);
       groundBurst.born = performance.now();
       groundBurst.lifeMs = lifeMs;
@@ -1055,7 +1080,7 @@ export class EntityManager {
       new THREE.MeshBasicMaterial({ color, transparent: true, side: THREE.DoubleSide, depthWrite: false }),
     );
     mesh.rotation.x = -Math.PI / 2;
-    mesh.position.set(pos.x, pos.y - 0.9, pos.z);
+    mesh.position.set(x, groundY + 0.03, z);
     this.scene.add(mesh);
     this.groundBursts.push({ school, mesh, born: performance.now(), lifeMs });
   }
@@ -1287,9 +1312,21 @@ export class EntityManager {
 
     const sparkIntervalMs = 55;
     for (const proj of this.projectiles.values()) {
+      const prevX = proj.group.position.x;
+      const prevY = proj.group.position.y;
+      const prevZ = proj.group.position.z;
+
       proj.group.position.lerp(proj.target, Math.min(1, dt * 18));
+
+      const dx = proj.target.x - prevX;
+      const dy = proj.target.y - prevY;
+      const dz = proj.target.z - prevZ;
+      if (dx * dx + dy * dy + dz * dz > 0.0001) {
+        proj.group.lookAt(proj.target);
+      }
+
       const spinSpeed = (proj.group.userData.spinSpeed as number | undefined) ?? 0;
-      if (spinSpeed) proj.group.rotation.y += spinSpeed * dt;
+      if (spinSpeed) proj.group.rotateZ(spinSpeed * dt);
       if (proj.trailPs) {
         this.spellVfx.moveTrail(proj.trailPs, proj.group.position);
       } else if (now - proj.lastSparkAt >= sparkIntervalMs) {
@@ -1370,6 +1407,7 @@ export class EntityManager {
     }
 
     this.spellVfx.update(dt);
+    this.characterAuras.update(dt);
     if (camera) this.schoolFlash.update(camera);
 
     for (let i = this.damageNumbers.length - 1; i >= 0; i--) {
@@ -1460,6 +1498,23 @@ export class EntityManager {
     return out.copy(e.group.position);
   }
 
+  /** Live world positions of nearby entities for the minimap. `hostile` marks
+   *  mobs and PvP-flagged players (red dots); pets/friendly players are not
+   *  hostile. Dead entities are skipped. */
+  mapBlips(): { x: number; z: number; kind: "mob" | "player" | "pet"; hostile: boolean }[] {
+    const out: { x: number; z: number; kind: "mob" | "player" | "pet"; hostile: boolean }[] = [];
+    for (const e of this.entities.values()) {
+      if (e.hp <= 0) continue;
+      out.push({
+        x: e.group.position.x,
+        z: e.group.position.z,
+        kind: e.kind,
+        hostile: e.kind === "mob" || e.pvp,
+      });
+    }
+    return out;
+  }
+
   /** Nearest dead player within range, for the hold-E-to-revive prompt.
    *  `anim === "dead"` is how a dead player's snapshot already renders
    *  (see applyPlayers), so no separate tracking is needed here. */
@@ -1541,7 +1596,34 @@ export class EntityManager {
     );
   }
 
+  /** Mirror a character's lasting positive buffs (from SelfState.auras / a
+   *  snapshot's aura list) as body auras that follow `group`. Safe to call
+   *  every frame -- CharacterAuras reconciles, only adding/removing on change. */
+  syncSelfBuffs(group: THREE.Object3D, auraIds: string[]): void {
+    this.characterAuras.syncBuffs(group, auraIds);
+  }
+
+  /** A heal landed on `group` -- rising green motes + a ground halo pulse. */
+  spawnHealAura(group: THREE.Object3D): void {
+    this.characterAuras.flourish(group, "regen", 0x8affb4, 1.1);
+  }
+
+  /** Cast-windup ring under a caster. `casterPos` is the caster's feet (as
+   *  returned by entityWorldPos), which is already the ground the ring lies
+   *  on -- routed through the same painter the impacts use so schools stay
+   *  visually consistent. */
+  spawnCastWindup(spellId: string, casterPos: THREE.Vector3): void {
+    this.spellVfx.painter.handleSpellCast(spellId, casterPos, spellSchool(spellId));
+  }
+
+  /** The scene group for a tracked remote entity, so callers (Game) can
+   *  attach a heal flourish to a healed ally/mob they don't otherwise hold. */
+  groupOf(id: string): THREE.Group | null {
+    return this.entities.get(id)?.group ?? null;
+  }
+
   private disposeEntity(entity: RemoteEntity): void {
+    this.characterAuras.clearGroup(entity.group);
     this.scene.remove(entity.group);
     if (entity.nameplate) {
       (entity.nameplate.material as THREE.SpriteMaterial).map?.dispose();

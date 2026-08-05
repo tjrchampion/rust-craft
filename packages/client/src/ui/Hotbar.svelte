@@ -23,6 +23,156 @@
     game.self ? Math.min(100, (game.self.mana / Math.max(1, game.self.maxMana)) * 100) : 0,
   );
 
+  let hoveredSpellId = $state<string | null>(null);
+  let hoveredItemId = $state<string | null>(null);
+  let tooltipPos = $state({ x: 0, y: 0 });
+  let selectedMoveSlot = $state<number | null>(null);
+  let draggingSlot = $state<number | null>(null);
+  // Pointer-based drag state. Native HTML5 drag can't be used: during gameplay
+  // the pointer is locked (see InputManager), so the OS cursor is hidden/frozen
+  // and dragstart never fires. We drive drag from mousedown + the software
+  // cursor (game.cursorX/Y) instead, which works both locked and unlocked.
+  let dragFrom: number | null = null;
+  let dragStartX = 0;
+  let dragStartY = 0;
+  // The icon "picked up" and shown floating under the cursor while dragging.
+  let dragGhost = $state<{ spellId: string | null; itemId: string | null } | null>(null);
+  let ghostEl = $state<HTMLDivElement | null>(null);
+
+  function onSlotHover(e: MouseEvent, spellId: string | null, itemId: string | null) {
+    const sId = spellId ?? (itemId?.startsWith("spell:") ? itemId.slice(6) : null);
+    const iId = itemId && !itemId.startsWith("spell:") ? itemId : null;
+
+    if (sId) {
+      hoveredSpellId = sId;
+      hoveredItemId = null;
+    } else if (iId) {
+      hoveredItemId = iId;
+      hoveredSpellId = null;
+    } else {
+      hoveredSpellId = null;
+      hoveredItemId = null;
+      return;
+    }
+
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    tooltipPos = {
+      x: Math.max(10, Math.min(rect.left + rect.width / 2 - 125, window.innerWidth - 260)),
+      y: rect.top - 10,
+    };
+  }
+
+  function onSlotLeave() {
+    hoveredSpellId = null;
+    hoveredItemId = null;
+  }
+
+  /** Swap two hotbar slots -- optimistic local reslot + authoritative sync. */
+  function performHotbarMove(fromSlot: number, targetSlotIndex: number) {
+    if (fromSlot === targetSlotIndex) return;
+    const fromItem = game.inventory.find((it) => it.container === "hotbar" && it.slot === fromSlot);
+    const toItem = game.inventory.find((it) => it.container === "hotbar" && it.slot === targetSlotIndex);
+    if (fromItem) fromItem.slot = targetSlotIndex;
+    if (toItem) toItem.slot = fromSlot;
+    getGame()?.sendMoveItem("hotbar", fromSlot, "hotbar", targetSlotIndex);
+  }
+
+  // Native drop target kept only for drags *from* the spellbook (which happen
+  // with the character screen open, i.e. pointer unlocked) -- hotbar slots are
+  // no longer a native drag source; within-hotbar rearranging is pointer-based.
+  function onDragOver(e: DragEvent) {
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+  }
+
+  function onDrop(e: DragEvent, targetSlotIndex: number) {
+    e.preventDefault();
+    const rawData = e.dataTransfer?.getData("text/plain");
+    if (!rawData) return;
+    try {
+      const data = JSON.parse(rawData);
+      if (data.container === "spellbook" || data.spellId) {
+        if (data.spellId) getGame()?.sendAssignSpell(data.spellId, targetSlotIndex);
+      } else if (data.container === "hotbar" && typeof data.slot === "number") {
+        performHotbarMove(data.slot, targetSlotIndex);
+      }
+    } catch {
+      // Ignore invalid JSON
+    }
+  }
+
+  /** Begin a pointer drag off a filled slot (mousedown, so the InputManager's
+   *  synthetic mousedown drives it while the pointer is locked). */
+  function startDrag(i: number, spellId: string | null, itemId: string | null, e: MouseEvent) {
+    if (!spellId && !itemId) return;
+    dragFrom = i;
+    dragStartX = e.clientX;
+    dragStartY = e.clientY;
+    dragGhost = { spellId, itemId };
+  }
+
+  $effect(() => {
+    // Promote to a visible drag once the software cursor moves past a small
+    // threshold; a press without movement stays a click (cast / shift-select).
+    const onMove = () => {
+      if (dragFrom === null) return;
+      if (Math.hypot(game.cursorX - dragStartX, game.cursorY - dragStartY) > 6) draggingSlot = dragFrom;
+    };
+    const onUp = () => {
+      if (dragFrom === null) return;
+      const from = dragFrom;
+      const wasDragging = draggingSlot === from;
+      dragFrom = null;
+      draggingSlot = null;
+      dragGhost = null;
+      if (!wasDragging) return; // treated as a click; onclick handles it
+      const el = document.elementFromPoint(game.cursorX, game.cursorY) as HTMLElement | null;
+      const slotEl = el?.closest("[data-slot]") as HTMLElement | null;
+      if (!slotEl) return;
+      const to = Number(slotEl.dataset.slot);
+      if (Number.isInteger(to)) performHotbarMove(from, to);
+    };
+    window.addEventListener("pointermove", onMove, { passive: true });
+    window.addEventListener("pointerup", onUp, { passive: true });
+    return () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    };
+  });
+
+  // Keep the picked-up icon glued to the software cursor. Reading game.cursorX
+  // only fires while a drag is active (the early return below means cursorX
+  // isn't tracked otherwise), so this doesn't re-run on every idle mouse move.
+  $effect(() => {
+    if (draggingSlot === null || !ghostEl) return;
+    ghostEl.style.transform = `translate3d(${game.cursorX}px, ${game.cursorY}px, 0)`;
+  });
+
+  function handleSlotClick(i: number, spellId: string | null, item: any, e: MouseEvent) {
+    if (selectedMoveSlot !== null) {
+      if (selectedMoveSlot !== i) {
+        const fromSlot = selectedMoveSlot;
+        const fromItem = game.inventory.find((it) => it.container === "hotbar" && it.slot === fromSlot);
+        const toItem = game.inventory.find((it) => it.container === "hotbar" && it.slot === i);
+        if (fromItem) fromItem.slot = i;
+        if (toItem) toItem.slot = fromSlot;
+
+        getGame()?.sendMoveItem("hotbar", fromSlot, "hotbar", i);
+      }
+      selectedMoveSlot = null;
+      return;
+    }
+
+    if (e.shiftKey) {
+      if (spellId || item) {
+        selectedMoveSlot = i;
+      }
+      return;
+    }
+
+    getGame()?.useHotbarSlot(i);
+  }
+
   const SPELL_PREFIX = "spell:";
   const KBM_LABELS = ["1", "2", "3", "4", "5", "6", "Q", "Z", "X", "C"];
   const PAD_LABELS = ["LB+A", "LB+B", "LB+X", "LB+Y", "LB+↑", "LB+↓", "LB+←", "LB+→", "RB+A", "RB+B"];
@@ -110,11 +260,17 @@
           class:active={i === game.selectedSlot}
           class:spell={spellId !== null}
           class:queued
-          title={spellId ? spellDef(spellId).name : undefined}
-          onclick={() => getGame()?.useHotbarSlot(i)}
+          class:moving={selectedMoveSlot === i || draggingSlot === i}
+          data-slot={i}
+          ondragover={(e) => onDragOver(e)}
+          ondrop={(e) => onDrop(e, i)}
+          onmousedown={(e) => startDrag(i, spellId, item?.itemId ?? null, e)}
+          onmouseenter={(e) => onSlotHover(e, spellId, item?.itemId ?? null)}
+          onmouseleave={onSlotLeave}
+          onclick={(e) => handleSlotClick(i, spellId, item, e)}
         >
           {#if spellId}
-            <IconGlyph value={spellIcon(spellId)} size={28} />
+            <IconGlyph value={spellIcon(spellId)} size={44} />
             {#if game.self?.castingSpell === spellId}<div class="casting"></div>{/if}
             {#if gcdFrac > 0 && cooldownFrac <= 0}<div class="gcd-dim" style="opacity: {gcdFrac}"></div>{/if}
             {#if cooldownFrac > 0}
@@ -123,7 +279,7 @@
             {/if}
             {#if queued}<div class="queue-pip"></div>{/if}
           {:else if item}
-            <IconGlyph value={itemIcon(item.itemId)} size={28} itemId={item.itemId} />
+            <IconGlyph value={itemIcon(item.itemId)} size={44} itemId={item.itemId} />
             {#if item.qty > 1}<span class="qty">{item.qty}</span>{/if}
             {#if item.durability !== null && itemDef(item.itemId).maxDurability}
               <div class="dura" style="width: {(item.durability / itemDef(item.itemId).maxDurability!) * 100}%"></div>
@@ -143,11 +299,17 @@
           class:active={i === game.selectedSlot}
           class:spell={spellId !== null}
           class:queued
-          title={spellId ? spellDef(spellId).name : undefined}
-          onclick={() => getGame()?.useHotbarSlot(i)}
+          class:moving={selectedMoveSlot === i || draggingSlot === i}
+          data-slot={i}
+          ondragover={(e) => onDragOver(e)}
+          ondrop={(e) => onDrop(e, i)}
+          onmousedown={(e) => startDrag(i, spellId, item?.itemId ?? null, e)}
+          onmouseenter={(e) => onSlotHover(e, spellId, item?.itemId ?? null)}
+          onmouseleave={onSlotLeave}
+          onclick={(e) => handleSlotClick(i, spellId, item, e)}
         >
           {#if spellId}
-            <IconGlyph value={spellIcon(spellId)} size={28} />
+            <IconGlyph value={spellIcon(spellId)} size={44} />
             {#if game.self?.castingSpell === spellId}<div class="casting"></div>{/if}
             {#if gcdFrac > 0 && cooldownFrac <= 0}<div class="gcd-dim" style="opacity: {gcdFrac}"></div>{/if}
             {#if cooldownFrac > 0}
@@ -156,7 +318,7 @@
             {/if}
             {#if queued}<div class="queue-pip"></div>{/if}
           {:else if item}
-            <IconGlyph value={itemIcon(item.itemId)} size={28} itemId={item.itemId} />
+            <IconGlyph value={itemIcon(item.itemId)} size={44} itemId={item.itemId} />
             {#if item.qty > 1}<span class="qty">{item.qty}</span>{/if}
             {#if item.durability !== null && itemDef(item.itemId).maxDurability}
               <div class="dura" style="width: {(item.durability / itemDef(item.itemId).maxDurability!) * 100}%"></div>
@@ -168,6 +330,74 @@
     </div>
   </div>
 </div>
+
+{#if draggingSlot !== null && dragGhost}
+  <div class="drag-ghost" bind:this={ghostEl}>
+    {#if dragGhost.spellId}
+      <IconGlyph value={spellIcon(dragGhost.spellId)} size={44} />
+    {:else if dragGhost.itemId}
+      <IconGlyph value={itemIcon(dragGhost.itemId)} size={44} itemId={dragGhost.itemId} />
+    {/if}
+  </div>
+{/if}
+
+{#if hoveredSpellId}
+  {@const def = spellDef(hoveredSpellId)}
+  <div class="rc-spell-tooltip" style="left: {tooltipPos.x}px; top: {tooltipPos.y}px;">
+    <div class="tooltip-header">
+      <span class="spell-name">{def.name}</span>
+      <span class="cost">{def.resourceCost ? `${def.resourceCost} ${game.resourceLabel ?? 'Mana'}` : 'No Cost'}</span>
+    </div>
+    <div class="meta-row">
+      <span>{def.targeting.range ? `${def.targeting.range}m Range` : 'Melee Range'}</span>
+      <span>{def.castTimeS > 0 ? `${def.castTimeS}s cast` : 'Instant'}</span>
+      {#if def.cooldownS > 0}<span>{def.cooldownS}s cd</span>{/if}
+    </div>
+    <div class="tooltip-body">
+      {#each def.effects as eff}
+        {#if eff.type === "damage"}
+          <div class="stat-line dmg">
+            Deals <strong>{eff.base ?? 0}</strong> {eff.damageType ?? 'physical'} damage
+            {#if eff.powerScale}(+{(eff.powerScale * 100).toFixed(0)}% Power){/if}
+          </div>
+        {:else if eff.type === "heal"}
+          <div class="stat-line heal">
+            Heals for <strong>{eff.base ?? 0}</strong> HP
+            {#if eff.powerScale}(+{(eff.powerScale * 100).toFixed(0)}% Power){/if}
+          </div>
+        {:else if eff.type === "applyAura"}
+          <div class="stat-line aura">Applies {eff.auraId ?? 'effect'} ({eff.landsOn ?? 'target'})</div>
+        {/if}
+      {/each}
+      {#if def.allowedWeaponTypes?.length}
+        <div class="stat-req">Requires: {def.allowedWeaponTypes.join(", ")}</div>
+      {/if}
+      {#if def.requiredLevel && def.requiredLevel > 1}
+        <div class="stat-req">Requires Level {def.requiredLevel}</div>
+      {/if}
+    </div>
+  </div>
+{:else if hoveredItemId}
+  {@const def = itemDef(hoveredItemId)}
+  <div class="rc-spell-tooltip" style="left: {tooltipPos.x}px; top: {tooltipPos.y}px;">
+    <div class="tooltip-header">
+      <span class="spell-name">{def.name}</span>
+      <span class="cost">{def.type}</span>
+    </div>
+    <div class="tooltip-body">
+      {#if def.damage}<div class="stat-line dmg">Melee Damage: +{def.damage}</div>{/if}
+      {#if def.restore}
+        {#if def.restore.hp}<div class="stat-line heal">Restores +{def.restore.hp} HP</div>{/if}
+        {#if def.restore.mana}<div class="stat-line heal">Restores +{def.restore.mana} Mana</div>{/if}
+      {/if}
+      {#if def.statModifiers}
+        {#each Object.entries(def.statModifiers) as [k, v]}
+          <div class="stat-line">+{v} {k.toUpperCase()}</div>
+        {/each}
+      {/if}
+    </div>
+  </div>
+{/if}
 
 {#if game.levelRewards.length > 0}
   <div class="reward-chests">
@@ -185,6 +415,20 @@
 {/if}
 
 <style>
+  .drag-ghost {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 44px;
+    height: 44px;
+    margin: -22px 0 0 -22px; /* centre the icon on the software cursor */
+    pointer-events: none;
+    z-index: 1000000;
+    opacity: 0.9;
+    filter: drop-shadow(0 6px 10px rgba(0, 0, 0, 0.65));
+    will-change: transform;
+  }
+
   .xp-strip {
     position: absolute;
     left: 50%;
@@ -328,6 +572,20 @@
   .row-gap {
     width: 10px;
   }
+  .rc-action-slot * {
+    pointer-events: none !important;
+    user-select: none !important;
+    -webkit-user-drag: none !important;
+  }
+  .rc-action-slot.moving {
+    outline: 2px solid var(--rc-gold-bright) !important;
+    box-shadow: 0 0 16px rgba(255, 215, 0, 0.8), inset 0 0 12px rgba(255, 215, 0, 0.4) !important;
+    animation: slotGlow 0.8s infinite alternate ease-in-out;
+  }
+  @keyframes slotGlow {
+    from { opacity: 0.75; }
+    to { opacity: 1; }
+  }
   .rc-action-slot.spell {
     border-color: rgba(160, 100, 200, 0.5);
   }
@@ -398,6 +656,58 @@
     background: conic-gradient(rgba(0, 0, 0, 0.78) calc(var(--frac) * 360deg), transparent 0);
     pointer-events: none;
   }
+
+  .rc-spell-tooltip {
+    position: fixed;
+    transform: translateY(-100%);
+    width: 250px;
+    padding: 10px 12px;
+    background: linear-gradient(180deg, rgba(18, 14, 26, 0.96), rgba(8, 5, 12, 0.98));
+    border: 1.5px solid var(--rc-gold);
+    border-radius: 4px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.85), inset 0 0 14px rgba(196, 163, 90, 0.15);
+    pointer-events: none;
+    z-index: 9999;
+    font-family: inherit;
+  }
+  .tooltip-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid rgba(196, 163, 90, 0.3);
+    padding-bottom: 4px;
+    margin-bottom: 4px;
+  }
+  .spell-name {
+    font-weight: 800;
+    font-size: 13px;
+    color: var(--rc-gold-bright);
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
+  }
+  .cost {
+    font-size: 11px;
+    font-weight: 700;
+    color: #64b5f6;
+  }
+  .meta-row {
+    display: flex;
+    gap: 8px;
+    font-size: 11px;
+    color: #b0b0b0;
+    margin-bottom: 6px;
+  }
+  .tooltip-body {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    font-size: 11.5px;
+    color: #e0e0e0;
+  }
+  .stat-line.dmg { color: #ff8a80; }
+  .stat-line.heal { color: #81c784; }
+  .stat-line.aura { color: #ce93d8; }
+  .stat-req { color: #ffd54f; font-size: 11px; margin-top: 2px; }
+
   .cooldown-label {
     position: absolute;
     font-size: 14px;

@@ -98,10 +98,40 @@ export function enableSharedGltfTextures(loader: GLTFLoader): void {
   }));
 }
 
+import { KTX2Loader } from "three/examples/jsm/loaders/KTX2Loader.js";
+import { DRACOLoader } from "three/examples/jsm/loaders/DRACOLoader.js";
+
+let sharedKtx2Loader: KTX2Loader | null = null;
+let sharedDracoLoader: DRACOLoader | null = null;
+
+export function getSharedDracoLoader(): DRACOLoader {
+  if (!sharedDracoLoader) {
+    sharedDracoLoader = new DRACOLoader();
+    sharedDracoLoader.setDecoderPath("/assets/draco/");
+  }
+  return sharedDracoLoader;
+}
+
+export function getSharedKtx2Loader(renderer?: THREE.WebGLRenderer): KTX2Loader {
+  if (!sharedKtx2Loader) {
+    sharedKtx2Loader = new KTX2Loader();
+    sharedKtx2Loader.setTranscoderPath("/assets/basis/");
+  }
+  if (renderer && !(sharedKtx2Loader as any).hasDetector) {
+    sharedKtx2Loader.detectSupport(renderer);
+    (sharedKtx2Loader as any).hasDetector = true;
+  }
+  return sharedKtx2Loader;
+}
+
 /** Shared GLTFLoader used by character / settlement / nature / region loads. */
-export function createSharedGltfLoader(): GLTFLoader {
+export function createSharedGltfLoader(renderer?: THREE.WebGLRenderer): GLTFLoader {
   const loader = new GLTFLoader();
   loader.setMeshoptDecoder(MeshoptDecoder);
+  loader.setDRACOLoader(getSharedDracoLoader());
+  if (renderer) {
+    loader.setKTX2Loader(getSharedKtx2Loader(renderer));
+  }
   enableSharedGltfTextures(loader);
   return loader;
 }

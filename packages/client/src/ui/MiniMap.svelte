@@ -2,6 +2,7 @@
   import { game } from "./gameState.svelte";
   import { generateVillages } from "@rustcraft/shared";
   import { getGame } from "../game/instance";
+  import { renderRegionThumbnail } from "./worldMapThumbnail";
 
   /** World-space radius (meters) shown edge-to-edge on the map. */
   const MAP_RADIUS_WORLD = 160;
@@ -12,6 +13,81 @@
   const EDGE_INSET = 6;
 
   const villages = generateVillages();
+
+  // Painted terrain background for the region we're currently in -- the same
+  // heightmap relief the full world map paints (worldMapThumbnail), but scoped
+  // to just this region and scrolled under the player. Loaded lazily per region
+  // and cached; re-rendered only when we cross into a different region.
+  type RegionBounds = { minX: number; maxX: number; minZ: number; maxZ: number };
+  type NpcBlip = { id: string; name: string; x: number; z: number; kind: "vendor" | "quest" | "npc" };
+  let loadedRegionId: string | null = null; // plain (non-reactive) load guard
+  let regionThumb = $state<string | null>(null);
+  let regionBounds = $state<RegionBounds | null>(null);
+  let regionNpcs = $state<NpcBlip[]>([]);
+  const thumbCache = new Map<string, { thumb: string; bounds: RegionBounds; npcs: NpcBlip[] }>();
+
+  // Tick so live entities (mobs, party) refresh on the minimap even when the
+  // player is standing still (their positions aren't Svelte-reactive state).
+  let blipTick = $state(0);
+  $effect(() => {
+    const iv = setInterval(() => blipTick++, 150);
+    return () => clearInterval(iv);
+  });
+
+  $effect(() => {
+    const id = game.regionState?.regionId ?? null;
+    if (id === loadedRegionId) return;
+    loadedRegionId = id;
+    regionThumb = null;
+    regionBounds = null;
+    regionNpcs = [];
+    if (!id) return;
+    const cached = thumbCache.get(id);
+    if (cached) {
+      regionThumb = cached.thumb;
+      regionBounds = cached.bounds;
+      regionNpcs = cached.npcs;
+      return;
+    }
+    const g = getGame();
+    if (!g) return;
+    void (async () => {
+      const bp = await g.ensureRegionBlueprint(id);
+      // Bail if we've since left this region (async race) or it has no heights.
+      if (!bp || loadedRegionId !== id) return;
+      const thumb = renderRegionThumbnail(bp, { edge: 256 });
+      if (!thumb) return;
+      // Origin from the catalog stub (always populated) rather than the
+      // blueprint's optional worldOriginX/Z, so the terrain sits at the region's
+      // real world position and scrolls correctly under the player.
+      const origin = g.regionWorldOriginOf(id) ?? { x: bp.worldOriginX ?? 0, z: bp.worldOriginZ ?? 0 };
+      const half = ((bp.gridSize - 1) * bp.pitch) / 2;
+      const bounds: RegionBounds = {
+        minX: origin.x - half,
+        maxX: origin.x + half,
+        minZ: origin.z - half,
+        maxZ: origin.z + half,
+      };
+      // NPCs (vendors / quest-givers) are stored in the blueprint at region-
+      // local coords; lift them to world space via the region origin.
+      const npcs: NpcBlip[] = (bp.npcs ?? []).map((n) => ({
+        id: n.id,
+        name: n.name,
+        x: origin.x + n.localX,
+        z: origin.z + n.localZ,
+        kind: n.vendorId
+          ? "vendor"
+          : n.quests?.length || n.generateProceduralQuests
+            ? "quest"
+            : "npc",
+      }));
+      thumbCache.set(id, { thumb, bounds, npcs });
+      if (loadedRegionId !== id) return;
+      regionThumb = thumb;
+      regionBounds = bounds;
+      regionNpcs = npcs;
+    })();
+  });
 
   // Same heading convention as TopBar's compass, so the two always agree.
   const heading = $derived((((-game.compassYaw * 180) / Math.PI) % 360 + 360) % 360);
@@ -69,7 +145,24 @@
     p: Projected;
   }
 
+  // Region NPCs (vendors / quest-givers) are static in world space.
+  const npcPoints = $derived(regionNpcs.map((n) => ({ ...n, p: project(n.x, n.z) })));
+
+  // Living mobs (red) + PvP-flagged players, refreshed on blipTick so they
+  // move on the map even while the player stands still.
+  const mobPoints = $derived.by(() => {
+    void blipTick;
+    const g = getGame();
+    if (!g) return [] as { x: number; y: number; onMap: boolean }[];
+    return g.entities
+      .mapBlips()
+      .filter((b) => b.hostile)
+      .map((b) => project(b.x, b.z))
+      .filter((p) => p.onMap);
+  });
+
   const partyPoints = $derived.by(() => {
+    void blipTick;
     const list: PartyPoint[] = [];
     const party = game.party ?? [];
     const selfId = game.selfId;
@@ -94,6 +187,21 @@
       });
     }
     return list;
+  });
+
+  // Player-centred, north-up placement of the region terrain image, using the
+  // same raw projection as project() (screen-right = world -x), so the terrain
+  // lines up exactly with the villages/quests drawn over it. The horizontal
+  // mirror needed for the -x convention is applied on the <image> transform.
+  const regionImg = $derived.by(() => {
+    const b = regionBounds;
+    if (!b || !regionThumb) return null;
+    return {
+      imgLeft: CENTER - (b.maxX - game.playerX) * SCALE,
+      imgTop: CENTER - (b.maxZ - game.playerZ) * SCALE,
+      imgW: (b.maxX - b.minX) * SCALE,
+      imgH: (b.maxZ - b.minZ) * SCALE,
+    };
   });
 
   const GLYPH: Record<string, string> = { available: "!", complete: "?", active: "?", escort: "🛡️" };
@@ -124,10 +232,44 @@
         </radialGradient>
       </defs>
       <circle cx={CENTER} cy={CENTER} r={RADIUS} class="mm-bg" />
+      {#if regionThumb && regionImg}
+        <!-- Clip stays on the untransformed outer group so the circle is fixed
+             at the minimap centre; the mirror/scroll transform lives on the
+             inner group (putting both on one element drags the clip with the
+             player). -->
+        <g clip-path="url(#mm-clip)">
+          <g transform="translate({regionImg.imgLeft + regionImg.imgW}, 0) scale(-1, 1)">
+            <image
+              class="mm-terrain"
+              href={regionThumb}
+              x="0"
+              y={regionImg.imgTop}
+              width={regionImg.imgW}
+              height={regionImg.imgH}
+              preserveAspectRatio="none"
+            />
+          </g>
+        </g>
+      {/if}
       <g clip-path="url(#mm-clip)">
+        {#each mobPoints as m, i (i)}
+          <circle cx={m.x} cy={m.y} r="2" class="mm-mob" />
+        {/each}
         {#each villagePoints as v (v.id)}
           {#if v.p.onMap}
             <circle cx={v.p.x} cy={v.p.y} r="2.6" class="mm-village" />
+          {/if}
+        {/each}
+        {#each npcPoints as n (n.id)}
+          {#if n.p.onMap}
+            {#if n.kind === "vendor"}
+              <circle cx={n.p.x} cy={n.p.y} r="3.2" class="mm-vendor" />
+              <text x={n.p.x} y={n.p.y + 2.7} class="mm-vendor-glyph">$</text>
+            {:else if n.kind === "quest"}
+              <circle cx={n.p.x} cy={n.p.y} r="2.8" class="mm-questgiver" />
+            {:else}
+              <circle cx={n.p.x} cy={n.p.y} r="2.6" class="mm-npc" />
+            {/if}
           {/if}
         {/each}
         {#each questPoints as q (q.id)}
@@ -252,6 +394,10 @@
   .mm-bg {
     fill: url(#mm-bg-grad);
   }
+  .mm-terrain {
+    opacity: 0.92;
+    pointer-events: none;
+  }
   .mm-rim {
     fill: none;
     stroke: rgba(196, 163, 90, 0.75);
@@ -273,6 +419,34 @@
     fill: var(--rc-ink-dim);
     stroke: rgba(0, 0, 0, 0.6);
     stroke-width: 0.5;
+  }
+  .mm-mob {
+    fill: #e0402e;
+    stroke: rgba(0, 0, 0, 0.7);
+    stroke-width: 0.5;
+  }
+  .mm-npc {
+    fill: #9fd0ff;
+    stroke: rgba(0, 0, 0, 0.6);
+    stroke-width: 0.6;
+  }
+  .mm-questgiver {
+    fill: #ffd400;
+    stroke: rgba(0, 0, 0, 0.65);
+    stroke-width: 0.6;
+  }
+  .mm-vendor {
+    fill: #ffd400;
+    stroke: rgba(0, 0, 0, 0.7);
+    stroke-width: 0.7;
+  }
+  .mm-vendor-glyph {
+    font-family: var(--rc-body);
+    font-weight: 900;
+    font-size: 7px;
+    fill: #1a1408;
+    text-anchor: middle;
+    pointer-events: none;
   }
   .mm-player {
     fill: var(--rc-magenta-bright);

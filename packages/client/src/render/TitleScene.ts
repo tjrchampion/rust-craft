@@ -1,7 +1,8 @@
 import * as THREE from "three";
-import { GLTFLoader, type GLTF } from "three/examples/jsm/loaders/GLTFLoader.js";
+import { type GLTF } from "three/examples/jsm/loaders/GLTFLoader.js";
 import type { RegionBlueprint } from "@rustcraft/shared";
 import { buildRock, buildBerryBush, buildBiomeTree } from "./models";
+import { load as loadGltf } from "./gltf";
 
 /**
  * Curated (non-gameplay) backdrop for the title / character-select screens:
@@ -26,17 +27,6 @@ const BUILDING_HEIGHTS: Record<string, number> = {
   well: 4.0,
   bridge_A: 4.5,
 };
-
-const loader = new GLTFLoader();
-const gltfCache = new Map<string, Promise<GLTF>>();
-function loadGltf(url: string): Promise<GLTF> {
-  let p = gltfCache.get(url);
-  if (!p) {
-    p = loader.loadAsync(url);
-    gltfCache.set(url, p);
-  }
-  return p;
-}
 
 async function placeBuilding(
   scene: THREE.Object3D,

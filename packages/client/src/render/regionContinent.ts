@@ -287,32 +287,58 @@ export class RegionContinent {
     const under = findRegionAtWorld(catalog, wx, wz);
     if (under) {
       const layer = this.layers.get(under.id);
-      if (layer) await layer.ready;
+      if (layer) {
+        await Promise.race([
+          layer.ready,
+          new Promise<void>((r) => setTimeout(r, 8000)),
+        ]).catch(() => {});
+      }
     }
   }
 
   private async ensureMounted(bp: RegionBlueprint): Promise<void> {
-    if (this.layers.has(bp.id) || this.loading.has(bp.id)) {
-      const existing = this.layers.get(bp.id);
-      if (existing) {
-        // Catalog/cache may have newer authored data (barriers etc.) after a save.
-        if (bp.heights?.length) this.updateLayerBlueprint(bp);
-        return existing.ready;
+    if (this.layers.has(bp.id)) {
+      const existing = this.layers.get(bp.id)!;
+      // Catalog/cache may have newer authored data (barriers etc.) after a save.
+      if (bp.heights?.length) this.updateLayerBlueprint(bp);
+      return Promise.race([
+        existing.ready,
+        new Promise<void>((r) => setTimeout(r, 8000)),
+      ]).catch(() => {});
+    }
+    if (this.loading.has(bp.id)) {
+      // Wait for in-flight mount — if it succeeds we're done; if it was
+      // cleaned up (e.g. unload() fired mid-mount) we'll re-enter below.
+      const waited = new Promise<void>((resolve) => {
+        const poll = setInterval(() => {
+          if (!this.loading.has(bp.id)) { clearInterval(poll); resolve(); }
+        }, 50);
+      });
+      await waited;
+      // It may have been unloaded during the in-flight mount; fall through to
+      // re-mount if still needed. If already present, return its ready.
+      const after = this.layers.get(bp.id);
+      if (after) {
+        return Promise.race([
+          after.ready,
+          new Promise<void>((r) => setTimeout(r, 8000)),
+        ]).catch(() => {});
       }
-      // Wait for in-flight mount.
-      while (this.loading.has(bp.id) && !this.layers.has(bp.id)) {
-        await new Promise((r) => setTimeout(r, 50));
-      }
-      return;
+      if (this.loading.has(bp.id)) return; // another re-entry is handling it
     }
     this.loading.add(bp.id);
     try {
-      // Always fetch so editor saves (barriers/clouds) land without a remount cycle.
+      // Fetch with a hard 5 s deadline — a stalled API call must not block
+      // the loading screen forever. Fall back to the stub (catalog entry).
       let blueprint = bp;
       try {
-        blueprint = await this.fetchBlueprint(bp.id);
+        blueprint = await Promise.race([
+          this.fetchBlueprint(bp.id),
+          new Promise<never>((_, reject) => setTimeout(() => reject(new Error("timeout")), 5000)),
+        ]);
       } catch {
         if (!blueprint.heights?.length) throw new Error(`Failed to fetch region ${bp.id}`);
+        // Use the stub we have — terrain will be flat but the player won't hang.
       }
       await preloadRegionAssets(blueprint, () => {});
       const group = new THREE.Group();
@@ -334,7 +360,10 @@ export class RegionContinent {
       this.colliderCache = null;
       // Build true-geometry (BVH) collision for this region's solids (async).
       void this.buildLayerCollision(blueprint);
-      await layer.ready;
+      await Promise.race([
+        layer.ready,
+        new Promise<void>((r) => setTimeout(r, 8000)),
+      ]).catch(() => {});
       // Warm around local player projection once we know them — caller updates.
     } finally {
       this.loading.delete(bp.id);

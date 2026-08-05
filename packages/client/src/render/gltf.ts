@@ -15,6 +15,7 @@ import {
   type ModularFit,
 } from "./classModels";
 import { createSharedGltfLoader } from "./sharedGltf";
+import { getAssetBuffer } from "./assetPack";
 
 const loader = createSharedGltfLoader();
 const cache = new Map<string, Promise<GLTF>>();
@@ -241,10 +242,55 @@ export function mobModelSpec(model: string): { url: string; anims: AnimSpec } {
 export function load(url: string): Promise<GLTF> {
   let p = cache.get(url);
   if (!p) {
-    p = loader.loadAsync(url);
+    p = (async () => {
+      // 1. Check if model exists inside the packed assets container (.rcpack)
+      const buffer = await getAssetBuffer(url);
+      if (buffer) {
+        return new Promise<GLTF>((resolve, reject) => {
+          loader.parse(buffer, url, resolve, reject);
+        });
+      }
+      // 2. Fallback to direct network GET request
+      return Promise.race([
+        loader.loadAsync(url),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error(`GLTF load timeout for ${url}`)), 12000),
+        ),
+      ]);
+    })().catch((err) => {
+      cache.delete(url);
+      throw err;
+    });
     cache.set(url, p);
   }
   return p;
+}
+
+/** Pre-parse and warm all 390+ GLTF models from the packed buffer into Three.js memory cache during startup. */
+export async function warmAllPackedAssets(onProgress?: (loaded: number, total: number) => void): Promise<void> {
+  const index = await initAssetPack();
+  if (!index) return;
+  const urls = Object.keys(index);
+  if (urls.length === 0) return;
+
+  let loaded = 0;
+  const BATCH_SIZE = 16;
+  for (let i = 0; i < urls.length; i += BATCH_SIZE) {
+    const batch = urls.slice(i, i + BATCH_SIZE);
+    await Promise.all(
+      batch.map(async (url) => {
+        try {
+          await load(url);
+        } catch {
+          /* ignore broken individual model */
+        } finally {
+          loaded++;
+          onProgress?.(loaded, urls.length);
+        }
+      }),
+    );
+    await new Promise((r) => setTimeout(r, 0));
+  }
 }
 
 const headBindWorldCache = new Map<CharacterGender, Promise<THREE.Matrix4 | null>>();

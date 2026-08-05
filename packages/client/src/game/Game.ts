@@ -77,7 +77,9 @@ import { GrassField } from "../render/grass";
 import { EntityManager } from "../render/entities";
 import { applyModularGearFromInventory, applyModularGearFromInventoryAsync } from "../render/modularGear";
 import { playerModelUrl, CLASS_WEAPON_NODES } from "../render/classModels";
-import { AnimatedModel, PLAYER_ANIMS, logicalFromState, dodgeLogicalFor } from "../render/gltf";
+import { AnimatedModel, PLAYER_ANIMS, logicalFromState, dodgeLogicalFor, warmAllPackedAssets } from "../render/gltf";
+import { preloadAssetPack } from "../render/assetPack";
+import { getSharedKtx2Loader } from "../render/sharedGltf";
 import {
   buildWorldStatic,
   buildVillage,
@@ -285,6 +287,7 @@ export class Game {
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1;
+    getSharedKtx2Loader(this.renderer);
 
     this.camera = new THREE.PerspectiveCamera(
       70,
@@ -354,12 +357,11 @@ export class Game {
     };
 
     canvas.addEventListener("mousedown", (e) => {
-      if (e.button === 2) {
-        e.preventDefault();
-        if (document.pointerLockElement !== canvas) {
-          void canvas.requestPointerLock();
-        }
-      }
+      // While the pointer is locked, real mouse events carry a frozen position
+      // and all target the canvas -- ignore them; InputManager re-dispatches a
+      // synthetic mousedown (isTrusted === false) at the software-cursor point,
+      // which is the one we act on. When unlocked, the real event is correct.
+      if (document.pointerLockElement && e.isTrusted) return;
       if (e.button === 0) {
         const hit = this.entities.raycastPlayer(this.camera, e.clientX, e.clientY);
         if (hit) {
@@ -494,8 +496,10 @@ export class Game {
       this.continent = new RegionContinent(
         this.scene,
         async (id) => {
-          // Prefer a network fetch so editor saves (barriers/clouds/etc.) reach
-          // the live continent without requiring a full page reload.
+          // Instant RAM cache lookup -- eliminate network requests during gameplay
+          const cached = this.regionBlueprintCache.get(id);
+          if (cached?.heights?.length) return cached;
+
           try {
             const res = await fetch(app.apiUrl(`/api/regions/${id}`), { credentials: "include" });
             if (res.ok) {
@@ -508,8 +512,7 @@ export class Game {
           } catch {
             /* fall through to cache */
           }
-          const cached = this.regionBlueprintCache.get(id);
-          if (cached?.heights?.length) return cached;
+          if (cached) return cached;
           throw new Error(`Failed to fetch region ${id}`);
         },
         this.regionNameMap,
@@ -795,30 +798,73 @@ export class Game {
 
   private async preloadAndEnter(msg: Extract<ServerMsg, { t: "welcome" }>): Promise<void> {
     try {
-      // Region blueprints already preload their own foliage/buildings via
-      // preloadRegionAssets. Skip global nature+settlement catalog warm —
-      // those were multi‑100 MB and mostly unused on the continent path.
       ui.loadingMessage = "Loading character...";
-      ui.loadingProgress = 40;
-      // UAL clips bind inside loadFrom; don't also await preloadCharacterAssets
-      // (that eagerly fetched both genders, all hair, skeletons, weapon props).
-      await this.avatar.loadFrom(playerModelUrl(this.selfGender), 1.8);
-      await this.avatar.applyAppearance(this.selfGender, this.selfAppearance);
-      ui.loadingProgress = 70;
-      await this.applyEquippedGearAsync(msg.inventory);
+      ui.loadingProgress = 20;
 
-      // Mount the region the server put us in (starting town for new chars,
-      // otherwise the region containing the restored logout pose).
-      const regionId = ui.regionState?.regionId;
+      // Parallelise: avatar load + region catalog fetch + master asset pack download
+      const avatarLoad = (async () => {
+        await this.avatar.loadFrom(playerModelUrl(this.selfGender), 1.8);
+        await this.avatar.applyAppearance(this.selfGender, this.selfAppearance);
+      })();
+      const catalogLoad = this.regionCatalog.length === 0 ? this.loadRegionCatalog() : Promise.resolve();
+      const packLoad = preloadAssetPack();
+
+      ui.loadingProgress = 30;
+      await Promise.all([avatarLoad, catalogLoad, packLoad]);
+
+      // Pre-fetch all full region blueprints in parallel during loading screen
+      if (this.regionCatalog.length > 0) {
+        await Promise.all(
+          this.regionCatalog.map(async (r) => {
+            if (this.regionBlueprintCache.get(r.id)?.heights?.length) return;
+            try {
+              const res = await fetch(app.apiUrl(`/api/regions/${r.id}`), { credentials: "include" });
+              if (res.ok) {
+                const data = (await res.json()) as { blueprint: RegionBlueprint };
+                this.regionBlueprintCache.set(r.id, data.blueprint);
+              }
+            } catch {}
+          }),
+        );
+      }
+
+      ui.loadingProgress = 45;
+
+      ui.loadingMessage = "Warming 3D asset catalog…";
+      await warmAllPackedAssets((loaded, total) => {
+        const pct = Math.floor(45 + (loaded / total) * 15);
+        ui.loadingProgress = pct;
+        ui.loadingMessage = `Warming 3D assets (${loaded}/${total})…`;
+      });
+      ui.loadingProgress = 60;
+
+      await this.applyEquippedGearAsync(msg.inventory);
+      ui.loadingProgress = 65;
+
+      // The server sends `regionState` *before* `welcome`, but there is a
+      // micro-task gap between WebSocket message dispatch and our onServerMsg
+      // handler. Retry for up to 2 s before giving up — covers any edge case
+      // where the two messages arrive in the same Event Loop tick.
+      let regionId = ui.regionState?.regionId;
+      if (!regionId) {
+        for (let i = 0; i < 40; i++) {
+          await new Promise((r) => setTimeout(r, 50));
+          regionId = ui.regionState?.regionId;
+          if (regionId) break;
+        }
+      }
+
       if (regionId) {
         ui.loadingMessage = "Loading region…";
-        ui.loadingProgress = 85;
+        ui.loadingProgress = 70;
         this.tearDownOverworld();
         this.regionEnterPromise = this.enterRegionInterior(regionId);
         if (this.regionEnterPromise) await this.regionEnterPromise;
       } else {
+        // No region — connected to the open overworld. Finish cleanly.
+        console.warn("[Game] No regionState after welcome — entering without region.");
         ui.loadingProgress = 100;
-        await new Promise((resolve) => setTimeout(resolve, 300));
+        await new Promise((resolve) => setTimeout(resolve, 100));
       }
 
       ui.loadingProgress = 100;
@@ -904,6 +950,12 @@ export class Game {
             crit ? `${Math.round(msg.amount)}!` : undefined,
           );
         }
+        // Green rising-mote flourish on whoever was healed -- the local
+        // avatar for self-heals, otherwise the tracked ally/mob group.
+        {
+          const healed = msg.targetId === this.selfId ? this.avatar.group : msg.targetId ? this.entities.groupOf(msg.targetId) : null;
+          if (healed) this.entities.spawnHealAura(healed);
+        }
         break;
       case "gather":
         if (msg.itemId && msg.amount) {
@@ -968,6 +1020,10 @@ export class Game {
         break;
       case "castStart":
         if (msg.sourceId === this.selfId) sound.play("castStart", { spellId: msg.spellId, classId: this.selfClassId });
+        if (msg.spellId) {
+          const pos = (msg.sourceId ? this.entities.entityWorldPos(msg.sourceId) : null) ?? new THREE.Vector3(this.move.x, this.move.y, this.move.z);
+          this.entities.spawnCastWindup(msg.spellId, pos);
+        }
         break;
       case "error":
         if (msg.message) ui.toast(msg.message);
@@ -1179,6 +1235,11 @@ export class Game {
     const dt = Math.min(0.1, (now - this.lastFrame) / 1000);
     this.lastFrame = now;
 
+    // Do NOT tick or render while the loading screen is active — it causes
+    // WebGL canvas flicker through the Svelte loading overlay, and streaming
+    // code that runs here can interfere with the async loading pipeline.
+    if (ui.loading) return;
+
     const actions = this.input.sample(dt);
     ui.lastDevice = this.input.lastDevice;
 
@@ -1367,6 +1428,9 @@ export class Game {
     this.updateCamera(rx, ry, rz);
     this.syncAuthoredRegionNodes();
     this.nodes?.update(rx, rz, now, dt);
+    // Mirror the local player's lasting positive buffs (HoTs, shields, haste)
+    // as auras on their own body -- see CharacterAuras.syncBuffs.
+    this.entities.syncSelfBuffs(this.avatar.group, ui.self?.auras.map((a) => a.auraId) ?? []);
     this.entities.update(now, dt, this.camera);
     this.tickClientSpellQueue();
     if (now - this.interactPromptAt >= INTERACT_PROMPT_INTERVAL_MS) {
@@ -1484,19 +1548,22 @@ export class Game {
   private async enterRegionInterior(regionId: string): Promise<void> {
     const alreadyMounted = !!this.continent?.getLayer(regionId);
     const showLoading = !alreadyMounted;
-    if (showLoading) {
+    const parentLoading = ui.loading;
+    if (showLoading && !parentLoading) {
       ui.loading = true;
       ui.loadingMessage = "Loading region…";
       ui.loadingProgress = 10;
     }
 
     try {
+      // Region catalog is already loaded by preloadAndEnter before we're called;
+      // only fall back if somehow we arrive here outside that flow.
       if (this.regionCatalog.length === 0) await this.loadRegionCatalog();
       const continent = this.ensureContinent();
 
-      if (showLoading) {
-        ui.loadingProgress = 30;
-        ui.loadingMessage = "Loading region…";
+      if (showLoading || parentLoading) {
+        ui.loadingProgress = Math.max(ui.loadingProgress, 75);
+        ui.loadingMessage = "Streaming terrain & assets…";
       }
 
       await continent.syncAround(this.move.x, this.move.z, this.continentCatalog(), {
@@ -1505,7 +1572,7 @@ export class Game {
 
       // Left the continent while loading.
       if (!ui.regionState?.regionId) {
-        if (showLoading) ui.loading = false;
+        if (showLoading && !parentLoading) ui.loading = false;
         return;
       }
 
@@ -1524,18 +1591,79 @@ export class Game {
       this.tickRenderFrom.y = this.move.y;
       this.tickRenderFrom.z = this.move.z;
 
-      if (showLoading) {
-        ui.loadingMessage = "Preparing region…";
-        ui.loadingProgress = 98;
-        this.renderer.compile(this.scene, this.camera);
+      if (showLoading || parentLoading) {
+        ui.loadingMessage = "Warming 360° graphics & shaders…";
+        ui.loadingProgress = 95;
+        this.prewarm360GpuPass();
         ui.loadingProgress = 100;
-        ui.loading = false;
+        if (!parentLoading) ui.loading = false;
       }
     } catch (e) {
       console.error("[Game] Continent enter failed", e);
-      if (showLoading) ui.loading = false;
+      if (showLoading && !parentLoading) ui.loading = false;
     } finally {
       this.regionEnterPromise = null;
+    }
+  }
+
+  /** Perform a 360-degree GPU pre-warm sweep pass before dropping the loading screen.
+   *  Rotates the camera through 8 cardinal & diagonal angles around the player pose,
+   *  updating continent streamers, grass, and rendering 1 frame at each angle.
+   *  This pre-compiles all WebGL shaders, terrain splat maps, foliage textures,
+   *  creature models, and shadow map depth buffers 360° around the player, making
+   *  subsequent camera turns 100% stutter-free. */
+  private prewarm360GpuPass(): void {
+    if (!this.renderer || !this.scene || !this.camera) return;
+    const px = this.move.x;
+    const py = this.move.y;
+    const pz = this.move.z;
+    const origYaw = this.cameraYaw;
+
+    try {
+      // --- Pass 1: compile shaders ---
+      // Sweep 8 angles and compile() at each so WebGL programs for every
+      // material visible in any direction are built before the player can turn.
+      const angles = [
+        0,
+        Math.PI / 4,
+        Math.PI / 2,
+        (3 * Math.PI) / 4,
+        Math.PI,
+        (5 * Math.PI) / 4,
+        (3 * Math.PI) / 2,
+        (7 * Math.PI) / 4,
+      ];
+
+      for (const angle of angles) {
+        this.cameraYaw = angle;
+        this.updateCamera(px, py, pz);
+        if (this.continent) {
+          this.continent.update(0, this.sun, px, pz, this.camera);
+        }
+        this.renderer.compile(this.scene, this.camera);
+      }
+
+      // --- Pass 2: render (offscreen-equivalent) to upload texture data to VRAM ---
+      // Three.js lazily uploads texture data on the first real render() where a
+      // texture is bound. compile() only uploads shader programs, NOT textures.
+      // A single render() sweep at original yaw forces all visible texture uploads
+      // before the loading screen drops, eliminating first-rotation stutter.
+      this.cameraYaw = origYaw;
+      this.updateCamera(px, py, pz);
+      const target = new THREE.WebGLRenderTarget(512, 512);
+      this.renderer.setRenderTarget(target);
+      for (const angle of angles) {
+        this.cameraYaw = angle;
+        this.updateCamera(px, py, pz);
+        this.renderer.render(this.scene, this.camera);
+      }
+      this.renderer.setRenderTarget(null);
+      target.dispose();
+    } catch (e) {
+      console.warn("[Game] prewarm360GpuPass completed with warning:", e);
+    } finally {
+      this.cameraYaw = origYaw;
+      this.updateCamera(px, py, pz);
     }
   }
 
@@ -2423,10 +2551,6 @@ export class Game {
 
   setUiMode(open: boolean): void {
     this.input.uiMode = open;
-    if (open) this.input.releasePointer();
-    // Closing a menu no longer re-locks the pointer -- the cursor stays free
-    // (WoW-style) until the player holds a mouse button over the viewport
-    // again to look around.
   }
 
   /** Open the character screen directly on `tab`, or close it if it's

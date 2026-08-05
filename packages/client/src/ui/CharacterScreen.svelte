@@ -1241,6 +1241,11 @@
                 class:moving={movingSpell === spellId}
                 class:locked={locked}
                 disabled={locked}
+                draggable={!locked}
+                ondragstart={(e) => {
+                  e.dataTransfer?.setData("text/plain", JSON.stringify({ container: "spellbook", spellId }));
+                  if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
+                }}
                 onmouseenter={(e) => showTooltip(spellId, e)}
                 onmouseleave={hideTooltip}
                 onclick={() => {

@@ -6,6 +6,10 @@ import * as QUARKS from "three.quarks";
 import { Vector3 as QVector3, Vector4 as QVector4 } from "three.quarks";
 import type { School } from "./vfx";
 import { SCHOOL_VFX } from "./vfx";
+import { SpellVfxPainter } from "./spellVfxPainter";
+export { SpellVfxPainter } from "./spellVfxPainter";
+export * from "./spellSpecs";
+export * from "./spellVfxPrimitives";
 
 /** Mirrors the normalized JSON shape written by scripts/hovl/extract-effect.mjs
  *  -- see that script's header for how each field maps back to Unity's
@@ -417,18 +421,17 @@ export class SpellVfxSystem {
   private renderer: QUARKS.BatchedRenderer;
   private effects = new Map<string, HovlEffectJSON>();
   private trailEffects = new Map<string, HovlEffectJSON>();
-  /** Effect-id -> school, populated by loadEffect so spawnForSchool knows
-   *  which schools have a real extracted effect vs need the procedural
-   *  fallback. */
   private effectIdForSchool = new Map<School, string>();
-  /** Soft cap on concurrent one-shot bursts — AoE spam shouldn't melt the GPU. */
   private liveBurstCount = 0;
   private static readonly MAX_LIVE_BURSTS = 18;
+
+  readonly painter: SpellVfxPainter;
 
   constructor(scene: THREE.Scene) {
     this.scene = scene;
     this.renderer = new QUARKS.BatchedRenderer();
     scene.add(this.renderer);
+    this.painter = new SpellVfxPainter(scene, this);
   }
 
   /** Load an extracted Hovl effect and register it as school's textured hit
@@ -531,5 +534,6 @@ export class SpellVfxSystem {
 
   update(dt: number): void {
     this.renderer.update(dt);
+    this.painter.update(dt);
   }
 }

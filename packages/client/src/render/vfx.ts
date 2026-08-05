@@ -231,21 +231,62 @@ export function buildSchoolProjectile(school: School, forceNew = false): THREE.G
 
   const profile = schoolProfile(school);
   const newGroup = new THREE.Group();
-  const geo =
-    school === "frost"
-      ? new THREE.OctahedronGeometry(0.22, 0)
-      : school === "arcane"
-        ? new THREE.TorusGeometry(0.18, 0.06, 6, 14)
-        : new THREE.SphereGeometry(0.18, 8, 6);
-  const core = new THREE.Mesh(geo, buildGlowMaterial(profile.color));
-  core.name = "core";
-  newGroup.add(core);
+
+  let coreMesh: THREE.Mesh;
+
+  if (school === "fire") {
+    // Tapered Flame Teardrop Cone
+    const geo = new THREE.ConeGeometry(0.2, 0.65, 8);
+    geo.rotateX(Math.PI / 2); // Point forward along +Z flight axis
+    coreMesh = new THREE.Mesh(geo, buildGlowMaterial(profile.color));
+  } else if (school === "frost") {
+    // Faceted Ice Spike Diamond
+    const geo = new THREE.OctahedronGeometry(0.25, 0);
+    geo.scale(0.8, 0.8, 2.2);
+    coreMesh = new THREE.Mesh(geo, buildGlowMaterial(profile.color));
+  } else if (school === "arcane") {
+    // Gyroscopic Arcane Sigil Ring + Floating Core
+    const geo = new THREE.TorusGeometry(0.22, 0.05, 8, 16);
+    coreMesh = new THREE.Mesh(geo, buildGlowMaterial(profile.color));
+    const innerGeo = new THREE.TetrahedronGeometry(0.14);
+    const inner = new THREE.Mesh(innerGeo, buildGlowMaterial(0xffffff));
+    inner.name = "innerCore";
+    coreMesh.add(inner);
+  } else if (school === "shadow") {
+    // Dark Void Orb + Outer Orbit Shell
+    const geo = new THREE.IcosahedronGeometry(0.22, 1);
+    coreMesh = new THREE.Mesh(geo, buildGlowMaterial(profile.color));
+    const shellGeo = new THREE.TorusGeometry(0.3, 0.03, 6, 12);
+    const shell = new THREE.Mesh(shellGeo, buildGlowMaterial(0xff00ff));
+    shell.name = "orbitShell";
+    coreMesh.add(shell);
+  } else if (school === "holy") {
+    // Radiant Sunforged Diamond
+    const geo = new THREE.OctahedronGeometry(0.24, 0);
+    geo.scale(1, 1, 1.8);
+    coreMesh = new THREE.Mesh(geo, buildGlowMaterial(profile.color));
+  } else if (school === "nature") {
+    // Venom Spike Needle
+    const geo = new THREE.ConeGeometry(0.14, 0.55, 6);
+    geo.rotateX(Math.PI / 2);
+    coreMesh = new THREE.Mesh(geo, buildGlowMaterial(profile.color));
+  } else {
+    // Physical Arrow / Blade Needle
+    const geo = new THREE.CylinderGeometry(0.02, 0.08, 0.8, 6);
+    geo.rotateX(Math.PI / 2);
+    coreMesh = new THREE.Mesh(geo, buildGlowMaterial(profile.color));
+  }
+
+  coreMesh.name = "core";
+  newGroup.add(coreMesh);
+
   const light = new THREE.PointLight(profile.color, 6, 8, 1.8);
   light.name = "light";
   light.visible = true;
   light.intensity = 0;
   newGroup.add(light);
-  newGroup.userData.spinSpeed = school === "arcane" ? 6 : school === "frost" ? 3 : 0;
+
+  newGroup.userData.spinSpeed = school === "arcane" ? 6 : school === "frost" ? 3 : school === "shadow" ? 4 : 0;
   return newGroup;
 }
 

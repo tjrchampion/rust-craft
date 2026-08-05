@@ -11,50 +11,7 @@ import {
   dungeonTierDef,
 } from "@rustcraft/shared";
 import { buildShrine, buildStump, buildNameplate, buildRock, enableFogOnObject } from "./models";
-import { createSharedGltfLoader } from "./sharedGltf";
-
-const loader = createSharedGltfLoader();
-const cache = new Map<string, Promise<GLTF>>();
-
-/** Target real-world height (m) per building type after normalization.
- *  Scaled up markedly for a more imposing, realistic settlement. */
-const BUILDING_HEIGHTS: Record<string, number> = {
-  home_A: 6.5,
-  home_B: 7.0,
-  tavern: 8.5,
-  blacksmith: 7.2,
-  market: 6.8,
-  church: 12.0,
-  windmill: 13.5,
-  lumbermill: 8.0,
-  well: 3.2,
-  destroyed: 6.0,
-  grain: 1.8,
-  tower_A: 16.0,
-};
-
-/** Clutter props (KayKit hexagon decoration). Height in meters. */
-const PROP_HEIGHTS: Record<string, number> = {
-  barrel: 1.1,
-  crate_A_big: 1.2,
-  crate_A_small: 0.8,
-  crate_B_small: 0.8,
-  bucket_water: 0.7,
-  fence_wood_straight: 1.2,
-  fence_wood_straight_gate: 1.6,
-  fence_stone_straight: 1.3,
-  flag_red: 3.5,
-  flag_blue: 3.5,
-};
-
-function loadGltf(url: string): Promise<GLTF> {
-  let p = cache.get(url);
-  if (!p) {
-    p = loader.loadAsync(url);
-    cache.set(url, p);
-  }
-  return p;
-}
+import { load as loadGltf } from "./gltf";
 
 function loadBuilding(type: string): Promise<GLTF> {
   return loadGltf(`/assets/models/buildings/building_${type}.gltf`);

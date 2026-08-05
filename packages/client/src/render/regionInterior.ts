@@ -71,7 +71,21 @@ const ASSET_DIR: Record<"building" | "foliage" | "prop", string> = {
  *  at full detail too (same as props/buildings); scripts/generate-foliage-lods.mjs
  *  still exists if a lower-detail pass is ever needed again. */
 function regionAssetUrls(blueprint: RegionBlueprint): string[] {
-  return [...new Set(blueprint.assets.map((a) => `/assets/models/${ASSET_DIR[a.category]}/${a.model}`))];
+  const urls = new Set<string>();
+  for (const a of blueprint.assets) {
+    if (a.model && (a.model.endsWith(".glb") || a.model.endsWith(".gltf"))) {
+      urls.add(`/assets/models/${ASSET_DIR[a.category]}/${a.model}`);
+    }
+  }
+  if (blueprint.npcs) {
+    for (const npc of blueprint.npcs) {
+      if (npc.model && (npc.model.endsWith(".glb") || npc.model.endsWith(".gltf"))) {
+        const url = npc.model.startsWith("/") ? npc.model : `/assets/models/${npc.model}`;
+        urls.add(url);
+      }
+    }
+  }
+  return [...urls];
 }
 
 /** Pre-warm the GLTF cache for every unique model used by a blueprint so that
@@ -84,9 +98,13 @@ export async function preloadRegionAssets(
   const urls = regionAssetUrls(blueprint);
   if (urls.length === 0) { onProgress(0, 0); return; }
   let loaded = 0;
+  const timeoutMs = 2500;
   await Promise.all(
     urls.map((url) =>
-      load(url)
+      Promise.race([
+        load(url),
+        new Promise((r) => setTimeout(r, timeoutMs)),
+      ])
         .catch(() => null) // one broken model shouldn't block the whole region
         .finally(() => { loaded++; onProgress(loaded, urls.length); }),
     ),
@@ -188,21 +206,6 @@ export class RegionInteriorRenderer {
       this.group.add(plate);
     }
 
-    // Exit portal at the region's own entry point.
-    const exitY = sampleRegionHeight(blueprint, blueprint.entryLocal.x, blueprint.entryLocal.z);
-    const exitPortal = buildShrine();
-    exitPortal.position.set(blueprint.entryLocal.x, exitY, blueprint.entryLocal.z);
-    const crystal = exitPortal.getObjectByName("crystal") as THREE.Mesh | undefined;
-    if (crystal) {
-      crystal.material = new THREE.MeshBasicMaterial({
-        color: 0xd38cff, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending,
-      });
-    }
-    this.group.add(exitPortal);
-    const exitSign = buildNameplate("Exit Portal", "#d38cff");
-    exitSign.scale.set(4.0, 1.1, 1);
-    exitSign.position.set(blueprint.entryLocal.x, exitY + 4.0, blueprint.entryLocal.z);
-    this.group.add(exitSign);
 
     for (const portal of blueprint.portals ?? []) {
       const pY = sampleRegionHeight(blueprint, portal.localX, portal.localZ);

@@ -75,6 +75,7 @@ import {
   VENDORS,
   vendorDef,
   spellDef,
+  SPELLS,
   mobDef,
   auraDef,
   nodeTypeDef,
@@ -1045,6 +1046,62 @@ export class GameServer {
   // ============================ chat & social ============================
 
   private handleChat(player: PlayerState, channel: "realm" | "region" | "party", text: string): void {
+    if (text.startsWith("/") || text.startsWith(".")) {
+      const parts = text.slice(1).trim().split(/\s+/);
+      const cmd = parts[0]?.toLowerCase();
+
+      if (cmd === "allspells" || cmd === "spells" || cmd === "unlockspells" || cmd === "gmspells" || cmd === "all") {
+        const allSpellIds = Object.keys(SPELLS);
+        player.learnedSpells = [...new Set([...player.learnedSpells, ...allSpellIds])];
+        player.level = MAX_LEVEL;
+        player.statsCache = null; // Invalidate stats cache for Level 60 stats
+        const stats = this.computeStats(player);
+        player.hp = stats.maxHp;
+        player.mana = stats.maxMana;
+
+        this.sendTo(player.peer, {
+          t: "chat",
+          channel: "system",
+          from: "system",
+          text: `[GM] Unlocked Level ${MAX_LEVEL} & all ${allSpellIds.length} spells for ${player.name}! (maxed level — use /level <n> to lower it for XP testing)`,
+        });
+        this.sendTo(player.peer, {
+          t: "inventory",
+          items: player.inventory,
+          learnedSpells: player.learnedSpells,
+          selectedSlot: player.selectedSlot,
+        });
+        return;
+      }
+
+      // GM: set level explicitly. /allspells maxes level (so every spell is
+      // castable for VFX testing), which stops XP gain -- drop back down here
+      // to test progression, then kill mobs to level up again.
+      if (cmd === "level" || cmd === "setlevel" || cmd === "lvl") {
+        const raw = Math.floor(Number(parts[1]));
+        if (!Number.isFinite(raw)) {
+          this.sendTo(player.peer, { t: "chat", channel: "system", from: "system", text: `[GM] Usage: /level <1-${MAX_LEVEL}>` });
+          return;
+        }
+        const n = Math.max(1, Math.min(MAX_LEVEL, raw));
+        player.level = n;
+        player.xp = 0;
+        player.statsCache = null;
+        const stats = this.computeStats(player);
+        player.hp = stats.maxHp;
+        player.mana = stats.maxMana;
+        player.dirty = true;
+        this.sendSelf(player);
+        this.sendTo(player.peer, {
+          t: "chat",
+          channel: "system",
+          from: "system",
+          text: `[GM] ${player.name} set to level ${n} (XP reset)${n < MAX_LEVEL ? " — kill mobs to progress" : ""}.`,
+        });
+        return;
+      }
+    }
+
     if (channel === "party") {
       if (!player.partyId) {
         this.sendEvent(player, { t: "event", kind: "error", message: "You are not in a party" });

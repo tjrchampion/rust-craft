@@ -1,9 +1,7 @@
 import * as THREE from "three";
 import { type GLTF } from "three/examples/jsm/loaders/GLTFLoader.js";
-import { createSharedGltfLoader } from "./sharedGltf";
 import { enableFogOnObject } from "./models";
-
-const loader = createSharedGltfLoader();
+import { load } from "./gltf";
 
 export type TreeKey =
   | "tree_single_A"
@@ -146,20 +144,13 @@ export function ensureNatureTemplate(key: TreeKey): Promise<void> {
   if (templates.has(key)) return Promise.resolve();
   let p = loading.get(key);
   if (p) return p;
-  p = new Promise<void>((resolve) => {
-    loader.load(
-      TREE_URLS[key],
-      (gltf) => {
-        templates.set(key, normalize(gltf, TREE_HEIGHTS[key]));
-        resolve();
-      },
-      undefined,
-      (err) => {
-        console.warn(`[natureAssets] failed to load ${key}`, err);
-        resolve();
-      },
-    );
-  });
+  p = load(TREE_URLS[key])
+    .then((gltf) => {
+      templates.set(key, normalize(gltf, TREE_HEIGHTS[key]));
+    })
+    .catch((err) => {
+      console.warn(`[natureAssets] failed to load ${key}`, err);
+    });
   loading.set(key, p);
   return p;
 }

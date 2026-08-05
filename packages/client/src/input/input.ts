@@ -1,3 +1,5 @@
+import { game as ui } from "../ui/gameState.svelte";
+
 /**
  * Action-based input layer. Keyboard/mouse and Gamepad API feed the same
  * action state; game code never reads raw keys. The HUD reads `lastDevice`
@@ -75,10 +77,26 @@ function dz(v: number): number {
   return Math.abs(v) < GAMEPAD_DEADZONE ? 0 : v;
 }
 
+function clamp(v: number, lo: number, hi: number): number {
+  return v < lo ? lo : v > hi ? hi : v;
+}
+
 export class InputManager {
   lastDevice: InputDevice = "kbm";
-  /** When true (menus open), movement/attack actions are suppressed. */
-  uiMode = false;
+  /** When true (a menu/panel is open), movement/attack actions are suppressed
+   *  AND the pointer is released so the panel gets the real OS cursor (full
+   *  native hover/drag). Closing the panel re-captures. Backed by _uiMode so
+   *  the setter can drive the pointer-lock transition. */
+  private _uiMode = false;
+  get uiMode(): boolean {
+    return this._uiMode;
+  }
+  set uiMode(open: boolean) {
+    if (this._uiMode === open) return;
+    this._uiMode = open;
+    if (open) this.exitLock();
+    else this.requestLock();
+  }
 
   private keys = new Set<string>();
   private mouseDx = 0;
@@ -97,6 +115,17 @@ export class InputManager {
   private rightDown = false;
   private lastMouseX = 0;
   private lastMouseY = 0;
+  /** Software ("in-game") cursor position in viewport px. While locked it's
+   *  advanced by mouse *movement* (the OS cursor is hidden/frozen); while
+   *  unlocked it tracks the real cursor. Mirrored to ui.cursorX/Y for
+   *  GameCursor to render, and used as the hit point for re-dispatched
+   *  clicks (see dispatchSynthetic). */
+  private vx = 0;
+  private vy = 0;
+  /** Element the current locked left-press started on, so a press+release on
+   *  the same control fires a click (cast/select) while a press-then-release
+   *  on a *different* element is a drag and suppresses the click. */
+  private downEl: Element | null = null;
   private prevPadButtons: boolean[] = [];
   private canvas: HTMLCanvasElement;
   /** LB/RB tap-vs-hold-chord disambiguation: a bare tap keeps the button's
@@ -119,76 +148,112 @@ export class InputManager {
     this.canvas = canvas;
 
     window.addEventListener("keydown", (e) => {
-      if (this.isTypingTarget(e.target)) return;
-      this.lastDevice = "kbm";
-      // CapsLock is a toggle: on macOS it only fires keydown when turning ON
-      // and keyup when turning OFF. Treat every edge as one target press,
-      // debounced so platforms that fire both don't double-trigger.
+      const target = e.target as HTMLElement | null;
+      const typing = this.isTypingTarget(target);
+      if (typing) return;
+
+      // Handle CapsLock edge directly on keydown -- keyup is unreliable for it.
       if (e.code === "CapsLock") {
         this.queueCaps();
-        return;
+      } else if (!e.repeat) {
+        this.pressedQueue.add(e.code);
       }
-      if (!e.repeat) this.pressedQueue.add(e.code);
       this.keys.add(e.code);
-      if (["Space", "Tab", "KeyE"].includes(e.code)) e.preventDefault();
+      this.lastDevice = "kbm";
     });
     window.addEventListener("keyup", (e) => {
-      if (e.code === "CapsLock") {
-        this.queueCaps();
-        return;
-      }
       this.keys.delete(e.code);
     });
     window.addEventListener("blur", () => {
       this.keys.clear();
       this.leftDown = false;
       this.rightDown = false;
+      ui.isRightClickDragging = false;
     });
 
     document.addEventListener("pointerlockchange", () => {
       this.pointerLocked = document.pointerLockElement === canvas;
-    });
-    window.addEventListener("mousemove", (e) => {
-      // Only rotate the camera while a look-button hold has us pointer-locked
-      // (see mousedown/mouseup below) -- WoW-style: the cursor is otherwise
-      // free to click HUD/menus, and merely moving the mouse over the
-      // viewport does nothing.
+      ui.pointerCaptured = this.pointerLocked;
       if (this.pointerLocked) {
-        this.mouseDx += e.movementX ?? 0;
-        this.mouseDy += e.movementY ?? 0;
+        // Anchor the software cursor where the OS cursor was so it doesn't jump.
+        this.vx = this.lastMouseX;
+        this.vy = this.lastMouseY;
+        this.publishCursor();
+      } else {
+        // Capture lost (Esc / blur / a panel opened). Any right-drag is over;
+        // if no panel is open, the next click re-captures (see pointerdown).
+        this.rightDown = false;
+        ui.isRightClickDragging = false;
       }
-      this.lastMouseX = e.clientX;
-      this.lastMouseY = e.clientY;
     });
-    window.addEventListener("mousedown", (e) => {
-      if (e.button === 0) {
-        this.leftDown = true;
-        this.lastDevice = "kbm";
-      }
-      if (e.button === 2) {
-        this.rightDown = true;
-        const targetEl = e.target as HTMLElement | null;
-        const isTextInput = targetEl?.tagName === "INPUT" || targetEl?.tagName === "TEXTAREA";
-        if (!isTextInput) {
-          e.preventDefault();
-          if (!this.pointerLocked) {
-            void canvas.requestPointerLock();
-          }
+    window.addEventListener("pointermove", (e: PointerEvent) => {
+      const dx = e.movementX ?? 0;
+      const dy = e.movementY ?? 0;
+      if (this.pointerLocked) {
+        if (this.rightDown) {
+          // Right button held -> turn the camera; the software cursor holds still.
+          this.mouseDx += dx;
+          this.mouseDy += dy;
+        } else {
+          // Otherwise movement drives the software cursor over the HUD/world.
+          this.vx = clamp(this.vx + dx, 0, window.innerWidth - 1);
+          this.vy = clamp(this.vy + dy, 0, window.innerHeight - 1);
+          this.publishCursor();
+        }
+        // clientX/Y are frozen while locked; keep lastMouse* on the virtual
+        // position so a later re-lock anchors where the cursor visibly is.
+        this.lastMouseX = this.vx;
+        this.lastMouseY = this.vy;
+      } else {
+        // Unlocked (panel open, or not captured yet): mirror the real cursor,
+        // and still allow a right-drag to turn if somehow unlocked mid-combat.
+        this.lastMouseX = e.clientX;
+        this.lastMouseY = e.clientY;
+        this.vx = e.clientX;
+        this.vy = e.clientY;
+        this.publishCursor();
+        if (this.rightDown) {
+          this.mouseDx += dx;
+          this.mouseDy += dy;
         }
       }
-      this.lastMouseX = e.clientX;
-      this.lastMouseY = e.clientY;
     });
-    window.addEventListener("mouseup", (e) => {
+    window.addEventListener("pointerdown", (e: PointerEvent) => {
+      if (e.button === 0) this.leftDown = true;
+      if (e.button === 2) this.rightDown = true;
+      if (e.button === 0 || e.button === 2) this.lastDevice = "kbm";
+
+      if (!this.pointerLocked) {
+        // Re-capture on any gameplay click (Pointer Lock needs a user gesture).
+        // A panel being open (uiMode) keeps the native cursor for that panel.
+        if (!this._uiMode) this.requestLock();
+        // Unlocked: let native DOM/canvas handlers process the click.
+        return;
+      }
+
+      // Locked: every real mouse event targets the canvas at a frozen point,
+      // so drive the interaction from the software cursor instead.
+      if (e.button === 2) {
+        ui.isRightClickDragging = true; // begin camera drag
+      } else if (e.button === 0 && !this.rightDown) {
+        this.downEl = document.elementFromPoint(this.vx, this.vy);
+        this.synthMouse(this.downEl, "mousedown", e);
+      }
+    });
+    window.addEventListener("pointerup", (e: PointerEvent) => {
       if (e.button === 0) this.leftDown = false;
       if (e.button === 2) {
         this.rightDown = false;
-        const targetEl = e.target as HTMLElement | null;
-        const isTextInput = targetEl?.tagName === "INPUT" || targetEl?.tagName === "TEXTAREA";
-        if (!isTextInput) {
-          e.preventDefault();
-        }
-        this.releasePointer();
+        ui.isRightClickDragging = false;
+      }
+      if (this.pointerLocked && e.button === 0) {
+        // Re-dispatch mouseup at the software cursor; a click only when the
+        // release lands on the same control the press did (so a drag between
+        // two hotbar slots doesn't also cast the spell it started on).
+        const upEl = document.elementFromPoint(this.vx, this.vy);
+        this.synthMouse(upEl, "mouseup", e);
+        if (this.sameClickable(this.downEl, upEl)) this.synthMouse(upEl, "click", e);
+        this.downEl = null;
       }
     });
     const blockMenu = (e: Event) => {
@@ -216,10 +281,77 @@ export class InputManager {
     window.addEventListener("gamepadconnected", () => {
       this.lastDevice = "gamepad";
     });
+
+    // Start the software cursor centred, then capture the pointer -- we're
+    // constructed inside the "Enter World" click gesture, so the lock request
+    // is allowed; if a browser rejects it, the first in-world click captures.
+    this.vx = this.lastMouseX = Math.floor(window.innerWidth / 2);
+    this.vy = this.lastMouseY = Math.floor(window.innerHeight / 2);
+    this.publishCursor();
+    this.requestLock();
   }
 
   private isTypingTarget(t: EventTarget | null): boolean {
     return t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement;
+  }
+
+  private publishCursor(): void {
+    ui.cursorX = this.vx;
+    ui.cursorY = this.vy;
+  }
+
+  /** (Re)acquire pointer lock on the game canvas. No-op if already locked;
+   *  must be called from within a user gesture or the browser rejects it. */
+  private requestLock(): void {
+    if (this.pointerLocked) return;
+    try {
+      void this.canvas.requestPointerLock?.();
+    } catch {}
+  }
+
+  /** Release the pointer (a panel opened) -- ends any camera drag and hands
+   *  the OS cursor back for native UI. */
+  private exitLock(): void {
+    this.rightDown = false;
+    ui.isRightClickDragging = false;
+    if (document.pointerLockElement === this.canvas) {
+      try {
+        document.exitPointerLock();
+      } catch {}
+    }
+  }
+
+  /** While locked the OS cursor is frozen and every real mouse event targets
+   *  the canvas, so a click can't reach the HUD button (or the right spot on
+   *  the canvas) the player is actually pointing at. Re-dispatch the event to
+   *  `target` (resolved from the software cursor) instead -- a HUD button's
+   *  onmousedown/onclick or the canvas's own target-picker then fire at the
+   *  correct point. Modifier keys are copied from the source pointer event so
+   *  Shift-click (e.g. hotbar move-mode) keeps working. */
+  private synthMouse(target: Element | null, type: "mousedown" | "mouseup" | "click", src: PointerEvent): void {
+    if (!target) return;
+    target.dispatchEvent(
+      new MouseEvent(type, {
+        bubbles: true,
+        cancelable: true,
+        view: window,
+        clientX: this.vx,
+        clientY: this.vy,
+        button: 0,
+        shiftKey: src.shiftKey,
+        ctrlKey: src.ctrlKey,
+        altKey: src.altKey,
+        metaKey: src.metaKey,
+      }),
+    );
+  }
+
+  /** Do two hit-tested elements belong to the same interactive control? Used
+   *  to decide press+release === click vs. drag (see the pointerup handler). */
+  private sameClickable(a: Element | null, b: Element | null): boolean {
+    if (!a || !b) return false;
+    const sel = "button, [role='button'], a, input, select, .slot, .rc-action-slot, .rc-btn, .item-card";
+    return (a.closest(sel) ?? a) === (b.closest(sel) ?? b);
   }
 
   /** True the frame a movement key is tapped twice within DOUBLE_TAP_MS --
