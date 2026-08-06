@@ -17,28 +17,32 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import { execSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const input = process.argv[2];
 if (!input) {
-  console.error('Usage: node scripts/import-hairstyles.mjs "<Universal Base Characters[Standard] folder>"');
+  console.error('Usage: node scripts/import-hairstyles.mjs "<Universal Base Characters folder>"');
   process.exit(1);
 }
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const outDir = path.join(root, "packages/client/public/assets/models/modular/Hair");
-const srcDir = path.join(path.resolve(input), "Hairstyles", "Rigged to Head Bone", "glTF (Godot -Unreal)");
 
-if (!fs.existsSync(srcDir)) {
-  console.error(`Could not find "${srcDir}" -- check the input folder is the pack's top-level dir.`);
+const candidateDirs = [
+  path.join(path.resolve(input), "Hairstyles", "Rigged to Head Bone", "glTF (Godot -Unreal)"),
+  path.join(path.resolve(input), "Hairstyles", "Origin at 0", "glTF (Godot)"),
+];
+
+const srcDir = candidateDirs.find((d) => fs.existsSync(d));
+
+if (!srcDir) {
+  console.error(`Could not find Hairstyles glTF folder in "${input}".`);
   process.exit(1);
 }
 
 fs.mkdirSync(outDir, { recursive: true });
 
-// Quaternius glTF sometimes references *_png.png; symlink to the real file,
-// same fixup import-universal-base.mjs applies to the body meshes.
 function fixTextureAliases(dir) {
   for (const bad of ["T_Hair_1_Normal_png.png", "T_Hair_2_Normal_png.png", "T_Hair_1_BaseColor_png.png", "T_Hair_2_BaseColor_png.png"]) {
     const good = bad.replace("_png.png", ".png");
@@ -47,28 +51,36 @@ function fixTextureAliases(dir) {
     if (fs.existsSync(target) && !fs.existsSync(link)) fs.symlinkSync(good, link);
   }
 }
-fixTextureAliases(srcDir);
 
-const PIECES = [
-  "Hair_Buzzed",
-  "Hair_BuzzedFemale",
-  "Hair_Long",
-  "Hair_SimpleParted",
-  "Hair_Buns",
-  "Hair_Beard",
-  "Eyebrows_Regular",
-  "Eyebrows_Female",
-];
-
-for (const name of PIECES) {
-  const src = path.join(srcDir, `${name}.gltf`);
-  if (!fs.existsSync(src)) {
-    console.warn(`! ${name}.gltf not found in pack, skipping`);
-    continue;
+function findGltfFiles(dir) {
+  let results = [];
+  fixTextureAliases(dir);
+  for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
+    const p = path.join(dir, ent.name);
+    if (ent.isDirectory()) {
+      results = results.concat(findGltfFiles(p));
+    } else if (ent.isFile() && ent.name.endsWith(".gltf")) {
+      results.push(p);
+    }
   }
-  const dest = path.join(outDir, `${name}.glb`);
-  execSync(`npx --yes @gltf-transform/cli copy "${src}" "${dest}"`, { stdio: "inherit", cwd: root });
-  console.log("Imported", name);
+  return results;
 }
 
-console.log("Done — hair/eyebrow pieces are in packages/client/public/assets/models/modular/Hair/");
+const gltfFiles = findGltfFiles(srcDir);
+const require = createRequire(path.join(root, "packages/client/package.json"));
+const { NodeIO } = await import(pathToFileURL(require.resolve("@gltf-transform/core")).href);
+const io = new NodeIO();
+
+for (const src of gltfFiles) {
+  const baseName = path.basename(src, ".gltf");
+  const dest = path.join(outDir, `${baseName}.glb`);
+  try {
+    const doc = await io.read(src);
+    await io.write(dest, doc);
+    console.log("Imported", baseName);
+  } catch (err) {
+    console.warn(`Could not import ${baseName}:`, err.message);
+  }
+}
+
+console.log(`Done — ${gltfFiles.length} hair/eyebrow pieces are in packages/client/public/assets/models/modular/Hair/`);

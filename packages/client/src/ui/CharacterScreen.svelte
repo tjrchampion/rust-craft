@@ -11,6 +11,8 @@
   import { music } from "../game/music";
   import { ClassPreviewScene } from "../render/ClassPreviewScene";
 
+  import CharacterThumbnail from "./CharacterThumbnail.svelte";
+
   const KBM_LABELS = ["1", "2", "3", "4", "5", "6", "Q", "Z", "X", "C"];
   const PAD_LABELS = ["LB+A", "LB+B", "LB+X", "LB+Y", "LB+↑", "LB+↓", "LB+←", "LB+→", "RB+A", "RB+B"];
 
@@ -124,7 +126,12 @@
     return parsed;
   }
 
-  const wikiParsed = parseWiki(wikiMarkdown);
+  let _wikiParsedCache: WikiLine[] | null = null;
+  const wikiParsed = $derived.by(() => {
+    if (game.activeTab !== "system") return [];
+    if (!_wikiParsedCache) _wikiParsedCache = parseWiki(wikiMarkdown);
+    return _wikiParsedCache;
+  });
 
   function formatBoldText(text: string): string {
     return text.replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>");
@@ -136,6 +143,143 @@
   /** A spell picked from the Spell Book list (or an already-slotted hotbar
    *  cell), waiting for a hotbar slot to land on via sendAssignSpell. */
   let movingSpell = $state<string | null>(null);
+  let spellHotbarPage = $state(0);
+  const currentSpellbookHotbarSlots = $derived(
+    Array.from({ length: 10 }, (_, i) => {
+      const slotIndex = spellHotbarPage * 10 + i;
+      return { item: hotbarSlots[slotIndex], slotIndex, displayIndex: i };
+    })
+  );
+
+  type ComponentType = any;
+  const tabCache = new Map<CharacterTab, ComponentType>();
+  let activeTabComponent = $state<ComponentType>(null);
+  let loadingTab = $state(false);
+
+  const TAB_LOADERS: Record<CharacterTab, () => Promise<{ default: ComponentType }>> = {
+    inventory: () => import("./tabs/InventoryTab.svelte"),
+    craft: () => import("./tabs/CraftingTab.svelte"),
+    spellbook: () => import("./tabs/SpellbookTab.svelte"),
+    quests: () => import("./tabs/QuestsTab.svelte"),
+    achievements: () => import("./tabs/AchievementsTab.svelte"),
+    party: () => import("./tabs/PartyTab.svelte"),
+    social: () => import("./tabs/SocialTab.svelte"),
+    system: () => import("./tabs/SystemTab.svelte"),
+  };
+
+  async function loadTabComponent(tabId: CharacterTab) {
+    if (tabCache.has(tabId)) {
+      activeTabComponent = tabCache.get(tabId);
+      return;
+    }
+    loadingTab = true;
+    try {
+      const loader = TAB_LOADERS[tabId];
+      if (loader) {
+        const mod = await loader();
+        tabCache.set(tabId, mod.default);
+        activeTabComponent = mod.default;
+      }
+    } catch (err) {
+      console.error("Failed to lazy load tab component:", err);
+    } finally {
+      loadingTab = false;
+    }
+  }
+
+  $effect(() => {
+    loadTabComponent(game.activeTab);
+  });
+
+  let craftSearch = $state("");
+  let craftCategory = $state<"all" | "weapons" | "armor" | "consumables" | "tools" | "reagents" | "station">("all");
+  let craftHaveMaterialsOnly = $state(false);
+  let selectedRecipeId = $state<string>("bandage");
+  let craftCount = $state(1);
+  let isCrafting = $state(false);
+  let craftProgress = $state(0);
+
+  const allRecipes = Object.values(RECIPES);
+
+  function getRecipeCategory(recipe: RecipeDef): "weapons" | "armor" | "consumables" | "tools" | "reagents" | "station" {
+    if (recipe.station) return "station";
+    const outDef = itemDef(recipe.output);
+    if (!outDef) return "reagents";
+    const t = outDef.type;
+    if (t === "weapon") return "weapons";
+    if (t === "armor" || t === "head" || t === "chest" || t === "legs" || t === "feet" || t === "shoulders") return "armor";
+    if (t === "potion" || t === "consumable" || t === "food") return "consumables";
+    if (t === "tool" || t === "bag" || t === "mount") return "tools";
+    return "reagents";
+  }
+
+  function getOwnedQty(itemId: string): number {
+    let total = 0;
+    for (const item of game.inventory) {
+      // Match the server's craft consumption (inventory + hotbar), so the
+      // "can craft / max" the UI shows never disagrees with what actually crafts.
+      if ((item.container === "inventory" || item.container === "hotbar") && item.itemId === itemId) {
+        total += item.qty;
+      }
+    }
+    return total;
+  }
+
+  function maxCraftable(recipe: RecipeDef): number {
+    let max = Infinity;
+    for (const ing of recipe.ingredients) {
+      const owned = getOwnedQty(ing.itemId);
+      const possible = Math.floor(owned / Math.max(1, ing.qty));
+      if (possible < max) max = possible;
+    }
+    return max === Infinity ? 0 : max;
+  }
+
+  function canCraftRecipe(recipe: RecipeDef, count = 1): boolean {
+    for (const ing of recipe.ingredients) {
+      if (getOwnedQty(ing.itemId) < ing.qty * count) return false;
+    }
+    return true;
+  }
+
+  const filteredRecipes = $derived.by(() => {
+    if (game.activeTab !== "craft") return [];
+    return allRecipes.filter((r) => {
+      const outDef = itemDef(r.output);
+      const name = outDef?.name ?? r.output;
+      if (craftSearch && !name.toLowerCase().includes(craftSearch.toLowerCase())) return false;
+      if (craftCategory !== "all" && getRecipeCategory(r) !== craftCategory) return false;
+      if (craftHaveMaterialsOnly && maxCraftable(r) <= 0) return false;
+      return true;
+    });
+  });
+
+  const selectedRecipe = $derived(allRecipes.find((r) => r.id === selectedRecipeId) ?? allRecipes[0]);
+
+  function startCrafting(recipe: RecipeDef, count: number) {
+    if (isCrafting || !canCraftRecipe(recipe, count)) return;
+    isCrafting = true;
+    craftProgress = 0;
+    sound.play("ui");
+
+    let progress = 0;
+    const interval = setInterval(() => {
+      progress += 0.15;
+      craftProgress = Math.min(1, progress);
+      if (progress >= 1) {
+        clearInterval(interval);
+        isCrafting = false;
+        craftProgress = 0;
+        const g = getGame();
+        for (let i = 0; i < count; i++) {
+          g?.sendCraft(recipe.id);
+        }
+        const outDef = itemDef(recipe.output);
+        game.toast(`Crafted ${count * recipe.outputQty}x ${outDef.name}!`);
+        sound.play("craft");
+      }
+    }, 80);
+  }
   /** Floating spell tooltip -- fixed-position (viewport-relative, computed
    *  from the hovered row's own rect) rather than CSS :hover + absolute, so
    *  it always renders above everything with no ancestor overflow/scroll
@@ -992,906 +1136,59 @@
     </div>
 
     <div class="content">
-      {#if game.activeTab === "inventory"}
-        <div class="col paperdoll-col">
-          <h3>Character</h3>
-          <div class="paperdoll">
-            <div class="paperdoll-slots">
-              {#each PAPERDOLL_LEFT as slotName (slotName)}
-                {@const i = EQUIP_SLOTS.indexOf(slotName)}
-                {@const item = equipSlots[i]}
-                <button
-                  class="equip-slot"
-                  class:cursor={equipCursor === i}
-                  class:filled={!!item}
-                  class:moving={moving?.container === "equip" && moving.slot === i}
-                  title={item ? itemDef(item.itemId).name : EQUIP_LABELS[slotName]}
-                  onclick={() => {
-                    equipCursor = i;
-                    activateInv("equip", i);
-                  }}
-                  oncontextmenu={(e) => { e.preventDefault(); if (item) openItemContextMenu("equip", i, item.itemId, e); }}
-                  onmouseenter={(e) => item && showItemTooltip(item.itemId, item.durability, e)}
-                  onmouseleave={hideItemTooltip}
-                >
-                  <span class="equip-slot-icon">
-                    {#if item}
-                      <IconGlyph value={itemIcon(item.itemId)} size={28} itemId={item.itemId} />
-                    {/if}
-                  </span>
-                  <span class="equip-slot-label">{EQUIP_LABELS[slotName]}</span>
-                </button>
-              {/each}
-            </div>
-            <div class="paperdoll-stage">
-              <canvas class="paperdoll-canvas" bind:this={paperdollCanvas}></canvas>
-              <div class="char-info">
-                <div class="char-level-class">Level {game.self?.level ?? 1} · {classInfo?.name ?? "Adventurer"}</div>
-                <div class="char-vitals">
-                  <div>HP: {Math.round(game.self?.hp ?? 0)}/{Math.round(game.self?.maxHp ?? 0)}</div>
-                  <div>{classInfo?.resourceLabel ?? "Mana"}: {Math.round(game.self?.mana ?? 0)}/{Math.round(game.self?.maxMana ?? 0)}</div>
-                </div>
-                {#if computedStats}
-                  <div class="stats-grid">
-                    <div class="stat-item"><span class="stat-name">Power:</span> <span class="stat-val">{Math.round(computedStats.power)}</span></div>
-                    <div class="stat-item"><span class="stat-name">Agility:</span> <span class="stat-val">{Math.round(computedStats.agility)}</span></div>
-                    <div class="stat-item"><span class="stat-name">Vitality:</span> <span class="stat-val">{Math.round(computedStats.vitality)}</span></div>
-                    <div class="stat-item"><span class="stat-name">Armor:</span> <span class="stat-val">{Math.round(computedStats.armor)}</span></div>
-                    <div class="stat-item"><span class="stat-name">Crit:</span> <span class="stat-val">{Math.round(computedStats.critChance * 100)}%</span></div>
-                    <div class="stat-item"><span class="stat-name">Speed:</span> <span class="stat-val">x{computedStats.moveSpeedMult.toFixed(2)}</span></div>
-                  </div>
-                {/if}
-              </div>
-            </div>
-            <div class="paperdoll-slots">
-              {#each PAPERDOLL_RIGHT as slotName (slotName)}
-                {@const i = EQUIP_SLOTS.indexOf(slotName)}
-                {@const item = equipSlots[i]}
-                <button
-                  class="equip-slot"
-                  class:cursor={equipCursor === i}
-                  class:filled={!!item}
-                  class:moving={moving?.container === "equip" && moving.slot === i}
-                  title={item ? itemDef(item.itemId).name : EQUIP_LABELS[slotName]}
-                  onclick={() => {
-                    equipCursor = i;
-                    activateInv("equip", i);
-                  }}
-                  oncontextmenu={(e) => { e.preventDefault(); if (item) openItemContextMenu("equip", i, item.itemId, e); }}
-                  onmouseenter={(e) => item && showItemTooltip(item.itemId, item.durability, e)}
-                  onmouseleave={hideItemTooltip}
-                >
-                  <span class="equip-slot-icon">
-                    {#if item}
-                      <IconGlyph value={itemIcon(item.itemId)} size={28} itemId={item.itemId} />
-                    {/if}
-                  </span>
-                  <span class="equip-slot-label">{EQUIP_LABELS[slotName]}</span>
-                </button>
-              {/each}
-            </div>
-          </div>
+      {#if loadingTab && !activeTabComponent}
+        <div class="tab-loading-box">
+          <span class="tab-loading-spinner">✨</span>
+          <span>Loading tab...</span>
         </div>
-        <div class="col backpack-col">
-          <h3>Backpack</h3>
-          <div class="grid">
-            {#each invSlots as item, i (i)}
-              <button
-                class="cell"
-                class:cursor={invCursor === i}
-                class:moving={moving?.container === "inventory" && moving.slot === i}
-                onclick={() => {
-                  invCursor = i;
-                  activateInv("inventory", i);
-                }}
-                oncontextmenu={(e) => { e.preventDefault(); if (item) openItemContextMenu("inventory", i, item.itemId, e); }}
-                onmouseenter={(e) => item && showItemTooltip(item.itemId, item.durability, e)}
-                onmouseleave={hideItemTooltip}
-              >
-                {#if item}
-                  <IconGlyph value={itemIcon(item.itemId)} itemId={item.itemId} />
-                  {#if item.qty > 1}<span class="qty">{item.qty}</span>{/if}
-                {/if}
-              </button>
-            {/each}
-          </div>
-          <h3>Hotbar</h3>
-          <div class="hotbar-row">
-            {#each hotbarSlots as item, i (i)}
-              {@const spellId = spellIdOf(item)}
-              <button
-                class="cell small"
-                class:first={i === 6}
-                class:moving={moving?.container === "hotbar" && moving.slot === i}
-                onclick={() => activateInv("hotbar", i)}
-                oncontextmenu={(e) => { e.preventDefault(); if (!spellId && item) openItemContextMenu("hotbar", i, item.itemId, e); }}
-                onmouseenter={(e) => !spellId && item && showItemTooltip(item.itemId, item.durability, e)}
-                onmouseleave={hideItemTooltip}
-              >
-                {#if spellId}
-                  <IconGlyph value={spellIcon(spellId)} size={20} />
-                {:else if item}
-                  <IconGlyph value={itemIcon(item.itemId)} size={20} itemId={item.itemId} />
-                  {#if item.qty > 1}<span class="qty">{item.qty}</span>{/if}
-                {/if}
-                <span class="num">{keyLabel(i)}</span>
-              </button>
-            {/each}
-          </div>
-          <div class="soec-currency-bar">
-            <div class="soec-label">Shadows of Eldor Coin (SoEC)</div>
-            {#if game.self}
-              {@const coins = parseCoins(game.self.coins)}
-              <div class="soec-badges">
-                <span class="coin-badge gold" title="{coins.gold} Gold"><span class="coin-icon">🟡</span> <strong>{coins.gold}</strong>g</span>
-                <span class="coin-badge silver" title="{coins.silver} Silver"><span class="coin-icon">⚪</span> <strong>{coins.silver}</strong>s</span>
-                <span class="coin-badge copper" title="{coins.copper} Copper"><span class="coin-icon">🟠</span> <strong>{coins.copper}</strong>c</span>
-              </div>
-            {/if}
-          </div>
-        </div>
-      {:else if game.activeTab === "quests"}
-        <div class="quests-tab">
-          <h3>Active Quests</h3>
-          <div class="quest-list">
-            {#each game.questLog as q, i (q.id)}
-              <div
-                class="quest-row"
-                class:row-active={questsCursor === i}
-              >
-                <!-- Tracking toggle -->
-                <button
-                  class="quest-row-main"
-                  class:sub-cursor={questsCursor === i && questSubFocus === "track"}
-                  onclick={() => {
-                    questsCursor = i;
-                    questSubFocus = "track";
-                    game.toggleQuestTrack(q.id);
-                  }}
-                >
-                  <div class="quest-row-title">
-                    <span class="quest-row-check">{game.untrackedQuests.has(q.id) ? "☐" : "☑"}</span>
-                    <span class="quest-row-name" class:done={q.status === "complete"}>{q.name}</span>
-                    <span class="quest-row-status" class:done={q.status === "complete"}>
-                      {q.status === "complete" ? "Complete" : "In Progress"}
-                    </span>
-                  </div>
-                  <div class="quest-row-desc">
-                    {objectiveText(q.objectiveKind, q.objectiveTarget)}
-                    <span class="quest-row-count">({q.progress}/{q.objectiveCount})</span>
-                  </div>
-                </button>
-
-                <!-- Actions -->
-                <div class="quest-row-actions">
-                  {#if game.party && game.party.length > 0}
-                    <button
-                      class="rc-btn share-btn"
-                      class:selected={questsCursor === i && questSubFocus === "share"}
-                      disabled={q.status === "complete"}
-                      onclick={() => {
-                        questsCursor = i;
-                        questSubFocus = "share";
-                        getGame()?.sendShareQuest(q.id);
-                      }}
-                    >
-                      Share
-                    </button>
-                  {/if}
-                </div>
-              </div>
-            {:else}
-              <div class="empty-quests">No active quests. Visit NPCs in towns to accept tasks.</div>
-            {/each}
-          </div>
-        </div>
-      {:else if game.activeTab === "achievements"}
-        <div class="achievements-tab">
-          <h3>Achievements</h3>
-          <p class="achievements-sub">
-            {game.achievements.filter((a) => a.complete).length}/{game.achievements.length || 0} complete
-          </p>
-          <div class="achievement-list">
-            {#each [...game.achievements].sort((a, b) => Number(a.complete) - Number(b.complete) || a.category.localeCompare(b.category) || a.name.localeCompare(b.name)) as a (a.id)}
-              <div class="achievement-row" class:complete={a.complete}>
-                <div class="achievement-mark" aria-hidden="true">{a.complete ? "✓" : "◇"}</div>
-                <div class="achievement-body">
-                  <div class="achievement-title-row">
-                    <span class="achievement-name">{a.name}</span>
-                    <span class="achievement-cat">{a.category}</span>
-                    {#if a.complete}
-                      <span class="achievement-done">Complete</span>
-                    {/if}
-                  </div>
-                  <div class="achievement-desc">{a.description}</div>
-                  <div class="achievement-req">Requires: {a.requirement}</div>
-                  <div class="achievement-progress">
-                    <div class="achievement-bar">
-                      <div
-                        class="achievement-fill"
-                        style="width: {a.target > 0 ? Math.min(100, (a.progress / a.target) * 100) : 0}%"
-                      ></div>
-                    </div>
-                    <span class="achievement-count">{a.progress}/{a.target}</span>
-                  </div>
-                  <div class="achievement-rewards">
-                    Reward: +{a.rewardXp} XP
-                    {#each a.rewardItems as r (r.itemId + ":" + r.qty)}
-                      · {r.qty}× {itemDef(r.itemId).name}
-                    {/each}
-                  </div>
-                </div>
-              </div>
-            {:else}
-              <div class="empty-quests">No achievements synced yet.</div>
-            {/each}
-          </div>
-        </div>
-      {:else if game.activeTab === "spellbook"}
-        <div class="spellbook-tab">
-          <h3>Known Spells</h3>
-          <div class="spell-list">
-            {#each spellsToShow as spellId, i (spellId)}
-              {@const spell = spellDef(spellId)}
-              {@const locked = isSpellLocked(spellId)}
-              <button
-                bind:this={spellElements[i]}
-                class="spell-row"
-                class:cursor={spellBookFocus === "spells" && spellCursor === i}
-                class:moving={movingSpell === spellId}
-                class:locked={locked}
-                disabled={locked}
-                draggable={!locked}
-                ondragstart={(e) => {
-                  e.dataTransfer?.setData("text/plain", JSON.stringify({ container: "spellbook", spellId }));
-                  if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
-                }}
-                onmouseenter={(e) => showTooltip(spellId, e)}
-                onmouseleave={hideTooltip}
-                onclick={() => {
-                  spellBookFocus = "spells";
-                  spellCursor = i;
-                  pickSpell(spellId);
-                }}
-              >
-                <IconGlyph value={spellIcon(spellId)} size={26} />
-                <span class="name">{spell.name}</span>
-                {#if locked}
-                  <span class="lock-req">{spellLockReason(spellId)} 🔒</span>
-                {/if}
-              </button>
-            {/each}
-          </div>
-          <h3>Hotbar</h3>
-          <div class="hotbar-row roomy">
-            {#each hotbarSlots as item, i (i)}
-              {@const spellId = slotSpellId(i)}
-              <button
-                bind:this={hotbarElements[i]}
-                class="cell big"
-                class:spell={spellId !== null}
-                class:moving={spellId !== null && movingSpell === spellId}
-                class:cursor={spellBookFocus === "hotbar" && spellHotbarCursor === i}
-                class:first={i === 6}
-                onclick={() => {
-                  spellBookFocus = "hotbar";
-                  spellHotbarCursor = i;
-                  activateHotbarForSpell(i);
-                }}
-              >
-                {#if spellId}
-                  <IconGlyph value={spellIcon(spellId)} size={28} />
-                  <span class="clear" onclick={(e) => clearHotbarSpell(i, e)}>✕</span>
-                {:else if item}
-                  <IconGlyph value={itemIcon(item.itemId)} size={28} itemId={item.itemId} />
-                {/if}
-                <span class="num">{keyLabel(i)}</span>
-              </button>
-            {/each}
-          </div>
-        </div>
-      {:else if game.activeTab === "craft"}
-        <div class="craft-container">
-          <!-- Left: Backpack -->
-          <div class="col backpack-col">
-            <h3>Backpack</h3>
-            <div class="grid">
-              {#each invSlots as item, i (i)}
-                <button
-                  class="cell"
-                  class:cursor={craftTabFocus === "inventory" && invCursor === i}
-                  class:moving={moving?.container === "inventory" && moving.slot === i}
-                  onclick={() => {
-                    craftTabFocus = "inventory";
-                    invCursor = i;
-                    activateInv("inventory", i);
-                  }}
-                  onmouseenter={(e) => item && showItemTooltip(item.itemId, item.durability, e)}
-                  onmouseleave={hideItemTooltip}
-                >
-                  {#if item}
-                    <IconGlyph value={itemIcon(item.itemId)} itemId={item.itemId} />
-                    {#if item.qty > 1}<span class="qty">{item.qty}</span>{/if}
-                  {/if}
-                </button>
-              {/each}
-            </div>
-          </div>
-
-          <!-- Middle: Crafting Area -->
-          <div class="col crafting-area-col">
-            <h3>Crafting Grid</h3>
-            <div class="crafting-area-main">
-              <!-- 3x3 Grid -->
-              <div class="crafting-grid">
-                {#each Array.from({ length: 9 }) as _, i}
-                  {@const item = craftingSlots[i]}
-                  <button
-                    class="cell big"
-                    class:cursor={craftTabFocus === "grid" && craftGridCursor === i}
-                    class:moving={moving?.container === "crafting" && moving.slot === i}
-                    onclick={() => {
-                      craftTabFocus = "grid";
-                      craftGridCursor = i;
-                      activateInv("crafting", i);
-                    }}
-                    onmouseenter={(e) => item && showItemTooltip(item.itemId, item.durability, e)}
-                    onmouseleave={hideItemTooltip}
-                  >
-                    {#if item}
-                      <IconGlyph value={itemIcon(item.itemId)} size={28} itemId={item.itemId} />
-                      {#if item.qty > 1}<span class="qty">{item.qty}</span>{/if}
-                    {/if}
-                  </button>
-                {/each}
-              </div>
-
-              <!-- Arrow -->
-              <div class="crafting-arrow">➜</div>
-
-              <!-- Output Slot -->
-              <div class="crafting-output-container">
-                <button
-                  class="cell big output-cell"
-                  class:cursor={craftTabFocus === "output"}
-                  class:has-item={matchedRecipe !== null}
-                  onclick={() => {
-                    craftTabFocus = "output";
-                    if (matchedRecipe) {
-                      getGame()?.sendCraft(matchedRecipe.id);
-                    }
-                  }}
-                  onmouseenter={(e) => matchedRecipe && showItemTooltip(matchedRecipe.output, null, e)}
-                  onmouseleave={hideItemTooltip}
-                >
-                  {#if matchedRecipe}
-                    <IconGlyph value={itemIcon(matchedRecipe.output)} size={28} itemId={matchedRecipe.output} />
-                    {#if matchedRecipe.outputQty > 1}
-                      <span class="qty">{matchedRecipe.outputQty}</span>
-                    {/if}
-                  {/if}
-                </button>
-                <div class="output-label">
-                  {matchedRecipe ? itemDef(matchedRecipe.output).name : "Empty"}
-                </div>
-              </div>
-            </div>
-
-            <!-- Actions -->
-            <div class="crafting-actions">
-              <button
-                class="rc-btn primary craft-btn"
-                class:selected={craftTabFocus === "clear" && clearBtnFocus === 0}
-                disabled={matchedRecipe === null}
-                onclick={() => {
-                  craftTabFocus = "clear";
-                  clearBtnFocus = 0;
-                  if (matchedRecipe) getGame()?.sendCraft(matchedRecipe.id);
-                }}
-              >
-                Craft
-              </button>
-              <button
-                class="rc-btn ghost clear-btn"
-                class:selected={craftTabFocus === "clear" && clearBtnFocus === 1}
-                disabled={craftingSlots.filter(it => it !== undefined).length === 0}
-                onclick={() => {
-                  craftTabFocus = "clear";
-                  clearBtnFocus = 1;
-                  clearCraftingGrid();
-                }}
-              >
-                Clear Grid
-              </button>
-            </div>
-          </div>
-
-          <!-- Right: Recipe Book -->
-          <div class="col recipe-book-col">
-            <h3>Recipe Book</h3>
-            <div class="recipes-list">
-              {#each recipes as recipe, idx}
-                {@const outputDef = itemDef(recipe.output)}
-                <button
-                  type="button"
-                  class="recipe-entry"
-                  class:selected={craftTabFocus === "recipes" && craftCursor === idx}
-                  class:matched={matchedRecipe?.id === recipe.id}
-                  class:unaffordable={!canCraft(recipe.id)}
-                  onclick={() => {
-                    craftTabFocus = "recipes";
-                    craftCursor = idx;
-                    quickFillRecipe(recipe);
-                  }}
-                  onmouseenter={(e) => showItemTooltip(recipe.output, null, e)}
-                  onmouseleave={hideItemTooltip}
-                >
-                  <div class="recipe-header">
-                    <span class="recipe-icon"><IconGlyph value={itemIcon(recipe.output)} size={16} itemId={recipe.output} /></span>
-                    <span class="recipe-name">{outputDef.name}</span>
-                    {#if recipe.station}
-                      <span class="recipe-station">🏕️</span>
-                    {/if}
-                  </div>
-                  <div class="recipe-ingredients">
-                    {#each recipe.ingredients as ing}
-                      <span class="recipe-ing">
-                        {itemDef(ing.itemId).name} x{ing.qty}
-                      </span>
-                    {/each}
-                  </div>
-                </button>
-              {/each}
-            </div>
-          </div>
-        </div>
-      {:else if game.activeTab === "party"}
-        <div class="col party-tab-col full-width">
-          <h3>Your Party</h3>
-          {#if game.pendingInvite}
-            <div class="pending-invite-box rc-frame">
-              <div class="pending-invite-text">
-                <strong>{game.pendingInvite}</strong> invites you to a party
-              </div>
-              <div class="pending-invite-actions">
-                <button class="rc-btn primary" onclick={() => getGame()?.sendParty("accept")}>Accept</button>
-                <button class="rc-btn ghost" onclick={() => getGame()?.sendParty("decline")}>Decline</button>
-              </div>
-            </div>
-          {:else if game.party && game.party.length > 0}
-            <div class="party-list">
-              {#each game.party as member (member.id)}
-                <div class="party-member" class:offline={!member.online}>
-                  <div class="pm-info">
-                    <span class="pm-name">
-                      {#if member.leader}<span class="crown" title="Party Leader">👑</span>{/if}
-                      {#if member.tag && member.tag !== "crown"}
-                        <span class="pm-tag-icon" title="Party Tag: {member.tag}">
-                          {member.tag === "target" ? "⚔️" : member.tag === "shield" ? "🛡️" : member.tag === "star" ? "⭐" : member.tag === "skull" ? "💀" : member.tag === "diamond" ? "💎" : "🏷️"}
-                        </span>
-                      {/if}
-                      {member.name} <span class="lvl">lv{member.level}</span>
-                    </span>
-                    <div class="pm-bar">
-                      <div class="pm-fill" style="width: {Math.min(100, (member.hp / member.maxHp) * 100)}%"></div>
-                    </div>
-                  </div>
-                  {#if amLeader && !member.leader}
-                    <div class="pm-tag-picker">
-                      <button class="tag-sm" onclick={() => getGame()?.sendPartyTag(member.name, "target")} title="Tag Target">⚔️</button>
-                      <button class="tag-sm" onclick={() => getGame()?.sendPartyTag(member.name, "shield")} title="Tag Shield">🛡️</button>
-                      <button class="tag-sm" onclick={() => getGame()?.sendPartyTag(member.name, "star")} title="Tag Star">⭐</button>
-                      <button class="tag-sm" onclick={() => getGame()?.sendPartyTag(member.name, "skull")} title="Tag Skull">💀</button>
-                      <button class="tag-sm" onclick={() => getGame()?.sendPartyTag(member.name, "diamond")} title="Tag Diamond">💎</button>
-                      <button class="tag-sm clear" onclick={() => getGame()?.sendPartyTag(member.name, "clear")} title="Clear Tag">✕</button>
-                    </div>
-                  {/if}
-                </div>
-              {/each}
-            </div>
-            {#if amLeader}
-              <button class="rc-btn ghost leave-btn" onclick={() => getGame()?.sendParty("disband")}>Disband Party</button>
-            {:else}
-              <button class="rc-btn ghost leave-btn" onclick={() => getGame()?.sendParty("leave")}>Leave Party</button>
-            {/if}
-          {:else}
-            <div class="empty-note">You are not currently in a party. Invite friends or realm players from the Social tab!</div>
-          {/if}
-        </div>
-      {:else if game.activeTab === "social"}
-        <div class="col social-tab-col">
-          <h3>Friends & Contacts</h3>
-          <div class="add-friend-form">
-            <input
-              type="text"
-              class="rc-input"
-              placeholder="Enter adventurer name..."
-              bind:value={friendInputName}
-              onkeydown={(e) => {
-                if (e.key === "Enter" && friendInputName.trim()) {
-                  getGame()?.sendFriend("add", friendInputName.trim());
-                  friendInputName = "";
-                }
-              }}
-            />
-            <button
-              class="rc-btn primary"
-              onclick={() => {
-                if (friendInputName.trim()) {
-                  getGame()?.sendFriend("add", friendInputName.trim());
-                  friendInputName = "";
-                }
-              }}
-            >
-              Add Friend
-            </button>
-          </div>
-
-          <div class="friends-list">
-            {#each game.friends as friend (friend.name)}
-              <div class="friend-row" class:offline={!friend.online}>
-                <div class="friend-info">
-                  <span class="status-dot" class:online={friend.online}></span>
-                  <div class="friend-text">
-                    <span class="friend-name">{friend.name}</span>
-                    {#if friend.online}
-                      <span class="friend-meta">lv{friend.level} · {friend.regionName ?? "Online"}</span>
-                    {:else}
-                      <span class="friend-meta offline">Offline</span>
-                    {/if}
-                  </div>
-                </div>
-                <div class="friend-actions">
-                  {#if friend.online}
-                    <button class="rc-btn primary sm" onclick={() => getGame()?.sendParty("invite", friend.name)} title="Start Party">
-                      ⚔️ Party
-                    </button>
-                    <button class="rc-btn ghost sm" onclick={() => { game.chatOpen = true; getGame()?.sendChat(`/w ${friend.name} `); }} title="Direct Message">
-                      💬 Whisper
-                    </button>
-                  {/if}
-                  <button class="rc-btn danger sm icon-only" onclick={() => getGame()?.sendFriend("remove", friend.name)} title="Remove Friend">
-                    ✕
-                  </button>
-                </div>
-              </div>
-            {/each}
-            {#if game.friends.length === 0}
-              <div class="empty-note">No friends added yet. Type a player's name above to add them!</div>
-            {/if}
-          </div>
-        </div>
-
-        <div class="col roster-col">
-          <h3>Online Realm Adventurers</h3>
-          <div class="roster-list">
-            {#each invitablePlayers as p (p.id)}
-              <div class="roster-row">
-                <span class="roster-name">{p.name} <span class="lvl">lv{p.level}</span></span>
-                <div class="roster-actions">
-                  {#if !game.friends.some((f) => f.name.toLowerCase() === p.name.toLowerCase())}
-                    <button class="rc-btn ghost sm" onclick={() => getGame()?.sendFriend("add", p.name)}>+ Friend</button>
-                  {/if}
-                  <button class="rc-btn invite-btn sm" onclick={() => getGame()?.sendParty("invite", p.name)}>Invite</button>
-                </div>
-              </div>
-            {/each}
-            {#if invitablePlayers.length === 0}
-              <div class="empty-note">No other players online right now.</div>
-            {/if}
-          </div>
-        </div>
-      {:else}
-        <div class="system-menu-container">
-          <!-- Sidebar sub-navigation -->
-          <div class="system-sidebar">
-            <button
-              class="sub-tab-btn"
-              class:active={systemTabSub === "game"}
-              class:cursor={systemSubFocus === "sidebar" && systemSubTabIdx === 0}
-              onclick={() => {
-                systemSubTabIdx = 0;
-                systemSubFocus = "sidebar";
-              }}
-            >
-              Settings
-            </button>
-            <button
-              class="sub-tab-btn"
-              class:active={systemTabSub === "graphics"}
-              class:cursor={systemSubFocus === "sidebar" && systemSubTabIdx === 1}
-              onclick={() => {
-                systemSubTabIdx = 1;
-                systemSubFocus = "sidebar";
-              }}
-            >
-              Graphics
-            </button>
-            <button
-              class="sub-tab-btn"
-              class:active={systemTabSub === "wiki"}
-              class:cursor={systemSubFocus === "sidebar" && systemSubTabIdx === 2}
-              onclick={() => {
-                systemSubTabIdx = 2;
-                systemSubFocus = "sidebar";
-              }}
-            >
-              Wiki Guide
-            </button>
-          </div>
-
-          <!-- Content display area -->
-          <div class="system-content-panel">
-            {#if systemTabSub === "game"}
-              <div class="col system-col settings-col">
-                <h3>Settings</h3>
-
-                <div class="settings-section">
-                  <div class="settings-section-title">Gameplay</div>
-                  <label class="setting-toggle">
-                    <input
-                      type="checkbox"
-                      checked={game.autoLoot}
-                      onchange={(e) => game.setAutoLoot(e.currentTarget.checked)}
-                    />
-                    <span class="setting-label">Auto Loot Corpses</span>
-                  </label>
-                </div>
-
-                <div class="settings-section">
-                  <div class="settings-section-title">Audio</div>
-                  <label class="setting-slider">
-                    <span class="setting-label">
-                      Sound Effects
-                      <span class="setting-value">{Math.round(game.sfxVolume * 100)}%</span>
-                    </span>
-                    <input
-                      type="range"
-                      min="0"
-                      max="100"
-                      step="1"
-                      value={Math.round(game.sfxVolume * 100)}
-                      oninput={(e) => {
-                        const v = Number(e.currentTarget.value) / 100;
-                        game.setSfxVolume(v);
-                        sound.setVolume(v);
-                      }}
-                    />
-                  </label>
-                  <label class="setting-slider">
-                    <span class="setting-label">
-                      Music
-                      <span class="setting-value">{Math.round(game.musicVolume * 100)}%</span>
-                    </span>
-                    <input
-                      type="range"
-                      min="0"
-                      max="100"
-                      step="1"
-                      value={Math.round(game.musicVolume * 100)}
-                      oninput={(e) => {
-                        const v = Number(e.currentTarget.value) / 100;
-                        game.setMusicVolume(v);
-                        music.setVolume(v);
-                      }}
-                    />
-                  </label>
-                </div>
-
-                <div class="settings-section">
-                  <div class="settings-section-title">Display</div>
-                  <label class="setting-toggle">
-                    <input
-                      type="checkbox"
-                      checked={game.showPlayerNameplates}
-                      onchange={(e) => {
-                        game.setShowPlayerNameplates(e.currentTarget.checked);
-                        getGame()?.syncNameplateVisibility();
-                      }}
-                    />
-                    <span class="setting-label">Player Nameplates</span>
-                  </label>
-                  <label class="setting-toggle">
-                    <input
-                      type="checkbox"
-                      checked={game.showMobNameplates}
-                      onchange={(e) => {
-                        game.setShowMobNameplates(e.currentTarget.checked);
-                        getGame()?.syncNameplateVisibility();
-                      }}
-                    />
-                    <span class="setting-label">Mob Nameplates</span>
-                  </label>
-                  <button
-                    class="rc-btn"
-                    class:selected={systemSubFocus === "content" && systemCursor === 0}
-                    onclick={toggleFullscreen}
-                  >
-                    {isFullscreen ? "Exit Fullscreen" : "Enter Fullscreen"}
-                  </button>
-                </div>
-
-                <div class="settings-section">
-                  <button
-                    class="rc-btn ghost"
-                    class:selected={systemSubFocus === "content" && systemCursor === 1}
-                    onclick={exitToCharacterSelect}
-                  >
-                    Exit to Character Select
-                  </button>
-                </div>
-              </div>
-            {:else if systemTabSub === "graphics"}
-              <div class="col system-col settings-col graphics-col" bind:this={graphicsScrollContainer}>
-                <h3>Graphics</h3>
-                <p class="settings-hint">
-                  Saved to your account. Resolution &amp; draw distance apply immediately;
-                  antialiasing applies the next time you enter the world.
-                </p>
-
-                <div class="settings-section">
-                  <div class="settings-section-title">Quality Preset</div>
-                  <div class="preset-row">
-                    {#each GRAPHICS_PRESET_IDS as id (id)}
-                      <button
-                        type="button"
-                        class="rc-btn preset-btn"
-                        class:selected={game.graphics.preset === id}
-                        onclick={() => game.setGraphicsPreset(id as GraphicsPresetId)}
-                      >
-                        {GRAPHICS_PRESET_LABELS[id]}
-                      </button>
-                    {/each}
-                  </div>
-                  {#if game.graphics.preset === "custom"}
-                    <div class="settings-note">Custom</div>
-                  {/if}
-                </div>
-
-                <div class="settings-section">
-                  <div class="settings-section-title">Resolution</div>
-                  <label class="setting-slider">
-                    <span class="setting-label">
-                      Render Scale
-                      <span class="setting-value">{Math.round(game.graphics.resolutionScale * 100)}%</span>
-                    </span>
-                    <input
-                      type="range"
-                      min="50"
-                      max="150"
-                      step="5"
-                      value={Math.round(game.graphics.resolutionScale * 100)}
-                      oninput={(e) =>
-                        game.patchGraphics({ resolutionScale: Number(e.currentTarget.value) / 100 })}
-                    />
-                  </label>
-                  <label class="setting-slider">
-                    <span class="setting-label">
-                      Max Pixel Ratio
-                      <span class="setting-value">{game.graphics.maxPixelRatio.toFixed(2)}</span>
-                    </span>
-                    <input
-                      type="range"
-                      min="75"
-                      max="200"
-                      step="5"
-                      value={Math.round(game.graphics.maxPixelRatio * 100)}
-                      oninput={(e) =>
-                        game.patchGraphics({ maxPixelRatio: Number(e.currentTarget.value) / 100 })}
-                    />
-                  </label>
-                </div>
-
-                <div class="settings-section">
-                  <div class="settings-section-title">Effects</div>
-                  <label class="setting-toggle">
-                    <input
-                      type="checkbox"
-                      checked={game.graphics.antialias}
-                      onchange={(e) => game.patchGraphics({ antialias: e.currentTarget.checked })}
-                    />
-                    <span class="setting-label">Antialiasing</span>
-                  </label>
-                  <label class="setting-toggle">
-                    <input
-                      type="checkbox"
-                      checked={game.graphics.shadowsEnabled}
-                      onchange={(e) => game.patchGraphics({ shadowsEnabled: e.currentTarget.checked })}
-                    />
-                    <span class="setting-label">Shadows</span>
-                  </label>
-                  <label class="setting-slider" class:setting-disabled={!game.graphics.shadowsEnabled}>
-                    <span class="setting-label">
-                      Shadow Map
-                      <span class="setting-value">{game.graphics.shadowMapSize}px</span>
-                    </span>
-                    <input
-                      type="range"
-                      min="0"
-                      max="2"
-                      step="1"
-                      disabled={!game.graphics.shadowsEnabled}
-                      value={[512, 1024, 2048].indexOf(game.graphics.shadowMapSize)}
-                      oninput={(e) => {
-                        const sizes: ShadowMapSize[] = [512, 1024, 2048];
-                        const size = sizes[Number(e.currentTarget.value)] ?? 1024;
-                        game.patchGraphics({ shadowMapSize: size });
-                      }}
-                    />
-                  </label>
-                </div>
-
-                <div class="settings-section">
-                  <div class="settings-section-title">Draw Distance</div>
-                  <label class="setting-slider">
-                    <span class="setting-label">
-                      World Stream
-                      <span class="setting-value">~{streamRingMeters(game.graphics.streamRing)} m</span>
-                    </span>
-                    <input
-                      type="range"
-                      min="2"
-                      max="5"
-                      step="1"
-                      value={game.graphics.streamRing}
-                      oninput={(e) => game.patchGraphics({ streamRing: Number(e.currentTarget.value) })}
-                    />
-                  </label>
-                  <label class="setting-slider">
-                    <span class="setting-label">
-                      Grass Distance
-                      <span class="setting-value">{Math.round(game.graphics.grassDrawDistance)} m</span>
-                    </span>
-                    <input
-                      type="range"
-                      min="40"
-                      max="160"
-                      step="5"
-                      value={game.graphics.grassDrawDistance}
-                      oninput={(e) =>
-                        game.patchGraphics({ grassDrawDistance: Number(e.currentTarget.value) })}
-                    />
-                  </label>
-                  <label class="setting-slider">
-                    <span class="setting-label">
-                      Fog Density
-                      <span class="setting-value">{Math.round(game.graphics.fogScale * 100)}%</span>
-                    </span>
-                    <input
-                      type="range"
-                      min="50"
-                      max="150"
-                      step="5"
-                      value={Math.round(game.graphics.fogScale * 100)}
-                      oninput={(e) => game.patchGraphics({ fogScale: Number(e.currentTarget.value) / 100 })}
-                    />
-                  </label>
-                </div>
-              </div>
-            {:else if systemTabSub === "wiki"}
-              <div class="wiki-panel">
-                <h3>Game Wiki Guide</h3>
-                <div class="wiki-scrollable" bind:this={wikiScrollContainer}>
-                  {#each wikiParsed as item}
-                    {#if item.type === "h1"}
-                      <h1 class="wiki-h1">{item.text}</h1>
-                    {:else if item.type === "h2"}
-                      <h2 class="wiki-h2">{item.text}</h2>
-                    {:else if item.type === "h3"}
-                      <h3 class="wiki-h3">{item.text}</h3>
-                    {:else if item.type === "li"}
-                      <li class="wiki-li">{@html formatBoldText(item.text)}</li>
-                    {:else if item.type === "p"}
-                      <p class="wiki-p">{@html formatBoldText(item.text)}</p>
-                    {:else if item.type === "hr"}
-                      <hr class="wiki-hr" />
-                    {/if}
-                  {/each}
-                </div>
-              </div>
-            {/if}
-          </div>
-        </div>
+      {:else if activeTabComponent}
+        <svelte:component
+          this={activeTabComponent}
+          {invSlots}
+          {hotbarSlots}
+          {equipSlots}
+          {classInfo}
+          {computedStats}
+          bind:equipCursor
+          bind:invCursor
+          {moving}
+          {activateInv}
+          {openItemContextMenu}
+          {showItemTooltip}
+          {hideItemTooltip}
+          {keyLabel}
+          {spellsToShow}
+          {spellDef}
+          {isSpellLocked}
+          {spellLockReason}
+          bind:spellElements
+          bind:hotbarElements
+          bind:spellBookFocus
+          bind:spellCursor
+          bind:spellHotbarCursor
+          bind:movingSpell
+          bind:spellHotbarPage
+          {slotSpellId}
+          {clearHotbarSpell}
+          {pickSpell}
+          {activateHotbarForSpell}
+          {showTooltip}
+          {hideTooltip}
+          bind:questsCursor
+          bind:questSubFocus
+          {objectiveText}
+          {amLeader}
+          {invitablePlayers}
+          {systemTabSub}
+          bind:systemSubFocus
+          bind:systemSubTabIdx
+          bind:systemCursor
+          {isFullscreen}
+          {toggleFullscreen}
+          {exitToCharacterSelect}
+          bind:graphicsScrollContainer
+          bind:wikiScrollContainer
+        />
       {/if}
     </div>
     <div class="hints">{hintKeys}</div>
@@ -1990,10 +1287,350 @@
   .screen {
     display: flex;
     flex-direction: column;
+    /* Centered panel (not fullscreen): large enough for the crafting/inventory
+       layouts, capped so it reads as a focused window over the game. */
     width: min(1080px, 94vw);
-    height: min(680px, 90vh);
+    height: min(668px, 90vh);
     padding: 0;
     overflow: hidden;
+    background: linear-gradient(180deg, rgba(20, 15, 26, 0.98), rgba(12, 9, 16, 0.98));
+    border: 1px solid rgba(196, 163, 90, 0.55);
+    border-radius: 10px;
+    box-shadow:
+      0 0 0 1px rgba(0, 0, 0, 0.6),
+      0 24px 70px rgba(0, 0, 0, 0.6),
+      0 0 40px rgba(120, 60, 160, 0.12);
+  }
+
+  /* ---- GW2 / WoW-Style Crafting Workbench ---- */
+  .wow-craft-workbench {
+    display: flex;
+    width: 100%;
+    height: 100%;
+    gap: 12px;
+    padding: 12px;
+    box-sizing: border-box;
+    overflow: hidden;
+  }
+  .craft-recipes-col {
+    width: 320px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    background: rgba(12, 9, 16, 0.85);
+    border: 1px solid rgba(196, 163, 90, 0.3);
+    border-radius: 6px;
+    padding: 10px;
+    flex-shrink: 0;
+  }
+  .craft-search-input {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 6px 10px;
+    background: rgba(0, 0, 0, 0.6);
+    border: 1px solid var(--rc-gold-dim);
+    border-radius: 4px;
+    color: var(--rc-parchment);
+    font-size: 12px;
+  }
+  .craft-filter-bar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+  .filter-pill {
+    padding: 3px 8px;
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--rc-gold-dim);
+    background: rgba(30, 22, 38, 0.8);
+    border: 1px solid rgba(196, 163, 90, 0.3);
+    border-radius: 3px;
+    cursor: pointer;
+  }
+  .filter-pill:hover,
+  .filter-pill.active {
+    color: var(--rc-gold-bright);
+    border-color: var(--rc-gold-bright);
+    background: rgba(74, 53, 92, 0.9);
+  }
+  .craft-mat-toggle {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: var(--rc-parchment);
+    cursor: pointer;
+  }
+  .recipe-list-scroll {
+    flex: 1;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding-right: 4px;
+  }
+  .recipe-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    background: rgba(20, 15, 26, 0.7);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 4px;
+    cursor: pointer;
+    text-align: left;
+    transition: all 0.15s ease;
+  }
+  .recipe-row:hover,
+  .recipe-row.active {
+    border-color: var(--rc-gold-bright);
+    background: rgba(50, 36, 64, 0.85);
+  }
+  .recipe-row-meta {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .recipe-name {
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--rc-parchment);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .recipe-sub {
+    font-size: 10px;
+    color: var(--rc-gold-dim);
+    text-transform: capitalize;
+  }
+  .craftable-badge {
+    font-size: 11px;
+    font-weight: 800;
+    color: #4ade80;
+    background: rgba(74, 222, 128, 0.15);
+    padding: 2px 6px;
+    border-radius: 4px;
+  }
+
+  .craft-detail-col {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    background: rgba(12, 9, 16, 0.85);
+    border: 1px solid rgba(196, 163, 90, 0.3);
+    border-radius: 6px;
+    padding: 16px;
+    overflow-y: auto;
+  }
+  .craft-header-card {
+    display: flex;
+    gap: 14px;
+    align-items: center;
+    background: rgba(0, 0, 0, 0.4);
+    border: 1px solid rgba(196, 163, 90, 0.3);
+    border-radius: 6px;
+    padding: 12px;
+  }
+  .out-title-box h2 {
+    margin: 0;
+    font-family: var(--rc-display);
+    font-size: 18px;
+    color: var(--rc-gold-bright);
+  }
+  .out-meta {
+    font-size: 11px;
+    color: var(--rc-parchment);
+    opacity: 0.8;
+  }
+  .out-desc {
+    margin: 4px 0 0 0;
+    font-size: 12px;
+    color: #94a3b8;
+  }
+  .station-banner {
+    background: rgba(234, 179, 8, 0.15);
+    border: 1px solid rgba(234, 179, 8, 0.4);
+    color: #fef08a;
+    padding: 8px 12px;
+    border-radius: 4px;
+    font-size: 12px;
+  }
+  .reagents-section h3 {
+    margin: 0 0 8px 0;
+    font-family: var(--rc-display);
+    font-size: 13px;
+    color: var(--rc-gold-bright);
+  }
+  .reagents-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 8px;
+  }
+  .reagent-card {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: rgba(20, 15, 26, 0.8);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 4px;
+    padding: 8px 10px;
+  }
+  .reagent-card.has-enough {
+    border-color: rgba(74, 222, 128, 0.4);
+  }
+  .reagent-card.missing {
+    border-color: rgba(248, 113, 113, 0.4);
+    background: rgba(40, 10, 10, 0.6);
+  }
+  .reagent-info {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+  }
+  .reagent-name {
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--rc-parchment);
+  }
+  .reagent-count.green {
+    color: #4ade80;
+  }
+  .reagent-count.red {
+    color: #f87171;
+  }
+  .craft-action-panel {
+    margin-top: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    background: rgba(0, 0, 0, 0.4);
+    border: 1px solid rgba(196, 163, 90, 0.3);
+    border-radius: 6px;
+    padding: 12px;
+  }
+  .craft-station-req {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: #ffb86b;
+    background: rgba(255, 136, 0, 0.1);
+    border: 1px solid rgba(255, 136, 0, 0.35);
+    border-radius: 4px;
+    padding: 5px 8px;
+    text-transform: capitalize;
+  }
+  .craft-station-req strong {
+    color: #ffd27a;
+  }
+  .qty-selector {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .qty-btn {
+    background: linear-gradient(180deg, #2b1f35, #140d1a);
+    border: 1px solid var(--rc-gold-dim);
+    color: var(--rc-gold-bright);
+    font-size: 13px;
+    font-weight: 700;
+    padding: 4px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+  }
+  .qty-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+  .qty-val {
+    font-size: 14px;
+    font-weight: 800;
+    color: #fff;
+    min-width: 24px;
+    text-align: center;
+  }
+  .craft-buttons-row {
+    display: flex;
+    gap: 10px;
+  }
+  .craft-btn.primary {
+    flex: 1;
+    padding: 10px;
+    font-family: var(--rc-display);
+    font-size: 14px;
+    font-weight: 800;
+    background: linear-gradient(180deg, #8a6423, #4a340e);
+    border: 1px solid var(--rc-gold-bright);
+    color: #fff;
+    border-radius: 4px;
+    cursor: pointer;
+    box-shadow: 0 0 12px rgba(255, 215, 0, 0.3);
+  }
+  .craft-btn.secondary {
+    flex: 1;
+    padding: 10px;
+    font-family: var(--rc-display);
+    font-size: 14px;
+    font-weight: 800;
+    background: linear-gradient(180deg, #322540, #181022);
+    border: 1px solid var(--rc-gold-dim);
+    color: var(--rc-parchment);
+    border-radius: 4px;
+    cursor: pointer;
+  }
+  .crafting-progress-bar {
+    position: relative;
+    height: 18px;
+    background: rgba(0, 0, 0, 0.8);
+    border: 1px solid var(--rc-gold-bright);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+  .crafting-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #b88f3a, #ffd700);
+  }
+  .crafting-progress-bar span {
+    position: absolute;
+    inset: 0;
+    text-align: center;
+    font-size: 11px;
+    font-weight: 700;
+    color: #000;
+    line-height: 18px;
+  }
+
+  .craft-materials-col {
+    width: 260px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    background: rgba(12, 9, 16, 0.85);
+    border: 1px solid rgba(196, 163, 90, 0.3);
+    border-radius: 6px;
+    padding: 10px;
+    flex-shrink: 0;
+  }
+  .materials-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 4px;
+    overflow-y: auto;
+  }
+  .mat-cell {
+    position: relative;
+    width: 48px;
+    height: 48px;
+    background: rgba(0, 0, 0, 0.6);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
   }
   .tabs {
     display: flex;
@@ -2056,12 +1693,15 @@
     gap: 24px;
     padding: 20px 26px;
     min-height: 0;
+    overflow: hidden;
   }
+  .content :global(.col),
   .col {
     display: flex;
     flex-direction: column;
     min-height: 0;
   }
+  .content :global(h3),
   h3 {
     margin: 0 0 8px;
     font-family: var(--rc-display);
@@ -2451,6 +2091,62 @@
     color: var(--rc-gold-bright);
     text-transform: uppercase;
   }
+  .spellbook-hotbar-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: 14px;
+    margin-bottom: 6px;
+  }
+  .spellbook-hotbar-header h3 {
+    margin: 0;
+  }
+  .tab-loading-box {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    height: 100%;
+    gap: 12px;
+    color: var(--rc-gold-bright);
+    font-family: var(--rc-display);
+    font-size: 15px;
+    letter-spacing: 1px;
+  }
+  .tab-loading-spinner {
+    font-size: 28px;
+    animation: tabSpin 1.2s infinite ease-in-out;
+  }
+  @keyframes tabSpin {
+    0% { transform: scale(0.9) rotate(0deg); opacity: 0.6; }
+    50% { transform: scale(1.15) rotate(180deg); opacity: 1; }
+    100% { transform: scale(0.9) rotate(360deg); opacity: 0.6; }
+  }
+
+  .page-segmented {
+    display: flex;
+    gap: 4px;
+  }
+  .page-tab {
+    background: linear-gradient(180deg, #2b1f35, #140d1a);
+    border: 1px solid var(--rc-gold-dim);
+    color: var(--rc-gold-dim);
+    font-size: 11px;
+    font-weight: 700;
+    padding: 3px 10px;
+    border-radius: 3px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+  .page-tab:hover,
+  .page-tab.active {
+    border-color: var(--rc-gold-bright);
+    color: var(--rc-gold-bright);
+    background: linear-gradient(180deg, #4a355c, #20132c);
+    box-shadow: 0 0 8px rgba(196, 163, 90, 0.4);
+  }
+
   .soec-badges {
     display: flex;
     align-items: center;
@@ -3041,121 +2737,7 @@
     grid-template-columns: repeat(3, 52px);
     gap: 6px;
   }
-  .crafting-arrow {
-    font-size: 24px;
-    color: var(--rc-gold-dim);
-    text-shadow: 0 1px 3px #000;
-  }
-  .crafting-output-container {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 6px;
-    width: 90px;
-  }
-  .output-cell {
-    border-color: var(--rc-gold-dim) !important;
-    background: rgba(201, 162, 75, 0.05) !important;
-    box-shadow: inset 0 0 10px rgba(0, 0, 0, 0.5) !important;
-  }
-  .output-cell.has-item {
-    border-color: var(--rc-gold-bright) !important;
-    box-shadow: 0 0 14px rgba(255, 214, 110, 0.25) !important;
-  }
-  .output-label {
-    font-size: 11px;
-    color: var(--rc-ink-dim);
-    text-align: center;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    width: 100%;
-  }
-  .crafting-actions {
-    display: flex;
-    gap: 10px;
-    width: 100%;
-    justify-content: center;
-    margin-top: auto;
-    padding-bottom: 10px;
-  }
-  .crafting-actions .rc-btn {
-    flex: 1;
-    max-width: 130px;
-  }
-  .recipe-book-col {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    min-height: 0;
-  }
-  .recipes-list {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    overflow-y: auto;
-    flex: 1;
-    padding-right: 4px;
-  }
-  .recipe-entry {
-    display: block;
-    width: 100%;
-    text-align: left;
-    font: inherit;
-    color: inherit;
-    cursor: pointer;
-    background: rgba(255, 255, 255, 0.03);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: 6px;
-    padding: 8px 10px;
-    transition: background 0.12s, border-color 0.12s;
-  }
-  .recipe-entry:hover {
-    background: rgba(255, 255, 255, 0.06);
-  }
-  .recipe-entry.selected {
-    border-color: var(--rc-gold);
-  }
-  .recipe-entry.matched {
-    background: rgba(120, 200, 140, 0.1);
-    border-color: rgba(120, 200, 140, 0.5);
-  }
-  .recipe-entry.unaffordable {
-    opacity: 0.55;
-  }
-  .recipe-header {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    margin-bottom: 4px;
-  }
-  .recipe-icon {
-    display: inline-flex;
-    vertical-align: middle;
-  }
-  .recipe-name {
-    font-family: var(--rc-display);
-    font-weight: 700;
-    font-size: 12.5px;
-    color: var(--rc-parchment);
-  }
-  .recipe-station {
-    font-size: 10px;
-    margin-left: auto;
-    opacity: 0.8;
-  }
-  .recipe-ingredients {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 4px 8px;
-    font-size: 10.5px;
-    color: var(--rc-ink-dim);
-  }
-  .recipe-ing {
-    background: rgba(0, 0, 0, 0.2);
-    padding: 1px 5px;
-    border-radius: 4px;
-  }
+
 
   /* ---- System tab ---- */
   .setting-toggle {

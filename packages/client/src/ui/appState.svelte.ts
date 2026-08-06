@@ -1,7 +1,7 @@
 import type { CharacterAppearance, AccountSettings, GraphicsSettings } from "@rustcraft/shared";
 import { game as gameUi } from "./gameState.svelte";
 
-export type Screen = "loading" | "login" | "charselect" | "ingame" | "dungeoneditor" | "regioneditor";
+export type Screen = "loading" | "login" | "charselect" | "ingame" | "dungeoneditor" | "regioneditor" | "website";
 
 export interface CharacterSummary extends CharacterAppearance {
   id: string;
@@ -31,6 +31,23 @@ export interface MeResponse {
   providers: { discord: boolean; google: boolean; dev: boolean; password: boolean };
 }
 
+export interface RealmInfo {
+  id: string;
+  name: string;
+  region: string;
+  url: string;
+  status: "online" | "maintenance" | "offline";
+  population: "High" | "Medium" | "Low";
+  ping: number;
+}
+
+export const REALM_LIST: RealmInfo[] = [
+  { id: "eldor-us", name: "Eldor Prime", region: "US East", url: "", status: "online", population: "High", ping: 24 },
+  { id: "shadowglen-eu", name: "Shadowglen", region: "EU Central", url: "", status: "online", population: "Medium", ping: 88 },
+  { id: "whispering-us", name: "Whispering Woods", region: "US West", url: "", status: "online", population: "Low", ping: 45 },
+  { id: "dev-realm", name: "Dev Sandbox Realm", region: "Local", url: "", status: "online", population: "Low", ping: 1 },
+];
+
 const LOCAL_REALM: Realm = { name: "Local Realm", url: "" };
 
 class AppState {
@@ -39,9 +56,10 @@ class AppState {
   activeCharacter = $state<CharacterSummary | null>(null);
   error = $state<string | null>(null);
   realm = $state<Realm>(LOCAL_REALM);
+  selectedRealm = $state<RealmInfo>(REALM_LIST[0]);
   private graphicsSaveBound = false;
 
-  private setScreen(s: Screen) {
+  setScreen(s: Screen) {
     this.screen = s;
     window.dispatchEvent(new CustomEvent("rc:screen", { detail: s }));
   }
@@ -76,24 +94,33 @@ class AppState {
         body: JSON.stringify({ graphics }),
       });
     } catch {
-      /* offline / transient — localStorage still has the prefs */
+      /* offline / transient */
     }
   }
 
-  /** Dev-only entry point for the dungeon editor (packages/client/src/ui/
-   *  DungeonEditor.svelte) -- pure level-authoring tooling, bypasses login/
-   *  character selection entirely since it needs no session. Gated by
-   *  import.meta.env.DEV at the call site (App.svelte) so it's stripped out
-   *  of production builds. */
+  selectRealm(realm: RealmInfo) {
+    this.selectedRealm = realm;
+    this.realm = { name: realm.name, url: realm.url };
+  }
+
   enterDungeonEditor() {
     this.setScreen("dungeoneditor");
   }
 
-  /** Dev-only entry point for the region editor (packages/client/src/ui/
-   *  RegionEditor.svelte) -- similar to dungeon editor, allows direct access
-   *  for development without login/character selection. */
   enterRegionEditor() {
     this.setScreen("regioneditor");
+  }
+
+  enterWebsite() {
+    this.setScreen("website");
+  }
+
+  enterLogin() {
+    this.setScreen("login");
+  }
+
+  enterCharSelect() {
+    this.setScreen("charselect");
   }
 
   async refresh() {

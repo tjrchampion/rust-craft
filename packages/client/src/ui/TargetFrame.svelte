@@ -10,11 +10,13 @@
     class:hostile={t.hostile}
     oncontextmenu={(e) => {
       e.preventDefault();
-      if (t && t.kind === "player") {
+      if (t) {
         game.playerContextMenu = {
           x: e.clientX,
           y: e.clientY,
           playerName: t.name,
+          playerLevel: t.level ?? 1,
+          playerClass: t.classId ?? "Adventurer",
         };
       }
     }}

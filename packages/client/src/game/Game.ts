@@ -336,38 +336,48 @@ export class Game {
     this.entities.prewarmVfx(this.renderer, this.camera);
     this.input = new InputManager(canvas);
 
-    canvas.oncontextmenu = (e) => {
-      e.preventDefault();
-      const hit = this.entities.raycastPlayer(this.camera, e.clientX, e.clientY);
-      if (hit) {
-        this.selectTarget(hit.id);
-        ui.playerContextMenu = {
-          x: e.clientX,
-          y: e.clientY,
-          playerName: hit.name,
-          playerLevel: hit.level,
-          playerClass: hit.classId,
-        };
+    const handleEntityPointerAction = (e: MouseEvent, isRmb = false) => {
+      const cx = ui.cursorX > 0 ? ui.cursorX : e.clientX;
+      const cy = ui.cursorY > 0 ? ui.cursorY : e.clientY;
+      const ndcX = (cx / window.innerWidth) * 2 - 1;
+      const ndcY = -(cy / window.innerHeight) * 2 + 1;
+
+      if (isRmb) {
+        const playerHit = this.entities.raycastPlayer(this.camera, cx, cy);
+        if (playerHit) {
+          this.selectTarget(playerHit.id);
+          ui.playerContextMenu = {
+            x: cx,
+            y: cy,
+            playerName: playerHit.name,
+            playerLevel: playerHit.level,
+            playerClass: playerHit.classId,
+          };
+          sound.play("target");
+          return;
+        }
       }
-      return false;
-    };
-    canvas.onauxclick = (e) => {
-      e.preventDefault();
-      return false;
+
+      // Raycast all living entities (mobs, players, NPCs)
+      const entityId = this.entities.raycastEntity(this.camera, ndcX, ndcY);
+      if (entityId) {
+        this.selectTarget(entityId);
+        sound.play("target");
+      }
     };
 
+    canvas.addEventListener("contextmenu", (e) => {
+      e.preventDefault();
+      if (document.pointerLockElement && e.isTrusted) return;
+      handleEntityPointerAction(e, true);
+    });
+
     canvas.addEventListener("mousedown", (e) => {
-      // While the pointer is locked, real mouse events carry a frozen position
-      // and all target the canvas -- ignore them; InputManager re-dispatches a
-      // synthetic mousedown (isTrusted === false) at the software-cursor point,
-      // which is the one we act on. When unlocked, the real event is correct.
       if (document.pointerLockElement && e.isTrusted) return;
       if (e.button === 0) {
-        const hit = this.entities.raycastPlayer(this.camera, e.clientX, e.clientY);
-        if (hit) {
-          this.selectTarget(hit.id);
-          sound.play("target");
-        }
+        handleEntityPointerAction(e, false);
+      } else if (e.button === 2) {
+        handleEntityPointerAction(e, true);
       }
     });
 

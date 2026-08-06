@@ -1,6 +1,10 @@
-#!/usr/bin/env node
-import { NodeIO } from "@gltf-transform/core";
 import path from "node:path";
+import { createRequire } from "node:module";
+import { fileURLToPath, pathToFileURL } from "node:url";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const require = createRequire(path.join(__dirname, "..", "packages/client/package.json"));
+const { NodeIO } = await import(pathToFileURL(require.resolve("@gltf-transform/core")).href);
 
 const file = process.argv[2];
 if (!file) {

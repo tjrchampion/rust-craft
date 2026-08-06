@@ -18,11 +18,13 @@
     gender = "male",
     appearance,
     equip = null,
+    mode = "head",
   }: {
     classId: ClassId;
     gender?: CharacterGender;
     appearance?: CharacterAppearance;
     equip?: Partial<Record<string, string>> | null;
+    mode?: "head" | "full";
   } = $props();
 
   let canvas: HTMLCanvasElement;
@@ -114,10 +116,18 @@
     renderer.setSize(128, 128, false);
 
     const scene = new THREE.Scene();
-    const camera = new THREE.PerspectiveCamera(30, 1, 0.1, 10);
-    // Lower camera target & step back slightly so top of helmets/horns are never cut off
-    camera.position.set(0, 1.30, 1.45);
-    camera.lookAt(0, 1.22, 0);
+    const fov = mode === "head" ? 32 : 30;
+    const camera = new THREE.PerspectiveCamera(fov, 1, 0.1, 10);
+    
+    if (mode === "head") {
+      // Model total height is 1.75m with feet at Y=0. Head/face center is at Y ≈ 1.58m!
+      camera.position.set(0, 1.58, 0.55);
+      camera.lookAt(0, 1.56, 0);
+    } else {
+      // Full body view
+      camera.position.set(0, 1.0, 2.2);
+      camera.lookAt(0, 0.9, 0);
+    }
 
     const ambient = new THREE.AmbientLight(0xfff2da, 0.95);
     scene.add(ambient);
@@ -153,6 +163,20 @@
       neck: equip?.neck ?? defaultArmor.neck ?? null,
     };
 
+    let animReqId: number | null = null;
+    let lastTime = performance.now();
+
+    const animate = (now: number) => {
+      if (!active || !renderer) return;
+      const dt = Math.min(0.1, (now - lastTime) / 1000);
+      lastTime = now;
+      if (model.loaded) {
+        model.update(dt);
+      }
+      renderer.render(scene, camera);
+      animReqId = requestAnimationFrame(animate);
+    };
+
     void model.loadFrom(GENDER_MODEL_URLS[targetGender], 1.75).then(() => {
       if (!active) return;
 
@@ -169,16 +193,16 @@
 
       // Rotate model slightly for a classic 3/4 heroic portrait angle
       model.group.rotation.y = 0.28;
+      model.setLogicalState("idle");
 
-      // Render initial frame and a delayed frame after modular textures finish loading
-      renderer?.render(scene, camera);
-      setTimeout(() => {
-        if (active) renderer?.render(scene, camera);
-      }, 200);
+      // Start animation loop
+      lastTime = performance.now();
+      animReqId = requestAnimationFrame(animate);
     });
 
     return () => {
       active = false;
+      if (animReqId !== null) cancelAnimationFrame(animReqId);
       model.dispose();
       renderer?.dispose();
       renderer = null;

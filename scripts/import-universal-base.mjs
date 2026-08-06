@@ -8,7 +8,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { execSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const input = process.argv[2];
 if (!input) {
@@ -29,9 +30,9 @@ if (input.endsWith(".zip")) {
   workDir = tmpDir;
 }
 
-function findFile(...names: string[]): string | null {
-  const hits: string[] = [];
-  const walk = (dir: string) => {
+function findFile(...names) {
+  const hits = [];
+  const walk = (dir) => {
     for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
       const p = path.join(dir, ent.name);
       if (ent.isDirectory()) walk(p);
@@ -43,7 +44,7 @@ function findFile(...names: string[]): string | null {
 }
 
 /** Quaternius glTF sometimes references *_png.png; symlink to the real file. */
-function fixTextureAliases(dir: string): void {
+function fixTextureAliases(dir) {
   const pairs = [
     ["T_Hair_1_Normal_png.png", "T_Hair_1_Normal.png"],
     ["T_Eye_Normal_png.png", "T_Eye_Normal.png"],
@@ -57,30 +58,42 @@ function fixTextureAliases(dir: string): void {
   }
 }
 
-const maleGltf =
-  findFile("Regular_Male.gltf", "Superhero_Male_FullBody.gltf") ??
-  findFile("Superhero_Male_FullBody.gltf");
-const femaleGltf =
-  findFile("Regular_Female.gltf", "Superhero_Female_FullBody.gltf") ??
-  findFile("Superhero_Female_FullBody.gltf");
+const targets = [
+  ["Regular_Male_FullBody.gltf", "Regular_Male.glb"],
+  ["Regular_Female_FullBody.gltf", "Regular_Female.glb"],
+  ["Superhero_Male_FullBody.gltf", "Superhero_Male.glb"],
+  ["Superhero_Female_FullBody.gltf", "Superhero_Female.glb"],
+  ["Teen_Male_FullBody.gltf", "Teen_Male.glb"],
+  ["Teen_Female_FullBody.gltf", "Teen_Female.glb"],
+];
 
-if (!maleGltf || !femaleGltf) {
-  console.error("Could not find Regular_* or Superhero_* FullBody glTF in", input);
+const importsToPerform = [];
+for (const [gltfName, destName] of targets) {
+  const src = findFile(gltfName);
+  if (src) {
+    fixTextureAliases(path.dirname(src));
+    importsToPerform.push([src, destName]);
+  } else {
+    console.warn(`! Warning: ${gltfName} not found in ${input}`);
+  }
+}
+
+if (importsToPerform.length === 0) {
+  console.error("Could not find any base character glTF files in", input);
   process.exit(1);
 }
 
-fixTextureAliases(path.dirname(maleGltf));
-fixTextureAliases(path.dirname(femaleGltf));
-
 fs.mkdirSync(outDir, { recursive: true });
 
-for (const [src, destName] of [
-  [maleGltf, "Regular_Male.glb"],
-  [femaleGltf, "Regular_Female.glb"],
-] as const) {
+const require = createRequire(path.join(root, "packages/client/package.json"));
+const { NodeIO } = await import(pathToFileURL(require.resolve("@gltf-transform/core")).href);
+const io = new NodeIO();
+
+for (const [src, destName] of importsToPerform) {
   const dest = path.join(outDir, destName);
-  execSync(`npx --yes @gltf-transform/cli copy "${src}" "${dest}"`, { stdio: "inherit", cwd: root });
-  execSync(`node scripts/strip-glb-animations.mjs "${dest}"`, { stdio: "inherit", cwd: root });
+  const doc = await io.read(src);
+  for (const anim of doc.getRoot().listAnimations()) anim.dispose();
+  await io.write(dest, doc);
   console.log("Imported", destName, "from", path.basename(src));
 }
 

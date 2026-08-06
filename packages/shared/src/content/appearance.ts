@@ -11,11 +11,41 @@ export const GENDERS: CharacterGender[] = ["male", "female"];
  *  overlay. Every other id maps to one of the imported Hair_*.glb pieces
  *  (see scripts/import-hairstyles.mjs / classModels.ts's HAIR_STYLE_FILES)
  *  -- deliberately not gender-restricted, any style with any gender. */
-export type HairStyleId = "none" | "buzzed" | "buzzed_female" | "long" | "simple_parted" | "buns";
-export const HAIR_STYLES: HairStyleId[] = ["none", "buzzed", "buzzed_female", "long", "simple_parted", "buns"];
+export type HairStyleId =
+  | "none"
+  | "buzzed"
+  | "buzzed_female"
+  | "long"
+  | "simple_parted"
+  | "buns"
+  | "bob"
+  | "dreads"
+  | "long_dreads"
+  | "mohawk"
+  | "ponytail"
+  | "ponytail_2"
+  | "slick_back"
+  | "balding";
 
-export type FacialHairId = "none" | "beard";
-export const FACIAL_HAIR_OPTIONS: FacialHairId[] = ["none", "beard"];
+export const HAIR_STYLES: HairStyleId[] = [
+  "none",
+  "buzzed",
+  "buzzed_female",
+  "long",
+  "simple_parted",
+  "buns",
+  "bob",
+  "dreads",
+  "long_dreads",
+  "mohawk",
+  "ponytail",
+  "ponytail_2",
+  "slick_back",
+  "balding",
+];
+
+export type FacialHairId = "none" | "beard" | "moustache" | "mutton_chops";
+export const FACIAL_HAIR_OPTIONS: FacialHairId[] = ["none", "beard", "moustache", "mutton_chops"];
 
 export interface CharacterAppearance {
   gender: CharacterGender;
@@ -31,12 +61,12 @@ export interface CharacterAppearance {
 }
 
 export const GENDER_HAIR_STYLES: Record<CharacterGender, HairStyleId[]> = {
-  male: ["none", "buzzed", "simple_parted"],
-  female: ["none", "buzzed_female", "long", "simple_parted", "buns"],
+  male: ["none", "buzzed", "simple_parted", "dreads", "long_dreads", "mohawk", "ponytail", "slick_back", "balding"],
+  female: ["none", "buzzed_female", "long", "simple_parted", "buns", "bob", "dreads", "long_dreads", "ponytail", "ponytail_2"],
 };
 
 export const GENDER_FACIAL_HAIR: Record<CharacterGender, FacialHairId[]> = {
-  male: ["none", "beard"],
+  male: ["none", "beard", "moustache", "mutton_chops"],
   female: ["none"],
 };
 

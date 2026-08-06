@@ -395,21 +395,22 @@
   }
   .castbar {
     position: absolute;
-    bottom: 128px;
+    bottom: 200px;
     left: 50%;
     transform: translateX(-50%);
-    width: 280px;
-    height: 16px;
-    background: rgba(8, 6, 14, 0.88);
-    border: 1px solid rgba(196, 163, 90, 0.45);
-    border-radius: 2px;
+    width: 300px;
+    height: 20px;
+    background: rgba(8, 6, 14, 0.92);
+    border: 1.5px solid var(--rc-gold-bright);
+    border-radius: 4px;
     overflow: hidden;
-    z-index: 5;
-    box-shadow: 0 0 14px rgba(196, 77, 154, 0.2);
+    z-index: 50;
+    box-shadow: 0 0 20px rgba(255, 215, 0, 0.4), 0 4px 14px rgba(0, 0, 0, 0.85);
   }
   .castbar-fill {
     height: 100%;
-    background: linear-gradient(90deg, #2a9d5a, #6fcf6a);
+    background: linear-gradient(90deg, #b88f3a 0%, #ffd700 50%, #f5e088 100%);
+    box-shadow: 0 0 12px #ffd700;
   }
   .castbar span {
     position: absolute;

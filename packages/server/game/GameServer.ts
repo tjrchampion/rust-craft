@@ -3772,74 +3772,48 @@ export class GameServer {
       }
     }
 
-    // Get all items in the player's crafting grid slots (container: "crafting")
-    const gridItems = player.inventory.filter((it) => it.container === "crafting");
-    
-    // Group grid items by itemId
-    const gridTotals: Record<string, number> = {};
-    for (const it of gridItems) {
-      gridTotals[it.itemId] = (gridTotals[it.itemId] ?? 0) + it.qty;
-    }
+    // Recipe-based crafting: ingredients are pulled from the player's backpack
+    // (main inventory + hotbar), matching the client UI which crafts straight
+    // from a selected recipe -- there's no manual placement grid to fill. Work
+    // on a copy so any failure leaves the real inventory untouched.
+    const tempInv: InvItem[] = JSON.parse(JSON.stringify(player.inventory));
+    const consumable = (it: InvItem): boolean => it.container === "inventory" || it.container === "hotbar";
 
-    // Verify ingredients are present in the grid in correct quantities
+    // Verify every ingredient is available in the required quantity.
     for (const ing of recipe.ingredients) {
-      const total = gridTotals[ing.itemId] ?? 0;
-      if (total < ing.qty) {
-        this.sendEvent(player, { t: "event", kind: "error", message: `Requires at least ${ing.qty}x ${itemDef(ing.itemId).name} in the grid` });
+      let have = 0;
+      for (const it of tempInv) if (consumable(it) && it.itemId === ing.itemId) have += it.qty;
+      if (have < ing.qty) {
+        this.sendEvent(player, { t: "event", kind: "error", message: `Need ${ing.qty}× ${itemDef(ing.itemId).name}` });
         return;
       }
     }
 
-    // Check inventory capacity first by copying inventory
-    const tempInv: InvItem[] = JSON.parse(JSON.stringify(player.inventory));
-
-    // Remove ingredients from tempInv's crafting slots
+    // Consume the ingredients.
     for (const ing of recipe.ingredients) {
       let remaining = ing.qty;
       for (let i = tempInv.length - 1; i >= 0 && remaining > 0; i--) {
         const item = tempInv[i]!;
-        if (item.container === "crafting" && item.itemId === ing.itemId) {
+        if (consumable(item) && item.itemId === ing.itemId) {
           const take = Math.min(item.qty, remaining);
           item.qty -= take;
           remaining -= take;
-          if (item.qty <= 0) {
-            tempInv.splice(i, 1);
-          }
+          if (item.qty <= 0) tempInv.splice(i, 1);
         }
       }
     }
 
-    // Extract all leftover/unneeded crafting items from tempInv to move them to inventory/hotbar
-    const itemsToReturn: { itemId: string; qty: number }[] = [];
-    for (let i = tempInv.length - 1; i >= 0; i--) {
-      const item = tempInv[i]!;
-      if (item.container === "crafting") {
-        itemsToReturn.push({ itemId: item.itemId, qty: item.qty });
-        tempInv.splice(i, 1);
-      }
-    }
-
-    // Try to add returned items back to the player's inventory slots in tempInv
-    for (const ret of itemsToReturn) {
-      const overflow = addItem(tempInv, ret.itemId, ret.qty);
-      if (overflow > 0) {
-        this.sendEvent(player, { t: "event", kind: "error", message: "Inventory full (cannot return extra ingredients)" });
-        return;
-      }
-    }
-
-    // Try to add recipe output to the inventory slots in tempInv
+    // Add the output (rolls back via tempInv if the backpack is full).
     const outputOverflow = addItem(tempInv, recipe.output, recipe.outputQty);
     if (outputOverflow > 0) {
       this.sendEvent(player, { t: "event", kind: "error", message: "Inventory full" });
       return;
     }
 
-    // All checks passed! Update player inventory
     player.inventory = tempInv;
     player.dirty = true;
     this.sendInventory(player);
-    this.sendEvent(player, { t: "event", kind: "gather", itemId: recipe.output, amount: recipe.outputQty - outputOverflow });
+    this.sendEvent(player, { t: "event", kind: "gather", itemId: recipe.output, amount: recipe.outputQty });
   }
 
   private handleConsume(player: PlayerState, container: InvItem["container"], slot: number): void {

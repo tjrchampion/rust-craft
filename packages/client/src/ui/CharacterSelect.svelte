@@ -24,6 +24,8 @@
   import { CLASS_ICONS } from "../render/classModels";
   import { preloadCharacterAssets } from "../render/gltf";
   import CharacterThumbnail from "./CharacterThumbnail.svelte";
+  import { parseMarkdown } from "./markdownParser";
+  import { fallbackUpdatesMarkdown } from "./updates";
 
   const GENDER_LABELS: Record<CharacterGender, string> = { male: "Male", female: "Female" };
   const HAIR_STYLE_LABELS: Record<HairStyleId, string> = {
@@ -77,9 +79,10 @@
   let draftHairColor = $state(0x2b1a12);
   let draftEyeColor = $state(0x6b4423);
   let draftOutfitHue = $state(0xffffff);
-  // Off by default -- creation preview shows the bare body/hair so appearance
-  // choices stay visible. Starters spawn unclothed (weapon only).
   let previewGear = $state(false);
+
+  let rawUpdatesMd = $state(fallbackUpdatesMarkdown);
+  const updatesHtml = $derived(parseMarkdown(rawUpdatesMd));
 
   const characters = $derived(app.me?.characters ?? []);
   const activeCharacter = $derived(characters.find((c) => c.id === selectedCharacterId) ?? null);
@@ -293,6 +296,12 @@
   }
 
   onMount(() => {
+    fetch("/updates.md")
+      .then((res) => (res.ok ? res.text() : fallbackUpdatesMarkdown))
+      .then((text) => {
+        if (text && text.trim()) rawUpdatesMd = text;
+      })
+      .catch(() => {});
     padRafId = requestAnimationFrame(pollGamepad);
     return () => cancelAnimationFrame(padRafId);
   });
@@ -319,6 +328,15 @@
   <div class="account-line">
     {app.me?.account?.displayName ?? "unknown"} · {app.realm.name}
     <button class="linkish" onclick={() => void app.logout()}>sign out</button>
+  </div>
+
+  <div class="news-updates-panel rc-frame">
+    <div class="news-panel-header">
+      <span class="news-panel-title">📜 REALM NEWS & UPDATES</span>
+    </div>
+    <div class="news-panel-body">
+      {@html updatesHtml}
+    </div>
   </div>
 
 
@@ -1399,6 +1417,116 @@
     color: #ff8a80;
     font-size: 13px;
   }
+
+  /* --- News & Updates Panel ------------------------------------------- */
+  .news-toggle-btn {
+    position: absolute;
+    right: 24px;
+    top: 20px;
+    font-size: 11px;
+    padding: 6px 14px;
+    z-index: 30;
+  }
+  .news-toggle-btn.active {
+    border-color: var(--rc-gold-bright);
+    color: var(--rc-gold-bright);
+    background: rgba(196, 163, 90, 0.15);
+  }
+  .news-updates-panel {
+    position: fixed;
+    top: 70px;
+    left: 24px;
+    width: 340px;
+    max-height: 65vh;
+    display: flex;
+    flex-direction: column;
+    z-index: 30;
+    padding: 18px;
+    box-shadow: 0 12px 36px rgba(0, 0, 0, 0.85), 0 0 18px rgba(196, 163, 90, 0.2);
+    border: 1px solid var(--rc-gold-dim);
+  }
+  .news-panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding-bottom: 10px;
+    margin-bottom: 10px;
+    border-bottom: 1px solid var(--rc-gold-dim);
+  }
+  .news-panel-title {
+    font-family: var(--rc-display);
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 1.5px;
+    color: var(--rc-gold-bright);
+  }
+  .news-close-btn {
+    width: 22px;
+    height: 22px;
+    font-size: 11px;
+  }
+  .news-panel-body {
+    overflow-y: auto;
+    padding-right: 6px;
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--rc-ink);
+  }
+  .news-panel-body :global(.md-h1) {
+    font-family: var(--rc-display);
+    font-size: 18px;
+    color: var(--rc-gold-bright);
+    margin: 0 0 10px;
+  }
+  .news-panel-body :global(.md-h2) {
+    font-family: var(--rc-display);
+    font-size: 15px;
+    color: var(--rc-gold);
+    margin: 12px 0 6px;
+  }
+  .news-panel-body :global(.md-h3) {
+    font-family: var(--rc-display);
+    font-size: 13px;
+    color: var(--rc-gold-bright);
+    margin: 10px 0 4px;
+  }
+  .news-panel-body :global(.md-h4) {
+    font-family: var(--rc-display);
+    font-size: 12px;
+    color: var(--rc-ink);
+    margin: 8px 0 4px;
+  }
+  .news-panel-body :global(.md-p) {
+    margin: 0 0 8px;
+    color: var(--rc-ink-dim);
+  }
+  .news-panel-body :global(.md-list) {
+    padding-left: 18px;
+    margin: 0 0 10px;
+  }
+  .news-panel-body :global(.md-li) {
+    margin-bottom: 4px;
+    color: var(--rc-ink);
+  }
+  .news-panel-body :global(.md-quote) {
+    border-left: 2px solid var(--rc-gold);
+    padding-left: 10px;
+    margin: 8px 0;
+    font-style: italic;
+    color: var(--rc-gold);
+    background: rgba(196, 163, 90, 0.08);
+  }
+  .news-panel-body :global(.md-hr) {
+    border: none;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, var(--rc-gold-dim), transparent);
+    margin: 12px 0;
+  }
+  .news-panel-body :global(.md-link) {
+    color: var(--rc-gold-bright);
+    text-decoration: underline;
+  }
+
   /* --- Responsive Scaling for Smaller Viewports ----------------------- */
   @media (max-height: 820px) {
     .name-input-wrapper {
@@ -1409,6 +1537,10 @@
       top: 64px;
       bottom: 110px;
       padding: 14px 16px;
+    }
+    .news-updates-panel {
+      top: 64px;
+      max-height: 55vh;
     }
     .roster-strip {
       padding: 6px 16px;

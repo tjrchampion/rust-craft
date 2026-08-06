@@ -235,9 +235,11 @@ export class InputManager {
       // so drive the interaction from the software cursor instead.
       if (e.button === 2) {
         ui.isRightClickDragging = true; // begin camera drag
+        this.downEl = document.elementFromPoint(this.vx, this.vy);
+        this.synthMouse(this.downEl, "mousedown", e, 2);
       } else if (e.button === 0 && !this.rightDown) {
         this.downEl = document.elementFromPoint(this.vx, this.vy);
-        this.synthMouse(this.downEl, "mousedown", e);
+        this.synthMouse(this.downEl, "mousedown", e, 0);
       }
     });
     window.addEventListener("pointerup", (e: PointerEvent) => {
@@ -246,13 +248,17 @@ export class InputManager {
         this.rightDown = false;
         ui.isRightClickDragging = false;
       }
-      if (this.pointerLocked && e.button === 0) {
-        // Re-dispatch mouseup at the software cursor; a click only when the
-        // release lands on the same control the press did (so a drag between
-        // two hotbar slots doesn't also cast the spell it started on).
+      if (this.pointerLocked) {
         const upEl = document.elementFromPoint(this.vx, this.vy);
-        this.synthMouse(upEl, "mouseup", e);
-        if (this.sameClickable(this.downEl, upEl)) this.synthMouse(upEl, "click", e);
+        if (e.button === 0) {
+          this.synthMouse(upEl, "mouseup", e, 0);
+          if (this.sameClickable(this.downEl, upEl)) this.synthMouse(upEl, "click", e, 0);
+        } else if (e.button === 2) {
+          this.synthMouse(upEl, "mouseup", e, 2);
+          if (this.sameClickable(this.downEl, upEl) || upEl === this.canvas) {
+            this.synthMouse(upEl, "contextmenu", e, 2);
+          }
+        }
         this.downEl = null;
       }
     });
@@ -328,7 +334,12 @@ export class InputManager {
    *  onmousedown/onclick or the canvas's own target-picker then fire at the
    *  correct point. Modifier keys are copied from the source pointer event so
    *  Shift-click (e.g. hotbar move-mode) keeps working. */
-  private synthMouse(target: Element | null, type: "mousedown" | "mouseup" | "click", src: PointerEvent): void {
+  private synthMouse(
+    target: Element | null,
+    type: "mousedown" | "mouseup" | "click" | "contextmenu",
+    src: PointerEvent,
+    button = 0,
+  ): void {
     if (!target) return;
     target.dispatchEvent(
       new MouseEvent(type, {
@@ -337,7 +348,8 @@ export class InputManager {
         view: window,
         clientX: this.vx,
         clientY: this.vy,
-        button: 0,
+        button,
+        buttons: button === 2 ? 2 : 1,
         shiftKey: src.shiftKey,
         ctrlKey: src.ctrlKey,
         altKey: src.altKey,

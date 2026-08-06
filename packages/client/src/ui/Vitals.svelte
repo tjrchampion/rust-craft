@@ -1,11 +1,10 @@
 <script lang="ts">
   import { game } from "./gameState.svelte";
   import { CLASSES, type ClassId } from "@rustcraft/shared";
-  import { CLASS_ICONS } from "../render/classModels";
+  import CharacterThumbnail from "./CharacterThumbnail.svelte";
 
   const self = $derived(game.self);
   const classId = $derived((game.classId || "warrior") as ClassId);
-  const classIcon = $derived(CLASS_ICONS[classId] ?? "⚔️");
   const className = $derived(CLASSES[classId]?.name ?? "Adventurer");
   const hpPct = $derived(self ? Math.min(100, (self.hp / Math.max(1, self.maxHp)) * 100) : 0);
   const manaPct = $derived(self ? Math.min(100, (self.mana / Math.max(1, self.maxMana)) * 100) : 0);
@@ -14,7 +13,15 @@
 {#if self}
   <div class="unitframe">
     <div class="portrait" title={className}>
-      <span class="portrait-icon">{classIcon}</span>
+      <div class="portrait-avatar">
+        <CharacterThumbnail
+          classId={classId}
+          gender={self.appearance?.gender ?? "male"}
+          appearance={self.appearance}
+          equip={self.equip}
+          mode="head"
+        />
+      </div>
       <span class="level">{self.level}</span>
     </div>
     <div class="body">
@@ -75,10 +82,22 @@
       inset 0 0 14px rgba(0, 0, 0, 0.55);
     flex-shrink: 0;
   }
-  .portrait-icon {
-    font-size: 28px;
-    filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.7));
-    line-height: 1;
+  .portrait-avatar {
+    width: 100%;
+    height: 100%;
+    border-radius: 50%;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    z-index: 1;
+  }
+  .portrait-avatar :global(canvas) {
+    width: 100% !important;
+    height: 100% !important;
+    border-radius: 50%;
+    object-fit: cover;
   }
   .level {
     position: absolute;

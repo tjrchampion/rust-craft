@@ -26,6 +26,14 @@ function findGlbFiles(dir, baseDir = dir) {
 }
 
 async function buildPack() {
+  // `--if-missing`: skip the (multi-hundred-MB) rebuild when the pack + index
+  // already exist. The pack is a gitignored build artifact, so this makes dev
+  // startup instant after the first build; run `pnpm pack:assets` (no flag) to
+  // force a rebuild after changing/adding .glb models.
+  if (process.argv.includes("--if-missing") && fs.existsSync(packPath) && fs.existsSync(indexPath)) {
+    console.log("[pack-assets] Pack already present — skipping (pass no --if-missing to force a rebuild).");
+    return;
+  }
   console.log(`[pack-assets] Scanning ${modelsDir} for .glb models...`);
   const files = findGlbFiles(modelsDir);
   console.log(`[pack-assets] Found ${files.length} .glb model files.`);

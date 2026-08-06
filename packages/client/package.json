@@ -4,7 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "predev": "node ../../scripts/pack-assets.mjs --if-missing",
     "dev": "vite",
+    "prebuild": "node ../../scripts/pack-assets.mjs",
     "build": "vite build",
     "typecheck": "svelte-check --tsconfig ./tsconfig.json"
   },

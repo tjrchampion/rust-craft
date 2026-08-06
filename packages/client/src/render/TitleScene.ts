@@ -3,6 +3,7 @@ import { type GLTF } from "three/examples/jsm/loaders/GLTFLoader.js";
 import type { RegionBlueprint } from "@rustcraft/shared";
 import { buildRock, buildBerryBush, buildBiomeTree } from "./models";
 import { load as loadGltf } from "./gltf";
+import { getSharedKtx2Loader } from "./sharedGltf";
 
 /**
  * Curated (non-gameplay) backdrop for the title / character-select screens:
@@ -185,6 +186,10 @@ export class TitleScene {
     this.renderer.setSize(window.innerWidth, window.innerHeight);
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    // The title backdrop loads real building/tree GLTFs, which now carry KTX2
+    // (Basis) textures -- prime the shared KTX2 transcoder with this renderer's
+    // GPU-format support so those textures decode here too, not just in-game.
+    getSharedKtx2Loader(this.renderer);
 
     this.camera = new THREE.PerspectiveCamera(42, window.innerWidth / window.innerHeight, 0.1, 600);
 

@@ -5,8 +5,9 @@
   "type": "module",
   "scripts": {
     "collision:extract": "node scripts/extract-collision.mjs",
+    "compress:assets": "node scripts/compress-assets.mjs",
     "pack:assets": "node scripts/pack-assets.mjs",
-    "predev": "node scripts/extract-collision.mjs --if-missing && node scripts/pack-assets.mjs",
+    "predev": "node scripts/extract-collision.mjs --if-missing && node scripts/pack-assets.mjs --if-missing",
     "dev": "pnpm run --parallel --filter @rustcraft/server --filter @rustcraft/client dev",
     "dev:server": "pnpm --filter @rustcraft/server dev",
     "dev:client": "pnpm --filter @rustcraft/client dev",

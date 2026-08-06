@@ -129,9 +129,14 @@ export function createSharedGltfLoader(renderer?: THREE.WebGLRenderer): GLTFLoad
   const loader = new GLTFLoader();
   loader.setMeshoptDecoder(MeshoptDecoder);
   loader.setDRACOLoader(getSharedDracoLoader());
-  if (renderer) {
-    loader.setKTX2Loader(getSharedKtx2Loader(renderer));
-  }
+  // Always attach the shared KTX2 loader (the singleton), even without a
+  // renderer yet: the module-level loader in gltf.ts is created at import time
+  // before any renderer exists, but our models use KTX2 (KHR_texture_basisu)
+  // textures that would silently fail to decode without it. detectSupport()
+  // runs as soon as a renderer is available (getSharedKtx2Loader(renderer),
+  // called from Game/TitleScene setup) on this same singleton, so by the time
+  // models actually load the transcoder knows the GPU's supported formats.
+  loader.setKTX2Loader(getSharedKtx2Loader(renderer));
   enableSharedGltfTextures(loader);
   return loader;
 }

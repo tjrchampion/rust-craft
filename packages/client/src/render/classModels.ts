@@ -82,10 +82,20 @@ const HAIR_STYLE_FILES: Partial<Record<HairStyleId, string>> = {
   long: `${HAIR_DIR}/Hair_Long.glb`,
   simple_parted: `${HAIR_DIR}/Hair_SimpleParted.glb`,
   buns: `${HAIR_DIR}/Hair_Buns.glb`,
+  bob: `${HAIR_DIR}/Hair_Bob.glb`,
+  dreads: `${HAIR_DIR}/Hair_Dreads.glb`,
+  long_dreads: `${HAIR_DIR}/Hair_LongDreads.glb`,
+  mohawk: `${HAIR_DIR}/Hair_Mohawk.glb`,
+  ponytail: `${HAIR_DIR}/Hair_Ponytail.glb`,
+  ponytail_2: `${HAIR_DIR}/Hair_Ponytail_2.glb`,
+  slick_back: `${HAIR_DIR}/Hair_SlickBack.glb`,
+  balding: `${HAIR_DIR}/Hair_Balding.glb`,
 };
 
 const FACIAL_HAIR_FILES: Partial<Record<FacialHairId, string>> = {
   beard: `${HAIR_DIR}/Hair_Beard.glb`,
+  moustache: `${HAIR_DIR}/Hair_Moustache.glb`,
+  mutton_chops: `${HAIR_DIR}/Hair_MuttonChops.glb`,
 };
 
 /** Real eyebrow meshes, gender-specific -- needed because the base rig's own

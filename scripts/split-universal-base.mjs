@@ -34,6 +34,7 @@
  * (Re-run any time Regular_Male.glb / Regular_Female.glb is re-imported
  * from a fresh Superhero_*_FullBody.gltf export.)
  */
+import fs from "node:fs";
 import path from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -307,23 +308,25 @@ async function recarvePelvisFromTorsoToThigh(fileName, gender) {
   );
 }
 
-for (const [fileName, gender] of [
-  ["Regular_Male.glb", "male"],
-  ["Regular_Female.glb", "female"],
+for (const [fileName, gender, prefix] of [
+  ["Regular_Male.glb", "male", "superhero"],
+  ["Regular_Female.glb", "female", "superhero"],
+  ["Superhero_Male.glb", "male", "superhero"],
+  ["Superhero_Female.glb", "female", "superhero"],
+  ["Teen_Male.glb", "male", "teen"],
+  ["Teen_Female.glb", "female", "teen"],
 ]) {
-  const monolithicMatcher = (name) => new RegExp(`^superhero_${gender}$`, "i").test(name);
-  const neckExists = await hasNode(fileName, (name) => new RegExp(`^regular_${gender}_neck$`, "i").test(name));
+  if (!fs.existsSync(path.join(BASE_DIR, fileName))) continue;
+  const monolithicMatcher = (name) => new RegExp(`^(${prefix}|regular|superhero|teen)_${gender}$`, "i").test(name);
+  const neckExists = await hasNode(fileName, (name) => new RegExp(`^(${prefix}|regular)_${gender}_neck$`, "i").test(name));
   if (await hasNode(fileName, monolithicMatcher)) {
     await splitBase(fileName, monolithicMatcher);
   } else if (!neckExists) {
-    // Already split under the old (Neck-less) region set -- re-carve Neck
-    // out of the existing combined Torso node instead of the full body.
-    const torsoMatcher = (name) => new RegExp(`^regular_${gender}_torso$`, "i").test(name);
+    const torsoMatcher = (name) => new RegExp(`^(${prefix}|regular)_${gender}_torso$`, "i").test(name);
     await splitBase(fileName, torsoMatcher);
   } else {
     console.log(`[${fileName}] already region-split; migrating pelvis Torso→Thigh if needed.`);
   }
-  // Safe to run repeatedly -- no-ops once pelvis tris are gone from Torso.
   await recarvePelvisFromTorsoToThigh(fileName, gender);
 }
 console.log("Done.");

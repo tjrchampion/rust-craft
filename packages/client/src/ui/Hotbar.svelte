@@ -122,15 +122,25 @@
       if (dragFrom === null) return;
       const from = dragFrom;
       const wasDragging = draggingSlot === from;
+      const currentGhost = dragGhost;
       dragFrom = null;
       draggingSlot = null;
       dragGhost = null;
       if (!wasDragging) return; // treated as a click; onclick handles it
       const el = document.elementFromPoint(game.cursorX, game.cursorY) as HTMLElement | null;
       const slotEl = el?.closest("[data-slot]") as HTMLElement | null;
-      if (!slotEl) return;
-      const to = Number(slotEl.dataset.slot);
-      if (Number.isInteger(to)) performHotbarMove(from, to);
+      if (slotEl) {
+        const to = Number(slotEl.dataset.slot);
+        if (Number.isInteger(to)) performHotbarMove(from, to);
+      } else {
+        // Dragged off hotbar onto empty space: remove from hotbar slot!
+        getGame()?.sendAssignSpell(null, from);
+        const item = game.inventory.find((it) => it.container === "hotbar" && it.slot === from);
+        if (item) {
+          const idx = game.inventory.indexOf(item);
+          if (idx >= 0) game.inventory.splice(idx, 1);
+        }
+      }
     };
     window.addEventListener("pointermove", onMove, { passive: true });
     window.addEventListener("pointerup", onUp, { passive: true });
@@ -187,8 +197,18 @@
     return () => clearInterval(id);
   });
 
+  let hotbarPage = $state(0);
+  function nextHotbarPage() {
+    hotbarPage = (hotbarPage + 1) % 3;
+  }
+  function prevHotbarPage() {
+    hotbarPage = (hotbarPage - 1 + 3) % 3;
+  }
+
+  const pageOffset = $derived(hotbarPage * 10);
   const slots = $derived(
-    Array.from({ length: HOTBAR_SLOTS }, (_, i) => {
+    Array.from({ length: 10 }, (_, idx) => {
+      const i = pageOffset + idx;
       const item = game.inventory.find((it) => it.container === "hotbar" && it.slot === i);
       const spellId = item?.itemId.startsWith(SPELL_PREFIX) ? item.itemId.slice(SPELL_PREFIX.length) : null;
       let cooldownFrac = 0;
@@ -210,12 +230,22 @@
         }
       }
       const queued = spellId !== null && game.self?.queuedSpellId === spellId;
-      return { item, spellId, cooldownFrac, cooldownLabel, gcdFrac, queued };
+      return { slotIndex: i, displayIndex: idx, item, spellId, cooldownFrac, cooldownLabel, gcdFrac, queued };
     }),
   );
 
   const leftSlots = $derived(slots.slice(0, 5));
   const rightSlots = $derived(slots.slice(5));
+
+  const currentSpellId = $derived.by(() => {
+    if (game.self?.castingSpell) return game.self.castingSpell;
+    if (game.self?.queuedSpellId) return game.self.queuedSpellId;
+    const activeSlot = slots[game.selectedSlot % 10];
+    if (activeSlot?.spellId) return activeSlot.spellId;
+    const selItem = game.inventory.find((it) => it.container === "hotbar" && it.slot === game.selectedSlot);
+    if (selItem?.itemId.startsWith(SPELL_PREFIX)) return selItem.itemId.slice(SPELL_PREFIX.length);
+    return null;
+  });
 </script>
 
 {#if game.self}
@@ -238,9 +268,16 @@
           <span class="label">{Math.round(hpPct)}% Health</span>
         </div>
       </div>
-      <div class="hub-portrait" title={CLASSES[classId]?.name ?? "Adventurer"}>
-        <span class="hub-icon">{classIcon}</span>
-        <span class="hub-level">{game.self.level}</span>
+      <div
+        class="hub-portrait"
+        class:has-spell={currentSpellId !== null}
+        title={currentSpellId ? spellDef(currentSpellId).name : (CLASSES[classId]?.name ?? "Adventurer")}
+      >
+        {#if currentSpellId}
+          <IconGlyph value={spellIcon(currentSpellId)} size={32} />
+        {:else}
+          <span class="hub-icon">{classIcon}</span>
+        {/if}
       </div>
       <div class="side-bar right">
         <div class="rc-resource-bar mana angled-flip">
@@ -252,22 +289,28 @@
   {/if}
 
   <div class="hotbar-plate">
+    <div class="hotbar-page-controls" title="Hotbar Page {hotbarPage + 1}">
+      <button type="button" class="page-arrow up" onclick={prevHotbarPage} title="Previous Page">▲</button>
+      <span class="page-badge">{hotbarPage + 1}</span>
+      <button type="button" class="page-arrow down" onclick={nextHotbarPage} title="Next Page">▼</button>
+    </div>
+
     <div class="hotbar-row">
-      {#each leftSlots as { item, spellId, cooldownFrac, cooldownLabel, gcdFrac, queued }, i (i)}
+      {#each leftSlots as { slotIndex, displayIndex, item, spellId, cooldownFrac, cooldownLabel, gcdFrac, queued } (slotIndex)}
         <button
           type="button"
           class="rc-action-slot"
-          class:active={i === game.selectedSlot}
+          class:active={slotIndex === game.selectedSlot}
           class:spell={spellId !== null}
           class:queued
-          class:moving={selectedMoveSlot === i || draggingSlot === i}
-          data-slot={i}
+          class:moving={selectedMoveSlot === slotIndex || draggingSlot === slotIndex}
+          data-slot={slotIndex}
           ondragover={(e) => onDragOver(e)}
-          ondrop={(e) => onDrop(e, i)}
-          onmousedown={(e) => startDrag(i, spellId, item?.itemId ?? null, e)}
+          ondrop={(e) => onDrop(e, slotIndex)}
+          onmousedown={(e) => startDrag(slotIndex, spellId, item?.itemId ?? null, e)}
           onmouseenter={(e) => onSlotHover(e, spellId, item?.itemId ?? null)}
           onmouseleave={onSlotLeave}
-          onclick={(e) => handleSlotClick(i, spellId, item, e)}
+          onclick={(e) => handleSlotClick(slotIndex, spellId, item, e)}
         >
           {#if spellId}
             <IconGlyph value={spellIcon(spellId)} size={44} />
@@ -285,28 +328,27 @@
               <div class="dura" style="width: {(item.durability / itemDef(item.itemId).maxDurability!) * 100}%"></div>
             {/if}
           {/if}
-          <span class="num">{keyLabel(i)}</span>
+          <span class="num">{keyLabel(displayIndex)}</span>
         </button>
       {/each}
 
       <div class="row-gap"></div>
 
-      {#each rightSlots as { item, spellId, cooldownFrac, cooldownLabel, gcdFrac, queued }, j (j + 5)}
-        {@const i = j + 5}
+      {#each rightSlots as { slotIndex, displayIndex, item, spellId, cooldownFrac, cooldownLabel, gcdFrac, queued } (slotIndex)}
         <button
           type="button"
           class="rc-action-slot"
-          class:active={i === game.selectedSlot}
+          class:active={slotIndex === game.selectedSlot}
           class:spell={spellId !== null}
           class:queued
-          class:moving={selectedMoveSlot === i || draggingSlot === i}
-          data-slot={i}
+          class:moving={selectedMoveSlot === slotIndex || draggingSlot === slotIndex}
+          data-slot={slotIndex}
           ondragover={(e) => onDragOver(e)}
-          ondrop={(e) => onDrop(e, i)}
-          onmousedown={(e) => startDrag(i, spellId, item?.itemId ?? null, e)}
+          ondrop={(e) => onDrop(e, slotIndex)}
+          onmousedown={(e) => startDrag(slotIndex, spellId, item?.itemId ?? null, e)}
           onmouseenter={(e) => onSlotHover(e, spellId, item?.itemId ?? null)}
           onmouseleave={onSlotLeave}
-          onclick={(e) => handleSlotClick(i, spellId, item, e)}
+          onclick={(e) => handleSlotClick(slotIndex, spellId, item, e)}
         >
           {#if spellId}
             <IconGlyph value={spellIcon(spellId)} size={44} />
@@ -324,7 +366,7 @@
               <div class="dura" style="width: {(item.durability / itemDef(item.itemId).maxDurability!) * 100}%"></div>
             {/if}
           {/if}
-          <span class="num">{keyLabel(i)}</span>
+          <span class="num">{keyLabel(displayIndex)}</span>
         </button>
       {/each}
     </div>
@@ -414,6 +456,8 @@
   <LevelUpModal chest={openChest} onClose={() => (openChestId = null)} />
 {/if}
 
+
+
 <style>
   .drag-ghost {
     position: fixed;
@@ -428,26 +472,122 @@
     filter: drop-shadow(0 6px 10px rgba(0, 0, 0, 0.65));
     will-change: transform;
   }
+  .spell-drop-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 10000;
+    background: rgba(0, 0, 0, 0.25);
+  }
+  .spell-drop-modal {
+    position: fixed;
+    width: 240px;
+    padding: 12px 14px;
+    background: linear-gradient(180deg, rgba(24, 18, 36, 0.96), rgba(12, 8, 18, 0.98));
+    border: 1.5px solid var(--rc-gold);
+    border-radius: 6px;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.9), inset 0 0 16px rgba(196, 163, 90, 0.15);
+    font-family: inherit;
+    color: #fff;
+    z-index: 10001;
+    animation: modalPop 0.15s cubic-bezier(0.18, 0.89, 0.32, 1.28);
+  }
+  @keyframes modalPop {
+    from { opacity: 0; transform: scale(0.92); }
+    to { opacity: 1; transform: scale(1); }
+  }
+  .spell-drop-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding-bottom: 8px;
+    margin-bottom: 8px;
+    border-bottom: 1px solid rgba(196, 163, 90, 0.3);
+  }
+  .spell-drop-icon {
+    font-size: 18px;
+    line-height: 1;
+  }
+  .spell-drop-title {
+    font-weight: 800;
+    font-size: 13px;
+    color: var(--rc-gold-bright);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .spell-drop-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .spell-drop-btn {
+    width: 100%;
+    padding: 7px 10px;
+    font-size: 12px;
+    font-weight: 700;
+    font-family: inherit;
+    border-radius: 4px;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    cursor: pointer;
+    transition: all 0.15s ease;
+    text-align: center;
+  }
+  .spell-drop-btn.remove-btn {
+    background: linear-gradient(180deg, rgba(180, 40, 40, 0.85), rgba(120, 20, 20, 0.95));
+    color: #ffdddd;
+    border-color: rgba(255, 100, 100, 0.5);
+  }
+  .spell-drop-btn.remove-btn:hover {
+    background: linear-gradient(180deg, rgba(210, 50, 50, 0.95), rgba(150, 25, 25, 1));
+    color: #ffffff;
+    box-shadow: 0 0 10px rgba(255, 60, 60, 0.4);
+  }
+  .spell-drop-btn.drop-btn {
+    background: linear-gradient(180deg, rgba(160, 100, 20, 0.85), rgba(100, 60, 10, 0.95));
+    color: #ffeedd;
+    border-color: rgba(255, 180, 80, 0.5);
+  }
+  .spell-drop-btn.drop-btn:hover {
+    background: linear-gradient(180deg, rgba(190, 120, 30, 0.95), rgba(130, 75, 15, 1));
+    color: #ffffff;
+    box-shadow: 0 0 10px rgba(255, 160, 40, 0.4);
+  }
+  .spell-drop-btn.keep-btn {
+    background: linear-gradient(180deg, rgba(50, 50, 70, 0.85), rgba(30, 30, 45, 0.95));
+    color: #d0d0e0;
+    border-color: rgba(160, 160, 200, 0.3);
+  }
+  .spell-drop-btn.keep-btn:hover {
+    background: linear-gradient(180deg, rgba(75, 75, 100, 0.95), rgba(45, 45, 65, 1));
+    color: #ffffff;
+  }
 
   .xp-strip {
     position: absolute;
-    left: 50%;
-    bottom: 2px;
-    transform: translateX(-50%);
-    width: min(560px, 90vw);
-    height: 6px;
-    background: rgba(4, 5, 8, 0.85);
-    border: 1px solid rgba(196, 163, 90, 0.3);
-    border-radius: 2px;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    width: 100%;
+    height: 8px;
+    background: rgba(4, 5, 8, 0.9);
+    border-top: 1px solid var(--rc-gold-dim);
     overflow: hidden;
     pointer-events: none;
-    z-index: 6;
+    z-index: 10;
   }
   .xp-fill {
     height: 100%;
-    background: linear-gradient(180deg, #9dff7a, #6fcf6a 50%, #3a8a3a);
+    background: linear-gradient(180deg, #ffe9a0 0%, #ffd700 45%, #c9a24b 80%, #7a5a18 100%);
     transition: width 0.3s ease-out;
-    box-shadow: 0 0 8px rgba(111, 207, 106, 0.45);
+    box-shadow:
+      0 0 12px #ffd700,
+      0 0 24px rgba(255, 215, 0, 0.8),
+      inset 0 1px 0 #ffffff;
+    animation: xpGlowPulse 2.5s infinite alternate ease-in-out;
+  }
+  @keyframes xpGlowPulse {
+    from { filter: brightness(1) drop-shadow(0 0 4px #ffd700); }
+    to { filter: brightness(1.25) drop-shadow(0 0 10px #ffd700); }
   }
 
   .currency {
@@ -531,37 +671,70 @@
     align-items: center;
     justify-content: center;
     flex-shrink: 0;
+    transition: all 0.2s ease;
+  }
+  .hub-portrait.has-spell {
+    border-color: #ffe890;
+    box-shadow:
+      0 0 20px rgba(255, 215, 0, 0.6),
+      0 4px 12px rgba(0, 0, 0, 0.7),
+      inset 0 0 12px rgba(255, 215, 0, 0.3);
   }
   .hub-icon {
     font-size: 24px;
     line-height: 1;
     filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.7));
   }
-  .hub-level {
-    position: absolute;
-    bottom: -3px;
-    right: -3px;
-    min-width: 20px;
-    height: 20px;
-    padding: 0 4px;
-    border-radius: 50%;
-    background: #1a1410;
-    border: 1.5px solid var(--rc-gold);
-    color: var(--rc-gold-bright);
-    font-size: 10px;
-    font-weight: 800;
+
+  .hotbar-plate {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    background: rgba(12, 10, 18, 0.75);
+    border: 1px solid rgba(196, 163, 90, 0.35);
+    border-radius: 6px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.65), inset 0 0 12px rgba(0, 0, 0, 0.4);
+    pointer-events: auto;
+  }
+  .hotbar-page-controls {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    padding-right: 6px;
+    border-right: 1px solid rgba(196, 163, 90, 0.25);
+  }
+  .page-arrow {
+    width: 20px;
+    height: 16px;
+    padding: 0;
     display: flex;
     align-items: center;
     justify-content: center;
+    background: linear-gradient(180deg, #2b1f35, #140d1a);
+    border: 1px solid var(--rc-gold-dim);
+    border-radius: 2px;
+    color: var(--rc-gold-bright);
+    font-size: 9px;
+    cursor: pointer;
+    line-height: 1;
+    transition: all 0.15s ease;
   }
-
-  .hotbar-plate {
-    padding: 6px 8px;
-    background: rgba(12, 10, 18, 0.55);
-    border: 1px solid rgba(196, 163, 90, 0.28);
-    border-radius: 4px;
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
-    pointer-events: auto;
+  .page-arrow:hover {
+    border-color: var(--rc-gold-bright);
+    color: #fff;
+    background: linear-gradient(180deg, #4a355c, #20132c);
+    box-shadow: 0 0 8px rgba(196, 163, 90, 0.5);
+  }
+  .page-badge {
+    font-family: var(--rc-display);
+    font-size: 10px;
+    font-weight: 800;
+    color: var(--rc-gold-bright);
+    line-height: 1;
+    text-shadow: 0 1px 3px #000;
   }
   .hotbar-row {
     display: flex;

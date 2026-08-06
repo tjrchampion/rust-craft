@@ -6,12 +6,18 @@
   import Hud from "./Hud.svelte";
   import DungeonEditor from "./DungeonEditor.svelte";
   import RegionEditor from "./RegionEditor.svelte";
+  import MarketingWebsite from "./MarketingWebsite.svelte";
   import Logo from "./Logo.svelte";
   import GameCursor from "./GameCursor.svelte";
 
   onMount(() => {
+    const params = new URLSearchParams(location.search);
+    if (params.get("site") === "true" || params.get("website") === "true" || params.get("wiki") === "true") {
+      app.enterWebsite();
+      return;
+    }
     if (import.meta.env.DEV) {
-      const editor = new URLSearchParams(location.search).get("editor");
+      const editor = params.get("editor");
       if (editor === "dungeon") {
         app.enterDungeonEditor();
         return;
@@ -31,6 +37,8 @@
   </div>
 {:else if app.screen === "login"}
   <TitleScreen />
+{:else if app.screen === "website"}
+  <MarketingWebsite />
 {:else if app.screen === "charselect"}
   <CharacterSelect />
 {:else if app.screen === "ingame"}
