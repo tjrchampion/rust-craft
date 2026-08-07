@@ -3,7 +3,7 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
 import { SelectionBox } from "three/examples/jsm/interactive/SelectionBox.js";
 import { SkeletonUtils } from "three/examples/jsm/Addons.js";
-import { load, AnimatedModel, PLAYER_ANIMS, logicalFromState } from "./gltf";
+import { load, AnimatedModel, PLAYER_ANIMS, logicalFromState, resolveNpcModelUrl } from "./gltf";
 import { GENDER_MODEL_URLS, CLASS_GENDER } from "./classModels";
 import { buildNameplate } from "./models";
 import { buildGatherNodeMesh } from "./nodes";
@@ -512,6 +512,8 @@ export class RegionEditorScene {
   public titleCamera?: { x: number; y: number; z: number; pitch: number; yaw: number };
 
   private gridSize = DEFAULT_GRID_SIZE;
+  private gridSizeX = DEFAULT_GRID_SIZE;
+  private gridSizeZ = DEFAULT_GRID_SIZE;
   private pitch = DEFAULT_PITCH;
   private heights: number[] = new Array(DEFAULT_GRID_SIZE * DEFAULT_GRID_SIZE).fill(0);
   private customTextures: number[] = new Array(DEFAULT_GRID_SIZE * DEFAULT_GRID_SIZE).fill(0);
@@ -2017,11 +2019,101 @@ export class RegionEditorScene {
     this.grassPreviewDirty = false;
   }
 
-  clearWater(): void {
+  shiftTerrainElevation(deltaY: number): void {
+    if (!deltaY || !Number.isFinite(deltaY)) return;
+    for (let i = 0; i < this.heights.length; i++) {
+      this.heights[i] = (this.heights[i] ?? 0) + deltaY;
+    }
+    this.syncTerrainMeshHeights();
+    this.syncWaterMesh();
+    this.rebuildGrassPreview();
+    this.triggerChange();
+  }
+
+  raiseTerrainAboveSeaLevel(targetHeight = 1.0): void {
+    for (let i = 0; i < this.heights.length; i++) {
+      const h = this.heights[i] ?? 0;
+      if (h <= 0) {
+        this.heights[i] = targetHeight;
+      }
+    }
+    this.rebuildGrassPreview();
+    this.triggerChange();
+  }
+
+  autoCarveNaturalWater(waterDepthTarget = 2.5): void {
+    if (this.heights.length === 0) return;
+    const gSize = this.gridSize;
+
+    let minH = Infinity, maxH = -Infinity;
+    for (let i = 0; i < this.heights.length; i++) {
+      const h = this.heights[i]!;
+      if (h < minH) minH = h;
+      if (h > maxH) maxH = h;
+    }
+    const span = Math.max(1e-3, maxH - minH);
+    const lowThreshold = minH + span * 0.28;
+
+    if (this.waterHeights.length !== gSize * gSize) {
+      this.waterHeights = new Float32Array(gSize * gSize);
+    }
+
+    for (let z = 0; z < gSize; z++) {
+      for (let x = 0; x < gSize; x++) {
+        const idx = z * gSize + x;
+        const h = this.heights[idx]!;
+        if (h <= lowThreshold) {
+          const t = (lowThreshold - h) / (lowThreshold - minH + 1e-3);
+          const carveDepth = Math.pow(t, 1.4) * (waterDepthTarget + 1.5);
+          this.heights[idx] = -carveDepth;
+          this.waterHeights[idx] = Math.max(0.6, carveDepth + 0.5);
+        }
+      }
+    }
+
+    this.syncTerrainMeshHeights();
+    this.syncWaterMesh();
+    this.rebuildGrassPreview();
+    this.triggerChange();
+  }
+
+  private showWater = true;
+
+  toggleWater(visible?: boolean): boolean {
+    this.showWater = visible ?? !this.showWater;
+    if (this.waterMeshField) {
+      this.waterMeshField.mesh.visible = this.showWater;
+    }
+    return this.showWater;
+  }
+
+  isWaterVisible(): boolean {
+    return this.showWater;
+  }
+
+  fillSeaLevelWater(): void {
+    if (this.waterHeights.length !== this.gridSize * this.gridSize) {
+      this.waterHeights = new Float32Array(this.gridSize * this.gridSize);
+    }
+    for (let i = 0; i < this.gridSize * this.gridSize; i++) {
+      const h = this.heights[i] ?? 0;
+      if (h <= 0.5) {
+        this.waterHeights[i] = Math.max(0.5, -h + 0.5);
+      }
+    }
+    this.syncWaterMesh();
+    this.triggerChange();
+  }
+
+  clearAllWater(): void {
     this.waterHeights.fill(0);
     this.waterActiveBounds = null;
     this.syncWaterMesh();
     this.triggerChange();
+  }
+
+  clearWater(): void {
+    this.clearAllWater();
   }
 
   private syncWaterMesh(): void {
@@ -2030,6 +2122,21 @@ export class RegionEditorScene {
       this.waterActiveBounds = null;
       this.waterFlowScratch = null;
     }
+
+    // Auto-populate sea-level water where terrain elevation <= 0 if no water painted yet
+    let totalWater = 0;
+    for (let i = 0; i < this.waterHeights.length; i++) {
+      totalWater += this.waterHeights[i]!;
+    }
+    if (totalWater === 0) {
+      for (let i = 0; i < this.gridSize * this.gridSize; i++) {
+        const h = this.heights[i] ?? 0;
+        if (h <= 0) {
+          this.waterHeights[i] = Math.max(0.5, -h + 0.5);
+        }
+      }
+    }
+
     if (!this.waterMeshField) {
       this.waterMeshField = buildRegionWaterMesh(this.gridSize, this.pitch, this.heights, this.waterHeights);
       this.scene.add(this.waterMeshField.mesh);
@@ -2041,6 +2148,7 @@ export class RegionEditorScene {
     } else {
       this.waterMeshField.updateGeometry(this.heights, this.waterHeights, this.gridSize, this.pitch);
     }
+    this.waterMeshField.mesh.visible = this.showWater;
   }
 
   private sampleWaterDepth(x: number, z: number): number {
@@ -2641,7 +2749,7 @@ export class RegionEditorScene {
     this.canvas.addEventListener("mousemove", this.onPlaytestMouseMove);
     this.canvas.addEventListener("wheel", this.onPlaytestWheel, { passive: false });
     document.addEventListener("pointerlockchange", this.onPointerLockChange);
-    this.canvas.requestPointerLock();
+    this.canvas.requestPointerLock?.()?.catch(() => {});
 
     this.playtestActive = true;
     this.onPlaytestChange?.(true);
@@ -2858,7 +2966,7 @@ export class RegionEditorScene {
     if (this.flyWantsLookLock()) {
       this.clearFlyUnlockTimer();
       if (document.pointerLockElement !== this.canvas) {
-        void this.canvas.requestPointerLock();
+        void this.canvas.requestPointerLock?.()?.catch(() => {});
       }
       return;
     }
@@ -4513,7 +4621,7 @@ export class RegionEditorScene {
       this.onContextMenuUi?.(null);
       this.flyLookDragging = true;
       this.orbit.enabled = false;
-      if (document.pointerLockElement !== this.canvas) void this.canvas.requestPointerLock();
+      if (document.pointerLockElement !== this.canvas) void this.canvas.requestPointerLock?.()?.catch(() => {});
       e.preventDefault();
       return;
     }
@@ -5672,7 +5780,7 @@ export class RegionEditorScene {
 
     const animModel = new AnimatedModel(PLAYER_ANIMS);
     animModel
-      .loadFrom(`/assets/models/${modelName}.glb`)
+      .loadFrom(resolveNpcModelUrl(modelName))
       .then(() => {
         if (!entry.obj.parent) return;
         markerSphere.visible = false;
@@ -7392,6 +7500,64 @@ export class RegionEditorScene {
     return this.titleCamera;
   }
 
+  async mirrorRegion(axis: "x" | "z"): Promise<void> {
+    const bp = this.exportBlueprint();
+    const mirrored = mirrorRegionBlueprint(bp, axis);
+    await this.loadBlueprint(mirrored);
+    this.triggerChange();
+  }
+
+  async rotateRegion(angle: 90 | 180 | 270): Promise<void> {
+    const bp = this.exportBlueprint();
+    const rotated = rotateRegionBlueprint(bp, angle);
+    await this.loadBlueprint(rotated);
+    this.triggerChange();
+  }
+
+  async resizeRegionGrid(newSizeX: number, newSizeZ: number): Promise<void> {
+    newSizeX = Math.max(8, Math.min(256, Math.round(newSizeX)));
+    newSizeZ = Math.max(8, Math.min(256, Math.round(newSizeZ)));
+    const curX = this.gridSizeX ?? this.gridSize;
+    const curZ = this.gridSizeZ ?? this.gridSize;
+    if (newSizeX === curX && newSizeZ === curZ) return;
+
+    const bp = this.exportBlueprint();
+    bp.gridSizeX = newSizeX;
+    bp.gridSizeZ = newSizeZ;
+    bp.gridSize = Math.max(newSizeX, newSizeZ);
+
+    const oldX = curX;
+    const oldZ = curZ;
+    const oldH = bp.heights ?? [];
+    const oldW = bp.waterHeights ?? [];
+    const oldC = bp.customTextures ?? [];
+
+    const totalNew = newSizeX * newSizeZ;
+    const newH = new Array<number>(totalNew).fill(0);
+    const newW = oldW.length > 0 ? new Array<number>(totalNew).fill(0) : undefined;
+    const newC = oldC.length > 0 ? new Array<number>(totalNew).fill(0) : undefined;
+
+    const minX = Math.min(oldX, newSizeX);
+    const minZ = Math.min(oldZ, newSizeZ);
+
+    for (let cz = 0; cz < minZ; cz++) {
+      for (let cx = 0; cx < minX; cx++) {
+        const srcIdx = cz * oldX + cx;
+        const dstIdx = cz * newSizeX + cx;
+        newH[dstIdx] = oldH[srcIdx] ?? 0;
+        if (newW && oldW) newW[dstIdx] = oldW[srcIdx] ?? 0;
+        if (newC && oldC) newC[dstIdx] = oldC[srcIdx] ?? 0;
+      }
+    }
+
+    bp.heights = newH;
+    if (newW) bp.waterHeights = newW;
+    if (newC) bp.customTextures = newC;
+
+    await this.loadBlueprint(bp);
+    this.triggerChange();
+  }
+
   private frame = (): void => {
     if (!this.running) return;
     requestAnimationFrame(this.frame);
@@ -7463,4 +7629,260 @@ export class RegionEditorScene {
     this.scene.remove(this.skyDome.group);
     this.renderer.dispose();
   }
+}
+
+export function mirrorRegionBlueprint(bp: RegionBlueprint, axis: "x" | "z"): RegionBlueprint {
+  const N = Math.max(16, bp.gridSize || 32);
+  const total = N * N;
+  const out: RegionBlueprint = JSON.parse(JSON.stringify(bp));
+
+  // 1. Heightmap, WaterHeights, CustomTextures
+  const oldH = bp.heights ?? [];
+  const oldW = bp.waterHeights ?? [];
+  const oldC = bp.customTextures ?? [];
+
+  const newH = new Float32Array(total);
+  const newW = oldW.length === total ? new Float32Array(total) : null;
+  const newC = oldC.length === total ? new Array<number>(total).fill(0) : null;
+
+  for (let cz = 0; cz < N; cz++) {
+    for (let cx = 0; cx < N; cx++) {
+      const srcIdx = cz * N + cx;
+      const dstCx = axis === "x" ? N - 1 - cx : cx;
+      const dstCz = axis === "z" ? N - 1 - cz : cz;
+      const dstIdx = dstCz * N + dstCx;
+
+      newH[dstIdx] = oldH[srcIdx] ?? 0;
+      if (newW && oldW) newW[dstIdx] = oldW[srcIdx] ?? 0;
+      if (newC && oldC) newC[dstIdx] = oldC[srcIdx] ?? 0;
+    }
+  }
+
+  out.heights = Array.from(newH);
+  if (newW) out.waterHeights = Array.from(newW);
+  if (newC) out.customTextures = newC;
+
+  // 2. Assets & Houses
+  if (out.assets) {
+    for (const a of out.assets) {
+      if (axis === "x") {
+        a.localX = -a.localX;
+        a.yaw = -a.yaw;
+      } else {
+        a.localZ = -a.localZ;
+        a.yaw = Math.PI - a.yaw;
+      }
+    }
+  }
+  if (out.houses) {
+    for (const h of out.houses) {
+      if (axis === "x") {
+        h.localX = -h.localX;
+        h.yaw = -h.yaw;
+      } else {
+        h.localZ = -h.localZ;
+        h.yaw = Math.PI - h.yaw;
+      }
+    }
+  }
+
+  // 3. Roads
+  if (out.roads) {
+    for (const r of out.roads) {
+      for (const p of r.points) {
+        if (axis === "x") p.x = -p.x;
+        else p.z = -p.z;
+      }
+    }
+  }
+
+  // 4. Grass Patches & Exclusions
+  if (out.grassPatches) {
+    for (const g of out.grassPatches) {
+      if (axis === "x") g.localX = -g.localX;
+      else g.localZ = -g.localZ;
+    }
+  }
+  if (out.grassExclusions) {
+    for (const g of out.grassExclusions) {
+      if (axis === "x") g.localX = -g.localX;
+      else g.localZ = -g.localZ;
+    }
+  }
+
+  // 5. Markers / Portals / NPCs / Events / Spawns
+  if (out.villages) {
+    for (const v of out.villages) {
+      if (axis === "x") v.localX = -v.localX;
+      else v.localZ = -v.localZ;
+    }
+  }
+  if (out.portals) {
+    for (const p of out.portals) {
+      if (axis === "x") p.localX = -p.localX;
+      else p.localZ = -p.localZ;
+    }
+  }
+  if (out.npcs) {
+    for (const n of out.npcs) {
+      if (axis === "x") { n.localX = -n.localX; n.yaw = -n.yaw; }
+      else { n.localZ = -n.localZ; n.yaw = Math.PI - n.yaw; }
+    }
+  }
+  if (out.worldEvents) {
+    for (const e of out.worldEvents) {
+      if (axis === "x") e.localX = -e.localX;
+      else e.localZ = -e.localZ;
+    }
+  }
+  if (out.mobSpawns) {
+    for (const m of out.mobSpawns) {
+      if (axis === "x") m.localX = -m.localX;
+      else m.localZ = -m.localZ;
+    }
+  }
+  if (out.resourceNodes) {
+    for (const r of out.resourceNodes) {
+      if (axis === "x") r.localX = -r.localX;
+      else r.localZ = -r.localZ;
+    }
+  }
+  if (out.entryLocal) {
+    if (axis === "x") out.entryLocal.x = -out.entryLocal.x;
+    else out.entryLocal.z = -out.entryLocal.z;
+  }
+
+  return out;
+}
+
+export function rotateRegionBlueprint(bp: RegionBlueprint, angle: 90 | 180 | 270): RegionBlueprint {
+  const N = Math.max(16, bp.gridSize || 32);
+  const total = N * N;
+  const out: RegionBlueprint = JSON.parse(JSON.stringify(bp));
+
+  const oldH = bp.heights ?? [];
+  const oldW = bp.waterHeights ?? [];
+  const oldC = bp.customTextures ?? [];
+
+  const newH = new Float32Array(total);
+  const newW = oldW.length === total ? new Float32Array(total) : null;
+  const newC = oldC.length === total ? new Array<number>(total).fill(0) : null;
+
+  for (let cz = 0; cz < N; cz++) {
+    for (let cx = 0; cx < N; cx++) {
+      const srcIdx = cz * N + cx;
+      let dstCx = cx;
+      let dstCz = cz;
+
+      if (angle === 90) {
+        dstCx = N - 1 - cz;
+        dstCz = cx;
+      } else if (angle === 180) {
+        dstCx = N - 1 - cx;
+        dstCz = N - 1 - cz;
+      } else if (angle === 270) {
+        dstCx = cz;
+        dstCz = N - 1 - cx;
+      }
+
+      const dstIdx = dstCz * N + dstCx;
+      newH[dstIdx] = oldH[srcIdx] ?? 0;
+      if (newW && oldW) newW[dstIdx] = oldW[srcIdx] ?? 0;
+      if (newC && oldC) newC[dstIdx] = oldC[srcIdx] ?? 0;
+    }
+  }
+
+  out.heights = Array.from(newH);
+  if (newW) out.waterHeights = Array.from(newW);
+  if (newC) out.customTextures = newC;
+
+  const rad = (angle * Math.PI) / 180;
+  const rotPoint = (x: number, z: number): { x: number; z: number } => {
+    if (angle === 90) return { x: -z, z: x };
+    if (angle === 180) return { x: -x, z: -z };
+    return { x: z, z: -x }; // 270
+  };
+
+  // Assets & Houses
+  if (out.assets) {
+    for (const a of out.assets) {
+      const p = rotPoint(a.localX, a.localZ);
+      a.localX = p.x; a.localZ = p.z;
+      a.yaw = (a.yaw + rad) % (2 * Math.PI);
+    }
+  }
+  if (out.houses) {
+    for (const h of out.houses) {
+      const p = rotPoint(h.localX, h.localZ);
+      h.localX = p.x; h.localZ = p.z;
+      h.yaw = (h.yaw + rad) % (2 * Math.PI);
+    }
+  }
+  if (out.roads) {
+    for (const r of out.roads) {
+      for (const p of r.points) {
+        const rp = rotPoint(p.x, p.z);
+        p.x = rp.x; p.z = rp.z;
+      }
+    }
+  }
+
+  // Grass
+  if (out.grassPatches) {
+    for (const g of out.grassPatches) {
+      const p = rotPoint(g.localX, g.localZ);
+      g.localX = p.x; g.localZ = p.z;
+    }
+  }
+  if (out.grassExclusions) {
+    for (const g of out.grassExclusions) {
+      const p = rotPoint(g.localX, g.localZ);
+      g.localX = p.x; g.localZ = p.z;
+    }
+  }
+
+  // Markers
+  if (out.villages) {
+    for (const v of out.villages) {
+      const p = rotPoint(v.localX, v.localZ);
+      v.localX = p.x; v.localZ = p.z;
+    }
+  }
+  if (out.portals) {
+    for (const p of out.portals) {
+      const pt = rotPoint(p.localX, p.localZ);
+      p.localX = pt.x; p.localZ = pt.z;
+    }
+  }
+  if (out.npcs) {
+    for (const n of out.npcs) {
+      const p = rotPoint(n.localX, n.localZ);
+      n.localX = p.x; n.localZ = p.z;
+      n.yaw = (n.yaw + rad) % (2 * Math.PI);
+    }
+  }
+  if (out.worldEvents) {
+    for (const e of out.worldEvents) {
+      const p = rotPoint(e.localX, e.localZ);
+      e.localX = p.x; e.localZ = p.z;
+    }
+  }
+  if (out.mobSpawns) {
+    for (const m of out.mobSpawns) {
+      const p = rotPoint(m.localX, m.localZ);
+      m.localX = p.x; m.localZ = p.z;
+    }
+  }
+  if (out.resourceNodes) {
+    for (const r of out.resourceNodes) {
+      const p = rotPoint(r.localX, r.localZ);
+      r.localX = p.x; r.localZ = p.z;
+    }
+  }
+  if (out.entryLocal) {
+    const p = rotPoint(out.entryLocal.x, out.entryLocal.z);
+    out.entryLocal.x = p.x; out.entryLocal.z = p.z;
+  }
+
+  return out;
 }

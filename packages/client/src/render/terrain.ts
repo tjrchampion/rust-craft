@@ -620,17 +620,21 @@ export function buildRegionWaterMesh(
   const geo = new THREE.PlaneGeometry(span, span, gridSize - 1, gridSize - 1);
   geo.rotateX(-Math.PI / 2);
 
+  const count = (geo.attributes.position as THREE.BufferAttribute).count;
+  geo.setAttribute("color", new THREE.BufferAttribute(new Float32Array(count * 3), 3));
+  geo.setAttribute("waterDepth", new THREE.BufferAttribute(new Float32Array(count), 1));
+
   const normalMap = tiledTexture("/assets/textures/water/water_normal.jpg");
   normalMap.repeat.set(16, 16);
 
   const mat = new THREE.MeshLambertMaterial({
-    color: 0x3b9bc9,
+    vertexColors: true,
     transparent: true,
-    opacity: 0.78,
+    opacity: 0.88,
     depthWrite: false,
     side: THREE.DoubleSide,
     normalMap,
-    normalScale: new THREE.Vector2(0.4, 0.4),
+    normalScale: new THREE.Vector2(0.5, 0.5),
   });
 
   const mesh = new THREE.Mesh(geo, mat);
@@ -639,6 +643,10 @@ export function buildRegionWaterMesh(
 
   function updateGeometry(hArr: ArrayLike<number>, wArr: ArrayLike<number>, gSize: number, pPitch: number): void {
     const pos = geo.attributes.position as THREE.BufferAttribute;
+    const colorAttr = geo.attributes.color as THREE.BufferAttribute;
+    const depthAttr = geo.attributes.waterDepth as THREE.BufferAttribute;
+    const shallowR = 0.62, shallowG = 0.95, shallowB = 1.0;
+    const deepR = 0.03, deepG = 0.12, deepB = 0.24;
 
     for (let gz = 0; gz < gSize; gz++) {
       for (let gx = 0; gx < gSize; gx++) {
@@ -647,11 +655,23 @@ export function buildRegionWaterMesh(
         const w = wArr[idx] ?? 0;
         const vIdx = gz * gSize + gx;
 
+        const realDepth = h <= 0 ? Math.max(0.0, -h) : w;
+        depthAttr.setX(vIdx, realDepth);
+
+        const depthFactor = Math.min(1.0, Math.max(0.0, realDepth / 2.5));
+        const t = Math.pow(depthFactor, 0.6);
+
+        colorAttr.setXYZ(
+          vIdx,
+          shallowR + (deepR - shallowR) * t,
+          shallowG + (deepG - shallowG) * t,
+          shallowB + (deepB - shallowB) * t,
+        );
+
         if (w > 0.005) {
           let waterY = h + w;
 
           // Wall-clinging meniscus effect:
-          // Check 4-neighbors for higher terrain walls or cliff faces
           let maxWallH = h;
           if (gx > 0) maxWallH = Math.max(maxWallH, hArr[idx - 1] ?? 0);
           if (gx < gSize - 1) maxWallH = Math.max(maxWallH, hArr[idx + 1] ?? 0);
@@ -659,14 +679,12 @@ export function buildRegionWaterMesh(
           if (gz < gSize - 1) maxWallH = Math.max(maxWallH, hArr[idx + gSize] ?? 0);
 
           if (maxWallH > waterY) {
-            // Cling slightly upward to cliff / wall face
             const clingLift = Math.min(0.25, (maxWallH - waterY) * 0.22);
             waterY += clingLift;
           }
 
           pos.setY(vIdx, waterY);
         } else {
-          // Check if any neighboring cell is wet (shoreline vertex)
           let hasWetNeighbor = false;
           let neighborWaterY = h;
           if (gx > 0 && (wArr[idx - 1] ?? 0) > 0.005) { hasWetNeighbor = true; neighborWaterY = (hArr[idx - 1] ?? 0) + (wArr[idx - 1] ?? 0); }
@@ -675,16 +693,16 @@ export function buildRegionWaterMesh(
           if (gz < gSize - 1 && (wArr[idx + gSize] ?? 0) > 0.005) { hasWetNeighbor = true; neighborWaterY = (hArr[idx + gSize] ?? 0) + (wArr[idx + gSize] ?? 0); }
 
           if (hasWetNeighbor) {
-            // Shoreline edge vertex: snap flush to ground level
             pos.setY(vIdx, Math.min(h, neighborWaterY));
           } else {
-            // Dry interior cell: sink below ground
             pos.setY(vIdx, h - 2);
           }
         }
       }
     }
     pos.needsUpdate = true;
+    colorAttr.needsUpdate = true;
+    depthAttr.needsUpdate = true;
     geo.computeVertexNormals();
   }
 
@@ -693,7 +711,14 @@ export function buildRegionWaterMesh(
   let t = 0;
   function update(dt: number): void {
     t += dt;
-    normalMap.offset.set(t * 0.02 + Math.sin(t * 0.04) * 0.02, t * 0.015);
+    const m = mesh.material as THREE.MeshLambertMaterial;
+    if (m.userData.shader) {
+      m.userData.shader.uniforms.uTime.value = t;
+    }
+    const norm = (m.userData.waterNormalMap as THREE.Texture | undefined) ?? m.normalMap;
+    if (norm) {
+      norm.offset.set(t * 0.03 + Math.sin(t * 0.05) * 0.015, t * 0.025);
+    }
   }
 
   return { mesh, updateGeometry, update };
@@ -704,15 +729,79 @@ export function createRegionWaterMaterial(): THREE.MeshLambertMaterial {
   const normalMap = tiledTexture("/assets/textures/water/water_normal.jpg");
   normalMap.repeat.set(16, 16);
   const mat = new THREE.MeshLambertMaterial({
-    color: 0x3b9bc9,
+    vertexColors: true,
     transparent: true,
-    opacity: 0.78,
+    opacity: 0.88,
     depthWrite: false,
     side: THREE.DoubleSide,
     normalMap,
-    normalScale: new THREE.Vector2(0.4, 0.4),
+    normalScale: new THREE.Vector2(0.5, 0.5),
   });
+
   mat.userData.waterNormalMap = normalMap;
+
+    // Custom GLSL shader injection for calm 3D vertex displacement, terrain-conforming edge foam, and shallow glow
+    mat.onBeforeCompile = (shader) => {
+      shader.uniforms.uTime = { value: 0 };
+      shader.uniforms.uFoamColor = { value: new THREE.Color(0xffffff) };
+
+      mat.userData.shader = shader;
+
+      shader.vertexShader = shader.vertexShader.replace(
+        "#include <common>",
+        `#include <common>
+         attribute float waterDepth;
+         varying vec3 vWorldPos;
+         varying float vWaterDepth;
+         uniform float uTime;`,
+      ).replace(
+        "#include <begin_vertex>",
+        `#include <begin_vertex>
+         vec4 wPos = modelMatrix * vec4(position, 1.0);
+         vWorldPos = wPos.xyz;
+         vWaterDepth = waterDepth;
+
+         // Calm, gentle 3D GPU vertex displacement (subtle glassy swell: ~0.03m amplitude)
+         float wave1 = sin(uTime * 1.5 + (wPos.x * 0.2 + wPos.z * 0.15)) * 0.035;
+         float wave2 = cos(uTime * 2.1 - (wPos.x * 0.35 - wPos.z * 0.28)) * 0.020;
+         float shoreWave = sin(uTime * 2.0 - waterDepth * 4.0) * 0.025 * clamp(waterDepth, 0.0, 1.5);
+
+         float totalDisplacement = (wave1 + wave2 + shoreWave) * clamp(waterDepth * 0.4, 0.0, 1.0);
+         transformed.y += totalDisplacement;`,
+      );
+
+      shader.fragmentShader = shader.fragmentShader.replace(
+        "#include <common>",
+        `#include <common>
+         varying vec3 vWorldPos;
+         varying float vWaterDepth;
+         uniform float uTime;
+         uniform vec3 uFoamColor;`,
+      ).replace(
+        "#include <color_fragment>",
+        `#include <color_fragment>
+         // 1. Shallow Water Light Transmission Glow (making shallow water noticeably brighter cyan)
+         float shallowGlow = 1.0 - smoothstep(0.0, 1.6, vWaterDepth);
+         diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.64, 0.96, 1.0), shallowGlow * 0.38);
+
+         // 2. Crisp Edge Foam line following the exact terrain contour (vWaterDepth < 0.45m)
+         float edgeMask = 1.0 - smoothstep(0.0, 0.45, vWaterDepth);
+         float shoreRipple = sin(uTime * 2.5 - vWaterDepth * 14.0);
+         float crispEdgeFoam = smoothstep(0.1, 0.85, edgeMask * (0.85 + shoreRipple * 0.25));
+
+         // 3. Micro-foam caustics texture pattern over shallow water
+         float foamNoise = sin(vWorldPos.x * 2.5 + uTime * 1.5) * cos(vWorldPos.z * 2.5 - uTime * 1.2);
+         float texturedFoam = smoothstep(0.5, 0.88, foamNoise * 0.5 + 0.5) * shallowGlow * 0.4;
+
+         // Blend caustics into water color
+         diffuseColor.rgb = mix(diffuseColor.rgb, uFoamColor, texturedFoam * 0.5);
+
+         // Overlay the crisp white edge foam following terrain contours cleanly on top!
+         diffuseColor.rgb = mix(diffuseColor.rgb, vec3(1.0), crispEdgeFoam * 0.95);
+         diffuseColor.a = max(diffuseColor.a, crispEdgeFoam * 0.95);`,
+      );
+    };
+
   return mat;
 }
 
@@ -812,15 +901,38 @@ export function buildRegionAdtWaterTile(
   geo.translate(centerX, 0, centerZ);
 
   const pos = geo.attributes.position as THREE.BufferAttribute;
+  const count = pos.count;
+  const colorArr = new Float32Array(count * 3);
+  const depthArr = new Float32Array(count);
+
+  const shallowR = 0.55, shallowG = 0.93, shallowB = 0.98;
+  const deepR = 0.04, deepG = 0.14, deepB = 0.26;
+
   // PlaneGeometry verts are row-major matching segs; map back to grid indices.
   for (let row = 0; row <= segsZ; row++) {
     for (let col = 0; col <= segsX; col++) {
       const vIdx = row * (segsX + 1) + col;
       const gx = gx0 + col;
       const gz = gz0 + row;
+      const idx = gz * gridSize + gx;
+      const h = heights[idx] ?? 0;
+      const w = waterHeights[idx] ?? 0;
+
+      const realDepth = h <= 0 ? Math.max(0.0, -h) : w;
+      depthArr[vIdx] = realDepth;
+
+      const depthFactor = Math.min(1.0, Math.max(0.0, realDepth / 2.5));
+      const t = Math.pow(depthFactor, 0.5);
+
+      colorArr[vIdx * 3] = shallowR + (deepR - shallowR) * t;
+      colorArr[vIdx * 3 + 1] = shallowG + (deepG - shallowG) * t;
+      colorArr[vIdx * 3 + 2] = shallowB + (deepB - shallowB) * t;
+
       pos.setY(vIdx, waterSurfaceY(heights, waterHeights, gridSize, gx, gz));
     }
   }
+  geo.setAttribute("color", new THREE.BufferAttribute(colorArr, 3));
+  geo.setAttribute("waterDepth", new THREE.BufferAttribute(depthArr, 1));
   pos.needsUpdate = true;
   geo.computeVertexNormals();
 

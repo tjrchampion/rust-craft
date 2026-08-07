@@ -1,10 +1,13 @@
 <script lang="ts">
+  import { onMount } from "svelte";
   import { game, parseCoins } from "../gameState.svelte";
   import { itemIcon, spellIcon } from "../icons";
   import IconGlyph from "../IconGlyph.svelte";
+  import { ClassPreviewScene } from "../../render/ClassPreviewScene";
   import {
     itemDef,
     EQUIP_SLOTS,
+    type ClassId,
     type GearSlot,
     type ItemSnap,
   } from "@rustcraft/shared";
@@ -57,6 +60,39 @@
   function spellIdOf(item: ItemSnap | undefined): string | null {
     return item?.itemId.startsWith(SPELL_PREFIX) ? item.itemId.slice(SPELL_PREFIX.length) : null;
   }
+
+  // 3D character preview (paperdoll). Reflects the currently-equipped gear.
+  let paperdollCanvas = $state<HTMLCanvasElement | null>(null);
+  let paperdollScene: ClassPreviewScene | null = null;
+  const paperdollEquip = $derived.by(() => {
+    const equip: Partial<Record<string, string>> = {};
+    for (let i = 0; i < EQUIP_SLOTS.length; i++) {
+      const item = equipSlots[i];
+      if (item) equip[EQUIP_SLOTS[i]!] = item.itemId;
+    }
+    return equip;
+  });
+
+  $effect(() => {
+    const canvas = paperdollCanvas;
+    if (!canvas) return;
+    if (!paperdollScene) {
+      paperdollScene = new ClassPreviewScene(canvas, { pedestal: false, motes: false, spotlight: false });
+    }
+    const classId = (game.classId || "warrior") as ClassId;
+    paperdollScene.setClass(classId, game.gender, game.appearance, paperdollEquip);
+    paperdollScene.resize();
+  });
+
+  onMount(() => {
+    const onResize = () => paperdollScene?.resize();
+    window.addEventListener("resize", onResize);
+    return () => {
+      window.removeEventListener("resize", onResize);
+      paperdollScene?.dispose();
+      paperdollScene = null;
+    };
+  });
 </script>
 
 <div class="col paperdoll-col">
@@ -90,6 +126,7 @@
       {/each}
     </div>
     <div class="paperdoll-stage">
+      <canvas bind:this={paperdollCanvas} class="paperdoll-canvas"></canvas>
       <div class="char-info">
         <div class="char-level-class">Level {game.self?.level ?? 1} · {classInfo?.name ?? "Adventurer"}</div>
         <div class="char-vitals">
@@ -267,6 +304,15 @@
     letter-spacing: 0.6px;
     color: #8a93a3;
     line-height: 1.1;
+  }
+  .paperdoll-canvas {
+    width: 100%;
+    height: min(260px, 34vh);
+    border-radius: 6px;
+    background: rgba(8, 10, 14, 0.45);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    cursor: grab;
+    touch-action: none;
   }
   .paperdoll-stage {
     display: flex;

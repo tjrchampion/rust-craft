@@ -45,6 +45,9 @@ import {
   WORLD_MAX_Z,
   sampleRegionWaterDepth,
   ensureRegionWorldOrigins,
+  regionHalfSpanX,
+  regionHalfSpanZ,
+  resolveVendorId,
   regionLocalToWorld,
   worldToRegionLocal,
   type MoveState,
@@ -90,6 +93,7 @@ import {
 } from "../render/settlements";
 import { DUNGEON_THEME_COLORS, DungeonInteriorRenderer } from "../render/dungeonInterior";
 import { RegionInteriorRenderer } from "../render/regionInterior";
+import { renderRegionThumbnail, renderRegionLandMask, OVERVIEW_EDGE } from "../ui/worldMapThumbnail";
 import { RegionContinent } from "../render/regionContinent";
 import {
   atmosphereFromGrading,
@@ -466,6 +470,7 @@ export class Game {
         worldOriginZ: r.worldOriginZ,
       }));
       ensureRegionWorldOrigins(this.regionCatalog);
+      void this.prewarmMapAssets();
       this.regionPortals = data.regions
         .filter((r) => r.portalWorldX !== 0 || r.portalWorldZ !== 0)
         .map((r) => ({ id: r.id, name: r.name, x: r.portalWorldX, z: r.portalWorldZ }));
@@ -822,31 +827,18 @@ export class Game {
       ui.loadingProgress = 30;
       await Promise.all([avatarLoad, catalogLoad, packLoad]);
 
-      // Pre-fetch all full region blueprints in parallel during loading screen
-      if (this.regionCatalog.length > 0) {
-        await Promise.all(
-          this.regionCatalog.map(async (r) => {
-            if (this.regionBlueprintCache.get(r.id)?.heights?.length) return;
-            try {
-              const res = await fetch(app.apiUrl(`/api/regions/${r.id}`), { credentials: "include" });
-              if (res.ok) {
-                const data = (await res.json()) as { blueprint: RegionBlueprint };
-                this.regionBlueprintCache.set(r.id, data.blueprint);
-              }
-            } catch {}
-          }),
-        );
-      }
-
-      ui.loadingProgress = 45;
+      ui.loadingMessage = "Prewarming world map & terrain rasters...";
+      ui.loadingProgress = 40;
+      await this.prewarmMapAssets();
+      ui.loadingProgress = 50;
 
       ui.loadingMessage = "Warming 3D asset catalog…";
       await warmAllPackedAssets((loaded, total) => {
-        const pct = Math.floor(45 + (loaded / total) * 15);
+        const pct = Math.floor(50 + (loaded / total) * 15);
         ui.loadingProgress = pct;
         ui.loadingMessage = `Warming 3D assets (${loaded}/${total})…`;
       });
-      ui.loadingProgress = 60;
+      ui.loadingProgress = 65;
 
       await this.applyEquippedGearAsync(msg.inventory);
       ui.loadingProgress = 65;
@@ -1546,10 +1538,61 @@ export class Game {
         Math.hypot(x - this.continentSyncAt.x, z - this.continentSyncAt.z) > 24;
       if (moved || now - this.continentSyncAt.t > 1500) {
         this.continentSyncAt = { x, z, t: now };
-        void this.continent.syncAround(x, z, this.continentCatalog(), { urgentId: regionId });
+        // Mount neighbours ahead of the seam, then warm their GPU programs +
+        // textures off-frame so crossing in doesn't hitch (see prewarmScene).
+        void this.continent
+          .syncAround(x, z, this.continentCatalog(), { urgentId: regionId })
+          .then(() => this.prewarmScene());
       }
     }
     this.continent?.update(dt, this.sun, x, z, this.camera);
+  }
+
+  private prewarming = false;
+  /** Warm the GPU for everything currently in the scene *off* the render frame:
+   *  compile shader programs (compileAsync uses parallel-shader-compile) and
+   *  upload textures. Without this, a freshly-mounted region's materials compile
+   *  and its atlases upload synchronously on the first frame they're drawn --
+   *  the visible "hitch as the map pops in". compile() walks ALL objects (even
+   *  distance-culled/invisible ones), so this readies assets *before* they come
+   *  into view. Both steps skip already-warm programs/textures, so calling it
+   *  after each mount cycle is cheap when nothing new arrived. */
+  private async prewarmScene(): Promise<void> {
+    if (this.prewarming || this.disposed) return;
+    this.prewarming = true;
+    try {
+      try {
+        this.renderer.compile(this.scene, this.camera);
+      } catch {
+        /* skip material compile if a mesh is mid-update */
+      }
+      if (this.disposed) return;
+      // Push texture uploads as well.
+      const seen = new Set<THREE.Texture>();
+      const TEX_SLOTS = ["map", "normalMap", "roughnessMap", "metalnessMap", "emissiveMap", "aoMap"] as const;
+      this.scene.traverse((o) => {
+        const mesh = o as THREE.Mesh;
+        if (!mesh.material) return;
+        const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+        for (const m of mats) {
+          for (const slot of TEX_SLOTS) {
+            const tex = (m as unknown as Record<string, THREE.Texture | null>)[slot];
+            if (tex && !seen.has(tex)) {
+              seen.add(tex);
+              try {
+                this.renderer.initTexture(tex);
+              } catch {
+                /* skip textures the driver rejects */
+              }
+            }
+          }
+        }
+      });
+    } catch {
+      /* prewarm is best-effort; a failure just means the old on-demand path */
+    } finally {
+      this.prewarming = false;
+    }
   }
 
   /** Mount the continent streamer around the player. Neighbor regions stay
@@ -2580,7 +2623,14 @@ export class Game {
     this.setUiMode(ui.inventoryOpen);
   }
 
-  setWorldMapOpen(open: boolean): void {
+  public initialMapFocusRegionId: string | null = null;
+
+  setWorldMapOpen(open: boolean, focusRegionId?: string): void {
+    if (open) {
+      this.initialMapFocusRegionId = focusRegionId ?? null;
+    } else {
+      this.initialMapFocusRegionId = null;
+    }
     ui.worldMapOpen = open;
     this.setUiMode(open || ui.inventoryOpen || ui.chatOpen || ui.questOffer !== null);
   }
@@ -2632,17 +2682,124 @@ export class Game {
           localZ: e.localZ,
           radius: e.radius,
         })),
-        npcs: (src.npcs ?? []).map((n) => ({
-          id: n.id,
-          name: n.name,
-          localX: n.localX,
-          localZ: n.localZ,
-          title: n.title,
-          hasQuests: Boolean(n.quests?.length) || (n.generateProceduralQuests !== false && !n.vendorId),
-          vendorId: n.vendorId,
-        })),
+        npcs: (src.npcs ?? []).map((n) => {
+          const vId = resolveVendorId(n);
+          return {
+            id: n.id,
+            name: n.name,
+            localX: n.localX,
+            localZ: n.localZ,
+            title: n.title,
+            hasQuests: Boolean(n.quests?.length) || (n.generateProceduralQuests !== false && !vId),
+            vendorId: vId,
+          };
+        }),
       };
     });
+  }
+
+  public readonly prewarmedThumbnails = new Map<string, string>();
+  public readonly prewarmedLandMasks = new Map<string, string>();
+  public readonly prewarmedDetails = new Map<string, string>();
+  public readonly prewarmedMinimaps = new Map<
+    string,
+    {
+      thumb: string;
+      bounds: { minX: number; maxX: number; minZ: number; maxZ: number };
+      npcs: Array<{ id: string; name: string; x: number; z: number; kind: "vendor" | "quest" | "npc" }>;
+    }
+  >();
+
+  private mapPrewarmStarted = false;
+
+  /** Yield to the browser so the HUD keeps painting between the (heavy,
+   *  synchronous) canvas rasters below -- requestIdleCallback runs them in the
+   *  gaps rather than one thread-blocking burst. */
+  private mapYield(): Promise<void> {
+    return new Promise<void>((resolve) => {
+      if (typeof requestIdleCallback === "function") requestIdleCallback(() => resolve(), { timeout: 200 });
+      else setTimeout(resolve, 0);
+    });
+  }
+
+  /** Pre-render just a region's minimap thumb (the small raster the on-screen
+   *  minimap needs immediately). Cheap; skips if already cached. */
+  private warmMinimapThumb(bp: RegionBlueprint, id: string): void {
+    if (this.prewarmedMinimaps.has(id)) return;
+    const minimapThumb = renderRegionThumbnail(bp, { edge: 224 });
+    if (!minimapThumb) return;
+    const origin = this.regionWorldOriginOf(id) ?? { x: bp.worldOriginX ?? 0, z: bp.worldOriginZ ?? 0 };
+    const halfX = regionHalfSpanX(bp);
+    const halfZ = regionHalfSpanZ(bp);
+    const bounds = { minX: origin.x - halfX, maxX: origin.x + halfX, minZ: origin.z - halfZ, maxZ: origin.z + halfZ };
+    const npcs = (bp.npcs ?? []).map((n) => ({
+      id: n.id,
+      name: n.name,
+      x: origin.x + n.localX,
+      z: origin.z + n.localZ,
+      kind: (n.vendorId ? "vendor" : n.quests?.length || n.generateProceduralQuests ? "quest" : "npc") as
+        | "vendor"
+        | "quest"
+        | "npc",
+    }));
+    this.prewarmedMinimaps.set(id, { thumb: minimapThumb, bounds, npcs });
+  }
+
+  /** Pre-render one region's map rasters (minimap thumb + world-map overview /
+   *  land mask / zoom detail). Skips work already cached. */
+  private warmRegionMapRasters(bp: RegionBlueprint, id: string): void {
+    this.warmMinimapThumb(bp, id);
+    if (!this.prewarmedThumbnails.has(id)) {
+      const thumbUrl = renderRegionThumbnail(bp, { edge: OVERVIEW_EDGE });
+      if (thumbUrl) this.prewarmedThumbnails.set(id, thumbUrl);
+    }
+    if (!this.prewarmedLandMasks.has(id)) {
+      const maskUrl = renderRegionLandMask(bp, { edge: OVERVIEW_EDGE });
+      if (maskUrl) this.prewarmedLandMasks.set(id, maskUrl);
+    }
+    if (!this.prewarmedDetails.has(id)) {
+      const detailUrl = renderRegionThumbnail(bp, { edge: 640 });
+      if (detailUrl) this.prewarmedDetails.set(id, detailUrl);
+    }
+  }
+
+  /** Pre-render every region's world-map & minimap rasters WITHOUT blocking the
+   *  main thread: the region the player is in is warmed first (its minimap is
+   *  needed immediately); everything else warms in the background during idle,
+   *  yielding between each region so the HUD (spell bar, etc.) never stalls
+   *  behind the prewarm. Safe to call from multiple entry points -- runs once. */
+  async prewarmMapAssets(): Promise<void> {
+    if (this.mapPrewarmStarted) return;
+    this.mapPrewarmStarted = true;
+    try {
+      const catalog = await this.ensureRegionMapCatalog();
+      if (!catalog || catalog.length === 0) return;
+      const currentId = ui.regionState?.regionId ?? this.activeRegionId ?? null;
+
+      // Only the current region's small minimap thumb is rendered up front (it's
+      // the raster actually on-screen). Everything else -- the current region's
+      // heavier world-map rasters and all other regions -- streams in during
+      // idle so the HUD never stalls behind it.
+      const current = catalog.find((r) => r.id === currentId);
+      if (current) {
+        const bp = await this.ensureRegionBlueprint(current.id);
+        if (bp) this.warmMinimapThumb(bp, current.id);
+      }
+
+      void (async () => {
+        // Current region first (its world map is the most likely to be opened),
+        // then every other region fully.
+        const order = current ? [current, ...catalog.filter((r) => r.id !== currentId)] : [...catalog];
+        for (const r of order) {
+          await this.mapYield();
+          if (this.disposed) return;
+          const bp = await this.ensureRegionBlueprint(r.id);
+          if (bp) this.warmRegionMapRasters(bp, r.id);
+        }
+      })();
+    } catch {
+      /* fall through */
+    }
   }
 
   /** Ensure the region catalog is loaded (used by the world map). */

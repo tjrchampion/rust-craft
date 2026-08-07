@@ -58,18 +58,10 @@
     cosmic: "#3a4a8a",
   };
 
-  function halfOf(t: LayoutTile): number {
-    return regionHalfSpan(t);
-  }
+  import { regionWorldBounds, regionHalfSpanX, regionHalfSpanZ } from "@rustcraft/shared";
 
   function boundsOf(t: LayoutTile) {
-    const h = halfOf(t);
-    return {
-      minX: t.worldOriginX - h,
-      maxX: t.worldOriginX + h,
-      minZ: t.worldOriginZ - h,
-      maxZ: t.worldOriginZ + h,
-    };
+    return regionWorldBounds(t);
   }
 
   function worldToScreen(wx: number, wz: number): { x: number; y: number } {
@@ -124,8 +116,9 @@
     if (!snapEdges) {
       return { x: Math.round(ox / 5) * 5, z: Math.round(oz / 5) * 5 };
     }
-    const half = halfOf(tile);
-    const thresh = 14;
+    const halfX = regionHalfSpanX(tile);
+    const halfZ = regionHalfSpanZ(tile);
+    const thresh = 50;
     let nx = ox;
     let nz = oz;
     let bestDx = thresh;
@@ -135,10 +128,10 @@
       if (o.id === tile.id) continue;
       const ob = boundsOf(o);
       const candidatesX: Array<[number, number]> = [
-        [ox - half, ob.maxX], // left → other's right
-        [ox + half, ob.minX], // right → other's left
-        [ox - half, ob.minX], // left → other's left
-        [ox + half, ob.maxX], // right → other's right
+        [ox - halfX, ob.maxX], // left → other's right
+        [ox + halfX, ob.minX], // right → other's left
+        [ox - halfX, ob.minX], // left → other's left
+        [ox + halfX, ob.maxX], // right → other's right
       ];
       for (const [edge, target] of candidatesX) {
         const d = Math.abs(edge - target);
@@ -148,10 +141,10 @@
         }
       }
       const candidatesZ: Array<[number, number]> = [
-        [oz - half, ob.maxZ],
-        [oz + half, ob.minZ],
-        [oz - half, ob.minZ],
-        [oz + half, ob.maxZ],
+        [oz - halfZ, ob.maxZ],
+        [oz + halfZ, ob.minZ],
+        [oz - halfZ, ob.minZ],
+        [oz + halfZ, ob.maxZ],
       ];
       for (const [edge, target] of candidatesZ) {
         const d = Math.abs(edge - target);
@@ -164,6 +157,107 @@
     if (bestDx >= thresh) nx = Math.round(nx / 5) * 5;
     if (bestDz >= thresh) nz = Math.round(nz / 5) * 5;
     return { x: nx, z: nz };
+  }
+
+  function autoSnapAllFlush(): void {
+    const updated = tiles.map((t) => ({ ...t }));
+    let changed = false;
+
+    for (let i = 0; i < updated.length; i++) {
+      const tileA = updated[i]!;
+      const hAX = regionHalfSpanX(tileA);
+      const hAZ = regionHalfSpanZ(tileA);
+
+      for (let j = 0; j < updated.length; j++) {
+        if (i === j) continue;
+        const tileB = updated[j]!;
+        const hBX = regionHalfSpanX(tileB);
+        const hBZ = regionHalfSpanZ(tileB);
+
+        // Horizontal snap (X-axis alignment)
+        const zOverlap = Math.abs(tileB.worldOriginZ - tileA.worldOriginZ) < (hAZ + hBZ) * 0.9;
+        const xDist = Math.abs(tileB.worldOriginX - tileA.worldOriginX);
+        const expectedX = hAX + hBX;
+
+        if (zOverlap && Math.abs(xDist - expectedX) < 200 && Math.abs(xDist - expectedX) > 0.5) {
+          const dir = tileB.worldOriginX >= tileA.worldOriginX ? 1 : -1;
+          tileB.worldOriginX = Math.round(tileA.worldOriginX + dir * expectedX);
+          tileB.dirty = true;
+          changed = true;
+        }
+
+        // Vertical snap (Z-axis alignment)
+        const xOverlap = Math.abs(tileB.worldOriginX - tileA.worldOriginX) < (hAX + hBX) * 0.9;
+        const zDist = Math.abs(tileB.worldOriginZ - tileA.worldOriginZ);
+        const expectedZ = hAZ + hBZ;
+
+        if (xOverlap && Math.abs(zDist - expectedZ) < 200 && Math.abs(zDist - expectedZ) > 0.5) {
+          const dir = tileB.worldOriginZ >= tileA.worldOriginZ ? 1 : -1;
+          tileB.worldOriginZ = Math.round(tileA.worldOriginZ + dir * expectedZ);
+          tileB.dirty = true;
+          changed = true;
+        }
+      }
+    }
+
+    if (changed) {
+      onTilesChange(updated);
+      draw();
+    }
+  }
+
+  function snapSelectedDirection(dir: "left" | "right" | "top" | "bottom"): void {
+    const id = selectedId ?? currentRegionId;
+    if (!id) return;
+    const cur = tiles.find((t) => t.id === id);
+    if (!cur) return;
+    const hCurX = regionHalfSpanX(cur);
+    const hCurZ = regionHalfSpanZ(cur);
+
+    let bestDist = Infinity;
+    let targetVal: number | null = null;
+
+    for (const other of tiles) {
+      if (other.id === id) continue;
+      const hOX = regionHalfSpanX(other);
+      const hOZ = regionHalfSpanZ(other);
+
+      if (dir === "left" || dir === "right") {
+        if (Math.abs(other.worldOriginZ - cur.worldOriginZ) < (hCurZ + hOZ) * 0.9) {
+          const expected = dir === "left" ? other.worldOriginX - (hOX + hCurX) : other.worldOriginX + (hOX + hCurX);
+          const dist = Math.abs(cur.worldOriginX - expected);
+          if (dist < bestDist) {
+            bestDist = dist;
+            targetVal = expected;
+          }
+        }
+      } else {
+        if (Math.abs(other.worldOriginX - cur.worldOriginX) < (hCurX + hOX) * 0.9) {
+          const expected = dir === "top" ? other.worldOriginZ - (hOZ + hCurZ) : other.worldOriginZ + (hOZ + hCurZ);
+          const dist = Math.abs(cur.worldOriginZ - expected);
+          if (dist < bestDist) {
+            bestDist = dist;
+            targetVal = expected;
+          }
+        }
+      }
+    }
+
+    if (targetVal !== null) {
+      onTilesChange(
+        tiles.map((t) =>
+          t.id === id
+            ? {
+                ...t,
+                worldOriginX: (dir === "left" || dir === "right") ? targetVal! : t.worldOriginX,
+                worldOriginZ: (dir === "top" || dir === "bottom") ? targetVal! : t.worldOriginZ,
+                dirty: true,
+              }
+            : t,
+        ),
+      );
+      draw();
+    }
   }
 
   function draw(): void {
@@ -430,6 +524,7 @@
         <input type="checkbox" bind:checked={snapEdges} />
         Snap edges
       </label>
+      <button onclick={autoSnapAllFlush} title="Automatically close gaps between all adjacent regions">⚡ Auto-Snap Flush</button>
       <button onclick={fitView}>Fit all</button>
       <button
         onclick={() => {
@@ -445,9 +540,12 @@
       >
       {#if selected}
         <span class="readout">
-          {selected.name}: origin ({Math.round(selected.worldOriginX)}, {Math.round(selected.worldOriginZ)})
-          · span {Math.round(halfOf(selected) * 2)}m
+          <strong>{selected.name}</strong>: ({Math.round(selected.worldOriginX)}, {Math.round(selected.worldOriginZ)})
         </span>
+        <button class="snap-btn" onclick={() => snapSelectedDirection("left")} title="Snap left flush to neighbor">⬅ Left</button>
+        <button class="snap-btn" onclick={() => snapSelectedDirection("right")} title="Snap right flush to neighbor">➡ Right</button>
+        <button class="snap-btn" onclick={() => snapSelectedDirection("top")} title="Snap top flush to neighbor">⬆ Top</button>
+        <button class="snap-btn" onclick={() => snapSelectedDirection("bottom")} title="Snap bottom flush to neighbor">⬇ Bottom</button>
       {/if}
       <div class="spacer"></div>
       <span class="hint">Drag tile · Alt/Space+drag pan · Scroll zoom · Arrows nudge</span>

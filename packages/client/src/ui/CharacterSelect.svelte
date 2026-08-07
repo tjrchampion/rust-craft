@@ -330,14 +330,16 @@
     <button class="linkish" onclick={() => void app.logout()}>sign out</button>
   </div>
 
-  <div class="news-updates-panel rc-frame">
-    <div class="news-panel-header">
-      <span class="news-panel-title">📜 REALM NEWS & UPDATES</span>
+  {#if mode === "select"}
+    <div class="news-updates-panel rc-frame">
+      <div class="news-panel-header">
+        <span class="news-panel-title">📜 REALM NEWS & UPDATES</span>
+      </div>
+      <div class="news-panel-body">
+        {@html updatesHtml}
+      </div>
     </div>
-    <div class="news-panel-body">
-      {@html updatesHtml}
-    </div>
-  </div>
+  {/if}
 
 
 

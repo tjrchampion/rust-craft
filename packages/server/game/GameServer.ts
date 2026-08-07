@@ -74,6 +74,7 @@ import {
   RECIPES,
   VENDORS,
   vendorDef,
+  resolveVendorId,
   spellDef,
   SPELLS,
   mobDef,
@@ -1418,17 +1419,19 @@ export class GameServer {
       if (dist2D(player.move.x, player.move.z, npcW.x, npcW.z) > 8) return;
 
       // ---- Vendor NPCs: open the merchant window ----
-      if (rNpc.vendorId) {
-        const vDef = vendorDef(rNpc.vendorId);
-        if (!vDef) return;
-        this.sendTo(player.peer, {
-          t: "vendorStock",
-          npcId: rNpc.vendorId,
-          vendorName: rNpc.name,
-          title: vDef.title,
-          items: vDef.items,
-        } as any);
-        return;
+      const vId = resolveVendorId(rNpc);
+      if (vId) {
+        const vDef = vendorDef(vId);
+        if (vDef) {
+          this.sendTo(player.peer, {
+            t: "vendorStock",
+            npcId: vId,
+            vendorName: rNpc.name,
+            title: vDef.title,
+            items: vDef.items,
+          } as any);
+          return;
+        }
       }
 
       const offers: QuestOfferInfo[] = [];

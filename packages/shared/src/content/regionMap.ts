@@ -35,6 +35,15 @@ export interface RegionMapNpc {
   vendorId?: string;
 }
 
+export interface RegionMapMobSpawn {
+  id: string;
+  mobTypeId?: string;
+  localX: number;
+  localZ: number;
+  level?: number;
+  radius?: number;
+}
+
 export interface RegionMapEntry {
   id: string;
   name: string;
@@ -52,4 +61,5 @@ export interface RegionMapEntry {
   portals: RegionMapPortal[];
   worldEvents: RegionMapEvent[];
   npcs: RegionMapNpc[];
+  mobSpawns?: RegionMapMobSpawn[];
 }

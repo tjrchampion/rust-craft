@@ -16,7 +16,7 @@ import {
   type RegionFogVolume,
   type RegionNPC,
 } from "@rustcraft/shared";
-import { load, AnimatedModel, PLAYER_ANIMS } from "./gltf";
+import { load, AnimatedModel, PLAYER_ANIMS, resolveNpcModelUrl } from "./gltf";
 import type { GLTF } from "three/examples/jsm/loaders/GLTFLoader.js";
 import * as SkeletonUtils from "three/examples/jsm/utils/SkeletonUtils.js";
 import { buildShrine, buildNameplate, buildHealthNameplate } from "./models";
@@ -79,10 +79,7 @@ function regionAssetUrls(blueprint: RegionBlueprint): string[] {
   }
   if (blueprint.npcs) {
     for (const npc of blueprint.npcs) {
-      if (npc.model && (npc.model.endsWith(".glb") || npc.model.endsWith(".gltf"))) {
-        const url = npc.model.startsWith("/") ? npc.model : `/assets/models/${npc.model}`;
-        urls.add(url);
-      }
+      urls.add(resolveNpcModelUrl(npc.model));
     }
   }
   return [...urls];
@@ -241,9 +238,7 @@ export class RegionInteriorRenderer {
       placeholder.position.set(0, 0.5, 0);
       npcGroup.add(placeholder);
 
-      const modelName = npc.model || "Knight";
-      const modelPath = modelName.endsWith(".glb") ? modelName : `${modelName}.glb`;
-      const modelUrl = modelPath.startsWith("/") ? modelPath : `/assets/models/${modelPath}`;
+      const modelUrl = resolveNpcModelUrl(npc.model);
 
       const animModel = new AnimatedModel(PLAYER_ANIMS);
       animModel
@@ -254,7 +249,7 @@ export class RegionInteriorRenderer {
           npcGroup.add(animModel.group);
         })
         .catch((err) => {
-          console.error(`Failed to load region NPC model ${modelUrl}:`, err);
+          console.warn(`Failed to load region NPC model ${modelUrl}:`, err);
         });
       const inst: RegionNpcInstance = {
         group: npcGroup,
@@ -695,8 +690,7 @@ export class RegionInteriorRenderer {
     // second via streamer logic when the player is about to walk onto void.
     const budget = new StreamBudget(REGION_STREAM_BUDGET_MS, 2);
     this.adtTerrain.update(viewerX, viewerZ, budget);
-    this.adtWater?.update(viewerX, viewerZ, budget);
-    this.adtWater?.updateScroll(delta);
+    this.adtWater?.update(viewerX, viewerZ, delta, budget);
 
     // Keep foliage/props inside the same Chebyshev ADT ring as streamed
     // terrain, and only show a chunk once its ground tile exists — otherwise

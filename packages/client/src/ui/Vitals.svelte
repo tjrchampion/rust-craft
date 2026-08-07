@@ -103,9 +103,11 @@
     position: absolute;
     bottom: -2px;
     left: -2px;
-    min-width: 24px;
+    /* Fixed square → a true circle (min-width + padding made it an oval pill
+       for 2-digit levels); z-index lifts it above the avatar canvas, which
+       sits in its own stacking context and was covering it. */
+    width: 24px;
     height: 24px;
-    padding: 0 5px;
     border-radius: 50%;
     background: linear-gradient(180deg, #3a2e20, #1a1410);
     border: 1.5px solid var(--rc-gold-bright);
@@ -117,6 +119,7 @@
     align-items: center;
     justify-content: center;
     box-shadow: 0 2px 6px rgba(0, 0, 0, 0.85);
+    z-index: 2;
   }
   .body {
     display: flex;

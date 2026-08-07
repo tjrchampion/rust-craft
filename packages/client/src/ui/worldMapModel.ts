@@ -15,6 +15,7 @@ export interface MapFilters {
   events: boolean;
   portals: boolean;
   npcs: boolean;
+  mobs: boolean;
 }
 
 export const DEFAULT_MAP_FILTERS: MapFilters = {
@@ -23,6 +24,7 @@ export const DEFAULT_MAP_FILTERS: MapFilters = {
   events: true,
   portals: true,
   npcs: true,
+  mobs: true,
 };
 
 export const BIOME_FILL: Record<RegionBiome, string> = {
@@ -40,6 +42,55 @@ export const BIOME_FILL: Record<RegionBiome, string> = {
 
 export function biomeLabel(biome: RegionBiome): string {
   return REGION_BIOME_LABELS[biome] ?? biome;
+}
+
+export interface RegionZoneMeta {
+  title: string;
+  levelRange: string;
+  minLevel: number;
+  maxLevel: number;
+  description: string;
+}
+
+export const REGION_ZONE_META: Record<string, RegionZoneMeta> = {
+  new_region: {
+    title: "The Emerald Valleys",
+    levelRange: "Levels 1 to 10",
+    minLevel: 1,
+    maxLevel: 10,
+    description: "A lush starting valley surrounded by rolling green hills, ancient shrines, and tranquil river streams.",
+  },
+  region_two: {
+    title: "The Frostpeak Reach",
+    levelRange: "Levels 10 to 20",
+    minLevel: 10,
+    maxLevel: 20,
+    description: "Rugged highland plateaus filled with iron veins, wild beasts, and treacherous icy mountain passes.",
+  },
+};
+
+function strHash(str: string): number {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    hash = (hash << 5) - hash + str.charCodeAt(i);
+    hash |= 0;
+  }
+  return Math.abs(hash);
+}
+
+export function getRegionZoneMeta(region: RegionMapEntry): RegionZoneMeta {
+  const meta = REGION_ZONE_META[region.id];
+  if (meta) return meta;
+  const index = strHash(region.id) % 6;
+  const minLvl = 1 + index * 5;
+  const maxLvl = minLvl + 9;
+  return {
+    title: region.name || "Uncharted Domain",
+    levelRange: `Levels ${minLvl} to ${maxLvl}`,
+    minLevel: minLvl,
+    maxLevel: maxLvl,
+    description: "An uncharted fantasy region filled with dangerous wildlife, ancient ruins, and valuable resources.",
+  };
 }
 
 export function continentBounds(regions: RegionMapEntry[]): {
@@ -84,14 +135,14 @@ export class MapCamera {
   worldToScreen(wx: number, wz: number): { x: number; y: number } {
     return {
       x: (wx - this.focusX) * this.scale + this.width / 2 + this.panX,
-      y: -(wz - this.focusZ) * this.scale + this.height / 2 + this.panY,
+      y: (wz - this.focusZ) * this.scale + this.height / 2 + this.panY,
     };
   }
 
   screenToWorld(sx: number, sy: number): { x: number; z: number } {
     return {
       x: (sx - this.width / 2 - this.panX) / this.scale + this.focusX,
-      z: -((sy - this.height / 2 - this.panY) / this.scale) + this.focusZ,
+      z: (sy - this.height / 2 - this.panY) / this.scale + this.focusZ,
     };
   }
 
@@ -105,17 +156,22 @@ export class MapCamera {
     maxX: number,
     minZ: number,
     maxZ: number,
-    padPx = 56,
+    padding = 60,
   ): void {
-    const spanX = Math.max(40, maxX - minX);
-    const spanZ = Math.max(40, maxZ - minZ);
-    const availW = Math.max(40, this.width - padPx * 2);
-    const availH = Math.max(40, this.height - padPx * 2);
-    this.scale = Math.min(availW / spanX, availH / spanZ, 4);
+    const spanX = Math.max(1, maxX - minX);
+    const spanZ = Math.max(1, maxZ - minZ);
+    const availW = Math.max(1, this.width - padding * 2);
+    const availH = Math.max(1, this.height - padding * 2);
+    this.scale = Math.min(availW / spanX, availH / spanZ);
     this.focusX = (minX + maxX) / 2;
     this.focusZ = (minZ + maxZ) / 2;
     this.panX = 0;
     this.panY = 0;
+  }
+
+  pan(dx: number, dy: number): void {
+    this.panX += dx;
+    this.panY += dy;
   }
 
   fitContinent(regions: RegionMapEntry[], padPx = 64): void {
@@ -133,7 +189,7 @@ export class MapCamera {
     this.scale = Math.min(max, Math.max(min, this.scale * factor));
     const after = this.screenToWorld(sx, sy);
     this.panX += (after.x - before.x) * this.scale;
-    this.panY -= (after.z - before.z) * this.scale;
+    this.panY += (after.z - before.z) * this.scale;
   }
 }
 
@@ -169,7 +225,7 @@ export function hitTestRegion(
 
 export interface MapMarker {
   id: string;
-  kind: "village" | "quest" | "questNpc" | "event" | "portal" | "npc" | "entry" | "player" | "party";
+  kind: "village" | "quest" | "questNpc" | "event" | "portal" | "npc" | "entry" | "player" | "party" | "mobSpawn";
   x: number;
   z: number;
   label: string;
@@ -201,6 +257,23 @@ export function buildStaticMarkers(
           label: v.name,
           radius: v.radius,
           regionId: r.id,
+        });
+      }
+    }
+
+    if (filters.mobs) {
+      for (const m of r.mobSpawns ?? []) {
+        const w = regionLocalToWorld(r, m.localX, m.localZ);
+        const name = m.mobTypeId ? m.mobTypeId.replace(/_/g, " ") : "Mob Spawn";
+        out.push({
+          id: `mob:${r.id}:${m.id}`,
+          kind: "mobSpawn",
+          x: w.x,
+          z: w.z,
+          label: name,
+          sub: m.level ? `Lvl ${m.level}` : undefined,
+          regionId: r.id,
+          radius: m.radius,
         });
       }
     }

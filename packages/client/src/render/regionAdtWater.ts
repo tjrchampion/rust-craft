@@ -84,7 +84,16 @@ export class RegionAdtWaterStreamer {
     }
   }
 
-  update(x: number, z: number, budget?: StreamBudget): void {
+  update(x: number, z: number, dt = 0.016, budget?: StreamBudget): void {
+    this.scrollT += dt;
+    if (this.material.userData.shader) {
+      this.material.userData.shader.uniforms.uTime.value = this.scrollT;
+    }
+    const norm = (this.material.userData.waterNormalMap as THREE.Texture | undefined) ?? this.material.normalMap;
+    if (norm) {
+      norm.offset.set(this.scrollT * 0.03 + Math.sin(this.scrollT * 0.05) * 0.015, this.scrollT * 0.025);
+    }
+
     const desired = this.loadKeys(x, z);
     const desiredSet = new Set(desired);
     const keepSet = new Set(this.keepKeys(x, z));

@@ -79,6 +79,8 @@
   let regionId = $state<string>("");
   let regionName = $state("New Region");
   let biome = $state<RegionBiome>("grassland");
+  let regionSizeX = $state(32);
+  let regionSizeZ = $state(32);
   let portalWorldX = $state(0);
   let portalWorldZ = $state(0);
   let worldOriginX = $state(0);
@@ -1228,6 +1230,8 @@
       regionId = data.blueprint.id;
       regionName = data.blueprint.name;
       biome = data.blueprint.biome;
+      regionSizeX = data.blueprint.gridSizeX ?? data.blueprint.gridSize ?? 32;
+      regionSizeZ = data.blueprint.gridSizeZ ?? data.blueprint.gridSize ?? 32;
       portalWorldX = data.blueprint.portalWorldX;
       portalWorldZ = data.blueprint.portalWorldZ;
       worldOriginX = data.blueprint.worldOriginX ?? 0;
@@ -1332,6 +1336,55 @@
       }
     } catch {
       status = "Save failed.";
+    }
+  }
+
+  async function duplicateRegion(): Promise<void> {
+    if (!scene) return;
+    const newId = `region_${Date.now()}`;
+    const newName = `${regionName} (Copy)`;
+
+    scene.setMeta({
+      id: newId,
+      name: newName,
+      biome,
+      portalWorldX,
+      portalWorldZ,
+      worldOriginX: worldOriginX + 60,
+      worldOriginZ: worldOriginZ + 60,
+      isStartingRegion: false,
+      musicTrack,
+    });
+
+    const blueprint = scene.exportBlueprint();
+    blueprint.id = newId;
+    blueprint.name = newName;
+
+    status = `Duplicating as "${newName}"…`;
+    try {
+      const res = await fetch(app.apiUrl("/api/debug/region-blueprint"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ blueprint }),
+      });
+      if (res.ok) {
+        regionId = newId;
+        regionName = newName;
+        isStartingRegion = false;
+        worldOriginX += 60;
+        worldOriginZ += 60;
+        localStorage.setItem("rustcraft_last_region_id", newId);
+        const url = new URL(window.location.href);
+        url.searchParams.set("region", newId);
+        window.history.replaceState({}, "", url.toString());
+        status = `Duplicated as "${newName}".`;
+        await refreshRegionList();
+      } else {
+        status = "Duplicate failed.";
+      }
+    } catch {
+      status = "Duplicate failed.";
     }
   }
 
@@ -1459,6 +1512,7 @@
         {#if activeDropdown === "file"}
           <div class="menu-panel">
             <button onclick={() => menuAction(newRegion)}>New Region</button>
+            <button onclick={() => menuAction(() => { void duplicateRegion(); })}>Duplicate Region</button>
             <div class="menu-sep"></div>
             <button onclick={() => menuAction(() => { void saveToServer(); })}>Save<span class="accel">⌘S</span></button>
             <button
@@ -1540,6 +1594,67 @@
               <span>Starting Town</span>
             </label>
             <div class="menu-sep"></div>
+            <div class="menu-section">Region Dimensions (Grid Width × Height)</div>
+            <div class="menu-row">
+              <label class="menu-field">
+                Width (X)
+                <input
+                  type="number"
+                  min="8"
+                  max="256"
+                  bind:value={regionSizeX}
+                  onchange={() => scene?.resizeRegionGrid(regionSizeX, regionSizeZ)}
+                />
+              </label>
+              <label class="menu-field">
+                Height (Z)
+                <input
+                  type="number"
+                  min="8"
+                  max="256"
+                  bind:value={regionSizeZ}
+                  onchange={() => scene?.resizeRegionGrid(regionSizeX, regionSizeZ)}
+                />
+              </label>
+            </div>
+            <div class="menu-preset-row">
+              <button
+                onclick={() => {
+                  regionSizeX = 16;
+                  regionSizeZ = 16;
+                  void scene?.resizeRegionGrid(16, 16);
+                }}>16×16 (Small)</button
+              >
+              <button
+                onclick={() => {
+                  regionSizeX = 32;
+                  regionSizeZ = 32;
+                  void scene?.resizeRegionGrid(32, 32);
+                }}>32×32 (Medium)</button
+              >
+              <button
+                onclick={() => {
+                  regionSizeX = 64;
+                  regionSizeZ = 64;
+                  void scene?.resizeRegionGrid(64, 64);
+                }}>64×64 (Large)</button
+              >
+              <button
+                onclick={() => {
+                  regionSizeX = 64;
+                  regionSizeZ = 32;
+                  void scene?.resizeRegionGrid(64, 32);
+                }}>64×32 (Wide)</button
+              >
+              <button
+                onclick={() => {
+                  regionSizeX = 32;
+                  regionSizeZ = 64;
+                  void scene?.resizeRegionGrid(32, 64);
+                }}>32×64 (Tall)</button
+              >
+            </div>
+            <div class="menu-sep"></div>
             <button
               onclick={() =>
                 menuAction(() => {
@@ -1598,6 +1713,19 @@
                   {#each TERRAIN_VOLUME_SHAPES as shape}
                     <button class:active={volumeStampShape === shape.id && !volumeSculptBrushActive && !volumeClaySculptActive} onclick={() => menuAction(() => pickVolumeStamp(shape.id))}>Stamp: {shape.label}</button>
                   {/each}
+
+                  <div class="menu-section">Global Terrain & Layout Transforms</div>
+                  <button onclick={() => menuAction(() => { void scene?.mirrorRegion("x"); })}>🪞 Mirror Region X (Horizontal)</button>
+                  <button onclick={() => menuAction(() => { void scene?.mirrorRegion("z"); })}>🪞 Mirror Region Z (Vertical)</button>
+                  <button onclick={() => menuAction(() => { void scene?.rotateRegion(90); })}>🔄 Rotate Region 90° Clockwise</button>
+                  <button onclick={() => menuAction(() => { void scene?.rotateRegion(180); })}>🔄 Rotate Region 180°</button>
+                  <button onclick={() => menuAction(() => { void scene?.rotateRegion(270); })}>🔄 Rotate Region 270° Clockwise</button>
+
+                  <div class="menu-section">Global Terrain Elevation</div>
+                  <button onclick={() => menuAction(() => scene?.autoCarveNaturalWater())}>🌊 Auto-Carve Natural Valleys & Add Water</button>
+                  <button onclick={() => menuAction(() => scene?.raiseTerrainAboveSeaLevel(1.5))}>⬆ Raise All Submerged Land Above Sea Level (+1.5m)</button>
+                  <button onclick={() => menuAction(() => scene?.shiftTerrainElevation(2.0))}>▲ Shift Entire Terrain Up (+2.0m)</button>
+                  <button onclick={() => menuAction(() => scene?.shiftTerrainElevation(-2.0))}>▼ Shift Entire Terrain Down (-2.0m)</button>
                 {/if}
               {/if}
 
@@ -1628,8 +1756,10 @@
               {#if toolCategoryFilter === "all" || toolCategoryFilter === "water" || toolSearchQuery}
                 {#if !toolSearchQuery || "water light fog mist cloud physics atmosphere".includes(toolSearchQuery.toLowerCase())}
                   <div class="menu-section">Water & Environment</div>
-                  <button class:active={waterBrushMode === "add"} onclick={() => menuAction(() => pickWaterBrush("add"))}>Drop Water [W]</button>
-                  <button class:active={waterBrushMode === "remove"} onclick={() => menuAction(() => pickWaterBrush("remove"))}>Drain Water</button>
+                  <button onclick={() => menuAction(() => scene?.toggleWater())}>Water Visibility: {scene?.isWaterVisible() ? "ON (Visible)" : "OFF (Hidden)"}</button>
+                  <button onclick={() => menuAction(() => scene?.fillSeaLevelWater())}>Fill Sea-Level Water (Matching Map)</button>
+                  <button class:active={waterBrushMode === "add"} onclick={() => menuAction(() => pickWaterBrush("add"))}>Paint / Drop Water [W]</button>
+                  <button class:active={waterBrushMode === "remove"} onclick={() => menuAction(() => pickWaterBrush("remove"))}>Drain / Erase Water</button>
                   <button class:active={waterPhysicsSimulating} onclick={() => toggleWaterPhysics()}>Water Physics: {waterPhysicsSimulating ? "On" : "Off"}</button>
                   <button onclick={() => menuAction(clearWater)}>Clear All Water</button>
 

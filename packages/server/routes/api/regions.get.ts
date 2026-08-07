@@ -1,6 +1,6 @@
 import { defineEventHandler } from "h3";
 import { listRegionBlueprints } from "../../utils/regions";
-import { ensureRegionWorldOrigins, type RegionMapEntry } from "@rustcraft/shared";
+import { ensureRegionWorldOrigins, resolveVendorId, type RegionMapEntry } from "@rustcraft/shared";
 
 // GET /api/regions -- always-on (not IS_DEV-gated, unlike the debug routes)
 // since this is needed in production: the client uses it to render the
@@ -47,16 +47,25 @@ export default defineEventHandler(() => {
       localZ: e.localZ,
       radius: e.radius,
     })),
-    npcs: (r.npcs ?? []).map((n) => ({
-      id: n.id,
-      name: n.name,
-      localX: n.localX,
-      localZ: n.localZ,
-      title: n.title,
-      hasQuests:
-        Boolean(n.quests?.length) ||
-        (n.generateProceduralQuests !== false && !n.vendorId),
-      vendorId: n.vendorId,
+    npcs: (r.npcs ?? []).map((n) => {
+      const vId = resolveVendorId(n);
+      return {
+        id: n.id,
+        name: n.name,
+        localX: n.localX,
+        localZ: n.localZ,
+        title: n.title,
+        hasQuests: Boolean(n.quests?.length) || (n.generateProceduralQuests !== false && !vId),
+        vendorId: vId,
+      };
+    }),
+    mobSpawns: (r.mobSpawns ?? []).map((m) => ({
+      id: m.id,
+      mobTypeId: m.mobTypeId,
+      localX: m.localX,
+      localZ: m.localZ,
+      level: m.level,
+      radius: m.radius,
     })),
   }));
   return { regions };

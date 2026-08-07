@@ -72,6 +72,10 @@ const GAMEPAD_DEADZONE = 0.18;
 const DOUBLE_TAP_MS = 280;
 const STICK_LOOK_SPEED = 2.6; // rad/s at full deflection
 const MOUSE_SENSITIVITY = 0.0024;
+/** Gamepad-in-menus: right stick drives the software cursor, left stick
+ *  scrolls the hovered window (px/second at full deflection). */
+const MENU_CURSOR_SPEED = 1300;
+const MENU_SCROLL_SPEED = 1500;
 
 function dz(v: number): number {
   return Math.abs(v) < GAMEPAD_DEADZONE ? 0 : v;
@@ -306,12 +310,72 @@ export class InputManager {
     ui.cursorY = this.vy;
   }
 
+  /** Move the software cursor by a delta (gamepad right-stick in menus),
+   *  clamped to the viewport. Keeps lastMouse* in sync so a later re-lock
+   *  anchors where the cursor visibly is. */
+  private moveCursorBy(dx: number, dy: number): void {
+    this.vx = clamp(this.vx + dx, 0, window.innerWidth - 1);
+    this.vy = clamp(this.vy + dy, 0, window.innerHeight - 1);
+    this.lastMouseX = this.vx;
+    this.lastMouseY = this.vy;
+    this.publishCursor();
+  }
+
+  /** Is the software cursor over something clickable? Used so a gamepad A
+   *  press over a button clicks it, but over empty space still falls through
+   *  to the menu's discrete "confirm". */
+  private cursorOverInteractive(): boolean {
+    const el = document.elementFromPoint(this.vx, this.vy);
+    return (
+      !!el &&
+      !!el.closest(
+        "button, a, input, select, [role='button'], .slot, .rc-action-slot, .rc-btn, .tab, .item-card, .filter-pill, .swatch, .chip",
+      )
+    );
+  }
+
+  /** Synthesize a left click at the software cursor (gamepad A in menus). */
+  private clickAtCursor(): void {
+    const el = document.elementFromPoint(this.vx, this.vy);
+    if (!el) return;
+    for (const type of ["mousedown", "mouseup", "click"] as const) {
+      el.dispatchEvent(
+        new MouseEvent(type, {
+          bubbles: true,
+          cancelable: true,
+          view: window,
+          clientX: this.vx,
+          clientY: this.vy,
+          button: 0,
+          buttons: 1,
+        }),
+      );
+    }
+  }
+
+  /** Scroll the nearest scrollable ancestor under the software cursor (gamepad
+   *  left-stick in menus). Synthetic wheel events don't perform native scroll,
+   *  so walk up to a real scroll container and nudge scrollTop directly. */
+  private scrollAtCursor(dy: number): void {
+    let el = document.elementFromPoint(this.vx, this.vy) as HTMLElement | null;
+    while (el && el !== document.body && el !== document.documentElement) {
+      if (el.scrollHeight - el.clientHeight > 2) {
+        const oy = getComputedStyle(el).overflowY;
+        if (oy === "auto" || oy === "scroll") {
+          el.scrollTop += dy;
+          return;
+        }
+      }
+      el = el.parentElement;
+    }
+  }
+
   /** (Re)acquire pointer lock on the game canvas. No-op if already locked;
    *  must be called from within a user gesture or the browser rejects it. */
   private requestLock(): void {
     if (this.pointerLocked) return;
     try {
-      void this.canvas.requestPointerLock?.();
+      void this.canvas.requestPointerLock?.()?.catch(() => {});
     } catch {}
   }
 
@@ -604,11 +668,28 @@ export class InputManager {
       respawnPressed ||= padPressed(0);
       mapPressed ||= padPressed(11); // R3: toggle world map
 
-      menuUp ||= padPressed(12) || (this.edgeAxis(pad, 1, -1) ?? false);
-      menuDown ||= padPressed(13) || (this.edgeAxis(pad, 1, 1) ?? false);
-      menuLeft ||= padPressed(14) || (this.edgeAxis(pad, 0, -1) ?? false);
-      menuRight ||= padPressed(15) || (this.edgeAxis(pad, 0, 1) ?? false);
-      menuConfirm ||= padPressed(0); // A
+      // In menus the sticks act as a mouse (handheld/controller UX): right
+      // stick moves the software cursor, left stick scrolls the window under
+      // it. A over a clickable clicks it; over empty space A still falls
+      // through to the discrete "confirm" below. Because the left stick now
+      // scrolls, discrete menu navigation is d-pad only (no stick edgeAxis).
+      let padAClicked = false;
+      if (this._uiMode) {
+        if (Math.abs(rx) + Math.abs(ry) > 0) {
+          this.moveCursorBy(rx * MENU_CURSOR_SPEED * dt, ry * MENU_CURSOR_SPEED * dt);
+        }
+        if (Math.abs(ay) > 0.01) this.scrollAtCursor(ay * MENU_SCROLL_SPEED * dt);
+        if (padPressed(0) && this.cursorOverInteractive()) {
+          this.clickAtCursor();
+          padAClicked = true;
+        }
+      }
+
+      menuUp ||= padPressed(12);
+      menuDown ||= padPressed(13);
+      menuLeft ||= padPressed(14);
+      menuRight ||= padPressed(15);
+      menuConfirm ||= padPressed(0) && !padAClicked; // A
       menuCancel ||= padPressed(1); // B
       menuClear ||= padPressed(2); // X / Square
 

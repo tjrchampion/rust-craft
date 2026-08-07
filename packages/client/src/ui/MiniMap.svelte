@@ -4,13 +4,21 @@
   import { getGame } from "../game/instance";
   import { renderRegionThumbnail } from "./worldMapThumbnail";
 
-  /** World-space radius (meters) shown edge-to-edge on the map. */
-  const MAP_RADIUS_WORLD = 160;
   const SIZE = 200;
   const CENTER = SIZE / 2;
   const RADIUS = 90;
-  const SCALE = RADIUS / MAP_RADIUS_WORLD;
   const EDGE_INSET = 6;
+  /** Zoom levels = world-space radius (meters) shown edge-to-edge; index 2 is
+   *  the default. + zooms in (smaller radius), − zooms out. */
+  const ZOOM_RADII = [90, 130, 160, 220, 300];
+  let zoomIndex = $state(2);
+  const SCALE = $derived(RADIUS / (ZOOM_RADII[zoomIndex] ?? 160));
+  function zoomIn(): void {
+    if (zoomIndex > 0) zoomIndex--;
+  }
+  function zoomOut(): void {
+    if (zoomIndex < ZOOM_RADII.length - 1) zoomIndex++;
+  }
 
   const villages = generateVillages();
 
@@ -51,12 +59,19 @@
     }
     const g = getGame();
     if (!g) return;
+
+    const prewarmed = g.prewarmedMinimaps.get(id);
+    if (prewarmed) {
+      thumbCache.set(id, prewarmed);
+      regionThumb = prewarmed.thumb;
+      regionBounds = prewarmed.bounds;
+      regionNpcs = prewarmed.npcs;
+      return;
+    }
     void (async () => {
       const bp = await g.ensureRegionBlueprint(id);
       // Bail if we've since left this region (async race) or it has no heights.
       if (!bp || loadedRegionId !== id) return;
-      const thumb = renderRegionThumbnail(bp, { edge: 256 });
-      if (!thumb) return;
       // Origin from the catalog stub (always populated) rather than the
       // blueprint's optional worldOriginX/Z, so the terrain sits at the region's
       // real world position and scrolls correctly under the player.
@@ -81,11 +96,23 @@
             ? "quest"
             : "npc",
       }));
-      thumbCache.set(id, { thumb, bounds, npcs });
-      if (loadedRegionId !== id) return;
-      regionThumb = thumb;
-      regionBounds = bounds;
-      regionNpcs = npcs;
+      // Bounds + NPC/village markers are cheap -- show them immediately. The
+      // terrain raster is a heavy synchronous canvas fill, so render it during
+      // idle so it never blocks the HUD (spell bar, etc.) from painting; the
+      // background fills in a beat later.
+      if (loadedRegionId === id) {
+        regionBounds = bounds;
+        regionNpcs = npcs;
+      }
+      const renderThumb = () => {
+        if (loadedRegionId !== id) return;
+        const thumb = renderRegionThumbnail(bp, { edge: 224 });
+        if (!thumb) return;
+        thumbCache.set(id, { thumb, bounds, npcs });
+        if (loadedRegionId === id) regionThumb = thumb;
+      };
+      if (typeof requestIdleCallback === "function") requestIdleCallback(renderThumb, { timeout: 500 });
+      else setTimeout(renderThumb, 0);
     })();
   });
 
@@ -211,6 +238,8 @@
     const g = getGame();
     if (!g) return;
     if (game.inventoryOpen || game.questOffer || game.chatOpen) return;
+    // Opening: focus the world map on the region we're currently in.
+    if (!game.worldMapOpen) game.worldMapFocusRegionId = game.regionState?.regionId ?? null;
     g.setWorldMapOpen(!game.worldMapOpen);
   }
 </script>
@@ -327,6 +356,10 @@
         <path d="M 0 -10 L 7 8 L 0 4 L -7 8 Z" class="mm-player" />
       </g>
     </svg>
+    <div class="mm-zoom">
+      <button type="button" class="mm-zoom-btn" onclick={zoomIn} disabled={zoomIndex <= 0} title="Zoom in">+</button>
+      <button type="button" class="mm-zoom-btn" onclick={zoomOut} disabled={zoomIndex >= ZOOM_RADII.length - 1} title="Zoom out">−</button>
+    </div>
     <button type="button" class="region-btn" onclick={openRegionMap} title="Open world map (M)">
       REGION
     </button>
@@ -569,5 +602,40 @@
     border-color: var(--rc-gold-bright);
     color: var(--rc-gold-bright);
     box-shadow: 0 0 12px rgba(196, 77, 154, 0.35);
+  }
+  .mm-zoom {
+    position: absolute;
+    right: -4px;
+    top: 50%;
+    transform: translateY(-50%);
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    pointer-events: auto;
+  }
+  .mm-zoom-btn {
+    width: 22px;
+    height: 22px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: var(--rc-display);
+    font-size: 15px;
+    font-weight: 700;
+    line-height: 1;
+    color: var(--rc-ink);
+    background: linear-gradient(180deg, #3a2e48, #1c1628);
+    border: 1px solid rgba(196, 163, 90, 0.65);
+    border-radius: 50%;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.55);
+    cursor: pointer;
+  }
+  .mm-zoom-btn:hover:not(:disabled) {
+    border-color: var(--rc-gold-bright);
+    color: var(--rc-gold-bright);
+  }
+  .mm-zoom-btn:disabled {
+    opacity: 0.35;
+    cursor: default;
   }
 </style>

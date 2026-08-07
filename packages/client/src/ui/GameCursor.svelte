@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { game as ui } from "./gameState.svelte";
+  import { getGame } from "../game/instance";
 
   let visible = $state(true);
   let cursorState = $state<"default" | "pointer" | "grab">("default");
@@ -37,9 +38,14 @@
     let lastCheckTime = 0;
     const tick = () => {
       raf = requestAnimationFrame(tick);
-      const locked = document.pointerLockElement !== null;
-      const x = locked ? ui.cursorX : realX;
-      const y = locked ? ui.cursorY : realY;
+      // In-game the InputManager owns the cursor position (ui.cursorX/Y): it
+      // tracks the real mouse when unlocked, the virtual cursor when locked,
+      // AND the right-stick in menus -- so a gamepad-driven cursor renders too.
+      // Pre-game (login/character screens) there's no InputManager, so fall
+      // back to the real cursor tracked here.
+      const inGame = getGame() !== null;
+      const x = inGame ? ui.cursorX : realX;
+      const y = inGame ? ui.cursorY : realY;
       if (containerEl) containerEl.style.transform = `translate3d(${x}px, ${y}px, 0)`;
 
       // Hidden only while turning the camera (right-drag); otherwise shown,

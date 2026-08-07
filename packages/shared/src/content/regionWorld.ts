@@ -69,9 +69,29 @@ export function worldNodesFromRegion(region: RegionBlueprint): WorldNode[] {
   return out;
 }
 
-/** Half-extent of a region's heightmap in world units (center → edge). */
-export function regionHalfSpan(bp: Pick<RegionBlueprint, "gridSize" | "pitch">): number {
-  return ((bp.gridSize - 1) * bp.pitch) / 2;
+export function getRegionGridSizeX(bp: { gridSize: number; gridSizeX?: number }): number {
+  return bp.gridSizeX ?? bp.gridSize ?? 32;
+}
+
+export function getRegionGridSizeZ(bp: { gridSize: number; gridSizeZ?: number }): number {
+  return bp.gridSizeZ ?? bp.gridSize ?? 32;
+}
+
+/** Half-extent along X-axis (width) in world units. */
+export function regionHalfSpanX(bp: { gridSize: number; gridSizeX?: number; pitch: number }): number {
+  const sizeX = getRegionGridSizeX(bp);
+  return ((sizeX - 1) * bp.pitch) / 2;
+}
+
+/** Half-extent along Z-axis (height) in world units. */
+export function regionHalfSpanZ(bp: { gridSize: number; gridSizeZ?: number; pitch: number }): number {
+  const sizeZ = getRegionGridSizeZ(bp);
+  return ((sizeZ - 1) * bp.pitch) / 2;
+}
+
+/** Max half-extent of a region's heightmap in world units (center → edge). */
+export function regionHalfSpan(bp: { gridSize: number; gridSizeX?: number; gridSizeZ?: number; pitch: number }): number {
+  return Math.max(regionHalfSpanX(bp), regionHalfSpanZ(bp));
 }
 
 /** World-space origin of a region's local (0,0). Falls back to 0,0. */
@@ -89,25 +109,32 @@ export interface RegionWorldBounds {
   maxZ: number;
   originX: number;
   originZ: number;
+  halfX: number;
+  halfZ: number;
   half: number;
 }
 
-export function regionWorldBounds(bp: Pick<RegionBlueprint, "gridSize" | "pitch" | "worldOriginX" | "worldOriginZ">): RegionWorldBounds {
-  const half = regionHalfSpan(bp);
+export function regionWorldBounds(
+  bp: { gridSize: number; gridSizeX?: number; gridSizeZ?: number; pitch: number; worldOriginX?: number; worldOriginZ?: number }
+): RegionWorldBounds {
+  const halfX = regionHalfSpanX(bp);
+  const halfZ = regionHalfSpanZ(bp);
   const { x: originX, z: originZ } = regionWorldOrigin(bp);
   return {
-    minX: originX - half,
-    maxX: originX + half,
-    minZ: originZ - half,
-    maxZ: originZ + half,
+    minX: originX - halfX,
+    maxX: originX + halfX,
+    minZ: originZ - halfZ,
+    maxZ: originZ + halfZ,
     originX,
     originZ,
-    half,
+    halfX,
+    halfZ,
+    half: Math.max(halfX, halfZ),
   };
 }
 
 export function regionContainsWorld(
-  bp: Pick<RegionBlueprint, "gridSize" | "pitch" | "worldOriginX" | "worldOriginZ">,
+  bp: { gridSize: number; gridSizeX?: number; gridSizeZ?: number; pitch: number; worldOriginX?: number; worldOriginZ?: number },
   wx: number,
   wz: number,
   /** Expand bounds slightly so seams don't flicker. */
@@ -210,31 +237,27 @@ export function regionsNearWorld(
  * different times, each with the *catalog as it looked then*, can otherwise
  * end up with origins whose world-space bounds genuinely overlap (verified:
  * this happened for real between two authored regions in this project's own
- * region files) — since RegionContinent mounts every region whose bounds
- * contain the player, an overlap means whichever layer iterates first wins,
- * independent of which region the player/server actually think they're in.
- * Re-checking on every call (rather than trusting "already has a value")
- * means this self-heals the moment both regions are seen together, without
- * needing a one-off migration of already-saved JSON.
+/**
+ * Ensures all regions have a defined worldOriginX and worldOriginZ.
+ * Authored positions set by the user in the Continent Layout Editor are ALWAYS preserved.
+ * Unplaced regions (where origin is undefined) are given a clean position next to existing regions.
  */
-export function ensureRegionWorldOrigins(regions: RegionBlueprint[]): void {
-  const list = [...regions].sort((a, b) => a.id.localeCompare(b.id));
-  let cursor = 0;
-  for (const bp of list) {
-    const half = regionHalfSpan(bp);
-    if (bp.worldOriginX !== undefined && bp.worldOriginZ !== undefined) {
-      const minX = bp.worldOriginX - half;
-      if (minX >= cursor) {
-        // Doesn't overlap anything placed so far -- keep the authored spot.
-        cursor = Math.max(cursor, bp.worldOriginX + half);
-        continue;
-      }
-      // Would overlap an earlier region in this pass -- fall through and
-      // re-place it past the cursor instead of trusting the stale value.
+export function ensureRegionWorldOrigins(regions: Array<Pick<RegionBlueprint, "worldOriginX" | "worldOriginZ" | "gridSize" | "gridSizeX" | "gridSizeZ" | "pitch">>): void {
+  let maxRight = 0;
+  for (const r of regions) {
+    if (r.worldOriginX !== undefined && r.worldOriginZ !== undefined) {
+      const b = regionWorldBounds(r);
+      maxRight = Math.max(maxRight, b.maxX);
     }
-    bp.worldOriginX = cursor + half;
-    bp.worldOriginZ = bp.worldOriginZ ?? 0;
-    cursor += half * 2;
+  }
+
+  for (const r of regions) {
+    if (r.worldOriginX === undefined || r.worldOriginZ === undefined) {
+      const halfX = regionHalfSpanX(r);
+      r.worldOriginX = Math.round(maxRight + halfX + 10);
+      r.worldOriginZ = 0;
+      maxRight = r.worldOriginX + halfX;
+    }
   }
 }
 
@@ -270,6 +293,6 @@ export function regionsAdjacentTo(
 }
 
 /** How close to a region edge (world meters) before we prefetch neighbors. */
-export const REGION_SEAM_PREFETCH_METERS = 80;
+export const REGION_SEAM_PREFETCH_METERS = 160;
 /** Keep neighbor region meshes resident within this world radius. */
-export const REGION_STREAM_RADIUS_METERS = 220;
+export const REGION_STREAM_RADIUS_METERS = 500;

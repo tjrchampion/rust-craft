@@ -133,6 +133,9 @@ class GameState {
   /** Set when another player @mentions you — Chat.svelte surfaces the panel. */
   chatMention = $state<ChatMention | null>(null);
   worldMapOpen = $state(false);
+  /** When the world map is opened via the minimap's REGION button, the region
+   *  to open focused on (consumed + cleared by WorldMap). Null = continent view. */
+  worldMapFocusRegionId = $state<string | null>(null);
   disconnected = $state(false);
   pvpEnabled = $state(false);
   target = $state<TargetInfo | null>(null);

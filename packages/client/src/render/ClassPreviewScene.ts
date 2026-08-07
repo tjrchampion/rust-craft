@@ -227,6 +227,8 @@ export class ClassPreviewScene {
     void this.ensureLoaded(gender).then((model) => {
       if (this.activeKey !== key) return; // superseded by a later hover/select
       this.applyEquip(id, gender, model, appearance, equip ?? null);
+      model.play("idle");
+      model.update(0);
       for (const [g, m] of this.models) m.group.visible = g === gender;
     });
   }

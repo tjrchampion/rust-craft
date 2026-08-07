@@ -438,3 +438,92 @@ select {
 ::-webkit-scrollbar-button:horizontal:increment {
   background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 10 10'><polygon points='3,1 8,5 3,9' fill='%23e8c878'/></svg>");
 }
+
+/* ── Artistic World Map Window & Elements ──────────────────── */
+.art-map-frame {
+  position: relative;
+  background:
+    radial-gradient(ellipse at 50% 10%, rgba(18, 48, 75, 0.6), transparent 70%),
+    linear-gradient(180deg, #0a1622 0%, #060e17 100%);
+  border: 2px solid #c4a35a;
+  outline: 2px solid #000;
+  box-shadow:
+    inset 0 0 0 1px rgba(232, 200, 120, 0.25),
+    inset 0 0 60px rgba(0, 0, 0, 0.8),
+    0 0 35px rgba(0, 0, 0, 0.9),
+    0 0 15px rgba(196, 163, 90, 0.25);
+  border-radius: 6px;
+  overflow: hidden;
+  color: var(--rc-ink);
+}
+
+.art-map-ocean {
+  background-color: #0b1a2b;
+  background-image:
+    radial-gradient(circle at 50% 50%, rgba(20, 50, 80, 0.4) 0%, rgba(8, 20, 35, 0.9) 100%),
+    repeating-linear-gradient(45deg, rgba(255, 255, 255, 0.015) 0px, rgba(255, 255, 255, 0.015) 2px, transparent 2px, transparent 8px);
+}
+
+.art-map-gold-header {
+  font-family: var(--rc-display);
+  background: linear-gradient(180deg, rgba(30, 24, 18, 0.95), rgba(12, 10, 8, 0.98));
+  border-bottom: 1px solid var(--rc-gold);
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.6);
+}
+
+.art-map-toggle-btn {
+  font-family: var(--rc-display);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--rc-gold-bright);
+  background: linear-gradient(180deg, #2b2216 0%, #161009 100%);
+  border: 1px solid var(--rc-gold-dim);
+  border-radius: 3px;
+  padding: 6px 14px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.15), 0 2px 6px rgba(0, 0, 0, 0.5);
+}
+
+.art-map-toggle-btn:hover {
+  color: #fff;
+  border-color: var(--rc-gold-bright);
+  background: linear-gradient(180deg, #3d301f 0%, #20170d 100%);
+  box-shadow: 0 0 10px rgba(232, 200, 120, 0.35);
+}
+
+.art-map-toggle-btn.active {
+  background: linear-gradient(180deg, #8a6f3a 0%, #523f1d 100%);
+  border-color: #fff;
+  color: #fff;
+}
+
+.art-map-banner {
+  font-family: var(--rc-display);
+  font-weight: 900;
+  text-transform: uppercase;
+  color: #f7e7c4;
+  text-shadow:
+    0 2px 4px #000,
+    0 0 12px rgba(196, 163, 90, 0.6),
+    -1px -1px 0 #000,
+    1px -1px 0 #000,
+    -1px 1px 0 #000,
+    1px 1px 0 #000;
+  letter-spacing: 2px;
+  pointer-events: none;
+}
+
+.art-map-tooltip {
+  background: linear-gradient(165deg, rgba(24, 18, 14, 0.96), rgba(10, 8, 6, 0.98));
+  border: 1px solid var(--rc-gold);
+  border-radius: 4px;
+  padding: 10px 14px;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.85), inset 0 0 0 1px rgba(255, 255, 255, 0.1);
+  color: #efe6d4;
+  font-family: var(--rc-body);
+  z-index: 100;
+}
+

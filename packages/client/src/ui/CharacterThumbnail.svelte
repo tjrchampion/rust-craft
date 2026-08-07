@@ -168,11 +168,6 @@
 
     const animate = (now: number) => {
       if (!active || !renderer) return;
-      const dt = Math.min(0.1, (now - lastTime) / 1000);
-      lastTime = now;
-      if (model.loaded) {
-        model.update(dt);
-      }
       renderer.render(scene, camera);
       animReqId = requestAnimationFrame(animate);
     };
@@ -193,7 +188,8 @@
 
       // Rotate model slightly for a classic 3/4 heroic portrait angle
       model.group.rotation.y = 0.28;
-      model.setLogicalState("idle");
+      model.play("idle");
+      model.update(0);
 
       // Start animation loop
       lastTime = performance.now();

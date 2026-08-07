@@ -15,7 +15,7 @@ import {
   type ModularFit,
 } from "./classModels";
 import { createSharedGltfLoader } from "./sharedGltf";
-import { getAssetBuffer } from "./assetPack";
+import { getAssetBuffer, initAssetPack } from "./assetPack";
 
 const loader = createSharedGltfLoader();
 const cache = new Map<string, Promise<GLTF>>();
@@ -237,6 +237,21 @@ export function mobModelSpec(model: string): { url: string; anims: AnimSpec } {
   if (creature) return creature;
   const url = SKELETON_MODELS[model] ?? SKELETON_MODELS.skeleton_minion!;
   return { url, anims: PLAYER_ANIMS };
+}
+
+/** Resolve an NPC `model` field (class name like "Warrior", explicit GLB path, or creature key) to a valid GLB URL. */
+export function resolveNpcModelUrl(modelName?: string): string {
+  if (!modelName) return GENDER_MODEL_URLS.male;
+  if (modelName.endsWith(".glb") || modelName.endsWith(".gltf") || modelName.startsWith("/")) {
+    return modelName.startsWith("/") ? modelName : `/assets/models/${modelName}`;
+  }
+  const lower = modelName.toLowerCase();
+  if (lower === "wolf") return WOLF_MODEL;
+  const creature = CREATURE_MODELS[lower];
+  if (creature) return creature.url;
+  const skel = SKELETON_MODELS[lower];
+  if (skel) return skel;
+  return GENDER_MODEL_URLS.male;
 }
 
 export function load(url: string): Promise<GLTF> {
@@ -1303,8 +1318,8 @@ export class AnimatedModel {
       action.play();
       action.stop();
     }
-    this.mixer.update(0);
     this.play("idle");
+    this.mixer.update(0);
     for (const [channel, { visible, all }] of this.pendingNodeVisibility) {
       this.setNodeVisibility(channel, visible, all);
     }

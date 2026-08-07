@@ -1484,6 +1484,10 @@ export interface RegionBlueprint {
   biome: RegionBiome;
   /** Heightmap resolution per axis. */
   gridSize: number;
+  /** Custom resolution along X-axis (width). Falls back to gridSize. */
+  gridSizeX?: number;
+  /** Custom resolution along Z-axis (height). Falls back to gridSize. */
+  gridSizeZ?: number;
   /** World units between adjacent heightmap samples. */
   pitch: number;
   /** Flattened gridSize*gridSize height values, row-major (index = gz*gridSize+gx). */
@@ -1892,7 +1896,7 @@ function flattenHeights(
   gridSize: number,
   pitch: number,
   half: number,
-  blueprint: Pick<RegionBlueprint, "gridSize" | "pitch" | "heights">,
+  blueprint: Pick<RegionBlueprint, "gridSize" | "gridSizeX" | "gridSizeZ" | "pitch" | "heights">,
   cx: number,
   cz: number,
   radius: number,

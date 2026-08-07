@@ -64,3 +64,19 @@ export const VENDORS: Record<string, VendorDef> = {
 export function vendorDef(vendorId: string): VendorDef | undefined {
   return VENDORS[vendorId] ?? VENDORS.vendor_merchant;
 }
+
+export function resolveVendorId(npc: { vendorId?: string; title?: string; name?: string }): string | undefined {
+  if (npc.vendorId) return npc.vendorId;
+  const str = `${npc.title ?? ""} ${npc.name ?? ""}`.toLowerCase();
+  if (str.includes("alchemist") || str.includes("potion") || str.includes("elixir") || str.includes("remedy")) {
+    return "vendor_alchemist";
+  }
+  if (str.includes("weaponsmith") || str.includes("blacksmith") || str.includes("armorer") || str.includes("smith")) {
+    return "vendor_blacksmith";
+  }
+  if (str.includes("merchant") || str.includes("trader") || str.includes("vendor") || str.includes("provisions") || str.includes("goods")) {
+    return "vendor_merchant";
+  }
+  return undefined;
+}
+
