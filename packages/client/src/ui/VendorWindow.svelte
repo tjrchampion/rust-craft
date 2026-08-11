@@ -23,13 +23,17 @@
   function handleBuy(itemId: string, qty = 1): void {
     if (!game.vendorWares) return;
     getGame()?.sendVendorBuy(game.vendorWares.npcId, itemId, qty);
-    sound.play("buttonClick");
+    sound.play("ui");
   }
 
-  function handleSell(container: string, slot: number, qty = 1): void {
+  function handleSell(
+    container: "inventory" | "hotbar" | "equip" | "crafting",
+    slot: number,
+    qty = 1,
+  ): void {
     if (!game.vendorWares) return;
     getGame()?.sendVendorSell(game.vendorWares.npcId, container, slot, qty);
-    sound.play("buttonClick");
+    sound.play("ui");
   }
 
   function getItemSellPrice(itemId: string): number {

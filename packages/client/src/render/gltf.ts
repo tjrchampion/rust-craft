@@ -19,8 +19,8 @@ import {
   enqueueTextureForUpload,
   enqueueModelTexturesForUpload,
 } from "./sharedGltf";
-import { getAssetBuffer, initAssetPack } from "./assetPack";
-import { runCooperatively } from "./idleScheduler";
+import { getAssetBuffer } from "./assetPack";
+import { runCooperatively, nextIdle } from "./idleScheduler";
 
 const loader = createSharedGltfLoader();
 const cache = new Map<string, Promise<GLTF>>();
@@ -293,24 +293,6 @@ export function load(url: string): Promise<GLTF> {
     cache.set(url, p);
   }
   return p;
-}
-
-/** Pre-parse and warm all 390+ GLTF models from the packed buffer into Three.js memory cache during startup. */
-export async function warmAllPackedAssets(onProgress?: (loaded: number, total: number) => void): Promise<void> {
-  const index = await initAssetPack();
-  if (!index) return;
-  const urls = Object.keys(index);
-  if (urls.length === 0) return;
-
-  // Parse in small waves, yielding a browser idle slot between each so the
-  // loading-screen progress bar keeps painting and (if this ever runs behind
-  // an interactive screen) input stays responsive. A single glTF parse is one
-  // synchronous block, so throughput comes from a modest wave, not a big batch
-  // that monopolises the main thread.
-  await runCooperatively(urls, (url) => load(url).then(() => undefined).catch(() => undefined), {
-    concurrency: 6,
-    onProgress,
-  });
 }
 
 const headBindWorldCache = new Map<CharacterGender, Promise<THREE.Matrix4 | null>>();
@@ -1252,16 +1234,36 @@ export class AnimatedModel {
     this.group.add(scene);
     this.mixer = new THREE.AnimationMixer(scene);
 
+    // Yield here: everything above (parse via load(), SkeletonUtils.clone,
+    // posed-bbox traversal, material clone/tint) is real synchronous CPU work
+    // that otherwise runs back-to-back with the anim-clip loop below inside a
+    // single frame, stalling the render loop (and with it mouse-look, which
+    // only applies its accumulated delta once per rAF -- see Game.ts's frame
+    // loop). Splitting the parse/mount phase from the anim-bind phase across
+    // an idle slot lets input/render catch up between them.
+    await nextIdle();
+
+    // Anim libraries are cached per-url after their first parse (see `cache`
+    // above), so repeat spawns resolve near-instantly and don't need a yield
+    // between them -- only insert one on an actual cache miss, so warm-path
+    // spawns (the common case) don't pay extra idle-slot latency for nothing.
+    const loadLibrary = async (libUrl: string): Promise<GLTF> => {
+      const wasCached = cache.has(libUrl);
+      const g = await load(libUrl);
+      if (!wasCached) await nextIdle();
+      return g;
+    };
+
     let clips: THREE.AnimationClip[] = [];
     if (universal) {
       try {
-        const ual = await load(UNIVERSAL_ANIMATION_LIBRARY);
+        const ual = await loadLibrary(UNIVERSAL_ANIMATION_LIBRARY);
         if (ual.animations?.length) clips.push(...ual.animations);
       } catch {
         /* UAL1 optional if UAL2 covers needs */
       }
       try {
-        const ual2 = await load(UNIVERSAL_ANIMATION_LIBRARY_2);
+        const ual2 = await loadLibrary(UNIVERSAL_ANIMATION_LIBRARY_2);
         if (ual2.animations?.length) clips.push(...ual2.animations);
       } catch {
         /* keep UAL1-only */
@@ -1271,17 +1273,17 @@ export class AnimatedModel {
       const isFemale = url.includes("F_") || url.includes("Female");
       if (isFemale) {
         try {
-          const femaleAnimGltf = await load("/assets/models/bundled/base/BaseFemale_Animated.glb");
+          const femaleAnimGltf = await loadLibrary("/assets/models/bundled/base/BaseFemale_Animated.glb");
           if (femaleAnimGltf.animations) clips.push(...femaleAnimGltf.animations);
         } catch (e) {}
       } else {
         try {
-          const maleAnimGltf = await load("/assets/models/bundled/base/BaseMale_Animated.glb");
+          const maleAnimGltf = await loadLibrary("/assets/models/bundled/base/BaseMale_Animated.glb");
           if (maleAnimGltf.animations) clips.push(...maleAnimGltf.animations);
         } catch (e) {}
       }
       try {
-        const baseAnimGltf = await load("/assets/models/bundled/base/BaseAnimatedCharacter.glb");
+        const baseAnimGltf = await loadLibrary("/assets/models/bundled/base/BaseAnimatedCharacter.glb");
         if (baseAnimGltf.animations) clips.push(...baseAnimGltf.animations);
       } catch (e) {}
     }

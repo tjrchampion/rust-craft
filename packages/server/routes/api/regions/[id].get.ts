@@ -1,6 +1,7 @@
-import { defineEventHandler, getRouterParam, createError } from "h3";
+import { defineEventHandler, getRouterParam, createError, send } from "h3";
 import { ensureRegionWorldOrigins } from "@rustcraft/shared";
 import { listRegionBlueprints, loadRegionBlueprint } from "../../../utils/regions";
+import { sendCompressedJson } from "../../../utils/compress";
 
 // GET /api/regions/:id -- always-on, full blueprint. Fetched both by the
 // client when a player actually walks through this region's portal (needs
@@ -17,12 +18,15 @@ import { listRegionBlueprints, loadRegionBlueprint } from "../../../utils/region
 // didn't match whichever region's mesh actually got streamed in. Running the
 // same full-catalog pass here keeps this endpoint's answer consistent with
 // every other place origins get computed.
-export default defineEventHandler((event) => {
+export default defineEventHandler(async (event) => {
   const id = getRouterParam(event, "id");
   if (!id) throw createError({ statusCode: 400, statusMessage: "id is required" });
   const list = listRegionBlueprints();
   ensureRegionWorldOrigins(list);
   const blueprint = list.find((r) => r.id === id) ?? loadRegionBlueprint(id);
   if (!blueprint) throw createError({ statusCode: 404, statusMessage: "No region found for this id" });
-  return { blueprint };
+  // A full blueprint (heightmap + assets) runs 1-1.5 MB uncompressed -- gzip
+  // when the client supports it (see sendCompressedJson) so region entry
+  // doesn't wait on shipping that much JSON over the wire uncompressed.
+  await send(event, sendCompressedJson(event, { blueprint }));
 });

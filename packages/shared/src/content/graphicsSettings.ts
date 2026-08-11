@@ -43,6 +43,14 @@ export const GRAPHICS_PRESET_LABELS: Record<GraphicsPresetId, string> = {
   ultra: "Ultra",
 };
 
+// Fragment/fill-rate cost scales with (resolutionScale * min(devicePixelRatio,
+// maxPixelRatio))^2 -- these two knobs dominate GPU cost far more than any
+// other setting here. A prior edit had bumped resolutionScale to 1.0 and
+// maxPixelRatio to 2 on low/medium/high, which on a 2x-DPR display means
+// rendering at full native 2x resolution even on "Low" -- the opposite of
+// what a weak-hardware preset needs. Restored to genuinely cheap values,
+// measured this session: dropping effective pixel ratio from 1.5 to 1.0 alone
+// recovered a large chunk of frame time on a mid-range laptop GPU.
 const PRESET_BODY: Record<GraphicsPresetId, Omit<GraphicsSettings, "preset">> = {
   low: {
     resolutionScale: 0.65,
@@ -51,7 +59,7 @@ const PRESET_BODY: Record<GraphicsPresetId, Omit<GraphicsSettings, "preset">> = 
     shadowsEnabled: false,
     shadowMapSize: 512,
     streamRing: 2,
-    grassDrawDistance: 50,
+    grassDrawDistance: 45,
     fogScale: 1.15,
   },
   medium: {
@@ -61,7 +69,7 @@ const PRESET_BODY: Record<GraphicsPresetId, Omit<GraphicsSettings, "preset">> = 
     shadowsEnabled: true,
     shadowMapSize: 512,
     streamRing: 3,
-    grassDrawDistance: 70,
+    grassDrawDistance: 65,
     fogScale: 1.05,
   },
   high: {
@@ -86,10 +94,14 @@ const PRESET_BODY: Record<GraphicsPresetId, Omit<GraphicsSettings, "preset">> = 
   },
 };
 
-/** Matches current Game.ts defaults (High). */
+/** Default graphics profile for smooth browser-first gameplay out of the box.
+ *  Medium, not High -- this is a browser game that should feel smooth on a
+ *  mid-range laptop the moment someone opens it, not just on a gaming rig.
+ *  Only affects brand-new accounts / cleared localStorage; existing players
+ *  keep their persisted choice. */
 export const DEFAULT_GRAPHICS_SETTINGS: GraphicsSettings = {
-  preset: "high",
-  ...PRESET_BODY.high,
+  preset: "medium",
+  ...PRESET_BODY.medium,
 };
 
 /** Account-scoped blob stored in `accounts.settings` jsonb. */
@@ -141,6 +153,31 @@ export function clampGraphicsSettings(
 
 export function graphicsFromPreset(preset: GraphicsPresetId): GraphicsSettings {
   return { preset, ...PRESET_BODY[preset] };
+}
+
+/**
+ * Resolve settings LOADED FROM PERSISTENCE (account settings / localStorage
+ * cache) -- as opposed to a live in-session edit (see patchGraphics, which
+ * must keep trusting literal field values so dragging a slider actually
+ * changes something).
+ *
+ * A saved named preset ("low"/"medium"/"high"/"ultra") is treated as a LIVE
+ * reference to that preset's *current* PRESET_BODY, not a frozen snapshot of
+ * whatever the numbers were the moment it was saved. Without this, retuning a
+ * preset here (as this pass did for Low/Medium/High) would never reach a
+ * player who had already saved that preset — every previously-saved "Medium"
+ * keeps shipping the old numbers forever unless the player happens to
+ * re-click the button. Only `preset: "custom"` (an explicit manual edit)
+ * trusts the persisted literal values, since that's the whole point of it.
+ */
+export function resolvePersistedGraphics(
+  partial: Partial<GraphicsSettings> | null | undefined,
+): GraphicsSettings {
+  const preset = partial?.preset;
+  if (preset && preset !== "custom" && (GRAPHICS_PRESET_IDS as readonly string[]).includes(preset)) {
+    return graphicsFromPreset(preset as GraphicsPresetId);
+  }
+  return clampGraphicsSettings(partial);
 }
 
 /** Merge overlays onto defaults, then clamp. */

@@ -60,7 +60,7 @@ class AppState {
   activeCharacter = $state<CharacterSummary | null>(null);
   error = $state<string | null>(null);
   realm = $state<Realm>(LOCAL_REALM);
-  selectedRealm = $state<RealmInfo>(REALM_LIST[0]);
+  selectedRealm = $state<RealmInfo>(REALM_LIST[0]!);
   private graphicsSaveBound = false;
 
   setScreen(s: Screen) {

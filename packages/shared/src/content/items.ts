@@ -126,6 +126,12 @@ export interface ItemDef {
   /** Gear (head slot only): true for closed helmets that fully replace the
    *  face. Hoods/crowns/horns leave the base head + eyes visible underneath. */
   coversHead?: boolean;
+  /** Flavor text shown in crafting/tooltip UI. Falls back to a generic line
+   *  when unset -- most items don't author one. */
+  description?: string;
+  /** Loot/tooltip quality tier -- drives the item-name color tier in loot UI.
+   *  Undefined items render as "common". */
+  rarity?: "common" | "uncommon" | "rare" | "epic" | "legendary";
 }
 
 /** Standalone alias for the weapon-type union, for spells.ts to import

@@ -86,7 +86,6 @@ import {
   PLAYER_ANIMS,
   logicalFromState,
   dodgeLogicalFor,
-  warmAllPackedAssets,
   CREATURE_MODELS,
   SKELETON_MODELS,
   WOLF_MODEL,
@@ -108,6 +107,7 @@ import { OVERVIEW_EDGE, DETAIL_EDGE } from "../ui/worldMapThumbnail";
 import { requestRegionThumbnailAsync, requestRegionLandMaskAsync } from "../render/worldMapThumbnailWorker";
 import { RegionContinent } from "../render/regionContinent";
 import { StreamBudget } from "../render/streamBudget";
+import { nextFrame } from "../render/idleScheduler";
 import {
   atmosphereFromGrading,
   cloneAtmosphere,
@@ -255,6 +255,7 @@ export class Game {
 
   /** Orbit arm length; scroll wheel adjusts while pointer-locked. */
   private cameraDistance = CAMERA_DISTANCE_DEFAULT;
+  private smoothCameraDistance = CAMERA_DISTANCE_DEFAULT;
   private selfId = "";
   private selfClassId = "warrior";
   private selfGender: CharacterGender = "male";
@@ -693,7 +694,10 @@ export class Game {
         const now = performance.now();
         ui.timeOfDay = msg.timeOfDay;
         for (const p of msg.players) {
-          if (p.id !== this.selfId) ui.names.set(p.id, p.name);
+          // p.name is only sent the first time this client sees a given
+          // player (see PlayerSnap's doc comment) -- already-cached names
+          // never go stale since they never change post-creation.
+          if (p.id !== this.selfId && p.name !== undefined) ui.names.set(p.id, p.name);
         }
         for (const m of msg.mobs) {
           if (!ui.names.has(m.id)) ui.names.set(m.id, mobDef(m.type).name);
@@ -741,7 +745,7 @@ export class Game {
         }
         break;
       case "friends":
-        ui.friends = (msg as any).friends ?? [];
+        ui.friends = msg.friends;
         break;
       case "pvp":
         ui.pvpEnabled = msg.enabled;
@@ -755,7 +759,7 @@ export class Game {
         this.setUiMode(true);
         break;
       case "vendorStock":
-        ui.vendorWares = msg as any;
+        ui.vendorWares = msg;
         ui.vendorOpen = true;
         this.setUiMode(true);
         break;
@@ -890,17 +894,9 @@ export class Game {
       await Promise.all([avatarLoad, catalogLoad, packLoad]);
 
       ui.loadingMessage = "Prewarming world map & terrain rasters...";
-      ui.loadingProgress = 40;
+      ui.loadingProgress = 45;
       await this.prewarmMapAssets();
-      ui.loadingProgress = 50;
-
-      ui.loadingMessage = "Warming 3D asset catalog…";
-      await warmAllPackedAssets((loaded, total) => {
-        const pct = Math.floor(50 + (loaded / total) * 15);
-        ui.loadingProgress = pct;
-        ui.loadingMessage = `Warming 3D assets (${loaded}/${total})…`;
-      });
-      ui.loadingProgress = 65;
+      ui.loadingProgress = 60;
 
       await this.applyEquippedGearAsync(msg.inventory);
       ui.loadingProgress = 65;
@@ -1096,6 +1092,7 @@ export class Game {
         }
         break;
       case "error":
+      case "info":
         if (msg.message) ui.toast(msg.message);
         break;
     }
@@ -1802,6 +1799,26 @@ export class Game {
       ui.loadingProgress = Math.min(94, 78 + Math.round(p * 16));
       await nextFrame();
     }
+
+    // 3. Nearby mobs/players/pets: EntityManager only enqueues a model load once
+    //    update() has actually run and found something within load radius of the
+    //    camera -- and update() only ever runs from the main frame() loop, which
+    //    is idle for the entire duration the loading screen is up (see frame()'s
+    //    `if (ui.loading) return`). Without pumping it here, whatever's near
+    //    spawn (a village, a mob pack) starts fetching its model only AFTER the
+    //    veil drops -- exactly the pop-in this whole wait exists to prevent.
+    //    Position the camera at the spawn point first so the distance check
+    //    inside entities.update() is correct (it's still at its pre-spawn
+    //    default otherwise).
+    this.updateCamera(this.move.x, this.move.y, this.move.z);
+    ui.loadingMessage = "Loading nearby creatures…";
+    while (performance.now() - start < DEADLINE_MS) {
+      if (this.disposed) return;
+      this.entities.update(performance.now(), 0, this.camera);
+      if (!this.entities.hasPendingMobLoads()) break;
+      ui.loadingProgress = 96;
+      await nextFrame();
+    }
   }
 
   /** Pre-compile WebGL shaders for all common creature models, character rigs,
@@ -1842,11 +1859,9 @@ export class Game {
       }
 
       this.scene.add(warmupGroup);
-      if (typeof this.renderer.compileAsync === "function") {
-        await this.renderer.compileAsync(this.scene, this.camera);
-      } else {
-        this.renderer.compile(this.scene, this.camera);
-      }
+      // Synchronous compile only -- see prewarm360GpuPass's comment for why
+      // compileAsync() is unsafe here (a proven crash, not a hypothetical).
+      this.renderer.compile(this.scene, this.camera);
       this.scene.remove(warmupGroup);
       warmupGroup.clear();
     } catch (e) {
@@ -1891,18 +1906,24 @@ export class Game {
         if (this.continent) {
           this.continent.update(0, this.sun, px, pz, this.camera);
         }
-        if (typeof this.renderer.compileAsync === "function") {
-          await this.renderer.compileAsync(this.scene, this.camera);
-        } else {
-          this.renderer.compile(this.scene, this.camera);
-        }
+        // Synchronous compile() only. compileAsync() polls checkMaterialsReady
+        // via a detached setTimeout, reading materialProperties.currentProgram
+        // for every material captured at call time; if any of those materials'
+        // GL programs get torn down before the poll resolves (exactly what
+        // continent.update() above can do -- it disposes ring-turnover tiles
+        // while streaming), that read is undefined and three.js throws
+        // `TypeError: can't access property "isReady", program is undefined`
+        // from inside the timer callback -- outside any promise chain, so it's
+        // an UNCAUGHT global exception no try/catch here can stop. Reproduced
+        // in this exact codebase; compile() has no such polling and is safe.
+        this.renderer.compile(this.scene, this.camera);
       }
 
       // --- Pass 2: render (offscreen-equivalent) to upload texture data to VRAM ---
       // Three.js lazily uploads texture data on the first real render() where a
       // texture is bound. compile() only uploads shader programs, NOT textures.
       // A single render() sweep at original yaw forces all visible texture uploads
-      // before the loading screen drops, eliminating first-rotation stutter.
+      // and primes shadow map depth buffers before the loading screen drops.
       this.cameraYaw = origYaw;
       this.updateCamera(px, py, pz);
       const target = new THREE.WebGLRenderTarget(512, 512);
@@ -1910,6 +1931,12 @@ export class Game {
       for (const angle of angles) {
         this.cameraYaw = angle;
         this.updateCamera(px, py, pz);
+        if (this.continent) {
+          this.continent.update(0.016, this.sun, px, pz, this.camera);
+        }
+        if (this.graphics.shadowsEnabled) {
+          this.renderer.shadowMap.needsUpdate = true;
+        }
         this.renderer.render(this.scene, this.camera);
       }
       this.renderer.setRenderTarget(null);
@@ -2260,7 +2287,7 @@ export class Game {
     const cy = this.cameraYaw;
     const cp = this.cameraPitch;
 
-    let distance = this.cameraDistance;
+    let targetDist = this.cameraDistance;
 
     // Inside regions: pull the camera in when the arm hits solid walls so
     // interiors / upstairs rooms stay usable instead of clipping through.
@@ -2272,7 +2299,7 @@ export class Game {
             ...regionVolumeColliders(this.regionRenderer!.terrainVolumes ?? []),
             ...regionBarrierColliders(this.regionRenderer!.blueprint.barrierVolumes),
           ];
-      const maxRange = distance + 4;
+      const maxRange = targetDist + 4;
       const colliders = allColliders.filter((c) => {
         if (c.climbable || c.solid || c.radius <= 0) return false;
         const dx = c.x - px;
@@ -2281,7 +2308,7 @@ export class Game {
         return dx * dx + dz * dz <= lim * lim;
       });
       const headY = py + 1.5;
-      for (let t = 0.6; t < distance; t += 0.35) {
+      for (let t = 0.6; t < targetDist; t += 0.35) {
         const sx = px - Math.sin(cy) * (t * Math.cos(cp));
         const sy = headY - t * Math.sin(cp);
         const sz = pz - Math.cos(cy) * (t * Math.cos(cp));
@@ -2300,16 +2327,22 @@ export class Game {
           }
         }
         if (blocked) {
-          distance = Math.max(0.9, t - 0.25);
+          targetDist = Math.max(0.9, t - 0.25);
           break;
         }
       }
     }
 
+    // Pull in immediately on obstacle collision, ease smoothly back out
+    if (targetDist < this.smoothCameraDistance) {
+      this.smoothCameraDistance = targetDist;
+    } else {
+      this.smoothCameraDistance += (targetDist - this.smoothCameraDistance) * 0.18;
+    }
+
+    const distance = this.smoothCameraDistance;
     let targetX = px - Math.sin(cy) * (distance * Math.cos(cp));
     let targetZ = pz - Math.cos(cy) * (distance * Math.cos(cp));
-    // Standard orbit: look down (negative pitch) raises the camera and aims
-    // into the water — same as land. Do not invert Y while swimming.
     let targetY = py + CAMERA_HEIGHT - distance * Math.sin(cp);
 
     const regionHm = this.continent ? undefined : this.regionRenderer?.heightmap;
@@ -2319,25 +2352,21 @@ export class Game {
     const underwater = isUnderwaterAt(px, py, pz, regionHm, groundAt, waterDepthAt);
 
     if (this.continent || this.regionRenderer) {
-      const h = this.continent
-        ? this.continentGroundAt(px, pz)
-        : this.regionRenderer!.heightAt(px, pz);
-      const wd = this.continent
-        ? this.continentWaterDepthAt(px, pz)
-        : sampleRegionWaterDepth(this.regionRenderer!.heightmap, px, pz);
-      targetY = Math.min(targetY, py + 2.7);
-      // Stay above terrain, but do not clamp to the water surface while
-      // swimming/diving — otherwise the camera can never go underwater.
-      const floorY = h + 0.45;
+      const camGround = this.continent
+        ? this.continentGroundAt(targetX, targetZ)
+        : this.regionRenderer!.heightAt(targetX, targetZ);
+      const camWaterDepth = this.continent
+        ? this.continentWaterDepthAt(targetX, targetZ)
+        : sampleRegionWaterDepth(this.regionRenderer!.heightmap, targetX, targetZ);
+      const floorY = camGround + 0.45;
       if (swimming || underwater) {
         targetY = Math.max(targetY, floorY);
       } else {
-        targetY = Math.max(targetY, floorY, h + wd + 0.35);
+        targetY = Math.max(targetY, floorY, camGround + camWaterDepth + 0.35);
       }
     } else if (this.insideDungeonPortal) {
-      const h = dungeonFloorHeightAt(px, pz);
+      const h = dungeonFloorHeightAt(targetX, targetZ) ?? dungeonFloorHeightAt(px, pz);
       if (h !== null) {
-        targetY = Math.min(targetY, py + 2.7);
         targetY = Math.max(targetY, h + 0.6);
       }
     } else {
@@ -2349,6 +2378,12 @@ export class Game {
       }
     }
 
+    // No smoothing on Y (unlike smoothCameraDistance above, which exists to
+    // ease a wall-collision pull-in back out): targetY already tracks the
+    // player's own (physics-smooth) vertical position, so an EMA on top of it
+    // only adds lag with no benefit -- and since X/Z track the player exactly
+    // every frame while Y trailed behind, the camera visibly detached from the
+    // player on the fastest vertical motion in normal play: jumping.
     this.camera.position.set(targetX, targetY, targetZ);
     this.camera.lookAt(px, py + 1.5, pz);
   }
@@ -2699,7 +2734,12 @@ export class Game {
     this.connection.send({ t: "vendor", action: "buy", npcId, itemId, qty });
   }
 
-  sendVendorSell(npcId: string, container: string, slot: number, qty = 1): void {
+  sendVendorSell(
+    npcId: string,
+    container: "inventory" | "hotbar" | "equip" | "crafting",
+    slot: number,
+    qty = 1,
+  ): void {
     this.connection.send({ t: "vendor", action: "sell", npcId, container, slot, qty });
   }
 

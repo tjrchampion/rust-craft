@@ -756,6 +756,7 @@ export class RegionEditorScene {
     onMarquee?: (box: { startX: number; startY: number; endX: number; endY: number } | null) => void,
     private onSnapChange?: (enabled: boolean) => void,
     private onFlyChange?: (active: boolean) => void,
+    private onStatus?: (message: string) => void,
   ) {
     // Guard against two live instances ever listening on the same canvas at
     // once (e.g. a leftover instance from a Vite HMR reload that never got
@@ -4019,6 +4020,7 @@ export class RegionEditorScene {
   setGizmoSpace(space: "local" | "world"): void {
     this.gizmoSpace = space;
     this.transform.setSpace(space);
+    this.emitSelection();
     this.emitStatus(`Transform Handles aligned to: ${space.toUpperCase()} space`);
   }
 
@@ -4041,13 +4043,14 @@ export class RegionEditorScene {
       }
       const asset = this.assets.get(id);
       if (asset && asset.solid) {
-        const box = measureSolidBox(asset.obj);
+        const box = measureObjectSolidBox(asset.obj);
         if (box) asset.solidBox = box;
       }
     }
     this.bakeSelectionYaw();
     this.setGizmoSpace("local");
-    this.scheduleSave();
+    this.triggerChange();
+    this.emitSelection();
     this.emitStatus(`Re-aligned bounding box & gizmo handles to LOCAL space for ${count} selected asset${count === 1 ? "" : "s"}`);
   }
 
@@ -5793,7 +5796,7 @@ export class RegionEditorScene {
 
     const animModel = new AnimatedModel(PLAYER_ANIMS);
     animModel
-      .loadFrom(resolveNpcModelUrl(modelName))
+      .loadFrom(resolveNpcModelUrl(modelName), RegionEditorScene.PLAYTEST_AVATAR_HEIGHT)
       .then(() => {
         if (!entry.obj.parent) return;
         markerSphere.visible = false;
@@ -6192,6 +6195,10 @@ export class RegionEditorScene {
       if (v) this.syncVolumeDataFromMesh(v);
     }
     this.updateSelectionGroup();
+  }
+
+  private emitStatus(message: string): void {
+    this.onStatus?.(message);
   }
 
   private emitSelection(): void {

@@ -16,8 +16,8 @@ import type {
 import {
   clampGraphicsSettings,
   graphicsFromPreset,
-  mergeGraphicsSettings,
   resolveGraphicsPreset,
+  resolvePersistedGraphics,
   type GraphicsPresetId,
 } from "@rustcraft/shared";
 import type { TargetInfo } from "../render/entities";
@@ -29,7 +29,10 @@ function loadGraphicsFromStorage(): GraphicsSettings {
   try {
     const raw = localStorage.getItem(GRAPHICS_STORAGE_KEY);
     if (!raw) return clampGraphicsSettings(undefined);
-    return clampGraphicsSettings(JSON.parse(raw) as Partial<GraphicsSettings>);
+    // A named preset re-resolves from its CURRENT numbers (see
+    // resolvePersistedGraphics) -- otherwise a preset tuned in code never
+    // reaches a player whose browser already cached the old values.
+    return resolvePersistedGraphics(JSON.parse(raw) as Partial<GraphicsSettings>);
   } catch {
     return clampGraphicsSettings(undefined);
   }
@@ -71,7 +74,7 @@ export interface QuestMarker {
   name: string;
   x: number;
   z: number;
-  marker: "available" | "complete" | "active";
+  marker: "available" | "complete" | "active" | "escort";
 }
 
 let toastId = 0;
@@ -296,11 +299,11 @@ class GameState {
   /** Seed from `/api/me` account.settings (account wins over local cache). */
   hydrateAccountSettings(settings: AccountSettings | null | undefined): void {
     if (!settings?.graphics) return;
-    this.graphics = mergeGraphicsSettings(this.graphics, settings.graphics);
-    this.graphics = {
-      ...this.graphics,
-      preset: resolveGraphicsPreset(this.graphics),
-    };
+    // A named preset (the common case -- most players just click a preset
+    // button and never touch a slider) always resolves from its CURRENT
+    // numbers, not whatever was frozen into the account row when it was
+    // saved -- see resolvePersistedGraphics.
+    this.graphics = resolvePersistedGraphics(settings.graphics);
     persistGraphicsLocal(this.graphics);
     void import("../game/instance").then(({ getGame }) => {
       getGame()?.applyGraphicsSettings(this.graphics);

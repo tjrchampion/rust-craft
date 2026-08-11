@@ -39,7 +39,9 @@ export interface SpellVfxSpec {
   };
 }
 
-export const SCHOOL_PALETTES: Record<string, SpellVfxPalette> = {
+export type SpellSchool = "physical" | "fire" | "frost" | "holy" | "nature" | "arcane" | "shadow";
+
+export const SCHOOL_PALETTES: Record<SpellSchool, SpellVfxPalette> = {
   physical: { primary: 0xffcc44, secondary: 0xaa7722, emissive: 0xffaa00 },
   fire: { primary: 0xff4400, secondary: 0xffaa00, emissive: 0xff2200 },
   frost: { primary: 0x44ccff, secondary: 0x88eeff, emissive: 0x0088ff },
@@ -252,7 +254,7 @@ export const SPELL_VFX_SPECS: Record<string, SpellVfxSpec> = {
 
 export function getSpellVfxSpec(spellId: string, school: string = "physical"): SpellVfxSpec {
   return SPELL_VFX_SPECS[spellId] ?? {
-    palette: SCHOOL_PALETTES[school] ?? SCHOOL_PALETTES.physical,
+    palette: SCHOOL_PALETTES[school as SpellSchool] ?? SCHOOL_PALETTES.physical,
     impact: { ringRadius: 1.5, burstCount: 12, decal: "cracked_earth" },
   };
 }

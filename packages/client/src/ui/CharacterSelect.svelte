@@ -35,8 +35,21 @@
     long: "Long",
     simple_parted: "Parted",
     buns: "Buns",
+    bob: "Bob",
+    dreads: "Dreads",
+    long_dreads: "Long Dreads",
+    mohawk: "Mohawk",
+    ponytail: "Ponytail",
+    ponytail_2: "Ponytail (Hi)",
+    slick_back: "Slick Back",
+    balding: "Balding",
   };
-  const FACIAL_HAIR_LABELS: Record<FacialHairId, string> = { none: "Clean", beard: "Beard" };
+  const FACIAL_HAIR_LABELS: Record<FacialHairId, string> = {
+    none: "Clean",
+    beard: "Beard",
+    moustache: "Moustache",
+    mutton_chops: "Mutton Chops",
+  };
   const HAIR_COLOR_PRESETS = [0x1b1410, 0x2b1a12, 0x5b3a1e, 0x8a4a2f, 0xd8b874, 0xd9d3c8, 0xa8432b];
   const EYE_COLOR_PRESETS = [0x6b4423, 0x8a6d3a, 0x4a7c4a, 0x3f6fa8, 0x8892a0, 0xb8862e];
   const OUTFIT_HUE_PRESETS = [0xffffff, 0xd4af5c, 0xd94f3d, 0x4a7c4a, 0x4a7cc4, 0x8a5ac4, 0x8892a0, 0x555555];

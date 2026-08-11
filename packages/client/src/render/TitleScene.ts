@@ -408,7 +408,7 @@ export class TitleScene {
         model.position.set(a.localX, a.localY, a.localZ);
         model.rotation.y = a.yaw;
         if (a.scaleX !== undefined) {
-          model.scale.set(a.scaleX, a.scaleY, a.scaleZ);
+          model.scale.set(a.scaleX, a.scaleY ?? a.scale ?? 1, a.scaleZ ?? a.scale ?? 1);
         } else {
           model.scale.setScalar(a.scale ?? 1);
         }

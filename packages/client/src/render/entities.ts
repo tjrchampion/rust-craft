@@ -31,6 +31,21 @@ const INTERP_DELAY_MS = 130;
 const DESPAWN_AFTER_MS = 1200;
 /** Defer GLB/anim binding for mobs/pets until within this range of the camera. */
 const MOB_MODEL_LOAD_RADIUS = 72;
+/** Stop advancing AnimationMixer/state-machine for in-frustum but distant
+ *  entities -- frozen mid-pose at range is imperceptible (same idea as
+ *  regionInterior.ts's npcAnimReach2 for region NPCs), but a crowded view
+ *  full of far-off players/mobs was paying full mixer-update cost for all of
+ *  them every frame regardless of how small they render on screen. */
+const ANIM_UPDATE_RADIUS = 70;
+
+/** PlayerSnap's gear fields are optional on the wire (server omits them when
+ *  unchanged since this viewer's last snapshot of that player -- see
+ *  GameServer.ts's sendSnapshots), but always arrive together as a complete
+ *  block when they arrive at all. Narrows to "definitely present" for code
+ *  that's already checked that. */
+type PlayerGearSnap = Required<
+  Pick<PlayerSnap, "weaponId" | "heldItemId" | "headId" | "chestId" | "armsId" | "legsId" | "feetId" | "shouldersId" | "neckId">
+>;
 
 /** Which schools have a textured effect extracted from the Hovl Studio pack
  *  (see scripts/hovl/) instead of SpellVfxSystem's built-in procedural
@@ -123,6 +138,10 @@ export interface TargetInfo {
   maxHp: number;
   kind: "player" | "mob" | "pet";
   hostile: boolean;
+  /** Only meaningful for kind "player" -- levels aren't tracked for remote
+   *  mobs/pets client-side, so this stays undefined for them. */
+  level?: number;
+  classId?: string;
 }
 
 interface DamageNumber {
@@ -398,11 +417,13 @@ export class EntityManager {
     }
 
     if (renderer && camera) {
-      if (typeof renderer.compileAsync === "function") {
-        void renderer.compileAsync(this.scene, camera).catch(() => {});
-      } else {
-        renderer.compile(this.scene, camera);
-      }
+      // Sync compile only -- compileAsync() throws an UNCATCHABLE (not part of
+      // any promise chain) TypeError from its internal setTimeout poll if a
+      // polled material's GL program is disposed before it resolves, which
+      // concurrent asset streaming can trigger. See Game.ts's
+      // prewarm360GpuPass comment for the full mechanism (reproduced, not
+      // hypothetical).
+      renderer.compile(this.scene, camera);
     }
 
     // Now turn everything invisible
@@ -576,8 +597,11 @@ export class EntityManager {
    *  anything equipped in that slot (hidden by default -- bare head, no
    *  cape) and tint the Body/Arm/Leg mesh for chest/arms/legs/feet --
    *  mirrors Game.ts's applyEquippedGear for the local player, so other
-   *  players see the same gear appearance. */
-  private setGearAppearance(entity: RemoteEntity, snap: PlayerSnap): void {
+   *  players see the same gear appearance. Takes the narrowed gear-fields
+   *  type (not the full optional PlayerSnap) -- callers only reach this once
+   *  they've confirmed the server actually sent the gear block this tick
+   *  (see applyPlayers's PlayerSnap.weaponId !== undefined check). */
+  private setGearAppearance(entity: RemoteEntity, snap: PlayerGearSnap): void {
     if (
       entity.headId !== snap.headId ||
       entity.chestId !== snap.chestId ||
@@ -611,21 +635,25 @@ export class EntityManager {
       if (snap.id === selfId) continue;
       let entity = this.entities.get(snap.id);
       if (!entity) {
+        // The server always sends the full name/appearance block the first
+        // time a player enters a given viewer's snapshots (see
+        // GameServer.ts's sendSnapshots isFirstSight logic) -- guaranteed
+        // present here, since this is the first snapshot we've seen them in.
         entity = this.createEntity(
           "player",
           snap.id,
-          snap.name,
+          snap.name!,
           now,
           undefined,
-          snap.classId,
+          snap.classId!,
           snap.gender as CharacterGender,
           {
             gender: snap.gender as CharacterGender,
             hairStyle: snap.hairStyle as CharacterAppearance["hairStyle"],
             facialHair: snap.facialHair as CharacterAppearance["facialHair"],
-            hairColor: snap.hairColor,
-            eyeColor: snap.eyeColor,
-            outfitHue: snap.outfitHue,
+            hairColor: snap.hairColor!,
+            eyeColor: snap.eyeColor!,
+            outfitHue: snap.outfitHue!,
           },
         );
         entity.lastX = snap.x;
@@ -637,8 +665,13 @@ export class EntityManager {
       entity.maxHp = snap.maxHp;
       this.setPvp(entity, snap.pvp);
       this.setMount(entity, snap.mount);
-      this.setWeapon(entity, snap.weaponId, snap.heldItemId);
-      this.setGearAppearance(entity, snap);
+      // Gear fields are all-or-nothing on the wire (see PlayerGearSnap) --
+      // checking one is enough to know the whole block is present.
+      if (snap.weaponId !== undefined) {
+        const gear = snap as PlayerSnap & PlayerGearSnap;
+        this.setWeapon(entity, gear.weaponId, gear.heldItemId);
+        this.setGearAppearance(entity, gear);
+      }
       entity.samples.push({ t: now, x: snap.x, y: snap.y, z: snap.z, yaw: snap.yaw });
       if (entity.samples.length > 12) entity.samples.shift();
       if (entity.hpBar) paintHpBarIfChanged(entity, snap.hp / snap.maxHp);
@@ -716,7 +749,7 @@ export class EntityManager {
       // Sync Party Tag (Overhead Leader Crown or Tag)
       if (entity.kind === "player") {
         const partyMember = (game.party ?? []).find(
-          (m) => m.id === entity.id || m.name.toLowerCase() === entity.name.toLowerCase(),
+          (m) => m.id === entity.id || (entity.name && m.name.toLowerCase() === entity.name.toLowerCase()),
         );
         const desiredTag = partyMember?.tag;
         if (entity.partyTag !== desiredTag) {
@@ -1184,7 +1217,7 @@ export class EntityManager {
     for (const entity of this.entities.values()) {
       if (entity.kind !== "player") continue;
       const partyMember = (game.party ?? []).find(
-        (m) => m.id === entity.id || m.name.toLowerCase() === entity.name.toLowerCase(),
+        (m) => m.id === entity.id || (entity.name && m.name.toLowerCase() === entity.name.toLowerCase()),
       );
       const desiredTag = partyMember?.tag;
       if (entity.partyTag !== desiredTag) {
@@ -1269,21 +1302,23 @@ export class EntityManager {
       // off-screen, which is imperceptible, and resumes cleanly the instant
       // it's back in view.
       let inView = true;
+      let withinAnimRange = true;
       if (camera) {
         this.cullSphere.center.set(entity.group.position.x, entity.group.position.y + 1, entity.group.position.z);
         inView = this.cullFrustum.intersectsSphere(this.cullSphere);
 
-        if (entity.pendingLoad && !entity.inLoadQueue) {
-          const dx = entity.group.position.x - camera.position.x;
-          const dz = entity.group.position.z - camera.position.z;
-          if (dx * dx + dz * dz <= MOB_MODEL_LOAD_RADIUS * MOB_MODEL_LOAD_RADIUS) {
-            entity.inLoadQueue = true;
-            this.pendingMobLoadQueue.push(entity);
-          }
+        const dx = entity.group.position.x - camera.position.x;
+        const dz = entity.group.position.z - camera.position.z;
+        const dist2 = dx * dx + dz * dz;
+        withinAnimRange = dist2 <= ANIM_UPDATE_RADIUS * ANIM_UPDATE_RADIUS;
+
+        if (entity.pendingLoad && !entity.inLoadQueue && dist2 <= MOB_MODEL_LOAD_RADIUS * MOB_MODEL_LOAD_RADIUS) {
+          entity.inLoadQueue = true;
+          this.pendingMobLoadQueue.push(entity);
         }
       }
       entity.group.visible = inView;
-      if (inView && entity.model.loaded) {
+      if (inView && withinAnimRange && entity.model.loaded) {
         entity.model.setLocomotionSpeed(entity.speed, entity.kind === "player" ? 3.5 : 3);
         const logical = logicalFromState(
           entity.anim,
@@ -1505,6 +1540,7 @@ export class EntityManager {
       maxHp: e.maxHp,
       kind: e.kind,
       hostile: e.kind === "mob" || e.pvp,
+      classId: e.kind === "player" ? e.classId : undefined,
     };
   }
 
@@ -1543,6 +1579,23 @@ export class EntityManager {
       if (d < bestDist) {
         bestDist = d;
         best = { id: e.id, name: e.name ?? "someone" };
+      }
+    }
+    return best;
+  }
+
+  /** Nearest live mob within range, for escort-quest "is my NPC under
+   *  attack" checks -- region interiors don't track mobs themselves (see
+   *  RegionInteriorRenderer's class doc), so they reach through here. */
+  nearestHostileMob(x: number, z: number, maxRange: number): { x: number; z: number } | null {
+    let best: { x: number; z: number } | null = null;
+    let bestDist = maxRange;
+    for (const e of this.entities.values()) {
+      if (e.kind !== "mob" || e.hp <= 0) continue;
+      const d = Math.hypot(e.group.position.x - x, e.group.position.z - z);
+      if (d < bestDist) {
+        bestDist = d;
+        best = { x: e.group.position.x, z: e.group.position.z };
       }
     }
     return best;
@@ -1638,6 +1691,15 @@ export class EntityManager {
     return this.entities.get(id)?.group ?? null;
   }
 
+  /** True while a nearby mob/player/pet model is loading or queued to load
+   *  (see pumpMobLoadQueue). Entities only get enqueued from update()'s
+   *  distance check, so this only reflects reality once update() has run at
+   *  least once with the player's real position -- used by Game.ts to hold
+   *  the loading screen until whatever's near spawn has finished loading. */
+  hasPendingMobLoads(): boolean {
+    return this.pendingMobLoadQueue.length > 0 || this.inFlightMobLoad;
+  }
+
   private pumpMobLoadQueue(camera: THREE.Camera | undefined): void {
     if (this.inFlightMobLoad || this.pendingMobLoadQueue.length === 0) return;
 
@@ -1676,11 +1738,13 @@ export class EntityManager {
       .loadFrom(pending.url, pending.height, pending.tint)
       .then(() => {
         if (this.renderer && camera) {
-          if (typeof this.renderer.compileAsync === "function") {
-            void this.renderer.compileAsync(entity.group, camera).catch(() => {});
-          } else {
-            this.renderer.compile(entity.group, camera);
-          }
+          // Sync compile() only -- this runs continuously during live gameplay
+          // (any mob/player/pet entering load radius) at the same time terrain/
+          // asset streaming is mutating the scene, which is exactly the
+          // condition that makes compileAsync()'s internal setTimeout poll
+          // throw an uncatchable TypeError (see Game.ts's prewarm360GpuPass
+          // comment). Not hypothetical -- reproduced in this codebase.
+          this.renderer.compile(entity.group, camera);
         }
       })
       .catch(() => {})
@@ -1764,7 +1828,8 @@ export class EntityManager {
       while (curr) {
         if (curr instanceof THREE.Group && groupToPlayer.has(curr)) {
           const p = groupToPlayer.get(curr)!;
-          return { id: p.id, name: p.name ?? "Adventurer", classId: p.classId, level: p.level ?? 1 };
+          // Remote entities don't track a level client-side -- always 1 until that changes.
+          return { id: p.id, name: p.name ?? "Adventurer", classId: p.classId, level: 1 };
         }
         curr = curr.parent;
       }

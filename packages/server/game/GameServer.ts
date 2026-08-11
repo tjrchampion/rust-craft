@@ -120,6 +120,8 @@ import {
   type NpcSpec,
   type QuestOfferInfo,
   type QuestLogEntry,
+  type QuestDef,
+  type FriendEntry,
   type AchievementSnap,
   type QuestStatus,
   type ClassId,
@@ -317,6 +319,12 @@ interface PlayerState {
     neckId: string | null;
     selectedSlot: number;
   } | null;
+  /** Bumped only when playerGearSnap's recompute actually changes a gear/
+   *  held-item id (not on every gearCache invalidation -- loot pickup and
+   *  aura ticks invalidate the cache too but don't touch equip slots). Lets
+   *  sendSnapshots() detect "did this player's gear actually change" per
+   *  viewer without resending the whole gear block every tick. */
+  gearVersion: number;
   pvp: boolean;
   mount: "horse" | "raft" | null;
   blocking: boolean;
@@ -429,6 +437,12 @@ interface Projectile {
 
 export class GameServer {
   private players = new Map<string, PlayerState>();
+  /** Per-viewer memory of the last PlayerSnap.gearVersion sent for each
+   *  visible player -- lets sendSnapshots() omit name/appearance/gear
+   *  fields once a viewer already has them and nothing's changed, instead
+   *  of resending ~15 mostly-static fields for every player, every 100ms.
+   *  Cleared per-viewer and per-target in removePlayer(). */
+  private lastSentPlayerCosmetics = new Map<string, Map<string, number>>();
   private peerToChar = new Map<string, string>();
   private mobs = new Map<string, MobState>();
   /**
@@ -728,6 +742,7 @@ export class GameServer {
       dirty: true,
       statsCache: null,
       gearCache: null,
+      gearVersion: 0,
       pvp: false,
       mount: null,
       blocking: false,
@@ -873,6 +888,12 @@ export class GameServer {
     // this.players to report each member online/offline) already sees this
     // player as gone, instead of momentarily reporting them still online.
     this.players.delete(charId);
+    // Drop this player's own cosmetic-cache map (as a viewer) right away --
+    // sendSnapshots() rebuilds every other viewer's map fresh each tick from
+    // who's actually still visible, so their entry as a *target* self-clears
+    // within one tick regardless; this just avoids a stale outer-map entry
+    // (and a needless relogin-treated-as-already-sent) in the meantime.
+    this.lastSentPlayerCosmetics.delete(charId);
     this.leaveParty(player, true);
     this.broadcastRoster();
     for (const mob of this.mobs.values()) {
@@ -1041,7 +1062,7 @@ export class GameServer {
         this.handleSit(player);
         break;
       case "lootCorpse":
-        this.handleLootCorpse(player, parsed.mobId, parsed.slot, parsed.lootAll);
+        this.handleLootCorpse(player, parsed.mobId, parsed.slot ?? undefined, parsed.lootAll ?? undefined);
         break;
       case "claimLevelReward":
         this.handleClaimLevelReward(player, parsed.rewardId ?? null);
@@ -1249,7 +1270,7 @@ export class GameServer {
                 description: q.description,
                 tier: q.tier,
                 minLevel: q.minLevel,
-                objectiveKind: q.objectiveKind as any,
+                objectiveKind: q.objectiveKind,
                 objectiveTarget: q.objectiveTarget,
                 objectiveCount: q.objectiveCount ?? 1,
                 rewardXp: q.rewardXp,
@@ -1449,7 +1470,7 @@ export class GameServer {
             vendorName: rNpc.name,
             title: vDef.title,
             items: vDef.items,
-          } as any);
+          });
           return;
         }
       }
@@ -1601,7 +1622,7 @@ export class GameServer {
                 id: rNpc.id,
                 name: rNpc.name,
                 regionId,
-                instanceId: player.instanceId,
+                instanceId: player.instanceId ?? "",
                 x: rNpc.localX,
                 y: 0,
                 z: rNpc.localZ,
@@ -1685,7 +1706,7 @@ export class GameServer {
         vendorName: vendor.name,
         title: vendor.title,
         items: vendor.items,
-      } as any);
+      });
       return;
     }
 
@@ -4827,16 +4848,21 @@ export class GameServer {
       const rNpc = this.activeRegionNpcs.get(realId);
       if (rNpc) {
         rNpc.hp = Math.max(0, rNpc.hp - Math.round(damage));
-        this.broadcastEvent({
-          t: "event",
-          kind: "damage",
-          sourceId: mob.id,
-          targetId,
-          amount: Math.round(damage),
-          x: rNpc.x,
-          y: rNpc.y + 1.5,
-          z: rNpc.z,
-        });
+        this.broadcastNear(
+          rNpc.x,
+          rNpc.z,
+          {
+            t: "event",
+            kind: "damage",
+            sourceId: mob.id,
+            targetId,
+            amount: Math.round(damage),
+            x: rNpc.x,
+            y: rNpc.y + 1.5,
+            z: rNpc.z,
+          },
+          rNpc.instanceId,
+        );
         if (rNpc.hp <= 0) {
           this.handleEscortNpcDeath(rNpc);
         }
@@ -5264,8 +5290,16 @@ export class GameServer {
   }
 
   /** Shared by mobs and pets -- both are just an x/y/z/yaw position that
-   *  steps toward a target each tick, so the type only needs those fields. */
-  private moveMob(mob: MobState, tx: number, tz: number, speed: number): void {
+   *  steps toward a target each tick, so the type only needs those fields.
+   *  `moving`/`activeAuras` stay optional since PetState tracks neither
+   *  (pet anim is derived from actionAnimUntil/targetId/following instead,
+   *  and pets don't currently carry auras). */
+  private moveMob(
+    mob: { x: number; y: number; z: number; yaw: number; instanceId: string | null; moving?: boolean; activeAuras?: ActiveAura[] },
+    tx: number,
+    tz: number,
+    speed: number,
+  ): void {
     if (mob.activeAuras && mob.activeAuras.length > 0) {
       speed *= moveSpeedMultFromAuras(mob.activeAuras);
     }
@@ -5355,6 +5389,7 @@ export class GameServer {
     if (player.gearCache && player.gearCache.selectedSlot === player.selectedSlot) {
       return player.gearCache;
     }
+    const prev = player.gearCache;
     const heldItem = findItem(player.inventory, "hotbar", player.selectedSlot);
     const gear = {
       weaponId: findItem(player.inventory, "equip", 0)?.itemId ?? null,
@@ -5368,6 +5403,23 @@ export class GameServer {
       neckId: findItem(player.inventory, "equip", EQUIP_SLOTS.indexOf("neck"))?.itemId ?? null,
       selectedSlot: player.selectedSlot,
     };
+    // gearCache gets invalidated for reasons that don't touch equip slots
+    // (loot pickup, aura ticks) -- only bump the version viewers key off of
+    // when a gear/held-item id actually differs from what was here before.
+    if (
+      !prev ||
+      prev.weaponId !== gear.weaponId ||
+      prev.heldItemId !== gear.heldItemId ||
+      prev.headId !== gear.headId ||
+      prev.chestId !== gear.chestId ||
+      prev.armsId !== gear.armsId ||
+      prev.legsId !== gear.legsId ||
+      prev.feetId !== gear.feetId ||
+      prev.shouldersId !== gear.shouldersId ||
+      prev.neckId !== gear.neckId
+    ) {
+      player.gearVersion++;
+    }
     player.gearCache = gear;
     return gear;
   }
@@ -5687,20 +5739,35 @@ export class GameServer {
       const pz = viewer.move.z;
 
       const players: PlayerSnap[] = [];
+      // Name/appearance/gear are the bulk of PlayerSnap's fields but almost
+      // never change tick-to-tick -- appearance is fixed for a character's
+      // lifetime and gear only moves on equip. Track what this specific
+      // viewer already has cached client-side and omit anything unchanged
+      // instead of resending it every 100ms for every visible player.
+      //
+      // Rebuilt fresh each tick (not mutated in place) containing only THIS
+      // tick's visible targets: a player who drops out of interest radius
+      // even briefly is gone from next tick's map, so if they re-enter they
+      // read back as "first sight" again. That has to match the client's own
+      // despawn threshold (entities.ts's DESPAWN_AFTER_MS) -- once a target
+      // stops appearing in snapshots for >1.2s the client disposes its
+      // RemoteEntity entirely, so re-sending stale "unchanged" gear/
+      // appearance to a client that already forgot everything would leave it
+      // stuck with an unnamed, bare-appearance ghost.
+      const prevCosmetics = this.lastSentPlayerCosmetics.get(viewer.id);
+      const nextCosmetics = new Map<string, number>();
+      this.lastSentPlayerCosmetics.set(viewer.id, nextCosmetics);
       for (const other of allPlayers) {
         if (!this.sameInstance(viewer, other)) continue;
         if (dist2D(px, pz, other.move.x, other.move.z) > INTEREST_RADIUS) continue;
         const gear = this.playerGearSnap(other);
-        players.push({
+        const prevVersion = prevCosmetics?.get(other.id);
+        const isFirstSight = prevVersion === undefined;
+        const gearChanged = isFirstSight || prevVersion !== other.gearVersion;
+        nextCosmetics.set(other.id, other.gearVersion);
+
+        const snap: PlayerSnap = {
           id: other.id,
-          name: other.name,
-          classId: other.classId,
-          gender: other.gender,
-          hairStyle: other.hairStyle,
-          facialHair: other.facialHair,
-          hairColor: other.hairColor,
-          eyeColor: other.eyeColor,
-          outfitHue: other.outfitHue,
           x: other.move.x,
           y: other.move.y,
           z: other.move.z,
@@ -5710,17 +5777,30 @@ export class GameServer {
           anim: this.playerAnim(other),
           pvp: other.pvp,
           mount: other.mount,
-          weaponId: gear.weaponId,
-          heldItemId: gear.heldItemId,
-          headId: gear.headId,
-          chestId: gear.chestId,
-          armsId: gear.armsId,
-          legsId: gear.legsId,
-          feetId: gear.feetId,
-          shouldersId: gear.shouldersId,
-          neckId: gear.neckId,
           debuffs: this.dotDebuffs(other.activeAuras),
-        });
+        };
+        if (isFirstSight) {
+          snap.name = other.name;
+          snap.classId = other.classId;
+          snap.gender = other.gender;
+          snap.hairStyle = other.hairStyle;
+          snap.facialHair = other.facialHair;
+          snap.hairColor = other.hairColor;
+          snap.eyeColor = other.eyeColor;
+          snap.outfitHue = other.outfitHue;
+        }
+        if (gearChanged) {
+          snap.weaponId = gear.weaponId;
+          snap.heldItemId = gear.heldItemId;
+          snap.headId = gear.headId;
+          snap.chestId = gear.chestId;
+          snap.armsId = gear.armsId;
+          snap.legsId = gear.legsId;
+          snap.feetId = gear.feetId;
+          snap.shouldersId = gear.shouldersId;
+          snap.neckId = gear.neckId;
+        }
+        players.push(snap);
       }
 
       const mobs: MobSnap[] = [];

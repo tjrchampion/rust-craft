@@ -1,4 +1,4 @@
-export type QuestObjectiveKind = "kill" | "gather";
+export type QuestObjectiveKind = "kill" | "gather" | "escort";
 
 export interface QuestDef {
   id: string;

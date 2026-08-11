@@ -12,12 +12,18 @@
     appearance,
     equip = null,
     mode = "head",
+    bareUnequipped = false,
   }: {
     classId: ClassId;
     gender?: CharacterGender;
     appearance?: CharacterAppearance;
     equip?: Partial<Record<string, string>> | null;
     mode?: ThumbnailMode;
+    /** Show unequipped slots bare instead of a thematic default outfit -- set
+     *  this wherever the thumbnail claims to show a real character's actual
+     *  gear (inventory paperdoll, HUD portrait). Leave false for class-preview
+     *  cards, which want the "what could you look like" themed default. */
+    bareUnequipped?: boolean;
   } = $props();
 
   let src = $state<string | null>(null);
@@ -43,7 +49,7 @@
     // identity changes on every parent re-render, so the effect re-runs often.
     // The renderer caches by content key, so a re-run is a no-op resolve —
     // keeping the last image avoids a loader flicker on those churn re-runs.
-    void requestCharacterThumbnail({ classId, gender: targetGender, appearance: app, equip, mode })
+    void requestCharacterThumbnail({ classId, gender: targetGender, appearance: app, equip, mode, bareUnequipped })
       .then((url) => {
         if (alive) src = url;
       })

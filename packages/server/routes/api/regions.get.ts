@@ -59,13 +59,15 @@ export default defineEventHandler(() => {
         vendorId: vId,
       };
     }),
-    mobSpawns: (r.mobSpawns ?? []).map((m) => ({
-      id: m.id,
-      mobTypeId: m.mobTypeId,
+    // RegionMobSpawn (authoring data) has no stable id/level/radius -- only
+    // localX/localZ/type/difficulty are actually authored (see regions.ts).
+    // Synthesize an index-based id for map-marker keying; leave level/radius
+    // unset (both optional on RegionMapMobSpawn) rather than inventing values.
+    mobSpawns: (r.mobSpawns ?? []).map((m, idx) => ({
+      id: String(idx),
+      mobTypeId: m.type,
       localX: m.localX,
       localZ: m.localZ,
-      level: m.level,
-      radius: m.radius,
     })),
   }));
   return { regions };

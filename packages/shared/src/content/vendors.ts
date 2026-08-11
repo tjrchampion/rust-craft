@@ -10,7 +10,9 @@ export interface VendorDef {
   items: VendorItem[];
 }
 
-export const VENDORS: Record<string, VendorDef> = {
+export type VendorId = "vendor_alchemist" | "vendor_blacksmith" | "vendor_merchant";
+
+export const VENDORS: Record<VendorId, VendorDef> = {
   vendor_alchemist: {
     id: "vendor_alchemist",
     name: "Eldrin the Alchemist",
@@ -61,8 +63,8 @@ export const VENDORS: Record<string, VendorDef> = {
   },
 };
 
-export function vendorDef(vendorId: string): VendorDef | undefined {
-  return VENDORS[vendorId] ?? VENDORS.vendor_merchant;
+export function vendorDef(vendorId: string): VendorDef {
+  return VENDORS[vendorId as VendorId] ?? VENDORS.vendor_merchant;
 }
 
 export function resolveVendorId(npc: { vendorId?: string; title?: string; name?: string }): string | undefined {

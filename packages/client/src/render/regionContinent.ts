@@ -299,11 +299,14 @@ export class RegionContinent {
     await Promise.all(mounts);
     const mountedNew = [...want].some((id) => this.layers.has(id) && !before.has(id));
 
-    // Warm terrain/grass around the *viewer*, not each region's entry — neighbors
-    // used to show seam foliage with empty ground underfoot.
-    for (const layer of this.layers.values()) {
-      const local = worldToRegionLocal(layer.blueprint, wx, wz);
-      layer.renderer.warmAround(local.x, local.z);
+    // Warm terrain/grass only for newly mounted layers around the viewer
+    if (mountedNew) {
+      for (const layer of this.layers.values()) {
+        if (!before.has(layer.id)) {
+          const local = worldToRegionLocal(layer.blueprint, wx, wz);
+          layer.renderer.warmAround(local.x, local.z);
+        }
+      }
     }
 
     const under = findRegionAtWorld(catalog, wx, wz);

@@ -388,7 +388,7 @@
   <div class="rc-spell-tooltip" style="left: {tooltipPos.x}px; top: {tooltipPos.y}px;">
     <div class="tooltip-header">
       <span class="spell-name">{def.name}</span>
-      <span class="cost">{def.resourceCost ? `${def.resourceCost} ${game.resourceLabel ?? 'Mana'}` : 'No Cost'}</span>
+      <span class="cost">{def.resourceCost ? `${def.resourceCost} ${CLASSES[classId]?.resourceLabel ?? 'Mana'}` : 'No Cost'}</span>
     </div>
     <div class="meta-row">
       <span>{def.targeting.range ? `${def.targeting.range}m Range` : 'Melee Range'}</span>

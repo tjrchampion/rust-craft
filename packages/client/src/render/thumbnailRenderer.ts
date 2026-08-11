@@ -36,6 +36,13 @@ export interface ThumbnailRequest {
   appearance: CharacterAppearance;
   equip?: Partial<Record<string, string>> | null;
   mode?: ThumbnailMode;
+  /** Skip the CLASS_FULL_ARMOR fallback below -- an unequipped slot renders
+   *  bare instead of thematic default armor. Character-select/create cards
+   *  want the "what could you look like" themed preview (the default);
+   *  anywhere showing a real character's actual gear (inventory paperdoll,
+   *  HUD portrait) must set this or an empty slot lies and shows armor the
+   *  player doesn't have equipped. */
+  bareUnequipped?: boolean;
 }
 
 const SIZE = 128;
@@ -58,7 +65,7 @@ const CLASS_FULL_ARMOR: Record<string, Record<string, string>> = {
 const SLOTS = ["head", "chest", "arms", "legs", "feet", "shoulders", "neck"] as const;
 
 function effectiveEquip(req: ThumbnailRequest): Partial<Record<string, string | null>> {
-  const def = CLASS_FULL_ARMOR[req.classId] ?? {};
+  const def = req.bareUnequipped ? {} : (CLASS_FULL_ARMOR[req.classId] ?? {});
   const out: Partial<Record<string, string | null>> = {};
   for (const s of SLOTS) out[s] = req.equip?.[s] ?? def[s] ?? null;
   return out;
@@ -69,6 +76,7 @@ function cacheKey(req: ThumbnailRequest): string {
   const eq = effectiveEquip(req);
   return [
     req.mode ?? "head",
+    req.bareUnequipped ? "bare" : "themed",
     req.classId,
     req.gender,
     a.hairStyle,

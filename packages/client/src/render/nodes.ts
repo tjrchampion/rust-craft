@@ -19,6 +19,13 @@ function foliageFileToTreeKey(model: string | undefined): TreeKey | null {
 
 /** Match terrain ADT ring — trees/rocks beyond this are culled, not fog-hidden. */
 const VISIBLE_RADIUS = TREE_VISIBLE_RADIUS;
+/** Extra slack before a node already in the scene gets removed again. Without
+ *  this, standing (or sitting still while camera bob / posError decay nudge
+ *  the sampled position) right around VISIBLE_RADIUS flickers a node in/out
+ *  every windowing tick -- same hysteresis trick the ADT terrain streamer
+ *  (ADT_KEEP_EXTRA) and Quick Grass (stickyVisible/keepD) already use for
+ *  exactly this reason. */
+const KEEP_RADIUS = VISIBLE_RADIUS + 20;
 
 /** Tint (+ optional glow accent for the precious tiers) per ore node type. */
 const ORE_TINTS: Record<string, { tint: number; glow?: number }> = {
@@ -243,8 +250,11 @@ export class NodeManager {
       this.lastWindowUpdate = timeMs;
       let buildBudget = 4;
       for (const entry of this.nodes.values()) {
-        const near = dist2D(px, pz, entry.node.x, entry.node.z) < VISIBLE_RADIUS;
-        if (near && !entry.inScene) {
+        const d = dist2D(px, pz, entry.node.x, entry.node.z);
+        // Enter at VISIBLE_RADIUS, but only leave past KEEP_RADIUS -- the gap
+        // is the hysteresis band that stops boundary flicker (see KEEP_RADIUS).
+        const shouldShow = entry.inScene ? d < KEEP_RADIUS : d < VISIBLE_RADIUS;
+        if (shouldShow && !entry.inScene) {
           if (!entry.mesh) {
             if (buildBudget <= 0) continue;
             entry.mesh = this.buildMesh(entry.node);
@@ -253,7 +263,7 @@ export class NodeManager {
           entry.mesh.visible = !entry.depleted;
           this.scene.add(entry.mesh);
           entry.inScene = true;
-        } else if (!near && entry.inScene && entry.mesh) {
+        } else if (!shouldShow && entry.inScene && entry.mesh) {
           this.scene.remove(entry.mesh);
           entry.inScene = false;
         }

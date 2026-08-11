@@ -249,17 +249,19 @@ export type AnimState =
 
 export interface PlayerSnap {
   id: string; // character id
-  name: string;
-  classId: string;
-  /** Appearance -- broadcast to every client (not just the owner) so remote
-   *  players render with the chosen gender/hair/colors instead of a class
-   *  default; see CharacterAppearance in content/appearance.ts. */
-  gender: string;
-  hairStyle: string;
-  facialHair: string;
-  hairColor: number;
-  eyeColor: number;
-  outfitHue: number;
+  /** Name/appearance -- broadcast once, the first snapshot in which a given
+   *  viewer sees this player, and omitted from every snapshot after (none
+   *  of these ever change post-creation). Absent only means "unchanged
+   *  since I last told you", never "cleared" -- see CharacterAppearance in
+   *  content/appearance.ts for the source fields. */
+  name?: string;
+  classId?: string;
+  gender?: string;
+  hairStyle?: string;
+  facialHair?: string;
+  hairColor?: number;
+  eyeColor?: number;
+  outfitHue?: number;
   x: number;
   y: number;
   z: number;
@@ -269,19 +271,23 @@ export interface PlayerSnap {
   anim: AnimState;
   pvp: boolean;
   mount: "horse" | "raft" | null;
-  weaponId: string | null;
+  /** Gear -- omitted when unchanged since the last snapshot sent to this
+   *  particular viewer (equip/unequip is the only thing that moves it).
+   *  Absent means "unchanged", not "unequipped" -- an actually-empty slot
+   *  is still sent as an explicit `null`, same as always. */
+  weaponId?: string | null;
   /** Whatever's in the player's currently-selected hotbar slot, if it's a
    *  real item (not a slotted spell marker) -- takes over the held-in-hand
    *  model on the client when it has its own weaponProp/weaponModel (tools,
    *  potions), same as the local player's own hotbar selection does. */
-  heldItemId: string | null;
-  headId: string | null;
-  chestId: string | null;
-  armsId: string | null;
-  legsId: string | null;
-  feetId: string | null;
-  shouldersId: string | null;
-  neckId: string | null;
+  heldItemId?: string | null;
+  headId?: string | null;
+  chestId?: string | null;
+  armsId?: string | null;
+  legsId?: string | null;
+  feetId?: string | null;
+  shouldersId?: string | null;
+  neckId?: string | null;
   /** Aura ids for currently-ticking damage-over-time effects only (not
    *  buffs/HoTs/silence) -- drives the floating debuff icon over their head. */
   debuffs: string[];
@@ -378,7 +384,7 @@ export interface QuestOfferInfo {
   description: string;
   tier: number;
   minLevel: number;
-  objectiveKind: "kill" | "gather";
+  objectiveKind: "kill" | "gather" | "escort";
   objectiveTarget: string;
   objectiveCount: number;
   rewardXp: number;
@@ -532,7 +538,8 @@ export type ServerMsg =
         | "castStart"
         | "spellHit"
         | "learnSpell"
-        | "error";
+        | "error"
+        | "info"; // generic toast (message), no error styling implied
       sourceId?: string;
       targetId?: string;
       itemId?: string;
@@ -557,6 +564,8 @@ export type ServerMsg =
     }
   | { t: "pvp"; enabled: boolean }
   | { t: "roster"; players: RosterEntry[] }
+  | { t: "friends"; friends: FriendEntry[] }
+  | { t: "vendorStock"; npcId: string; vendorName: string; title: string; items: { itemId: string; price: number }[] }
   | { t: "questOffer"; npcId: string; npcName: string; offers: QuestOfferInfo[] }
   | { t: "questLog"; quests: QuestLogEntry[] }
   | { t: "achievements"; achievements: AchievementSnap[] }

@@ -233,7 +233,7 @@ export function mobIcon(mobType: string): string {
 }
 
 export function spellIcon(spellId: string): string {
-  return SPELL_IMAGES[spellId] ?? SVG_SPELL_GRAPHICS[spellId] ?? SPELL_IMAGES.firebolt;
+  return SPELL_IMAGES[spellId] ?? SVG_SPELL_GRAPHICS[spellId] ?? SPELL_IMAGES.firebolt ?? "❔";
 }
 
 export function rewardChestIcon(): string {

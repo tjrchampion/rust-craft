@@ -11,10 +11,12 @@
 import type { RegionBiome, RegionBlueprint } from "@rustcraft/shared";
 import { BIOME_FILL } from "./worldMapModel";
 
-export type ThumbnailSource = Pick<
-  RegionBlueprint,
-  "gridSize" | "pitch" | "heights" | "waterHeights" | "biome" | "colorGrading" | "villages" | "roads" | "customTextures" | "assets" | "houses"
->;
+// gridSize/pitch/biome are always supplied (even by the lightweight-catalog-
+// entry fallback callers use when the full blueprint hasn't loaded yet);
+// every other field is read defensively (`?? []`/`||`/`?.` throughout this
+// file) so that fallback can omit them.
+export type ThumbnailSource = Pick<RegionBlueprint, "gridSize" | "pitch" | "biome"> &
+  Partial<Pick<RegionBlueprint, "heights" | "waterHeights" | "villages" | "roads" | "customTextures" | "assets" | "houses" | "colorGrading">>;
 
 /** Longest thumbnail edge in pixels; larger heightmaps are downsampled. */
 const MAX_EDGE = 192;

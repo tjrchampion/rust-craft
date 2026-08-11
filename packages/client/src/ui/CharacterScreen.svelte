@@ -9,7 +9,6 @@
   import { wikiMarkdown } from "./wikiContent";
   import { sound } from "../game/sound";
   import { music } from "../game/music";
-  import { ClassPreviewScene } from "../render/ClassPreviewScene";
 
   import CharacterThumbnail from "./CharacterThumbnail.svelte";
 
@@ -74,9 +73,6 @@
   const PAPERDOLL_LEFT: GearSlot[] = ["head", "neck", "chest", "arms", "legs"];
   const PAPERDOLL_RIGHT: GearSlot[] = ["shoulders", "weapon", "feet"];
   const recipes = Object.values(RECIPES);
-
-  let paperdollCanvas = $state<HTMLCanvasElement | null>(null);
-  let paperdollScene: ClassPreviewScene | null = null;
 
   let invCursor = $state(0);
   let equipCursor = $state(0);
@@ -207,9 +203,9 @@
     if (!outDef) return "reagents";
     const t = outDef.type;
     if (t === "weapon") return "weapons";
-    if (t === "armor" || t === "head" || t === "chest" || t === "legs" || t === "feet" || t === "shoulders") return "armor";
-    if (t === "potion" || t === "consumable" || t === "food") return "consumables";
-    if (t === "tool" || t === "bag" || t === "mount") return "tools";
+    if (t === "gear") return "armor";
+    if (t === "consumable") return "consumables";
+    if (t === "tool") return "tools";
     return "reagents";
   }
 
@@ -346,36 +342,6 @@
     return equip;
   });
   const learnedSpells = $derived(game.learnedSpells);
-
-  $effect(() => {
-    const canvas = paperdollCanvas;
-    const tab = game.activeTab;
-    if (!canvas || tab !== "inventory") {
-      paperdollScene?.dispose();
-      paperdollScene = null;
-      return;
-    }
-    if (!paperdollScene) {
-      paperdollScene = new ClassPreviewScene(canvas, {
-        pedestal: false,
-        motes: false,
-        spotlight: false,
-      });
-    }
-    const classId = (game.classId || "warrior") as ClassId;
-    paperdollScene.setClass(classId, game.gender, game.appearance, paperdollEquip);
-    paperdollScene.resize();
-  });
-
-  onMount(() => {
-    const onResize = () => paperdollScene?.resize();
-    window.addEventListener("resize", onResize);
-    return () => {
-      window.removeEventListener("resize", onResize);
-      paperdollScene?.dispose();
-      paperdollScene = null;
-    };
-  });
 
   let spellElements = $state<(HTMLElement | null)[]>([]);
   let hotbarElements = $state<(HTMLElement | null)[]>([]);

@@ -323,6 +323,9 @@
       (active) => {
         flyNav = active;
       },
+      (message) => {
+        status = message;
+      },
     );
     scene.setContextMenuHandler((menu) => {
       contextMenu = menu;
@@ -925,12 +928,10 @@
 
   function realignBounds(): void {
     scene?.realignSelectedBounds();
-    selection = scene?.getSelection() ?? [];
   }
 
   function toggleGizmo(): void {
     scene?.toggleGizmoSpace();
-    selection = scene?.getSelection() ?? [];
   }
 
   function pickFogTool(color: string, shape: "sphere" | "box" = "sphere"): void {
@@ -3065,10 +3066,10 @@
             </select>
           </label>
         {:else if sel.markerKind === "npc"}
-          <label>NPC Name <input type="text" value={sel.npcData?.name ?? sel.name} onchange={(e) => applyPatch({ name: (e.target as HTMLInputElement).value, npcData: { ...sel.npcData, name: (e.target as HTMLInputElement).value } })} /></label>
-          <label>Title <input type="text" value={sel.npcData?.title ?? "<Questgiver>"} onchange={(e) => applyPatch({ npcData: { ...sel.npcData, title: (e.target as HTMLInputElement).value } })} /></label>
+          <label>NPC Name <input type="text" value={sel.npcData?.name ?? sel.name} onchange={(e) => applyPatch({ name: (e.target as HTMLInputElement).value, npcData: { ...sel.npcData!, name: (e.target as HTMLInputElement).value } })} /></label>
+          <label>Title <input type="text" value={sel.npcData?.title ?? "<Questgiver>"} onchange={(e) => applyPatch({ npcData: { ...sel.npcData!, title: (e.target as HTMLInputElement).value } })} /></label>
           <label>Vendor Type
-            <select value={sel.npcData?.vendorId ?? ""} onchange={(e) => applyPatch({ npcData: { ...sel.npcData, vendorId: (e.target as HTMLSelectElement).value || undefined } })}>
+            <select value={sel.npcData?.vendorId ?? ""} onchange={(e) => applyPatch({ npcData: { ...sel.npcData!, vendorId: (e.target as HTMLSelectElement).value || undefined } })}>
               <option value="">— None (Quest Giver) —</option>
               {#each Object.values(VENDORS) as v}
                 <option value={v.id}>{v.name} — {v.title}</option>
@@ -3076,7 +3077,7 @@
             </select>
           </label>
           <label>Model
-            <select value={sel.npcData?.model ?? "Knight"} onchange={(e) => applyPatch({ npcData: { ...sel.npcData, model: (e.target as HTMLSelectElement).value } })}>
+            <select value={sel.npcData?.model ?? "Knight"} onchange={(e) => applyPatch({ npcData: { ...sel.npcData!, model: (e.target as HTMLSelectElement).value } })}>
               <option value="Knight">Knight</option>
               <option value="Mage">Mage</option>
               <option value="Barbarian">Barbarian</option>
@@ -3090,7 +3091,7 @@
             </select>
           </label>
           <label>Dialogue
-            <textarea rows="2" value={sel.npcData?.dialogue ?? ""} onchange={(e) => applyPatch({ npcData: { ...sel.npcData, dialogue: (e.target as HTMLTextAreaElement).value } })}></textarea>
+            <textarea rows="2" value={sel.npcData?.dialogue ?? ""} onchange={(e) => applyPatch({ npcData: { ...sel.npcData!, dialogue: (e.target as HTMLTextAreaElement).value } })}></textarea>
           </label>
 
           {#if sel.npcData?.vendorId}
@@ -3103,7 +3104,7 @@
             </div>
 
             <label class="procedural-toggle">
-              <input type="checkbox" checked={sel.npcData?.generateProceduralQuests ?? true} onchange={(e) => applyPatch({ npcData: { ...sel.npcData, generateProceduralQuests: (e.target as HTMLInputElement).checked } })} />
+              <input type="checkbox" checked={sel.npcData?.generateProceduralQuests ?? true} onchange={(e) => applyPatch({ npcData: { ...sel.npcData!, generateProceduralQuests: (e.target as HTMLInputElement).checked } })} />
               <span>Generate Procedural Quests</span>
             </label>
 

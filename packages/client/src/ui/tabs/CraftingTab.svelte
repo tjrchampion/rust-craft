@@ -37,9 +37,9 @@
     if (!outDef) return "reagents";
     const t = outDef.type;
     if (t === "weapon") return "weapons";
-    if (t === "armor" || t === "head" || t === "chest" || t === "legs" || t === "feet" || t === "shoulders") return "armor";
-    if (t === "potion" || t === "consumable" || t === "food") return "consumables";
-    if (t === "tool" || t === "bag" || t === "mount") return "tools";
+    if (t === "gear") return "armor";
+    if (t === "consumable") return "consumables";
+    if (t === "tool") return "tools";
     return "reagents";
   }
 

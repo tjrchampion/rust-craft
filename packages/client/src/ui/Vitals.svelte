@@ -1,6 +1,6 @@
 <script lang="ts">
   import { game } from "./gameState.svelte";
-  import { CLASSES, type ClassId } from "@rustcraft/shared";
+  import { CLASSES, EQUIP_SLOTS, type ClassId } from "@rustcraft/shared";
   import CharacterThumbnail from "./CharacterThumbnail.svelte";
 
   const self = $derived(game.self);
@@ -8,6 +8,18 @@
   const className = $derived(CLASSES[classId]?.name ?? "Adventurer");
   const hpPct = $derived(self ? Math.min(100, (self.hp / Math.max(1, self.maxHp)) * 100) : 0);
   const manaPct = $derived(self ? Math.min(100, (self.mana / Math.max(1, self.maxMana)) * 100) : 0);
+  // SelfState carries no appearance/equip fields -- those live on top-level
+  // `game` state (gender/appearance) and in the equip-container slice of
+  // game.inventory, same as the character-screen paperdoll.
+  const portraitEquip = $derived.by(() => {
+    const equip: Partial<Record<string, string>> = {};
+    for (const item of game.inventory) {
+      if (item.container !== "equip") continue;
+      const slot = EQUIP_SLOTS[item.slot];
+      if (slot) equip[slot] = item.itemId;
+    }
+    return equip;
+  });
 </script>
 
 {#if self}
@@ -16,10 +28,11 @@
       <div class="portrait-avatar">
         <CharacterThumbnail
           classId={classId}
-          gender={self.appearance?.gender ?? "male"}
-          appearance={self.appearance}
-          equip={self.equip}
+          gender={game.gender}
+          appearance={game.appearance}
+          equip={portraitEquip}
           mode="head"
+          bareUnequipped
         />
       </div>
       <span class="level">{self.level}</span>

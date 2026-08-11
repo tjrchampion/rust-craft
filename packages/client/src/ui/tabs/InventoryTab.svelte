@@ -3,13 +3,13 @@
   import { game, parseCoins } from "../gameState.svelte";
   import { itemIcon, spellIcon } from "../icons";
   import IconGlyph from "../IconGlyph.svelte";
-  import { ClassPreviewScene } from "../../render/ClassPreviewScene";
+  import CharacterThumbnail from "../CharacterThumbnail.svelte";
   import {
     itemDef,
     EQUIP_SLOTS,
-    type ClassId,
     type GearSlot,
     type ItemSnap,
+    type ClassId,
   } from "@rustcraft/shared";
 
   let {
@@ -61,9 +61,7 @@
     return item?.itemId.startsWith(SPELL_PREFIX) ? item.itemId.slice(SPELL_PREFIX.length) : null;
   }
 
-  // 3D character preview (paperdoll). Reflects the currently-equipped gear.
-  let paperdollCanvas = $state<HTMLCanvasElement | null>(null);
-  let paperdollScene: ClassPreviewScene | null = null;
+  // 2D character preview (paperdoll). Reflects the currently-equipped gear via shared offscreen renderer.
   const paperdollEquip = $derived.by(() => {
     const equip: Partial<Record<string, string>> = {};
     for (let i = 0; i < EQUIP_SLOTS.length; i++) {
@@ -71,27 +69,6 @@
       if (item) equip[EQUIP_SLOTS[i]!] = item.itemId;
     }
     return equip;
-  });
-
-  $effect(() => {
-    const canvas = paperdollCanvas;
-    if (!canvas) return;
-    if (!paperdollScene) {
-      paperdollScene = new ClassPreviewScene(canvas, { pedestal: false, motes: false, spotlight: false });
-    }
-    const classId = (game.classId || "warrior") as ClassId;
-    paperdollScene.setClass(classId, game.gender, game.appearance, paperdollEquip);
-    paperdollScene.resize();
-  });
-
-  onMount(() => {
-    const onResize = () => paperdollScene?.resize();
-    window.addEventListener("resize", onResize);
-    return () => {
-      window.removeEventListener("resize", onResize);
-      paperdollScene?.dispose();
-      paperdollScene = null;
-    };
   });
 </script>
 
@@ -126,7 +103,16 @@
       {/each}
     </div>
     <div class="paperdoll-stage">
-      <canvas bind:this={paperdollCanvas} class="paperdoll-canvas"></canvas>
+      <div class="paperdoll-preview">
+        <CharacterThumbnail
+          classId={(game.classId || "warrior") as ClassId}
+          gender={game.gender}
+          appearance={game.appearance}
+          equip={paperdollEquip}
+          mode="full"
+          bareUnequipped
+        />
+      </div>
       <div class="char-info">
         <div class="char-level-class">Level {game.self?.level ?? 1} · {classInfo?.name ?? "Adventurer"}</div>
         <div class="char-vitals">
@@ -305,14 +291,16 @@
     color: #8a93a3;
     line-height: 1.1;
   }
-  .paperdoll-canvas {
+  .paperdoll-preview {
     width: 100%;
     height: min(260px, 34vh);
     border-radius: 6px;
     background: rgba(8, 10, 14, 0.45);
     border: 1px solid rgba(255, 255, 255, 0.08);
-    cursor: grab;
-    touch-action: none;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
   }
   .paperdoll-stage {
     display: flex;

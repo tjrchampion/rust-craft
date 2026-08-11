@@ -29,7 +29,7 @@ import { createFogVolumeMesh, fogVolumeInfluence } from "./fogVolumes";
 import { createRegionCloudRuntime, type RegionCloudRuntime } from "./regionClouds";
 import { buildRegionHorizon } from "./regionHorizon";
 import { StreamBudget, REGION_STREAM_BUDGET_MS } from "./streamBudget";
-import { nextFrame } from "./idleScheduler";
+import { nextFrame, runCooperatively } from "./idleScheduler";
 import { game } from "../ui/gameState.svelte";
 import { getGame } from "../game/instance";
 
@@ -50,6 +50,9 @@ interface RegionNpcInstance {
   maxHp: number;
   lastHitTime: number;
   plateSprite?: THREE.Sprite;
+  loaded?: boolean;
+  loading?: boolean;
+  placeholder?: THREE.Mesh;
   escortState?: {
     questId: string;
     waypoints: { x: number; z: number }[];
@@ -97,15 +100,23 @@ export async function preloadRegionAssets(
   if (urls.length === 0) { onProgress(0, 0); return; }
   let loaded = 0;
   const timeoutMs = 2500;
-  await Promise.all(
-    urls.map((url) =>
-      Promise.race([
+  // Cooperative + capped concurrency: `syncAround` calls this live while the
+  // player walks near a new region, not just behind a loading screen. Firing
+  // every model's load() at once let dozens of first-time GLTF parses drain
+  // back-to-back as one microtask cascade with no frame in between -- which
+  // is what stalled camera/mouse-look mid-walk. Yielding between small waves
+  // gives the render loop + input a slot every few parses instead of one.
+  await runCooperatively(
+    urls,
+    async (url) => {
+      await Promise.race([
         load(url),
         new Promise((r) => setTimeout(r, timeoutMs)),
-      ])
-        .catch(() => null) // one broken model shouldn't block the whole region
-        .finally(() => { loaded++; onProgress(loaded, urls.length); }),
-    ),
+      ]).catch(() => null); // one broken model shouldn't block the whole region
+      loaded++;
+      onProgress(loaded, urls.length);
+    },
+    { concurrency: 3 },
   );
 }
 
@@ -124,7 +135,8 @@ export async function preloadRegionAssets(
  */
 export class RegionInteriorRenderer {
   private group: THREE.Object3D;
-  readonly blueprint: RegionBlueprint;
+  /** Not readonly: replaceBlueprint() hot-swaps this after an editor save. */
+  blueprint: RegionBlueprint;
   private adtTerrain: RegionAdtTerrainStreamer;
   private adtWater: RegionAdtWaterStreamer | null = null;
   private npcModels: AnimatedModel[] = [];
@@ -236,25 +248,13 @@ export class RegionInteriorRenderer {
       npcGroup.rotation.y = npc.yaw;
 
       const placeholder = new THREE.Mesh(
-        new THREE.SphereGeometry(0.7, 12, 10),
+        new THREE.SphereGeometry(0.7, 8, 6),
         new THREE.MeshBasicMaterial({ color: 0x33b5e5 }),
       );
       placeholder.position.set(0, 0.5, 0);
       npcGroup.add(placeholder);
 
-      const modelUrl = resolveNpcModelUrl(npc.model);
-
       const animModel = new AnimatedModel(PLAYER_ANIMS);
-      animModel
-        .loadFrom(modelUrl, 1.75)
-        .then(() => {
-          placeholder.visible = false;
-          animModel.play("idle");
-          npcGroup.add(animModel.group);
-        })
-        .catch((err) => {
-          console.warn(`Failed to load region NPC model ${modelUrl}:`, err);
-        });
       const inst: RegionNpcInstance = {
         group: npcGroup,
         animModel,
@@ -266,6 +266,9 @@ export class RegionInteriorRenderer {
         hp: 100,
         maxHp: 100,
         lastHitTime: 0,
+        placeholder,
+        loaded: false,
+        loading: false,
       };
 
       const labelText = npc.title ? `${npc.name}\n${npc.title}` : npc.name;
@@ -274,9 +277,6 @@ export class RegionInteriorRenderer {
       npcGroup.add(plate);
       inst.plateSprite = plate;
 
-      this.npcModels.push(animModel);
-      this.npcInstances.push(inst);
-
       if ((npc.quests?.length ?? 0) > 0 || npc.generateProceduralQuests !== false) {
         const badge = buildNameplate("!", "#ffd700");
         badge.position.set(0, 3.4, 0);
@@ -284,6 +284,8 @@ export class RegionInteriorRenderer {
         npcGroup.add(badge);
       }
 
+      this.npcModels.push(animModel);
+      this.npcInstances.push(inst);
       this.group.add(npcGroup);
     }
 
@@ -806,6 +808,32 @@ export class RegionInteriorRenderer {
     // distance cull doesn't change when escorts actually begin.
     const npcAnimReach2 = 70 * 70;
     for (const inst of this.npcInstances) {
+      if (!inst.loaded) {
+        if (!inst.loading) {
+          const dx = inst.group.position.x - viewerX;
+          const dz = inst.group.position.z - viewerZ;
+          if (dx * dx + dz * dz <= npcAnimReach2) {
+            inst.loading = true;
+            const modelUrl = resolveNpcModelUrl(inst.data.model);
+            void inst.animModel
+              .loadFrom(modelUrl, 1.75)
+              .then(() => {
+                inst.loaded = true;
+                if (inst.placeholder) inst.placeholder.visible = false;
+                inst.animModel.play("idle");
+                inst.group.add(inst.animModel.group);
+              })
+              .catch((err) => {
+                console.warn(`Failed to load region NPC model ${modelUrl}:`, err);
+              })
+              .finally(() => {
+                inst.loading = false;
+              });
+          }
+        }
+        continue;
+      }
+
       const isEscorting = !!inst.escortState && !inst.escortState.completed;
       if (!isEscorting) {
         const dx = inst.group.position.x - viewerX;
@@ -867,24 +895,24 @@ export class RegionInteriorRenderer {
           game.questMarkers = game.questMarkers.filter((m) => m.id !== markerId);
           game.questLog = game.questLog.filter((q) => q.id !== qId);
           getGame()?.sendQuestAction("decline", qId);
-          getGame()?.toasts.add("Quest Failed: You Died", "error");
+          game.toast("Quest Failed: You Died");
           continue;
         }
 
         // 2. Check Mob Attacks on Escort NPC
         const now = performance.now();
         if (now - inst.lastHitTime > 1500) {
-          const mobList = game.mobSnaps ?? [];
-          const nearMob = mobList.find((m) => {
-            if (m.hp <= 0) return false;
-            return Math.hypot(m.x - inst.group.position.x, m.z - inst.group.position.z) <= 6.0;
-          });
+          const nearMob = getGame()?.entities.nearestHostileMob(
+            inst.group.position.x,
+            inst.group.position.z,
+            6.0,
+          );
           if (nearMob) {
             inst.lastHitTime = now;
             const dmg = Math.floor(12 + Math.random() * 10);
             inst.hp = Math.max(0, inst.hp - dmg);
             this.updateNpcNameplate(inst);
-            getGame()?.toasts.add(`${inst.data.name} took ${dmg} damage! (${inst.hp}/${inst.maxHp} HP)`, "error");
+            game.toast(`${inst.data.name} took ${dmg} damage! (${inst.hp}/${inst.maxHp} HP)`);
           }
         }
 
@@ -900,7 +928,7 @@ export class RegionInteriorRenderer {
           game.questMarkers = game.questMarkers.filter((m) => m.id !== markerId);
           game.questLog = game.questLog.filter((q) => q.id !== qId);
           getGame()?.sendQuestAction("decline", qId);
-          getGame()?.toasts.add("Quest Failed: Escort NPC Perished", "error");
+          game.toast("Quest Failed: Escort NPC Perished");
           continue;
         }
 
@@ -930,7 +958,7 @@ export class RegionInteriorRenderer {
               state.completed = true;
               inst.animModel.play("idle");
               game.questMarkers = game.questMarkers.filter((m) => m.id !== markerId);
-              getGame()?.toasts.add("Escort Quest Complete!", "quest");
+              game.toast("Escort Quest Complete!");
               getGame()?.sendQuestAction("turnin", state.questId);
             }
           }

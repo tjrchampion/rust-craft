@@ -21,6 +21,38 @@ function loadProp(type: string): Promise<GLTF> {
   return loadGltf(`/assets/models/buildings/${type}.gltf`);
 }
 
+/** Target real-world heights (meters) each building/prop model is rescaled
+ *  to, keyed by the `type` strings generateVillages()/generatePois() emit
+ *  (see worldgen.ts's VILLAGE_BUILDING_TYPES and the ruins/camp POI cases). */
+const BUILDING_HEIGHTS: Record<string, number> = {
+  church: 14,
+  tower_A: 17,
+  home_A: 7.0,
+  home_B: 7.5,
+  tavern: 9.5,
+  blacksmith: 7.5,
+  windmill: 18.0,
+  lumbermill: 8.5,
+  market: 5.5,
+  well: 4.0,
+  bridge_A: 4.5,
+  bridge_B: 4.5,
+  destroyed: 6.0,
+  grain: 5.5,
+};
+
+const PROP_HEIGHTS: Record<string, number> = {
+  barrel: 0.9,
+  crate_A_big: 1.1,
+  crate_A_small: 0.6,
+  crate_B_small: 0.6,
+  bucket_water: 0.5,
+  flag_red: 2.5,
+  flag_blue: 2.5,
+  fence_wood_straight: 1.4,
+  fence_wood_straight_gate: 1.4,
+};
+
 /** Queued clone+placement jobs -- see flushSettlementQueue. Each job is the
  *  synchronous, CPU-bound tail end of a placeBuilding/placeProp/instanceProp
  *  call (deep clone, bbox measurement, scene.add), deferred so a freshly-
