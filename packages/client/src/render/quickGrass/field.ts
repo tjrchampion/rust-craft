@@ -526,12 +526,12 @@ export function createQuickGrassField(
   let cells: Cell[] = [];
   /** Last-frame high-LOD membership — hysteresis stops near/far geo flipping
    *  every few frames (reads as a 1–3 s grass "flicker" with camera bob). */
-  const lodHigh = new Map<string, boolean>();
+  const lodHigh = new Map<number, boolean>();
   /** Sticky visible set so MAX_PATCHES thrashing doesn't pop the same cells. */
-  const stickyVisible = new Set<string>();
+  const stickyVisible = new Set<number>();
 
-  function cellKey(cx: number, cz: number): string {
-    return `${cx}|${cz}`;
+  function cellKey(cx: number, cz: number): number {
+    return ((Math.round(cx) + 32768) << 16) | ((Math.round(cz) + 32768) & 0xffff);
   }
 
   /** Streams patches around the camera within drawDistance. Distance-only
@@ -600,7 +600,7 @@ export function createQuickGrassField(
     }
 
     stickyVisible.clear();
-    const seenLod = new Set<string>();
+    const seenLod = new Set<number>();
 
     let patches = 0;
     let blades = 0;

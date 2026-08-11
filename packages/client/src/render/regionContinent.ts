@@ -17,15 +17,16 @@ import {
   type RegionAssetCollider,
 } from "@rustcraft/shared";
 import {
-  buildRegionCollisionBVH,
   resolveCapsule,
   sampleGroundBelow,
   disposeRegionCollision,
   type RegionCollision,
   type PlacedCollider,
 } from "@rustcraft/shared/collision";
-import { preloadCollision, getCollisionMesh, collisionModelKey } from "./collisionData";
+import { preloadCollisionIndex, hasCollisionEntry, collisionModelKey } from "./collisionData";
 import { RegionInteriorRenderer, preloadRegionAssets } from "./regionInterior";
+import { getRegionCollisionWorker } from "./regionCollisionWorker";
+import { StreamBudget, REGION_STREAM_BUDGET_MS, REGION_STREAM_MAX_BUILDS } from "./streamBudget";
 
 const CAPSULE_HEIGHT = 1.7;
 
@@ -51,6 +52,7 @@ export class RegionContinent {
    *  async on mount (needs the offline meshes fetched); until ready the layer's
    *  solids fall back to the analytic colliders in collidersWorld(). */
   private bvhCache = new Map<string, RegionCollision | null>();
+  public revision = 0;
   private graphicsOpts = {
     streamRing: ADT_RING,
     grassDrawDistance: 90,
@@ -93,6 +95,7 @@ export class RegionContinent {
     // are read from renderer.blueprint, not only layer.blueprint.
     layer.renderer.replaceBlueprint(bp);
     this.colliderCache = null;
+    this.revision++;
     // Re-bake this region's collision BVH so an editor save (moved/scaled
     // assets) updates collision live.
     void this.buildLayerCollision(bp);
@@ -156,7 +159,7 @@ export class RegionContinent {
       const o = regionWorldOrigin(layer.blueprint);
       const bvhReady = this.bvhCache.get(layer.id) != null;
       const analyticAssets = regionAllAssets(layer.blueprint).filter(
-        (a) => !(bvhReady && a.solid && getCollisionMesh(collisionModelKey(a.category, a.model)) != null),
+        (a) => !(bvhReady && a.solid && hasCollisionEntry(collisionModelKey(a.category, a.model))),
       );
       const local = [
         ...regionAssetColliders(analyticAssets),
@@ -219,7 +222,10 @@ export class RegionContinent {
   }
 
   /** Build (or rebuild) a mounted region's world-baked collision BVH from its
-   *  solid assets. Async: fetches the offline meshes first. */
+   *  solid assets. Async: fetches the offline meshes, then bakes + builds the
+   *  MeshBVH in a Web Worker (the build is heavy + synchronous, so on-thread it
+   *  froze the frame for ~0.5s every mount). Analytic colliders cover movement
+   *  until the BVH resolves. */
   private async buildLayerCollision(bp: RegionBlueprint): Promise<void> {
     const placed: PlacedCollider[] = [];
     const keys = new Set<string>();
@@ -238,10 +244,21 @@ export class RegionContinent {
         scaleZ: a.scaleZ ?? a.scale ?? 1,
       });
     }
-    await preloadCollision(keys);
+    // Load only the small collision INDEX here (not the per-model .bin meshes):
+    // collidersWorld() needs to know which solids are BVH-baked to avoid double
+    // collision, and hasCollisionEntry() answers that from the index. The worker
+    // fetches the actual meshes, so the .bin files are downloaded exactly once
+    // (a prior double-fetch here flooded the dev server's connection pool).
+    await preloadCollisionIndex();
     if (!this.layers.has(bp.id)) return; // unmounted while fetching
     const origin = regionWorldOrigin(bp);
-    const next = buildRegionCollisionBVH(placed, getCollisionMesh, { x: origin.x, z: origin.z });
+    const next = await getRegionCollisionWorker().build([...keys], placed, { x: origin.x, z: origin.z });
+    if (!this.layers.has(bp.id)) {
+      // Unmounted while the worker built -- drop the result rather than caching
+      // collision for a region that's no longer resident.
+      if (next) disposeRegionCollision(next);
+      return;
+    }
     const prev = this.bvhCache.get(bp.id);
     if (prev) disposeRegionCollision(prev);
     this.bvhCache.set(bp.id, next);
@@ -258,7 +275,7 @@ export class RegionContinent {
     wz: number,
     catalog: RegionBlueprint[],
     opts?: { urgentId?: string },
-  ): Promise<void> {
+  ): Promise<boolean> {
     const near = regionsNearWorld(catalog, wx, wz, REGION_STREAM_RADIUS_METERS);
     const want = new Set(near.map((b) => b.id));
     if (opts?.urgentId) want.add(opts.urgentId);
@@ -267,6 +284,10 @@ export class RegionContinent {
       if (!want.has(id)) this.unload(id);
     }
 
+    // Ids resident before this pass -- so the caller can tell whether anything
+    // NEW actually mounted (a full-scene GPU pre-warm is only worth its ~100ms
+    // cost then, not on every steady-state sync that mounts nothing).
+    const before = new Set(this.layers.keys());
     const mounts: Promise<void>[] = [];
     for (const bp of near) {
       mounts.push(this.ensureMounted(bp));
@@ -276,6 +297,7 @@ export class RegionContinent {
       if (urgent) mounts.push(this.ensureMounted(urgent));
     }
     await Promise.all(mounts);
+    const mountedNew = [...want].some((id) => this.layers.has(id) && !before.has(id));
 
     // Warm terrain/grass around the *viewer*, not each region's entry — neighbors
     // used to show seam foliage with empty ground underfoot.
@@ -294,6 +316,7 @@ export class RegionContinent {
         ]).catch(() => {});
       }
     }
+    return mountedNew;
   }
 
   private async ensureMounted(bp: RegionBlueprint): Promise<void> {
@@ -358,6 +381,7 @@ export class RegionContinent {
       this.scene.add(group);
       this.layers.set(blueprint.id, layer);
       this.colliderCache = null;
+      this.revision++;
       // Build true-geometry (BVH) collision for this region's solids (async).
       void this.buildLayerCollision(blueprint);
       await Promise.race([
@@ -377,9 +401,26 @@ export class RegionContinent {
     wz: number,
     camera?: THREE.Camera,
   ): void {
-    for (const layer of this.layers.values()) {
+    // ONE budget shared across every mounted region -- terrain/water streaming
+    // is capped per streaming tick regardless of how many neighbors are resident
+    // (near a seam that's 2-4). Previously each region minted its own budget, so
+    // the cost multiplied by region count -- a hidden per-frame tax that grew
+    // exactly when the most regions were mounted.
+    const budget = new StreamBudget(REGION_STREAM_BUDGET_MS, REGION_STREAM_MAX_BUILDS);
+    // Process the region under the player first so its terrain wins the shared
+    // slice; neighbors stream with whatever's left. The underfoot-sync safety in
+    // the ADT streamer still guarantees the tile beneath the player exists.
+    const underId = findRegionAtWorld(
+      [...this.layers.values()].map((l) => l.blueprint),
+      wx,
+      wz,
+    )?.id;
+    const ordered = [...this.layers.values()].sort((a, b) =>
+      a.id === underId ? -1 : b.id === underId ? 1 : 0,
+    );
+    for (const layer of ordered) {
       const local = worldToRegionLocal(layer.blueprint, wx, wz);
-      layer.renderer.update(dt, sun, local.x, local.z, camera);
+      layer.renderer.update(dt, sun, local.x, local.z, camera, budget);
     }
   }
 
@@ -393,6 +434,7 @@ export class RegionContinent {
     if (col) disposeRegionCollision(col);
     this.bvhCache.delete(id);
     this.colliderCache = null;
+    this.revision++;
   }
 
   destroy(): void {

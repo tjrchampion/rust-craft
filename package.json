@@ -6,6 +6,7 @@
   "scripts": {
     "collision:extract": "node scripts/extract-collision.mjs",
     "compress:assets": "node scripts/compress-assets.mjs",
+    "models:glb": "node scripts/convert-gltf-glb.mjs",
     "pack:assets": "node scripts/pack-assets.mjs",
     "predev": "node scripts/extract-collision.mjs --if-missing && node scripts/pack-assets.mjs --if-missing",
     "dev": "pnpm run --parallel --filter @rustcraft/server --filter @rustcraft/client dev",

@@ -5,6 +5,14 @@ import {
   sampleRegionHeight, regionSlopeAt,
   type RegionBlueprint, type RegionBiome, type RegionRoad,
 } from "@rustcraft/shared";
+import {
+  adtTileSpan,
+  computeAdtTileAttributes,
+  type AdtLiteBlueprint,
+  type AdtTileGeometryData,
+  type AdtTileSpan,
+} from "./adtTileGeometry";
+import type { AdtGeometryPool } from "./adtGeometryPool";
 
 const RESOLUTION = 200; // vertices per side (legacy monolithic meshes)
 const TERRAIN_TILING = 48; // texture repeats across the zone
@@ -550,6 +558,112 @@ export function buildRegionAdtTile(
   return mesh;
 }
 
+// ---- Worker-driven ADT tile pipeline ---------------------------------------
+//
+// The heavy per-vertex sampling now lives in adtTileGeometry.ts (worker-safe).
+// The main thread only builds the cheap PlaneGeometry skeleton (which owns the
+// correct x/z + index winding) and wraps the worker's returned typed arrays.
+
+/** Extract the minimal, worker-transferable slice of a region blueprint. */
+export function toAdtLiteBlueprint(
+  bp: Pick<RegionBlueprint, "gridSize" | "pitch" | "heights" | "biome" | "roads" | "colorGrading" | "customTextures">,
+): AdtLiteBlueprint {
+  return {
+    gridSize: bp.gridSize,
+    pitch: bp.pitch,
+    // Float32Array copy so it clones cheaply into workers.
+    heights: bp.heights instanceof Float32Array ? bp.heights : Float32Array.from(bp.heights as number[]),
+    biome: bp.biome,
+    roads: bp.roads ?? [],
+    groundTint: bp.colorGrading?.groundTint,
+    customTextures: bp.customTextures ? Float32Array.from(bp.customTextures) : undefined,
+  };
+}
+
+/** Build the flat PlaneGeometry skeleton for one ADT tile (positions x/z +
+ *  index only; y is 0). Cheap — no sampling. Returns null for empty tiles.
+ *  When a pool is supplied the skeleton is recycled instead of allocated. */
+export function buildAdtTileSkeleton(
+  bp: Pick<RegionBlueprint, "gridSize" | "pitch">,
+  ix: number,
+  iz: number,
+  pool?: AdtGeometryPool,
+): { geo: THREE.PlaneGeometry; span: AdtTileSpan } | null {
+  const span = adtTileSpan(bp.gridSize, bp.pitch, ix, iz);
+  if (!span) return null;
+  if (pool) return { geo: pool.acquire(span), span };
+  const geo = new THREE.PlaneGeometry(span.sizeX, span.sizeZ, span.segsX, span.segsZ);
+  geo.rotateX(-Math.PI / 2);
+  geo.translate(span.centerX, 0, span.centerZ);
+  return { geo, span };
+}
+
+/** Write a Float32 attribute into `geo`, reusing the existing BufferAttribute's
+ *  array in place when the geometry came from the pool (same vertex count).
+ *  Reusing the attribute keeps its GL buffer, so a pooled tile re-uploads via
+ *  bufferSubData instead of allocating a new buffer -- and, unlike a fresh
+ *  setAttribute(), it never orphans the previous attribute's GL buffer (which
+ *  the sync-replace path used to leak one-per-tile for `normal`). */
+function writeGeoAttribute(
+  geo: THREE.BufferGeometry,
+  name: string,
+  arr: Float32Array,
+  itemSize: number,
+): void {
+  const existing = geo.getAttribute(name) as THREE.BufferAttribute | undefined;
+  if (existing && (existing.array as Float32Array).length === arr.length) {
+    (existing.array as Float32Array).set(arr);
+    existing.needsUpdate = true;
+  } else {
+    geo.setAttribute(name, new THREE.BufferAttribute(arr, itemSize));
+  }
+}
+
+/** Wrap a worker's computed attributes into a finished terrain mesh. Cheap:
+ *  writes Y into the skeleton and fills the transferred typed arrays. When
+ *  `geo` was recycled from the pool this reuses every attribute buffer in
+ *  place; a fresh geometry allocates the custom attributes on first use. */
+export function assembleAdtTileMesh(
+  geo: THREE.PlaneGeometry,
+  data: AdtTileGeometryData,
+  material: THREE.MeshLambertMaterial,
+): THREE.Mesh {
+  const posAttr = geo.attributes.position as THREE.BufferAttribute;
+  const posArr = posAttr.array as Float32Array;
+  const ys = data.ys;
+  for (let i = 0; i < ys.length; i++) posArr[i * 3 + 1] = ys[i]!;
+  posAttr.needsUpdate = true;
+  writeGeoAttribute(geo, "color", data.colors, 3);
+  writeGeoAttribute(geo, "weightsA", data.weightsA, 3);
+  writeGeoAttribute(geo, "weightsB", data.weightsB, 3);
+  writeGeoAttribute(geo, "terrainUv", data.terrainUv, 2);
+  writeGeoAttribute(geo, "normal", data.normals, 3);
+  geo.computeBoundingSphere();
+
+  const mesh = new THREE.Mesh(geo, material);
+  mesh.receiveShadow = true;
+  mesh.name = `region-adt:${adtKey(data.ix, data.iz)}`;
+  mesh.userData.adtIx = data.ix;
+  mesh.userData.adtIz = data.iz;
+  return mesh;
+}
+
+/** Synchronous main-thread build (fallback / underfoot-urgent) via the same
+ *  math the worker runs — one source of truth, no visual drift. */
+export function buildRegionAdtTileSync(
+  lite: AdtLiteBlueprint,
+  ix: number,
+  iz: number,
+  material: THREE.MeshLambertMaterial,
+  pool?: AdtGeometryPool,
+): THREE.Mesh | null {
+  const skel = buildAdtTileSkeleton(lite, ix, iz, pool);
+  if (!skel) return null;
+  const positions = (skel.geo.attributes.position!.array as Float32Array).slice();
+  const data = computeAdtTileAttributes(lite, skel.span, positions);
+  return assembleAdtTileMesh(skel.geo, data, material);
+}
+
 export interface WaterField {
   mesh: THREE.Mesh;
   update(dt: number): void;
@@ -805,6 +919,11 @@ export function createRegionWaterMaterial(): THREE.MeshLambertMaterial {
   return mat;
 }
 
+/** How many grid cells the water sheet extends under the surrounding bank so
+ *  its hard grid edge hides behind the opaque shore instead of showing a
+ *  sawtooth waterline. See waterSurfaceY. */
+const WATER_SKIRT_CELLS = 2;
+
 function waterSurfaceY(
   hArr: ArrayLike<number>,
   wArr: ArrayLike<number>,
@@ -827,25 +946,35 @@ function waterSurfaceY(
     return waterY;
   }
 
-  let hasWetNeighbor = false;
-  let neighborWaterY = h;
-  if (gx > 0 && (wArr[idx - 1] ?? 0) > 0.005) {
-    hasWetNeighbor = true;
-    neighborWaterY = (hArr[idx - 1] ?? 0) + (wArr[idx - 1] ?? 0);
+  // Dry vertex: extend the water sheet a few cells UNDER the surrounding
+  // terrain so its hard, grid-aligned boundary tucks behind the opaque shore /
+  // cliff (which then occludes it) rather than ending in a visible 6m-grid
+  // sawtooth right at the waterline. `Math.min(h, ...)` keeps the sheet below
+  // the terrain everywhere, so widening the skirt never makes water poke up
+  // onto land -- it just hides the seam. WATER_SKIRT_CELLS controls how far the
+  // sheet reaches under the bank (2 ≈ ~12 m at pitch 6, enough to bury the seam
+  // behind all but the shallowest banks).
+  const SKIRT = WATER_SKIRT_CELLS;
+  let nearestWaterY = 0;
+  let nearestDist = Infinity;
+  for (let dz = -SKIRT; dz <= SKIRT; dz++) {
+    for (let dx = -SKIRT; dx <= SKIRT; dx++) {
+      if (dx === 0 && dz === 0) continue;
+      const ngx = gx + dx;
+      const ngz = gz + dz;
+      if (ngx < 0 || ngx >= gridSize || ngz < 0 || ngz >= gridSize) continue;
+      const nIdx = ngz * gridSize + ngx;
+      if ((wArr[nIdx] ?? 0) <= 0.005) continue;
+      // Nearest wet cell wins (Chebyshev) so the surface tracks the closest
+      // shoreline height; ties keep the first found.
+      const d = Math.max(Math.abs(dx), Math.abs(dz));
+      if (d < nearestDist) {
+        nearestDist = d;
+        nearestWaterY = (hArr[nIdx] ?? 0) + (wArr[nIdx] ?? 0);
+      }
+    }
   }
-  if (gx < gridSize - 1 && (wArr[idx + 1] ?? 0) > 0.005) {
-    hasWetNeighbor = true;
-    neighborWaterY = (hArr[idx + 1] ?? 0) + (wArr[idx + 1] ?? 0);
-  }
-  if (gz > 0 && (wArr[idx - gridSize] ?? 0) > 0.005) {
-    hasWetNeighbor = true;
-    neighborWaterY = (hArr[idx - gridSize] ?? 0) + (wArr[idx - gridSize] ?? 0);
-  }
-  if (gz < gridSize - 1 && (wArr[idx + gridSize] ?? 0) > 0.005) {
-    hasWetNeighbor = true;
-    neighborWaterY = (hArr[idx + gridSize] ?? 0) + (wArr[idx + gridSize] ?? 0);
-  }
-  if (hasWetNeighbor) return Math.min(h, neighborWaterY);
+  if (nearestDist !== Infinity) return Math.min(h, nearestWaterY);
   return h - 2;
 }
 

@@ -29,6 +29,7 @@ import { createFogVolumeMesh, fogVolumeInfluence } from "./fogVolumes";
 import { createRegionCloudRuntime, type RegionCloudRuntime } from "./regionClouds";
 import { buildRegionHorizon } from "./regionHorizon";
 import { StreamBudget, REGION_STREAM_BUDGET_MS } from "./streamBudget";
+import { nextFrame } from "./idleScheduler";
 import { game } from "../ui/gameState.svelte";
 import { getGame } from "../game/instance";
 
@@ -131,6 +132,9 @@ export class RegionInteriorRenderer {
   /** Every InstancedMesh built by instanceModel (foliage + props/buildings),
    *  tracked flat for destroy() cleanup. */
   private instancedGroups: THREE.InstancedMesh[] = [];
+  /** Set in destroy() so a time-sliced instance build bails instead of adding
+   *  meshes into a torn-down region group. */
+  private destroyed = false;
   /** Instanced asset chunks (foliage/props/buildings) for distance culling. */
   private assetChunks: { x: number; z: number; meshes: THREE.InstancedMesh[] }[] = [];
   /** Painted grass via Quick Grass (see quickGrass/). Null if none. */
@@ -437,6 +441,18 @@ export class RegionInteriorRenderer {
     this.adtWater?.warm(x, z);
   }
 
+  /** True when the terrain ring visible from local (x,z) is fully streamed --
+   *  used with `ready` (foliage/props) to hold the loading screen until nothing
+   *  will pop in around the player. Pump update() to drive it toward true. */
+  isTerrainRingLoaded(x: number, z: number): boolean {
+    return this.adtTerrain.ringComplete(x, z);
+  }
+
+  /** Fraction (0..1) of the visible terrain ring that's meshed. */
+  terrainRingProgress(x: number, z: number): number {
+    return this.adtTerrain.ringProgress(x, z);
+  }
+
   get regionName(): string {
     return this.blueprint.name;
   }
@@ -521,7 +537,7 @@ export class RegionInteriorRenderer {
         }
         // Rocks are foliage for placement, but must stay rigid — tree wind
         // sway looks wrong on stone and fought the solid collision silhouette.
-        this.instanceModel(gltf, indices, {
+        await this.instanceModel(gltf, indices, {
           castShadow: true,
           receiveShadow: false,
           applyWind: !isRockLikeAssetModel(model),
@@ -557,7 +573,7 @@ export class RegionInteriorRenderer {
         // Mirrors the old per-object placement rule: floor-type props never
         // cast (they'd shadow themselves against the ground right beneath them).
         const castShadow = category !== "prop" || !model.startsWith("floor");
-        this.instanceModel(gltf, indices, { castShadow, receiveShadow: true, distanceCull: true });
+        await this.instanceModel(gltf, indices, { castShadow, receiveShadow: true, distanceCull: true });
       }),
     );
   }
@@ -575,11 +591,16 @@ export class RegionInteriorRenderer {
    *  its authored position/rotation/scale (same localY as the region editor —
    *  no heightmap re-snap). Pass `distanceCull` so far chunks can be hidden
    *  in update() without load/unload thrashing. */
-  private instanceModel(
+  /** Wall-clock slice for instance-matrix building before yielding a frame, so
+   *  a species with thousands of placements streams in instead of freezing the
+   *  main thread in one synchronous burst. */
+  private static readonly INSTANCE_BUILD_SLICE_MS = 4;
+
+  private async instanceModel(
     gltf: GLTF,
     indices: number[],
     opts: { castShadow: boolean; receiveShadow: boolean; applyWind?: boolean; distanceCull?: boolean },
-  ): void {
+  ): Promise<void> {
     const template = SkeletonUtils.clone(gltf.scene);
     template.updateMatrixWorld(true);
     const meshTemplates: THREE.Mesh[] = [];
@@ -625,7 +646,15 @@ export class RegionInteriorRenderer {
     }
 
     const dummy = new THREE.Object3D();
+    // Reused across every instance/submesh — the old code allocated a fresh
+    // Matrix4 (dummy.matrix.clone()) per instance per submesh, which for
+    // thousands of trees is thousands of throwaway matrices (GC churn + slower
+    // build). setMatrixAt copies into the instance buffer, so reuse is safe.
+    const scratch = new THREE.Matrix4();
+    let sliceStart = performance.now();
+
     for (const [cellKey, cellIndices] of cells) {
+      if (this.destroyed) return;
       const [cellCx, cellCz] = cellKey.split(",").map(Number) as [number, number];
       const instancedMeshes = meshTemplates.map((m) => {
         const im = new THREE.InstancedMesh(m.geometry, m.material, cellIndices.length);
@@ -644,7 +673,8 @@ export class RegionInteriorRenderer {
         dummy.scale.set(axes.x, axes.y, axes.z);
         dummy.updateMatrix();
         for (let mi = 0; mi < instancedMeshes.length; mi++) {
-          instancedMeshes[mi]!.setMatrixAt(k, dummy.matrix.clone().multiply(localMatrices[mi]!));
+          scratch.multiplyMatrices(dummy.matrix, localMatrices[mi]!);
+          instancedMeshes[mi]!.setMatrixAt(k, scratch);
         }
       }
       for (const im of instancedMeshes) {
@@ -658,6 +688,14 @@ export class RegionInteriorRenderer {
           z: (cellCz + 0.5) * RegionInteriorRenderer.CHUNK_SIZE,
           meshes: instancedMeshes,
         });
+      }
+
+      // Spread the work: once this frame's slice is spent, yield so the render
+      // loop paints, then resume with the next cell.
+      if (performance.now() - sliceStart >= RegionInteriorRenderer.INSTANCE_BUILD_SLICE_MS) {
+        await nextFrame();
+        if (this.destroyed) return;
+        sliceStart = performance.now();
       }
     }
   }
@@ -685,10 +723,10 @@ export class RegionInteriorRenderer {
     viewerX = 0,
     viewerZ = 0,
     camera?: THREE.Camera,
+    /** Shared per-tick streaming slice (see RegionContinent.update). When
+     *  omitted (standalone callers) a private one-region budget is used. */
+    budget: StreamBudget = new StreamBudget(REGION_STREAM_BUDGET_MS, 2),
   ): void {
-    // One heavy build preferred; urgent underfoot tiles may still force a
-    // second via streamer logic when the player is about to walk onto void.
-    const budget = new StreamBudget(REGION_STREAM_BUDGET_MS, 2);
     this.adtTerrain.update(viewerX, viewerZ, budget);
     this.adtWater?.update(viewerX, viewerZ, delta, budget);
 
@@ -902,6 +940,7 @@ export class RegionInteriorRenderer {
   }
 
   destroy(): void {
+    this.destroyed = true;
     if (this.grassField) {
       this.grassField.dispose();
       this.grassField = null;

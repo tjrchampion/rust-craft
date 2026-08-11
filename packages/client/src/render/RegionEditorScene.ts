@@ -105,14 +105,14 @@ import {
 } from "./castleGen";
 import { generateFantasticBuildingAssets, type FantasticBuildingType } from "./fantasticBuildingGen";
 import {
-  buildRegionCollisionBVH,
   resolveCapsule,
   sampleGroundBelow,
   disposeRegionCollision,
   type RegionCollision,
   type PlacedCollider,
 } from "@rustcraft/shared/collision";
-import { preloadCollision, getCollisionMesh, collisionModelKey } from "./collisionData";
+import { preloadCollisionIndex, hasCollisionEntry, collisionModelKey } from "./collisionData";
+import { getRegionCollisionWorker } from "./regionCollisionWorker";
 import type { RegionAsset } from "@rustcraft/shared";
 import {
   createTerrainVolumeMesh,
@@ -701,6 +701,9 @@ export class RegionEditorScene {
   /** True-geometry (BVH) collision for solid assets during playtest; built on
    *  enterPlaytest from the offline collision meshes, disposed on exit. */
   private playtestCollision: RegionCollision | null = null;
+  /** Bumped per off-thread collision rebuild so a rapid sequence of asset edits
+   *  discards stale worker results (only the newest layout is installed). */
+  private playtestCollisionSeq = 0;
   /** Capsule feet→head height for playtest collision (matches movement.ts's
    *  hard-coded 1.7m head offset). */
   private static readonly PLAYTEST_CAPSULE_HEIGHT = 1.7;
@@ -2780,9 +2783,19 @@ export class RegionEditorScene {
         scaleZ: a.obj.scale.z || 1,
       });
     }
-    await preloadCollision(keys);
+    await preloadCollisionIndex();
     if (!this.playtestActive) return; // exited while fetching
-    const next = buildRegionCollisionBVH(placed, getCollisionMesh, { x: 0, z: 0 });
+    // Build the BVH OFF-THREAD -- the merged MeshBVH bake is synchronous and
+    // ~0.5s on a dense region, and this runs on every asset transform edit, so
+    // on-thread it froze the editor each nudge. Only keys cross to the worker.
+    // A newer rebuild (another edit) invalidates this one -- discard the stale
+    // result so we never install collision for a since-changed asset layout.
+    const token = ++this.playtestCollisionSeq;
+    const next = await getRegionCollisionWorker().build([...keys], placed, { x: 0, z: 0 });
+    if (!this.playtestActive || token !== this.playtestCollisionSeq) {
+      if (next) disposeRegionCollision(next);
+      return;
+    }
     disposeRegionCollision(this.playtestCollision);
     this.playtestCollision = next;
   }
@@ -3316,7 +3329,7 @@ export class RegionEditorScene {
       // Solid assets whose mesh is baked into the BVH are handled there — keep
       // them out of the analytic set to avoid double collision. Un-meshed
       // solids (e.g. meshopt rocks) and all non-solid props stay analytic.
-      .filter((a) => !(bvhActive && a.solid && getCollisionMesh(collisionModelKey(a.category, a.model)) != null))
+      .filter((a) => !(bvhActive && a.solid && hasCollisionEntry(collisionModelKey(a.category, a.model))))
       .map((a) => {
       const s = regionAssetScaleFields(a.obj.scale.x || 1, a.obj.scale.y || 1, a.obj.scale.z || 1);
       return {
@@ -5795,7 +5808,12 @@ export class RegionEditorScene {
     nameplate.scale.set(3.4, 0.95, 1);
     entry.obj.add(nameplate);
 
-    if ((entry.npcData?.quests?.length ?? 0) > 0 || entry.npcData?.generateProceduralQuests !== false) {
+    if (entry.npcData?.vendorId) {
+      const badge = buildNameplate("$", "#4caf50");
+      badge.position.set(0, 3.4, 0);
+      badge.scale.set(1.4, 1.4, 1);
+      entry.obj.add(badge);
+    } else if ((entry.npcData?.quests?.length ?? 0) > 0 || entry.npcData?.generateProceduralQuests !== false) {
       const badge = buildNameplate("!", "#ffd700");
       badge.position.set(0, 3.4, 0);
       badge.scale.set(1.4, 1.4, 1);
@@ -7198,6 +7216,7 @@ export class RegionEditorScene {
             dialogue: npc.dialogue,
             quests: npc.quests ?? [],
             generateProceduralQuests: npc.generateProceduralQuests ?? true,
+            vendorId: npc.vendorId,
           };
           this.rebuildNPCMarkerVisual(m);
         }
@@ -7383,6 +7402,7 @@ export class RegionEditorScene {
           dialogue: m.npcData?.dialogue,
           quests: m.npcData?.quests ?? [],
           generateProceduralQuests: m.npcData?.generateProceduralQuests ?? true,
+          vendorId: m.npcData?.vendorId,
         };
       });
     const worldEvents: RegionWorldEvent[] = [...this.markers.values()]

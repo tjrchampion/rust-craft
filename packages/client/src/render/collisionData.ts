@@ -29,6 +29,7 @@ const DIR: Record<RegionAssetCategory, string> = {
 const BASE = "/assets/collision";
 
 let indexPromise: Promise<CollisionIndex | null> | null = null;
+let loadedIndex: CollisionIndex | null = null;
 const meshCache = new Map<string, CollisionMeshData | null>();
 const inflight = new Map<string, Promise<CollisionMeshData | null>>();
 
@@ -41,9 +42,27 @@ function loadIndex(): Promise<CollisionIndex | null> {
   if (!indexPromise) {
     indexPromise = fetch(`${BASE}/index.json`)
       .then((r) => (r.ok ? (r.json() as Promise<CollisionIndex>) : null))
+      .then((idx) => {
+        loadedIndex = idx;
+        return idx;
+      })
       .catch(() => null);
   }
   return indexPromise;
+}
+
+/** Load just the small collision index (not the per-model .bin meshes). Enough
+ *  for hasCollisionEntry() to drive the analytic-vs-BVH partition without every
+ *  client re-fetching mesh data the collision worker already fetches. */
+export async function preloadCollisionIndex(): Promise<void> {
+  await loadIndex();
+}
+
+/** True when the index lists collision data for this key. Synchronous — returns
+ *  false until preloadCollisionIndex() has resolved. Presence only; does NOT
+ *  require the mesh .bin to be fetched on this thread. */
+export function hasCollisionEntry(key: string): boolean {
+  return !!loadedIndex?.models[key];
 }
 
 function parseBin(buf: ArrayBuffer): CollisionMeshData {

@@ -26,3 +26,6 @@ export class StreamBudget {
 
 /** Soft wall-clock slice after paint for all region ADT + grass work. */
 export const REGION_STREAM_BUDGET_MS = 2.5;
+/** Heavy mesh builds allowed per streaming tick, shared across all mounted
+ *  regions (see RegionContinent.update). */
+export const REGION_STREAM_MAX_BUILDS = 2;

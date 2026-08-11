@@ -116,7 +116,8 @@ export function continentBounds(regions: RegionMapEntry[]): {
   return { minX, maxX, minZ, maxZ };
 }
 
-/** Camera that maps world (x,z) → screen (sx,sy) with north-up (+z → up). */
+/** Camera that maps world (x,z) → screen (sx,sy) in the editor's authored
+ * world-space layout. */
 export class MapCamera {
   scale = 0.4;
   /** Screen-space offset applied after projecting around focus. */

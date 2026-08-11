@@ -52,6 +52,10 @@ const LOCAL_REALM: Realm = { name: "Local Realm", url: "" };
 
 class AppState {
   screen = $state<Screen>("loading");
+  /** True while a pre-game screen is still loading its 3D content (character
+   *  select previews, etc.). Drives cursor hiding so the janky, main-thread-
+   *  blocked cursor isn't shown while models parse. */
+  assetsLoading = $state(false);
   me = $state<MeResponse | null>(null);
   activeCharacter = $state<CharacterSummary | null>(null);
   error = $state<string | null>(null);

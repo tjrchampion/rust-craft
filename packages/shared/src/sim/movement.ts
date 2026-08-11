@@ -79,6 +79,14 @@ export interface MoveInput {
   groundAt?: (x: number, z: number) => number;
   /** Water column depth in the same space as `groundAt`. */
   waterDepthAt?: (x: number, z: number) => number;
+  /** Seamless continents only: true when the step (x0,z0)->(x1,z1) crosses
+   *  from one authored region into a *different* authored region. Neighbor
+   *  regions are sculpted independently, so their shared edge heights can
+   *  differ by many meters -- a data seam, not a real cliff. Callers pass
+   *  this so the cliff guard below doesn't wall the player in at every region
+   *  border. Returns false within a single region and when stepping into the
+   *  void (no neighbor), so genuine cliffs and the world edge still block. */
+  crossesRegionSeam?: (x0: number, z0: number, x1: number, z1: number) => boolean;
   /**
    * True-geometry (BVH) collision hooks, injected by the caller so this
    * THREE-free module never imports three.js (see
@@ -245,7 +253,8 @@ export function stepMovement(state: MoveState, input: MoveInput, dt: number): Mo
     // Seamless continent: no single-region edge clamp; still block cliffs.
     const oldHeight = walkHeightAt(state.x, state.z, input.groundAt(state.x, state.z));
     const newHeight = walkHeightAt(nextX, nextZ, input.groundAt(nextX, nextZ));
-    if (Math.abs(newHeight - oldHeight) > 2.5) {
+    const crossesSeam = input.crossesRegionSeam?.(state.x, state.z, nextX, nextZ) ?? false;
+    if (!crossesSeam && Math.abs(newHeight - oldHeight) > 2.5) {
       nextX = state.x;
       nextZ = state.z;
     }

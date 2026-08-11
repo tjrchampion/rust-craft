@@ -21,7 +21,8 @@
     type MapMarker,
     type MapViewMode,
   } from "./worldMapModel";
-  import { renderRegionThumbnail, renderRegionLandMask, OVERVIEW_EDGE, DETAIL_EDGE } from "./worldMapThumbnail";
+  import { OVERVIEW_EDGE, DETAIL_EDGE } from "./worldMapThumbnail";
+  import { requestRegionThumbnailAsync, requestRegionLandMaskAsync } from "../render/worldMapThumbnailWorker";
 
   let regions = $state<RegionMapEntry[]>([]);
   let loadError = $state<string | null>(null);
@@ -42,6 +43,21 @@
 
   let wrapEl: HTMLDivElement | undefined = $state();
   let cam = new MapCamera();
+
+
+  // Match Minimap's negated X-projection for all vector markers & clicks
+  const rawWorldToScreen = cam.worldToScreen.bind(cam);
+  cam.worldToScreen = function (x: number, z: number) {
+    const p = rawWorldToScreen(x, z);
+    return { x: cam.width - p.x, y: p.y };
+  };
+
+  const rawScreenToWorld = cam.screenToWorld.bind(cam);
+  cam.screenToWorld = function (sx: number, sy: number) {
+    return rawScreenToWorld(cam.width - sx, sy);
+  };
+
+
   // Reactive tick so SVG updates when camera mutates.
   let camTick = $state(0);
   function bumpCam(): void {
@@ -50,7 +66,7 @@
 
   let drag: { sx: number; sy: number; panX: number; panY: number } | null = null;
 
-  const heading = $derived((((game.compassYaw * 180) / Math.PI) % 360 + 360) % 360);
+  const heading = $derived((((-game.compassYaw * 180) / Math.PI) % 360 + 360) % 360);
   const focusRegion = $derived(regions.find((r) => r.id === focusRegionId) ?? null);
   const currentRegionId = $derived(game.regionState?.regionId ?? null);
 
@@ -67,6 +83,7 @@
       z: m.z,
       label: m.name || m.id,
       questMarker: m.marker as MapMarker["questMarker"],
+      regionId: currentRegionId ?? undefined,
     }));
   });
 
@@ -118,14 +135,33 @@
     return list;
   });
 
+  let blipTick = $state(0);
+  $effect(() => {
+    if (!game.worldMapOpen) return;
+    const iv = setInterval(() => blipTick++, 250);
+    return () => clearInterval(iv);
+  });
+
   const playerMarker = $derived.by((): MapMarker | null => {
+    void blipTick;
     if (!game.self) return null;
+    const g = getGame();
+    let x = game.playerX;
+    let z = game.playerZ;
+    if (g && game.selfId) {
+      const realPos = g.entities.entityWorldPos(game.selfId);
+      if (realPos) {
+        x = realPos.x;
+        z = realPos.z;
+      }
+    }
     return {
       id: "player",
       kind: "player",
-      x: game.playerX,
-      z: game.playerZ,
+      x,
+      z,
       label: game.selfName || "You",
+      regionId: currentRegionId ?? undefined,
     };
   });
 
@@ -155,8 +191,15 @@
     return list.map((r) => {
       const b = regionWorldBounds(r);
       const c = cam.worldToScreen(b.originX, b.originZ);
-      const tl = cam.worldToScreen(b.minX, b.minZ);
-      const br = cam.worldToScreen(b.maxX, b.maxZ);
+
+      const nw = cam.worldToScreen(b.minX, b.maxZ);
+      const se = cam.worldToScreen(b.maxX, b.minZ);
+
+      const imgX = Math.min(nw.x, se.x);
+      const imgY = Math.min(nw.y, se.y);
+      const imgW = Math.abs(se.x - nw.x);
+      const imgH = Math.abs(se.y - nw.y);
+
       return {
         region: r,
         path: regionTilePath(cam, r),
@@ -165,13 +208,12 @@
         fill: r.colorGrading?.groundTint ?? BIOME_FILL[r.biome],
         current: r.id === currentRegionId,
         focused: r.id === focusRegionId,
-        // Zoomed-into region uses its high-detail render (DETAIL_EDGE = 1024); everything else overview thumbnail.
         thumb: (r.id === focusRegionId ? detailById[r.id] : undefined) ?? thumbById[r.id],
         landMask: landMaskById[r.id],
-        imgX: tl.x,
-        imgY: tl.y,
-        imgW: br.x - tl.x,
-        imgH: br.y - tl.y,
+        imgX,
+        imgY,
+        imgW,
+        imgH,
       };
     });
   });
@@ -184,15 +226,6 @@
     });
   });
 
-  // Live nearby hostile mobs as red dots -- same source as the minimap
-  // (entities.mapBlips). Refreshed on a tick since entity positions aren't
-  // reactive state; only runs while the map is open.
-  let blipTick = $state(0);
-  $effect(() => {
-    if (!game.worldMapOpen) return;
-    const iv = setInterval(() => blipTick++, 250);
-    return () => clearInterval(iv);
-  });
   const mobMarkers = $derived.by(() => {
     void camTick;
     void blipTick;
@@ -232,8 +265,6 @@
     loading = true;
     loadError = null;
     try {
-      // Prefer the live game catalog (already fetched for continent streaming),
-      // then refresh from /api/regions for overlay fields (villages/npcs/etc).
       const g = getGame();
       const fromGame = g ? await g.ensureRegionMapCatalog() : [];
       let fromApi: RegionMapEntry[] = [];
@@ -260,8 +291,6 @@
       if (regions.length === 0) {
         loadError = "No regions found. Is the server running, and have any regions been saved?";
       } else {
-        // Opened via the minimap's REGION button → drop straight into that
-        // region; otherwise open on the continent overview.
         const focus = game.worldMapFocusRegionId;
         game.worldMapFocusRegionId = null;
         if (focus && regions.some((r) => r.id === focus)) openRegion(focus);
@@ -272,15 +301,12 @@
       loadError = e instanceof Error ? e.message : "Failed to load map";
     } finally {
       loading = false;
-      // Stage may have just finished mounting — refit once size is known.
       queueMicrotask(() => {
         if (regions.length > 0 && mode === "world") fitWorld();
       });
     }
   }
 
-  /** Fetch each region's full blueprint (heights) and render a painted
-   *  relief thumbnail. Cheap + cached; failures leave the flat biome fill. */
   async function loadThumbnails(): Promise<void> {
     const g = getGame();
     if (g) {
@@ -324,8 +350,13 @@
           biome: r.biome,
           colorGrading: r.colorGrading,
         };
-        const url = thumbById[r.id] ?? renderRegionThumbnail(src, { edge: OVERVIEW_EDGE });
-        const maskUrl = landMaskById[r.id] ?? renderRegionLandMask(src, { edge: OVERVIEW_EDGE });
+        const urlPromise = thumbById[r.id]
+          ? Promise.resolve(thumbById[r.id])
+          : requestRegionThumbnailAsync(src, { edge: OVERVIEW_EDGE });
+        const maskPromise = landMaskById[r.id]
+          ? Promise.resolve(landMaskById[r.id])
+          : requestRegionLandMaskAsync(src, { edge: OVERVIEW_EDGE });
+        const [url, maskUrl] = await Promise.all([urlPromise, maskPromise]);
         if (url && !thumbById[r.id]) thumbById = { ...thumbById, [r.id]: url };
         if (maskUrl && !landMaskById[r.id]) landMaskById = { ...landMaskById, [r.id]: maskUrl };
       }),
@@ -348,7 +379,7 @@
       biome: r.biome,
       colorGrading: r.colorGrading,
     };
-    const url = renderRegionThumbnail(src, { edge: DETAIL_EDGE });
+    const url = await requestRegionThumbnailAsync(src, { edge: DETAIL_EDGE });
     if (url) detailById = { ...detailById, [id]: url };
   }
 
@@ -374,7 +405,6 @@
     resize();
     cam.fitRegion(r, 56);
     bumpCam();
-    // Non-blocking async detail render so UI transition is 100% instant (0ms freeze)
     setTimeout(() => { void ensureDetail(id); }, 10);
   }
 
@@ -470,9 +500,6 @@
   $effect(() => {
     if (!game.worldMapOpen || !wrapEl) return;
     const el = wrapEl;
-    // Frame the current view once per open. Untracked so writing mode /
-    // focusRegionId (via fitWorld / openRegion) and reading regions doesn't
-    // re-trigger this effect into an infinite resize→bumpCam loop.
     untrack(() => {
       resize();
       if (regions.length > 0) {
@@ -693,29 +720,33 @@
               onkeydown={(e) => { if (e.key === "Enter" || e.key === " ") openRegion(tile.region.id); }}
             >
               {#if tile.thumb && tile.imgW > 0 && tile.imgH > 0}
-                <image
-                  class="tile-thumb"
-                  class:dim={mode === "region" && !tile.focused}
-                  class:hovered={isHovered}
-                  href={tile.thumb}
-                  x={tile.imgX}
-                  y={tile.imgY}
-                  width={tile.imgW}
-                  height={tile.imgH}
-                  preserveAspectRatio="none"
-                />
+                <g transform="translate({tile.imgX + tile.imgW}, {tile.imgY}) scale(-1, 1)">
+                  <image
+                    class="tile-thumb"
+                    class:dim={mode === "region" && !tile.focused}
+                    class:hovered={isHovered}
+                    href={tile.thumb}
+                    x="0"
+                    y="0"
+                    width={tile.imgW}
+                    height={tile.imgH}
+                    preserveAspectRatio="none"
+                  />
+                </g>
               {/if}
               {#if tile.landMask && tile.imgW > 0 && tile.imgH > 0}
-                <image
-                  class="tile-land-glow"
-                  class:active={isHovered}
-                  href={tile.landMask}
-                  x={tile.imgX}
-                  y={tile.imgY}
-                  width={tile.imgW}
-                  height={tile.imgH}
-                  preserveAspectRatio="none"
-                />
+                <g transform="translate({tile.imgX + tile.imgW}, {tile.imgY}) scale(-1, 1)">
+                  <image
+                    class="tile-land-glow"
+                    class:active={isHovered}
+                    href={tile.landMask}
+                    x="0"
+                    y="0"
+                    width={tile.imgW}
+                    height={tile.imgH}
+                    preserveAspectRatio="none"
+                  />
+                </g>
               {/if}
               <path
                 d={tile.path}

@@ -14,8 +14,13 @@ import {
   GENDER_MODEL_URLS,
   type ModularFit,
 } from "./classModels";
-import { createSharedGltfLoader } from "./sharedGltf";
+import {
+  createSharedGltfLoader,
+  enqueueTextureForUpload,
+  enqueueModelTexturesForUpload,
+} from "./sharedGltf";
 import { getAssetBuffer, initAssetPack } from "./assetPack";
+import { runCooperatively } from "./idleScheduler";
 
 const loader = createSharedGltfLoader();
 const cache = new Map<string, Promise<GLTF>>();
@@ -88,6 +93,9 @@ const objectsTexture = textureLoader.load("/assets/models/bundled/textures/Maste
 objectsTexture.colorSpace = THREE.SRGBColorSpace;
 objectsTexture.flipY = false;
 
+enqueueTextureForUpload(bodyTexture);
+enqueueTextureForUpload(objectsTexture);
+
 export function applyMasterTextures(root: THREE.Object3D): void {
   root.traverse((o) => {
     const mesh = o as THREE.Mesh;
@@ -124,7 +132,7 @@ export const PLAYER_MODELS = [
 ];
 export const WOLF_MODEL = "/assets/models/Wolf.glb";
 
-const SKELETON_MODELS: Record<string, string> = {
+export const SKELETON_MODELS: Record<string, string> = {
   skeleton_warrior: "/assets/models/Skeleton_Warrior.glb",
   skeleton_minion: "/assets/models/Skeleton_Minion.glb",
   skeleton_rogue: "/assets/models/Skeleton_Rogue.glb",
@@ -207,7 +215,7 @@ const VELOCIRAPTOR_ANIMS: AnimSpec = {
   dead: ["Velociraptor_Death"],
 };
 
-const CREATURE_MODELS: Record<string, { url: string; anims: AnimSpec }> = {
+export const CREATURE_MODELS: Record<string, { url: string; anims: AnimSpec }> = {
   fox: { url: `${CREATURES_DIR}/fox.glb`, anims: QUADRUPED_ANIMS },
   stag: { url: `${CREATURES_DIR}/stag.glb`, anims: QUADRUPED_ANIMS },
   alpaca: { url: `${CREATURES_DIR}/alpaca.glb`, anims: QUADRUPED_ANIMS },
@@ -258,20 +266,26 @@ export function load(url: string): Promise<GLTF> {
   let p = cache.get(url);
   if (!p) {
     p = (async () => {
+      let gltf: GLTF;
       // 1. Check if model exists inside the packed assets container (.rcpack)
       const buffer = await getAssetBuffer(url);
       if (buffer) {
-        return new Promise<GLTF>((resolve, reject) => {
+        gltf = await new Promise<GLTF>((resolve, reject) => {
           loader.parse(buffer, url, resolve, reject);
         });
+      } else {
+        // 2. Fallback to direct network GET request
+        gltf = await Promise.race([
+          loader.loadAsync(url),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error(`GLTF load timeout for ${url}`)), 12000),
+          ),
+        ]);
       }
-      // 2. Fallback to direct network GET request
-      return Promise.race([
-        loader.loadAsync(url),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error(`GLTF load timeout for ${url}`)), 12000),
-        ),
-      ]);
+      if (gltf?.scene) {
+        enqueueModelTexturesForUpload(gltf.scene);
+      }
+      return gltf;
     })().catch((err) => {
       cache.delete(url);
       throw err;
@@ -288,24 +302,15 @@ export async function warmAllPackedAssets(onProgress?: (loaded: number, total: n
   const urls = Object.keys(index);
   if (urls.length === 0) return;
 
-  let loaded = 0;
-  const BATCH_SIZE = 16;
-  for (let i = 0; i < urls.length; i += BATCH_SIZE) {
-    const batch = urls.slice(i, i + BATCH_SIZE);
-    await Promise.all(
-      batch.map(async (url) => {
-        try {
-          await load(url);
-        } catch {
-          /* ignore broken individual model */
-        } finally {
-          loaded++;
-          onProgress?.(loaded, urls.length);
-        }
-      }),
-    );
-    await new Promise((r) => setTimeout(r, 0));
-  }
+  // Parse in small waves, yielding a browser idle slot between each so the
+  // loading-screen progress bar keeps painting and (if this ever runs behind
+  // an interactive screen) input stays responsive. A single glTF parse is one
+  // synchronous block, so throughput comes from a modest wave, not a big batch
+  // that monopolises the main thread.
+  await runCooperatively(urls, (url) => load(url).then(() => undefined).catch(() => undefined), {
+    concurrency: 6,
+    onProgress,
+  });
 }
 
 const headBindWorldCache = new Map<CharacterGender, Promise<THREE.Matrix4 | null>>();
@@ -1569,15 +1574,23 @@ export function logicalFromState(
   }
 }
 
-export function preloadCharacterAssets(): Promise<void> {
+export async function preloadCharacterAssets(): Promise<void> {
   // Warm only shared anim libs + both gender bases. Hair/facial/eyebrows,
   // skeletons, weapon props, and medium/large creature anim packs load on
   // demand — eager-fetching them ballooned VRAM and stalled welcome.
+  //
+  // These are the heaviest parses on the character screen (the two Universal
+  // animation libraries carry tens of thousands of track channels each). Load
+  // them one at a time, yielding an idle slot between each, so the turntable
+  // preview keeps rendering and the mouse stays responsive instead of freezing
+  // through a back-to-back parse burst.
   const urls = [
     UNIVERSAL_ANIMATION_LIBRARY,
     UNIVERSAL_ANIMATION_LIBRARY_2,
     "/assets/models/modular/base/Regular_Male.glb",
     "/assets/models/modular/base/Regular_Female.glb",
   ];
-  return Promise.all(urls.map((url) => load(url).catch(() => null))).then(() => {});
+  await runCooperatively(urls, (url) => load(url).then(() => undefined).catch(() => undefined), {
+    concurrency: 1,
+  });
 }

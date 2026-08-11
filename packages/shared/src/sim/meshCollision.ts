@@ -150,6 +150,67 @@ export function buildRegionCollisionBVH(
 }
 
 /**
+ * A RegionCollision flattened to transferable buffers so the (expensive,
+ * synchronous) BVH build can run in a Web Worker and cross the postMessage
+ * boundary without a structured-clone copy. See serialize/deserialize below.
+ */
+export interface SerializedRegionCollision {
+  positions: Float32Array;
+  index: Uint16Array | Uint32Array;
+  /** MeshBVH root node buffers (three-mesh-bvh's serialize output). */
+  roots: ArrayBuffer[];
+  /** [minX,minY,minZ, maxX,maxY,maxZ] world AABB. */
+  aabb: [number, number, number, number, number, number];
+  bakedCount: number;
+}
+
+/** Flatten a built RegionCollision for transfer. `transfer` lists every backing
+ *  ArrayBuffer so postMessage moves (not copies) them. Consumes the input's
+ *  buffers -- do not use `col` on the sender after transferring. */
+export function serializeRegionCollision(
+  col: RegionCollision,
+): { data: SerializedRegionCollision; transfer: ArrayBuffer[] } {
+  const ser = MeshBVH.serialize(col.bvh, { cloneBuffers: false });
+  const positions = col.geometry.attributes.position!.array as Float32Array;
+  const index = col.geometry.getIndex()!.array as Uint16Array | Uint32Array;
+  const roots = ser.roots as ArrayBuffer[];
+  const b = col.aabb;
+  return {
+    data: {
+      positions,
+      index,
+      roots,
+      aabb: [b.min.x, b.min.y, b.min.z, b.max.x, b.max.y, b.max.z],
+      bakedCount: col.bakedCount,
+    },
+    transfer: [positions.buffer as ArrayBuffer, index.buffer as ArrayBuffer, ...roots],
+  };
+}
+
+/** Rebuild a live RegionCollision (geometry + MeshBVH) from transferred buffers.
+ *  The BVH is reconstructed without re-generation -- the heavy work already ran
+ *  in the worker. */
+export function deserializeRegionCollision(data: SerializedRegionCollision): RegionCollision {
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.BufferAttribute(data.positions, 3));
+  // `version` must be present at runtime -- deserialize runs a format-0 fixup on
+  // the roots when it's missing, which would corrupt current-format data. The
+  // published SerializedBVH type omits the field, so cast past it.
+  const serialized = { version: 1, roots: data.roots, index: data.index, indirectBuffer: null };
+  const bvh = MeshBVH.deserialize(
+    serialized as unknown as Parameters<typeof MeshBVH.deserialize>[0],
+    geometry,
+    { setIndex: true },
+  );
+  geometry.boundsTree = bvh;
+  const aabb = new THREE.Box3(
+    new THREE.Vector3(data.aabb[0], data.aabb[1], data.aabb[2]),
+    new THREE.Vector3(data.aabb[3], data.aabb[4], data.aabb[5]),
+  );
+  return { bvh, geometry, aabb, bakedCount: data.bakedCount };
+}
+
+/**
  * Depenetrate a vertical capsule (feet at `x,y,z`) out of the region geometry.
  * Returns the corrected feet position + whether it was pushed up (grounded).
  * World-space capsule vs world-baked BVH — no matrix inverse needed.

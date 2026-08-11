@@ -94,6 +94,11 @@ export const ChatMsg = z.object({
 
 export const RespawnMsg = z.object({ t: z.literal("respawn") });
 
+/** Client → server: the local player has finished loading the region it spawned
+ *  into (terrain + assets streamed). Until this arrives (or a server-side
+ *  timeout) the player is spawn-protected so it can't die mid-load. */
+export const ReadyMsg = z.object({ t: z.literal("ready") });
+
 export const PvpMsg = z.object({
   t: z.literal("pvp"),
   enabled: z.boolean(),
@@ -199,6 +204,7 @@ export const ClientMsg = z.discriminatedUnion("t", [
   PlaceMsg,
   ChatMsg,
   RespawnMsg,
+  ReadyMsg,
   PvpMsg,
   PartyMsg,
   FriendMsg,

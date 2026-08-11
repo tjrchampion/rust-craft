@@ -2,7 +2,7 @@
   import { game } from "./gameState.svelte";
   import { generateVillages } from "@rustcraft/shared";
   import { getGame } from "../game/instance";
-  import { renderRegionThumbnail } from "./worldMapThumbnail";
+  import { requestRegionThumbnailAsync } from "../render/worldMapThumbnailWorker";
 
   const SIZE = 200;
   const CENTER = SIZE / 2;
@@ -104,15 +104,10 @@
         regionBounds = bounds;
         regionNpcs = npcs;
       }
-      const renderThumb = () => {
-        if (loadedRegionId !== id) return;
-        const thumb = renderRegionThumbnail(bp, { edge: 224 });
-        if (!thumb) return;
-        thumbCache.set(id, { thumb, bounds, npcs });
-        if (loadedRegionId === id) regionThumb = thumb;
-      };
-      if (typeof requestIdleCallback === "function") requestIdleCallback(renderThumb, { timeout: 500 });
-      else setTimeout(renderThumb, 0);
+      const thumb = await requestRegionThumbnailAsync(bp, { edge: 224 });
+      if (loadedRegionId !== id || !thumb) return;
+      thumbCache.set(id, { thumb, bounds, npcs });
+      if (loadedRegionId === id) regionThumb = thumb;
     })();
   });
 

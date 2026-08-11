@@ -30,6 +30,102 @@ const WEBGL_WRAPPINGS: Record<number, THREE.Wrapping> = {
 
 const urlTextureCache = new Map<string, Promise<THREE.Texture>>();
 
+let activeRenderer: THREE.WebGLRenderer | null = null;
+const knownQueuedTextures = new WeakSet<THREE.Texture>();
+const uploadedTextures = new WeakSet<THREE.Texture>();
+
+/**
+ * Freshly-loaded textures awaiting a GPU pre-upload. External PNG maps upload
+ * UNCOMPRESSED via texImage2D (+ mipmap generation) on the first render they
+ * appear in -- a region's worth landing in one frame is a multi-hundred-ms
+ * stall. The idle pump and render loop drain this in ~2ms slices so the cost
+ * spreads across idle time / frames instead of freezing one.
+ */
+const gpuTextureUploadQueue: THREE.Texture[] = [];
+let idleScheduled = false;
+
+export function setSharedRenderer(renderer: THREE.WebGLRenderer): void {
+  activeRenderer = renderer;
+  if (sharedKtx2Loader && !(sharedKtx2Loader as any).hasDetector) {
+    sharedKtx2Loader.detectSupport(renderer);
+    (sharedKtx2Loader as any).hasDetector = true;
+  }
+  scheduleIdleTextureProcessing();
+}
+
+export function getSharedRenderer(): THREE.WebGLRenderer | null {
+  return activeRenderer;
+}
+
+/** Enqueue a single Three.js texture for background GPU upload via renderer.initTexture. */
+export function enqueueTextureForUpload(tex: THREE.Texture | null | undefined): void {
+  if (!tex || !tex.isTexture || knownQueuedTextures.has(tex) || uploadedTextures.has(tex)) return;
+  knownQueuedTextures.add(tex);
+  gpuTextureUploadQueue.push(tex);
+  scheduleIdleTextureProcessing();
+}
+
+/** Traverse an Object3D hierarchy and queue every texture found on its materials. */
+export function enqueueModelTexturesForUpload(root: THREE.Object3D | null | undefined): void {
+  if (!root) return;
+  root.traverse((o) => {
+    const mesh = o as THREE.Mesh;
+    if (mesh.isMesh && mesh.material) {
+      const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+      for (const m of mats) {
+        if (!m) continue;
+        const mat = m as Record<string, any>;
+        if (mat.map?.isTexture) enqueueTextureForUpload(mat.map);
+        if (mat.normalMap?.isTexture) enqueueTextureForUpload(mat.normalMap);
+        if (mat.roughnessMap?.isTexture) enqueueTextureForUpload(mat.roughnessMap);
+        if (mat.metalnessMap?.isTexture) enqueueTextureForUpload(mat.metalnessMap);
+        if (mat.aoMap?.isTexture) enqueueTextureForUpload(mat.aoMap);
+        if (mat.emissiveMap?.isTexture) enqueueTextureForUpload(mat.emissiveMap);
+        if (mat.specularMap?.isTexture) enqueueTextureForUpload(mat.specularMap);
+        if (mat.alphaMap?.isTexture) enqueueTextureForUpload(mat.alphaMap);
+      }
+    }
+  });
+}
+
+function processIdleTextureUploads(): void {
+  idleScheduled = false;
+  if (!activeRenderer || gpuTextureUploadQueue.length === 0) return;
+  const start = performance.now();
+  // Spend at most 2ms per idle time-slice uploading textures to GPU VRAM
+  while (gpuTextureUploadQueue.length > 0 && performance.now() - start < 2.0) {
+    const tex = gpuTextureUploadQueue.shift();
+    if (!tex) break;
+    if (uploadedTextures.has(tex)) continue;
+    try {
+      activeRenderer.initTexture(tex);
+      uploadedTextures.add(tex);
+    } catch {
+      /* driver/context rejected texture; skip */
+    }
+  }
+  if (gpuTextureUploadQueue.length > 0) {
+    scheduleIdleTextureProcessing();
+  }
+}
+
+export function scheduleIdleTextureProcessing(): void {
+  if (idleScheduled || gpuTextureUploadQueue.length === 0 || !activeRenderer) return;
+  idleScheduled = true;
+  if (typeof requestIdleCallback === "function") {
+    requestIdleCallback(() => processIdleTextureUploads(), { timeout: 30 });
+  } else {
+    setTimeout(processIdleTextureUploads, 0);
+  }
+}
+
+/** Remove up to `max` freshly-loaded textures for the caller to initTexture().
+ *  Called by the render loop; returns [] when nothing is pending. */
+export function takePendingTextureUploads(max: number): THREE.Texture[] {
+  if (gpuTextureUploadQueue.length === 0) return [];
+  return gpuTextureUploadQueue.splice(0, max);
+}
+
 function applySampler(
   texture: THREE.Texture,
   sampler: { magFilter?: number; minFilter?: number; wrapS?: number; wrapT?: number },
@@ -85,6 +181,8 @@ export function enableSharedGltfTextures(loader: GLTFLoader): void {
         pending = loadImageAsTexture(resolved).then((tex) => {
           tex.name = textureDef.name || sourceDef.name || sourceDef.uri || "";
           applySampler(tex, sampler);
+          // Pre-upload off the first render frame (spread by the render loop).
+          gpuTextureUploadQueue.push(tex);
           return tex;
         });
         urlTextureCache.set(resolved, pending);

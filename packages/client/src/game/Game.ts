@@ -50,6 +50,7 @@ import {
   resolveVendorId,
   regionLocalToWorld,
   worldToRegionLocal,
+  findRegionAtWorld,
   type MoveState,
   type ServerMsg,
   type SelfState,
@@ -79,10 +80,20 @@ import { NodeManager } from "../render/nodes";
 import { GrassField } from "../render/grass";
 import { EntityManager } from "../render/entities";
 import { applyModularGearFromInventory, applyModularGearFromInventoryAsync } from "../render/modularGear";
-import { playerModelUrl, CLASS_WEAPON_NODES } from "../render/classModels";
-import { AnimatedModel, PLAYER_ANIMS, logicalFromState, dodgeLogicalFor, warmAllPackedAssets } from "../render/gltf";
+import { playerModelUrl, CLASS_WEAPON_NODES, GENDER_MODEL_URLS } from "../render/classModels";
+import {
+  AnimatedModel,
+  PLAYER_ANIMS,
+  logicalFromState,
+  dodgeLogicalFor,
+  warmAllPackedAssets,
+  CREATURE_MODELS,
+  SKELETON_MODELS,
+  WOLF_MODEL,
+  load as loadGltf,
+} from "../render/gltf";
 import { preloadAssetPack } from "../render/assetPack";
-import { getSharedKtx2Loader } from "../render/sharedGltf";
+import { getSharedKtx2Loader, takePendingTextureUploads, setSharedRenderer } from "../render/sharedGltf";
 import {
   buildWorldStatic,
   buildVillage,
@@ -93,8 +104,10 @@ import {
 } from "../render/settlements";
 import { DUNGEON_THEME_COLORS, DungeonInteriorRenderer } from "../render/dungeonInterior";
 import { RegionInteriorRenderer } from "../render/regionInterior";
-import { renderRegionThumbnail, renderRegionLandMask, OVERVIEW_EDGE } from "../ui/worldMapThumbnail";
+import { OVERVIEW_EDGE, DETAIL_EDGE } from "../ui/worldMapThumbnail";
+import { requestRegionThumbnailAsync, requestRegionLandMaskAsync } from "../render/worldMapThumbnailWorker";
 import { RegionContinent } from "../render/regionContinent";
+import { StreamBudget } from "../render/streamBudget";
 import {
   atmosphereFromGrading,
   cloneAtmosphere,
@@ -124,8 +137,34 @@ const GATHER_RANGE = 4.0;
  *  doesn't need 60Hz precision -- ~8Hz is imperceptibly different to a player
  *  but cuts several full linear scans down to a fraction of their frame cost. */
 const INTERACT_PROMPT_INTERVAL_MS = 120;
+/** Render the sun's shadow map once every N frames instead of every frame. The
+ *  shadow-casting scene re-render is the biggest GPU cost when fill/shadow-bound;
+ *  3 keeps shadows within ~2 frames of the player (imperceptible for a high sun)
+ *  while cutting that cost to a third. */
+const SHADOW_UPDATE_INTERVAL = 3;
 /** Left-to-right tab order for gamepad LB/RB cycling in the character screen. */
 const TAB_ORDER: CharacterTab[] = ["inventory", "quests", "achievements", "spellbook", "craft", "party", "system"];
+
+// --- Perf sampler helpers (DEV) ---------------------------------------------
+/** Push onto a rolling window capped at 120 samples (~2s at 60fps). */
+function push120(arr: number[], v: number): void {
+  arr.push(v);
+  if (arr.length > 120) arr.shift();
+}
+function avg(arr: number[]): number {
+  if (arr.length === 0) return 0;
+  let s = 0;
+  for (const v of arr) s += v;
+  return s / arr.length;
+}
+/** {avg, p95, max} rounded to 0.1ms — enough to read a frame budget at a glance. */
+function stat(arr: number[]): { avg: number; p95: number; max: number } {
+  if (arr.length === 0) return { avg: 0, p95: 0, max: 0 };
+  const sorted = [...arr].sort((a, b) => a - b);
+  const p95 = sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.95))]!;
+  const r = (n: number) => Math.round(n * 10) / 10;
+  return { avg: r(avg(arr)), p95: r(p95), max: r(sorted[sorted.length - 1]!) };
+}
 
 interface PendingInput {
   seq: number;
@@ -143,6 +182,7 @@ interface PendingInput {
   regionAssets?: RegionAssetCollider[];
   groundAt?: (x: number, z: number) => number;
   waterDepthAt?: (x: number, z: number) => number;
+  crossesRegionSeam?: (x0: number, z0: number, x1: number, z1: number) => boolean;
 }
 
 export class Game {
@@ -192,8 +232,8 @@ export class Game {
   private interactPromptAt = -Infinity;
   /** Depleted gather-node ids from welcome / nodeUpdate. */
   private depletedNodeIds = new Set<string>();
-  /** Last mounted-region signature used for authored gather-node sync. */
-  private regionNodesSyncKey = "";
+  /** Last mounted-region revision used for authored gather-node sync. */
+  private lastContinentRevision = -1;
 
   private connection = new Connection();
   private input: InputManager;
@@ -259,6 +299,15 @@ export class Game {
   private lastDodgeTime: number = 0;
   private accumulator = 0;
   private lastFrame = performance.now();
+  /** Rolling perf sampler (DEV). See perfSnapshot()/window.__rc.perf(). */
+  private perf = {
+    frame: [] as number[], // total ms between frames (incl. browser idle)
+    render: [] as number[], // renderer.render() ms only
+    logic: [] as number[], // frame() work excluding render()
+    stream: [] as number[], // post-paint updateZoneAndStreaming() task ms
+    prewarm: [] as number[], // prewarmScene() compile+upload ms (on new mounts)
+    lastLogAt: 0,
+  };
   private jumpQueued = false;
   private running = false;
   private disposed = false;
@@ -272,6 +321,8 @@ export class Game {
   private fogScale = 1;
   /** AA flag used when the WebGL context was created — change needs re-enter world. */
   private antialiasActive = true;
+  /** Frame counter for throttled shadow-map refresh (see SHADOW_UPDATE_INTERVAL). */
+  private shadowTick = 0;
 
   constructor(
     canvas: HTMLCanvasElement,
@@ -287,11 +338,20 @@ export class Game {
     this.renderer.setPixelRatio(effectivePixelRatio(this.graphics, window.devicePixelRatio));
     this.renderer.setSize(window.innerWidth, window.innerHeight);
     this.renderer.shadowMap.enabled = this.graphics.shadowsEnabled;
+    // The shadow map re-renders the WHOLE shadow-casting scene from the sun's
+    // POV. Doing that every frame (autoUpdate default) over dense foliage +
+    // millions of tris is a huge GPU cost that shows up as GPU-bound frames
+    // (low renderMs CPU, high frameMs). Drive it manually on a throttle instead
+    // (see frame()): the sun barely moves and the shadow camera trails the
+    // player, so an N-frame-stale shadow is imperceptible but N× cheaper.
+    this.renderer.shadowMap.autoUpdate = false;
+    this.renderer.shadowMap.needsUpdate = this.graphics.shadowsEnabled;
     // Soft PCF over a huge ortho frustum + dense foliage was a major GPU cost.
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1;
     getSharedKtx2Loader(this.renderer);
+    setSharedRenderer(this.renderer);
 
     this.camera = new THREE.PerspectiveCamera(
       70,
@@ -486,18 +546,9 @@ export class Game {
   /** Keep NodeManager in sync with mounted continent region.resourceNodes. */
   private syncAuthoredRegionNodes(force = false): void {
     if (!this.nodes || !this.continent) return;
+    if (!force && this.continent.revision === this.lastContinentRevision) return;
+    this.lastContinentRevision = this.continent.revision;
     const layers = this.continent.mountedBlueprints();
-    const key = layers
-      .map((bp) => {
-        const nodes = (bp.resourceNodes ?? [])
-          .map((n) => `${n.id ?? ""}:${n.type}:${n.model ?? ""}:${n.localX.toFixed(2)},${n.localZ.toFixed(2)}`)
-          .join(";");
-        return `${bp.id}@${bp.worldOriginX ?? 0},${bp.worldOriginZ ?? 0}:${nodes}`;
-      })
-      .sort()
-      .join("|");
-    if (!force && key === this.regionNodesSyncKey) return;
-    this.regionNodesSyncKey = key;
     const list: WorldNode[] = layers.flatMap((bp) => worldNodesFromRegion(bp));
     this.nodes.removeRegionResourceNodes();
     this.nodes.addDynamicNodes(list);
@@ -521,7 +572,7 @@ export class Game {
               const data = (await res.json()) as { blueprint: RegionBlueprint };
               this.regionBlueprintCache.set(id, data.blueprint);
               this.continent?.updateLayerBlueprint(data.blueprint);
-              this.regionNodesSyncKey = "";
+              this.lastContinentRevision = -1;
               return data.blueprint;
             }
           } catch {
@@ -549,6 +600,17 @@ export class Game {
   private continentWaterDepthAt = (x: number, z: number): number => {
     if (!this.continent) return 0;
     return this.continent.waterDepthAt(x, z, this.continentCatalog());
+  };
+
+  /** True when a step crosses from one region into a different one -- lets the
+   *  cliff guard in stepMovement pass at a region seam whose two independently
+   *  sculpted edges don't line up. Must match the server (GameServer's
+   *  crossesRegionSeam) exactly or reconcile would rubber-band at the border. */
+  private continentCrossesSeam = (x0: number, z0: number, x1: number, z1: number): boolean => {
+    const catalog = this.continentCatalog();
+    const a = findRegionAtWorld(catalog, x0, z0);
+    const b = findRegionAtWorld(catalog, x1, z1);
+    return a !== null && b !== null && a.id !== b.id;
   };
 
   /** Bind primary renderer/music to the ownership region (no tear-down). */
@@ -616,7 +678,7 @@ export class Game {
         this.depletedNodeIds = new Set(msg.depletedNodes);
         // Continent gatherables come from authored region.resourceNodes — not procedural overworld scatter.
         this.nodes = new NodeManager(this.scene, msg.depletedNodes, []);
-        this.regionNodesSyncKey = "";
+        this.lastContinentRevision = -1;
         for (const structure of msg.structures) this.entities.addStructure(structure);
         for (const npc of msg.npcs) this.npcManager.applySnap(npc);
         ui.questMarkers = this.npcManager.questMarkers();
@@ -870,11 +932,17 @@ export class Game {
       }
 
       ui.loadingProgress = 100;
+      // Region + assets are loaded and about to be shown -- tell the server to
+      // lift spawn protection now that the player can actually see and react.
+      this.connection.send({ t: "ready" });
       ui.loading = false;
       ui.connected = true;
     } catch (e) {
       console.error("[Game] Preload failed", e);
-      // Fallback: connect anyway so they aren't stuck on a black screen
+      // Fallback: connect anyway so they aren't stuck on a black screen. Still
+      // clear spawn protection so the player isn't invulnerable after a failed
+      // load.
+      this.connection.send({ t: "ready" });
       ui.loading = false;
       ui.connected = true;
     }
@@ -1184,6 +1252,7 @@ export class Game {
     // server so reconcile settles at the same wall/deck instead of snapping.
     const meshResolve = inContinent ? this.continent!.meshResolveWorld : undefined;
     const meshGroundBelow = inContinent ? this.continent!.meshGroundBelowWorld : undefined;
+    const liveSeam = inContinent ? this.continentCrossesSeam : undefined;
     let replayed = serverState;
     for (const p of this.pending) {
       replayed = stepMovement(
@@ -1193,6 +1262,7 @@ export class Game {
           regionAssets: liveAssets ?? p.regionAssets,
           groundAt: liveGround ?? p.groundAt,
           waterDepthAt: liveWater ?? p.waterDepthAt,
+          crossesRegionSeam: liveSeam ?? p.crossesRegionSeam,
           meshResolve,
           meshGroundBelow,
         },
@@ -1441,8 +1511,19 @@ export class Game {
     }
     this.updateDayNight(rx, rz, dt);
     this.skyDome.update(dt, this.camera);
+    this.pumpTextureUploads();
 
+    // Refresh the shadow map only every Nth frame (autoUpdate is off). The full
+    // shadow-casting scene re-render is the dominant GPU cost when fill/shadow-
+    // bound; a few frames of shadow latency is invisible for a high sun.
+    if (this.graphics.shadowsEnabled && ++this.shadowTick >= SHADOW_UPDATE_INTERVAL) {
+      this.shadowTick = 0;
+      this.renderer.shadowMap.needsUpdate = true;
+    }
+
+    const renderStart = performance.now();
     this.renderer.render(this.scene, this.camera);
+    this.samplePerf(now, renderStart);
     // Yield to the browser so this frame can paint before ADT/village work.
     // setTimeout(0) runs after paint; rAF-sync streaming blocked compositing.
     this.streamArgs = { x: rx, z: rz, dt };
@@ -1451,10 +1532,79 @@ export class Game {
         this.streamTimer = 0;
         if (this.disposed) return;
         const args = this.streamArgs;
-        if (args) this.updateZoneAndStreaming(args.x, args.z, args.dt);
+        if (args) {
+          // Time the post-paint streaming task -- this runs outside frame(), so
+          // its cost is invisible to logicMs but still delays the next vsync.
+          const s0 = performance.now();
+          this.updateZoneAndStreaming(args.x, args.z, args.dt);
+          push120(this.perf.stream, performance.now() - s0);
+        }
       }, 0);
     }
   };
+
+  /** Upload a few freshly-loaded textures to the GPU per frame so a streamed
+   *  region's PNG maps don't texImage2D-stall a single render(). Adaptive: does
+   *  one guaranteed upload, then more only while under a small time budget --
+   *  so one heavy map costs one frame, not the whole batch at once. */
+  private pumpTextureUploads(): void {
+    const start = performance.now();
+    do {
+      const batch = takePendingTextureUploads(1);
+      if (batch.length === 0) break;
+      try {
+        this.renderer.initTexture(batch[0]!);
+      } catch {
+        /* driver rejected this texture; skip it */
+      }
+    } while (performance.now() - start < 2);
+  }
+
+  /** Record one frame's timings. Near-zero cost; drives perfSnapshot(). `now`
+   *  is the rAF timestamp; `renderStart` is performance.now() just before the
+   *  renderer.render() call (same time origin, so logic = renderStart - now). */
+  private samplePerf(now: number, renderStart: number): void {
+    const end = performance.now();
+    const p = this.perf;
+    const prev = (p as unknown as { prevNow?: number }).prevNow;
+    (p as unknown as { prevNow?: number }).prevNow = now;
+    const frameMs = prev ? now - prev : 0;
+    const renderMs = end - renderStart;
+    const logicMs = Math.max(0, renderStart - now);
+    if (frameMs > 0) push120(p.frame, frameMs);
+    push120(p.render, renderMs);
+    push120(p.logic, logicMs);
+    if ((window as unknown as { __rcPerf?: boolean }).__rcPerf && now - p.lastLogAt > 2000) {
+      p.lastLogAt = now;
+      // eslint-disable-next-line no-console
+      console.log("[perf]", JSON.stringify(this.perfSnapshot()));
+    }
+  }
+
+  /** Snapshot of the rolling perf window. Call `__rc.perfSnapshot()` in the DEV
+   *  console, or set `window.__rcPerf = true` to auto-log every 2s. Tells GPU-
+   *  vs CPU-bound apart: high `render` = GPU/draw-bound; high `logic` = main-
+   *  thread JS; high `frame.max` with low avg = hitches (GC / streaming). */
+  perfSnapshot(): Record<string, unknown> {
+    const p = this.perf;
+    const info = this.renderer.info;
+    return {
+      fps: Math.round(1000 / (avg(p.frame) || 16.7)),
+      frameMs: stat(p.frame),
+      renderMs: stat(p.render),
+      logicMs: stat(p.logic),
+      streamMs: stat(p.stream),
+      prewarmMs: stat(p.prewarm),
+      drawCalls: info.render.calls,
+      triangles: info.render.triangles,
+      programs: info.programs?.length ?? 0,
+      geometries: info.memory.geometries,
+      textures: info.memory.textures,
+      shadowAutoUpdate: this.renderer.shadowMap.autoUpdate,
+      shadowMapSize: this.sun.shadow.mapSize.x,
+      pixelRatio: this.renderer.getPixelRatio(),
+    };
+  }
 
   /** Add/remove the mount mesh under the rider when the mount state changes. */
   private syncMount(): void {
@@ -1538,62 +1688,19 @@ export class Game {
         Math.hypot(x - this.continentSyncAt.x, z - this.continentSyncAt.z) > 24;
       if (moved || now - this.continentSyncAt.t > 1500) {
         this.continentSyncAt = { x, z, t: now };
-        // Mount neighbours ahead of the seam, then warm their GPU programs +
-        // textures off-frame so crossing in doesn't hitch (see prewarmScene).
-        void this.continent
-          .syncAround(x, z, this.continentCatalog(), { urgentId: regionId })
-          .then(() => this.prewarmScene());
+        // Mount neighbours ahead of the seam. We deliberately do NOT pre-warm the
+        // scene here: prewarmScene() does a full-scene renderer.compile(), whose
+        // cost grows with scene size (measured up to ~935ms once many regions are
+        // resident) and fired on every new mount -- far worse than the first-draw
+        // stutter it was meant to prevent. Shader programs now compile lazily on
+        // first draw (spread across frames as props enter the frustum) and
+        // textures upload incrementally via pumpTextureUploads().
+        void this.continent.syncAround(x, z, this.continentCatalog(), { urgentId: regionId });
       }
     }
     this.continent?.update(dt, this.sun, x, z, this.camera);
   }
 
-  private prewarming = false;
-  /** Warm the GPU for everything currently in the scene *off* the render frame:
-   *  compile shader programs (compileAsync uses parallel-shader-compile) and
-   *  upload textures. Without this, a freshly-mounted region's materials compile
-   *  and its atlases upload synchronously on the first frame they're drawn --
-   *  the visible "hitch as the map pops in". compile() walks ALL objects (even
-   *  distance-culled/invisible ones), so this readies assets *before* they come
-   *  into view. Both steps skip already-warm programs/textures, so calling it
-   *  after each mount cycle is cheap when nothing new arrived. */
-  private async prewarmScene(): Promise<void> {
-    if (this.prewarming || this.disposed) return;
-    this.prewarming = true;
-    try {
-      try {
-        this.renderer.compile(this.scene, this.camera);
-      } catch {
-        /* skip material compile if a mesh is mid-update */
-      }
-      if (this.disposed) return;
-      // Push texture uploads as well.
-      const seen = new Set<THREE.Texture>();
-      const TEX_SLOTS = ["map", "normalMap", "roughnessMap", "metalnessMap", "emissiveMap", "aoMap"] as const;
-      this.scene.traverse((o) => {
-        const mesh = o as THREE.Mesh;
-        if (!mesh.material) return;
-        const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-        for (const m of mats) {
-          for (const slot of TEX_SLOTS) {
-            const tex = (m as unknown as Record<string, THREE.Texture | null>)[slot];
-            if (tex && !seen.has(tex)) {
-              seen.add(tex);
-              try {
-                this.renderer.initTexture(tex);
-              } catch {
-                /* skip textures the driver rejects */
-              }
-            }
-          }
-        }
-      });
-    } catch {
-      /* prewarm is best-effort; a failure just means the old on-demand path */
-    } finally {
-      this.prewarming = false;
-    }
-  }
 
   /** Mount the continent streamer around the player. Neighbor regions stay
    *  resident across seams — only the first entry (or a far teleport) shows
@@ -1634,6 +1741,12 @@ export class Game {
       if (layer) {
         const local = worldToRegionLocal(layer.blueprint, this.move.x, this.move.z);
         layer.renderer.warmAround(local.x, local.z);
+        // Hold the loading screen until the terrain ring + foliage/props the
+        // player will actually see are fully built -- no pop-in after the veil
+        // drops (and, with server spawn-protection, no dying mid-load).
+        if (showLoading || parentLoading) {
+          await this.waitForRegionLoaded(layer.renderer, layer.ready, local.x, local.z);
+        }
       }
 
       this.move.y = this.continentGroundAt(this.move.x, this.move.z) + 0.05;
@@ -1647,7 +1760,7 @@ export class Game {
       if (showLoading || parentLoading) {
         ui.loadingMessage = "Warming 360° graphics & shaders…";
         ui.loadingProgress = 95;
-        this.prewarm360GpuPass();
+        await this.prewarm360GpuPass();
         ui.loadingProgress = 100;
         if (!parentLoading) ui.loading = false;
       }
@@ -1659,13 +1772,95 @@ export class Game {
     }
   }
 
+  /** Hold until the region content the player will see is fully built: foliage/
+   *  props instancing (renderer.ready) plus the terrain ring around the spawn.
+   *  While the loading screen is up the main frame() loop is idle, so we pump
+   *  the streamer ourselves, yielding a frame between passes so the worker pool
+   *  builds tiles and the progress bar paints. Hard-capped by a deadline so a
+   *  stuck stream can never wedge the loader. */
+  private async waitForRegionLoaded(
+    renderer: RegionInteriorRenderer,
+    ready: Promise<void>,
+    localX: number,
+    localZ: number,
+  ): Promise<void> {
+    const DEADLINE_MS = 20000;
+    const start = performance.now();
+    ui.loadingMessage = "Streaming terrain & assets…";
+
+    // 1. Foliage / props instancing, bounded by the deadline.
+    await Promise.race([ready, new Promise<void>((r) => setTimeout(r, DEADLINE_MS))]).catch(() => {});
+
+    // 2. Terrain ring: pump update() with a generous budget until every tile in
+    //    the load ring around the spawn is meshed (the streamer's own in-flight
+    //    caps bound each pass).
+    while (performance.now() - start < DEADLINE_MS) {
+      if (this.disposed) return;
+      renderer.update(0, this.sun, localX, localZ, this.camera, new StreamBudget(20, 12));
+      if (renderer.isTerrainRingLoaded(localX, localZ)) break;
+      const p = renderer.terrainRingProgress(localX, localZ);
+      ui.loadingProgress = Math.min(94, 78 + Math.round(p * 16));
+      await nextFrame();
+    }
+  }
+
+  /** Pre-compile WebGL shaders for all common creature models, character rigs,
+   *  and spell particle burst effects up front before gameplay begins. */
+  private async prewarmCommonModelShaders(): Promise<void> {
+    if (!this.renderer || !this.camera || !this.scene) return;
+    try {
+      this.entities.prewarmVfx(this.renderer, this.camera);
+
+      const warmupGroup = new THREE.Group();
+      warmupGroup.name = "shader-warmup-staging";
+
+      const modelUrls = new Set<string>([
+        GENDER_MODEL_URLS.male,
+        GENDER_MODEL_URLS.female,
+        WOLF_MODEL,
+        ...Object.values(SKELETON_MODELS),
+        ...Object.values(CREATURE_MODELS).map((m) => m.url),
+      ]);
+
+      for (const url of modelUrls) {
+        try {
+          const gltf = await loadGltf(url);
+          if (gltf?.scene) {
+            const clone = gltf.scene.clone();
+            clone.traverse((o) => {
+              const m = o as THREE.Mesh;
+              if (m.isMesh) {
+                m.castShadow = true;
+                m.receiveShadow = true;
+              }
+            });
+            warmupGroup.add(clone);
+          }
+        } catch {
+          /* skip missing */
+        }
+      }
+
+      this.scene.add(warmupGroup);
+      if (typeof this.renderer.compileAsync === "function") {
+        await this.renderer.compileAsync(this.scene, this.camera);
+      } else {
+        this.renderer.compile(this.scene, this.camera);
+      }
+      this.scene.remove(warmupGroup);
+      warmupGroup.clear();
+    } catch (e) {
+      console.warn("[Game] prewarmCommonModelShaders completed with warning:", e);
+    }
+  }
+
   /** Perform a 360-degree GPU pre-warm sweep pass before dropping the loading screen.
    *  Rotates the camera through 8 cardinal & diagonal angles around the player pose,
    *  updating continent streamers, grass, and rendering 1 frame at each angle.
    *  This pre-compiles all WebGL shaders, terrain splat maps, foliage textures,
    *  creature models, and shadow map depth buffers 360° around the player, making
    *  subsequent camera turns 100% stutter-free. */
-  private prewarm360GpuPass(): void {
+  private async prewarm360GpuPass(): Promise<void> {
     if (!this.renderer || !this.scene || !this.camera) return;
     const px = this.move.x;
     const py = this.move.y;
@@ -1673,6 +1868,9 @@ export class Game {
     const origYaw = this.cameraYaw;
 
     try {
+      // Prewarm common creature and spell shaders first
+      await this.prewarmCommonModelShaders();
+
       // --- Pass 1: compile shaders ---
       // Sweep 8 angles and compile() at each so WebGL programs for every
       // material visible in any direction are built before the player can turn.
@@ -1693,7 +1891,11 @@ export class Game {
         if (this.continent) {
           this.continent.update(0, this.sun, px, pz, this.camera);
         }
-        this.renderer.compile(this.scene, this.camera);
+        if (typeof this.renderer.compileAsync === "function") {
+          await this.renderer.compileAsync(this.scene, this.camera);
+        } else {
+          this.renderer.compile(this.scene, this.camera);
+        }
       }
 
       // --- Pass 2: render (offscreen-equivalent) to upload texture data to VRAM ---
@@ -1827,6 +2029,7 @@ export class Game {
     // authoritative server so prediction doesn't rubber-band at walls/decks.
     const meshResolve = inContinent ? this.continent!.meshResolveWorld : undefined;
     const meshGroundBelow = inContinent ? this.continent!.meshGroundBelowWorld : undefined;
+    const crossesRegionSeam = inContinent ? this.continentCrossesSeam : undefined;
     const seq = ++this.inputSeq;
     this.pending.push({
       seq,
@@ -1837,6 +2040,7 @@ export class Game {
       regionAssets,
       groundAt,
       waterDepthAt,
+      crossesRegionSeam,
     });
     if (this.pending.length > 120) this.pending.shift();
 
@@ -1844,7 +2048,7 @@ export class Game {
     // omits mount (server is authoritative on mount state).
     this.move = stepMovement(
       this.move,
-      { ...input, mount, inDungeon, regionHeightmap, regionAssets, groundAt, waterDepthAt, meshResolve, meshGroundBelow },
+      { ...input, mount, inDungeon, regionHeightmap, regionAssets, groundAt, waterDepthAt, meshResolve, meshGroundBelow, crossesRegionSeam },
       TICK_DT,
     );
     this.connection.send({
@@ -2061,13 +2265,21 @@ export class Game {
     // Inside regions: pull the camera in when the arm hits solid walls so
     // interiors / upstairs rooms stay usable instead of clipping through.
     if (this.continent || this.regionRenderer) {
-      const colliders = this.continent
+      const allColliders = this.continent
         ? this.continent.collidersWorld()
         : [
             ...regionAssetColliders(this.regionRenderer!.assets),
             ...regionVolumeColliders(this.regionRenderer!.terrainVolumes ?? []),
             ...regionBarrierColliders(this.regionRenderer!.blueprint.barrierVolumes),
           ];
+      const maxRange = distance + 4;
+      const colliders = allColliders.filter((c) => {
+        if (c.climbable || c.solid || c.radius <= 0) return false;
+        const dx = c.x - px;
+        const dz = c.z - pz;
+        const lim = maxRange + c.radius;
+        return dx * dx + dz * dz <= lim * lim;
+      });
       const headY = py + 1.5;
       for (let t = 0.6; t < distance; t += 0.35) {
         const sx = px - Math.sin(cy) * (t * Math.cos(cp));
@@ -2075,9 +2287,6 @@ export class Game {
         const sz = pz - Math.cos(cy) * (t * Math.cos(cp));
         let blocked = false;
         for (const c of colliders) {
-          // Invisible barriers use a huge circumradius for player OBB tests —
-          // never treat them as camera blockers (they'd pin the arm at ~1m).
-          if (c.climbable || c.solid || c.radius <= 0) continue;
           if (c.halfX !== undefined && c.halfZ !== undefined) {
             if (!pointInColliderXZ(sx, sz, c, 0.15)) continue;
           } else {
@@ -2724,10 +2933,10 @@ export class Game {
 
   /** Pre-render just a region's minimap thumb (the small raster the on-screen
    *  minimap needs immediately). Cheap; skips if already cached. */
-  private warmMinimapThumb(bp: RegionBlueprint, id: string): void {
+  private async warmMinimapThumb(bp: RegionBlueprint, id: string): Promise<void> {
     if (this.prewarmedMinimaps.has(id)) return;
-    const minimapThumb = renderRegionThumbnail(bp, { edge: 224 });
-    if (!minimapThumb) return;
+    const minimapThumb = await requestRegionThumbnailAsync(bp, { edge: 224 });
+    if (!minimapThumb || this.disposed) return;
     const origin = this.regionWorldOriginOf(id) ?? { x: bp.worldOriginX ?? 0, z: bp.worldOriginZ ?? 0 };
     const halfX = regionHalfSpanX(bp);
     const halfZ = regionHalfSpanZ(bp);
@@ -2747,27 +2956,33 @@ export class Game {
 
   /** Pre-render one region's map rasters (minimap thumb + world-map overview /
    *  land mask / zoom detail). Skips work already cached. */
-  private warmRegionMapRasters(bp: RegionBlueprint, id: string): void {
-    this.warmMinimapThumb(bp, id);
-    if (!this.prewarmedThumbnails.has(id)) {
-      const thumbUrl = renderRegionThumbnail(bp, { edge: OVERVIEW_EDGE });
-      if (thumbUrl) this.prewarmedThumbnails.set(id, thumbUrl);
+  private async warmRegionMapRasters(bp: RegionBlueprint, id: string): Promise<void> {
+    void this.warmMinimapThumb(bp, id);
+    const thumbPromise = this.prewarmedThumbnails.has(id)
+      ? null
+      : requestRegionThumbnailAsync(bp, { edge: OVERVIEW_EDGE });
+    const maskPromise = this.prewarmedLandMasks.has(id)
+      ? null
+      : requestRegionLandMaskAsync(bp, { edge: OVERVIEW_EDGE });
+    const detailPromise = this.prewarmedDetails.has(id)
+      ? null
+      : requestRegionThumbnailAsync(bp, { edge: DETAIL_EDGE });
+
+    const [thumbUrl, maskUrl, detailUrl] = await Promise.all([thumbPromise, maskPromise, detailPromise]);
+    if (thumbUrl && !this.prewarmedThumbnails.has(id)) {
+      this.prewarmedThumbnails.set(id, thumbUrl);
     }
-    if (!this.prewarmedLandMasks.has(id)) {
-      const maskUrl = renderRegionLandMask(bp, { edge: OVERVIEW_EDGE });
-      if (maskUrl) this.prewarmedLandMasks.set(id, maskUrl);
+    if (maskUrl && !this.prewarmedLandMasks.has(id)) {
+      this.prewarmedLandMasks.set(id, maskUrl);
     }
-    if (!this.prewarmedDetails.has(id)) {
-      const detailUrl = renderRegionThumbnail(bp, { edge: 640 });
-      if (detailUrl) this.prewarmedDetails.set(id, detailUrl);
+    if (detailUrl && !this.prewarmedDetails.has(id)) {
+      this.prewarmedDetails.set(id, detailUrl);
     }
   }
 
   /** Pre-render every region's world-map & minimap rasters WITHOUT blocking the
    *  main thread: the region the player is in is warmed first (its minimap is
-   *  needed immediately); everything else warms in the background during idle,
-   *  yielding between each region so the HUD (spell bar, etc.) never stalls
-   *  behind the prewarm. Safe to call from multiple entry points -- runs once. */
+   *  needed immediately); everything else warms in the background worker pool. */
   async prewarmMapAssets(): Promise<void> {
     if (this.mapPrewarmStarted) return;
     this.mapPrewarmStarted = true;
@@ -2776,25 +2991,19 @@ export class Game {
       if (!catalog || catalog.length === 0) return;
       const currentId = ui.regionState?.regionId ?? this.activeRegionId ?? null;
 
-      // Only the current region's small minimap thumb is rendered up front (it's
-      // the raster actually on-screen). Everything else -- the current region's
-      // heavier world-map rasters and all other regions -- streams in during
-      // idle so the HUD never stalls behind it.
       const current = catalog.find((r) => r.id === currentId);
       if (current) {
         const bp = await this.ensureRegionBlueprint(current.id);
-        if (bp) this.warmMinimapThumb(bp, current.id);
+        if (bp) await this.warmMinimapThumb(bp, current.id);
       }
 
       void (async () => {
-        // Current region first (its world map is the most likely to be opened),
-        // then every other region fully.
         const order = current ? [current, ...catalog.filter((r) => r.id !== currentId)] : [...catalog];
         for (const r of order) {
-          await this.mapYield();
           if (this.disposed) return;
           const bp = await this.ensureRegionBlueprint(r.id);
-          if (bp) this.warmRegionMapRasters(bp, r.id);
+          if (bp) await this.warmRegionMapRasters(bp, r.id);
+          await this.mapYield();
         }
       })();
     } catch {

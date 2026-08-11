@@ -1,43 +1,81 @@
-/**
- * Painted-relief minimap thumbnails for the world map. Renders a region's
- * heightmap to a small raster — biome-tinted elevation ramp + NW hillshade +
- * water — so each tile reads as real terrain art instead of a flat polygon.
- *
- * Coordinate convention (matches sampleRegionHeight in content/regions.ts):
- * heights[cz*N + cx] with cx = west→east (0..N-1), cz = south→north (0..N-1).
- * The map tile's screen top-left is (west, north), so the thumbnail's top row
- * is north (cz = N-1) and its left column is west (cx = 0).
- */
-import type { RegionBiome, RegionBlueprint } from "@rustcraft/shared";
-import { BIOME_FILL } from "./worldMapModel";
+/// <reference lib="webworker" />
+import type { RegionBiome } from "@rustcraft/shared";
+import type { ThumbnailSource, ThumbnailOptions } from "../ui/worldMapThumbnail";
 
-export type ThumbnailSource = Pick<
-  RegionBlueprint,
-  "gridSize" | "pitch" | "heights" | "waterHeights" | "biome" | "colorGrading" | "villages" | "roads" | "customTextures" | "assets" | "houses"
->;
-
-/** Longest thumbnail edge in pixels; larger heightmaps are downsampled. */
-const MAX_EDGE = 192;
-
-/** Per-biome water tint (RGB). */
-const WATER_RGB: Record<RegionBiome, [number, number, number]> = {
-  grassland: [40, 96, 150],
-  forest: [32, 82, 120],
-  jungle: [26, 96, 108],
-  desert: [58, 120, 150],
-  arctic: [120, 165, 195],
-  swamp: [46, 84, 70],
-  volcanic: [120, 60, 40],
-  alien: [70, 50, 120],
-  underground: [40, 44, 66],
-  cosmic: [50, 60, 130],
+const BIOME_FILL: Record<RegionBiome, string> = {
+  grassland: "#3b6b47",
+  forest: "#2a4d33",
+  jungle: "#1f5438",
+  desert: "#b89a5b",
+  arctic: "#8ba3b8",
+  swamp: "#384733",
+  volcanic: "#3d2d2a",
+  alien: "#5a2d6b",
+  underground: "#232330",
+  cosmic: "#1a2238",
 };
+
+interface LoadedTexture {
+  data: Uint8ClampedArray;
+  width: number;
+  height: number;
+}
+
+const textureCache: Record<string, LoadedTexture> = {};
+
+let texturesPromise: Promise<void> | null = null;
+
+async function preloadTextureWorker(key: string, url: string): Promise<void> {
+  if (textureCache[key]) return;
+  try {
+    const origin = typeof self !== "undefined" && self.location?.origin ? self.location.origin : "";
+    const fullUrl = url.startsWith("http") ? url : `${origin}${url}`;
+    const res = await fetch(fullUrl);
+    if (!res.ok) return;
+    const blob = await res.blob();
+    const bitmap = await createImageBitmap(blob);
+    const cvs = new OffscreenCanvas(bitmap.width, bitmap.height);
+    const ctx = cvs.getContext("2d");
+    if (!ctx) return;
+    ctx.drawImage(bitmap, 0, 0);
+    const imgData = ctx.getImageData(0, 0, bitmap.width, bitmap.height);
+    textureCache[key] = {
+      data: imgData.data,
+      width: bitmap.width,
+      height: bitmap.height,
+    };
+  } catch (e) {
+    console.warn(`[ThumbnailWorker] Texture load error for ${key}:`, e);
+  }
+}
+
+function ensureTexturesLoaded(): Promise<void> {
+  if (!texturesPromise) {
+    texturesPromise = Promise.all([
+      preloadTextureWorker("grass", "/assets/textures/terrain/grass.jpg"),
+      preloadTextureWorker("dirt", "/assets/textures/terrain/dirt.jpg"),
+      preloadTextureWorker("sand", "/assets/textures/terrain/sand.jpg"),
+      preloadTextureWorker("rock", "/assets/textures/terrain/rock.jpg"),
+      preloadTextureWorker("snow", "/assets/textures/terrain/snow.jpg"),
+      preloadTextureWorker("cobble", "/assets/textures/terrain/cobble.png"),
+      preloadTextureWorker("water", "/assets/textures/water/water_normal.jpg"),
+    ]).then(() => undefined);
+  }
+  return texturesPromise;
+}
+
+// Start loading immediately
+void ensureTexturesLoaded();
 
 function hexToRgb(hex: string): [number, number, number] {
   const h = hex.replace("#", "");
-  const n = h.length === 3
-    ? h.split("").map((c) => c + c).join("")
-    : h.padEnd(6, "0").slice(0, 6);
+  const n =
+    h.length === 3
+      ? h
+          .split("")
+          .map((c) => c + c)
+          .join("")
+      : h.padEnd(6, "0").slice(0, 6);
   const int = parseInt(n, 16);
   return [(int >> 16) & 255, (int >> 8) & 255, int & 255];
 }
@@ -88,67 +126,6 @@ function sampleRoadBlend(src: ThumbnailSource, fx: number, fz: number): number {
   return maxBlend;
 }
 
-/**
- * Render a region thumbnail as a PNG data URL, or null when there is no usable
- * heightmap (caller keeps the flat biome fill). Cheap enough to call per region
- * when the map opens; cache the result by region id upstream.
- */
-export interface ThumbnailOptions {
-  /**
-   * Target raster edge in pixels. The heightmap is sampled BILINEARLY at this
-   * resolution, so a larger edge yields smoother, more detailed relief (crisp
-   * shaded slopes instead of blocky cells) — this is the level-of-detail knob:
-   * a small edge (~160) for the continent overview, a large one (~512) for the
-   * region you zoom into. Clamped to [16, 768].
-   */
-  edge?: number;
-}
-
-/** Longest thumbnail edge for the low-detail continent-overview tier. */
-export const OVERVIEW_EDGE = 512;
-/** Longest thumbnail edge for the high-detail focused-region tier. */
-export const DETAIL_EDGE = 640;
-
-interface LoadedTexture {
-  data: Uint8ClampedArray;
-  width: number;
-  height: number;
-}
-
-const textureCache: Record<string, LoadedTexture> = {};
-
-function preloadTexture(key: string, url: string): void {
-  if (typeof window === "undefined" || textureCache[key]) return;
-  const img = new Image();
-  img.crossOrigin = "anonymous";
-  img.onload = () => {
-    const cvs = document.createElement("canvas");
-    cvs.width = img.width;
-    cvs.height = img.height;
-    const ctx = cvs.getContext("2d");
-    if (ctx) {
-      ctx.drawImage(img, 0, 0);
-      const imgData = ctx.getImageData(0, 0, img.width, img.height);
-      textureCache[key] = {
-        data: imgData.data,
-        width: img.width,
-        height: img.height,
-      };
-    }
-  };
-  img.src = url;
-}
-
-if (typeof window !== "undefined") {
-  preloadTexture("grass", "/assets/textures/terrain/grass.jpg");
-  preloadTexture("dirt", "/assets/textures/terrain/dirt.jpg");
-  preloadTexture("sand", "/assets/textures/terrain/sand.jpg");
-  preloadTexture("rock", "/assets/textures/terrain/rock.jpg");
-  preloadTexture("snow", "/assets/textures/terrain/snow.jpg");
-  preloadTexture("cobble", "/assets/textures/terrain/cobble.png");
-  preloadTexture("water", "/assets/textures/water/water_normal.jpg");
-}
-
 function sampleImageTexture(key: string, u: number, v: number): [number, number, number] | null {
   const tex = textureCache[key];
   if (!tex) return null;
@@ -158,7 +135,8 @@ function sampleImageTexture(key: string, u: number, v: number): [number, number,
   return [tex.data[idx]!, tex.data[idx + 1]!, tex.data[idx + 2]!];
 }
 
-export function renderRegionThumbnail(src: ThumbnailSource, opts?: ThumbnailOptions): string | null {
+async function renderThumbnail(src: ThumbnailSource, opts?: ThumbnailOptions): Promise<Blob | null> {
+  await ensureTexturesLoaded();
   const N = Math.max(16, src.gridSize || 32);
   let heights: ArrayLike<number> = src.heights ?? [];
   if (heights.length < N * N) {
@@ -167,7 +145,6 @@ export function renderRegionThumbnail(src: ThumbnailSource, opts?: ThumbnailOpti
       for (let x = 0; x < N; x++) {
         const nx = (x / N) * 4;
         const nz = (z / N) * 4;
-        // Natural island shape with mountain peaks, river valleys, and coastal bays
         const island = Math.sin(nx * 0.75) * Math.sin(nz * 0.75);
         const mtn1 = Math.exp(-Math.hypot(nx - 2.0, nz - 2.8) * 2.5) * 22;
         const mtn2 = Math.exp(-Math.hypot(nx - 1.4, nz - 1.2) * 2.2) * 18;
@@ -178,17 +155,14 @@ export function renderRegionThumbnail(src: ThumbnailSource, opts?: ThumbnailOpti
     }
     heights = gen;
   }
-  if (typeof document === "undefined") return null;
 
-  const size = Math.max(16, Math.min(opts?.edge ?? MAX_EDGE, 768));
-  const canvas = document.createElement("canvas");
-  canvas.width = size;
-  canvas.height = size;
+  const size = Math.max(16, Math.min(opts?.edge ?? 192, 768));
+  const canvas = new OffscreenCanvas(size, size);
   const ctx = canvas.getContext("2d");
   if (!ctx) return null;
 
-  // Elevation range for normalization.
-  let lo = Infinity, hi = -Infinity;
+  let lo = Infinity,
+    hi = -Infinity;
   for (let i = 0; i < N * N; i++) {
     const v = heights[i] ?? 0;
     if (v < lo) lo = v;
@@ -204,10 +178,12 @@ export function renderRegionThumbnail(src: ThumbnailSource, opts?: ThumbnailOpti
   const sampleGrid = (arr: ArrayLike<number>, fx: number, fz: number): number => {
     const x = fx < 0 ? 0 : fx > N - 1 ? N - 1 : fx;
     const z = fz < 0 ? 0 : fz > N - 1 ? N - 1 : fz;
-    const x0 = Math.floor(x), z0 = Math.floor(z);
+    const x0 = Math.floor(x),
+      z0 = Math.floor(z);
     const x1 = x0 + 1 > N - 1 ? N - 1 : x0 + 1;
     const z1 = z0 + 1 > N - 1 ? N - 1 : z0 + 1;
-    const tx = x - x0, tz = z - z0;
+    const tx = x - x0,
+      tz = z - z0;
     const a = arr[z0 * N + x0]! + (arr[z0 * N + x1]! - arr[z0 * N + x0]!) * tx;
     const b = arr[z1 * N + x0]! + (arr[z1 * N + x1]! - arr[z1 * N + x0]!) * tx;
     return a + (b - a) * tz;
@@ -215,14 +191,14 @@ export function renderRegionThumbnail(src: ThumbnailSource, opts?: ThumbnailOpti
   const H = (fx: number, fz: number): number => sampleGrid(heights, fx, fz);
 
   const relief = 2.5;
-  const lx = -1, ly = 2, lz = 1;
+  const lx = -1,
+    ly = 2,
+    lz = 1;
   const ll = Math.hypot(lx, ly, lz);
   const gstep = 0.5;
 
   const img = ctx.createImageData(size, size);
   const data = img.data;
-
-  // Topographic contour ring bands
   const contourSteps = 12;
 
   for (let py = 0; py < size; py++) {
@@ -232,13 +208,13 @@ export function renderRegionThumbnail(src: ThumbnailSource, opts?: ThumbnailOpti
       const h = H(fx, fz);
       const t = clamp01((h - lo) / span);
 
-      // Topographic contour line
       const contourFrac = (t * contourSteps) % 1;
       const isContour = contourFrac < 0.08;
 
-      let r = 0, g = 0, b = 0;
+      let r = 0,
+        g = 0,
+        b = 0;
 
-      // 3D PNG/JPG Texture sampling for terrain and water
       const pitch = src.pitch || 2;
       const u = (fx * pitch) / 16;
       const v = (fz * pitch) / 16;
@@ -258,18 +234,15 @@ export function renderRegionThumbnail(src: ThumbnailSource, opts?: ThumbnailOpti
       const roadBlend = sampleRoadBlend(src, fx, fz);
 
       if (h <= 0) {
-        // Deep water / Ocean coastal shelf with caustics and foam textures matching 3D world
         const depth = clamp01(-h / 3.5);
         const shallowCyan = [158, 242, 255];
         const deepOcean = [10, 36, 68];
 
-        // Depth-based color gradient
         const tDepth = Math.pow(depth, 0.6);
         r = mix(shallowCyan[0]!, deepOcean[0]!, tDepth);
         g = mix(shallowCyan[1]!, deepOcean[1]!, tDepth);
         b = mix(shallowCyan[2]!, deepOcean[2]!, tDepth);
 
-        // Water normal map & caustics texture overlay from water_normal.jpg
         const caustics = waterTex ? (waterTex[0] + waterTex[1]) / 510 : clamp01((n1 + n2) * 0.5 + 0.5);
         if (depth < 0.5) {
           const causticGlow = (1.0 - depth * 2.0) * caustics * 35;
@@ -278,7 +251,6 @@ export function renderRegionThumbnail(src: ThumbnailSource, opts?: ThumbnailOpti
           b = Math.min(255, b + causticGlow);
         }
 
-        // Shoreline edge foam line flowing along terrain shape
         const waveDist = Math.abs(h);
         if (waveDist < 0.45) {
           const edgeFoam = (1.0 - waveDist / 0.45) * 0.75;
@@ -287,8 +259,6 @@ export function renderRegionThumbnail(src: ThumbnailSource, opts?: ThumbnailOpti
           b = mix(b, 255, edgeFoam);
         }
       } else {
-        // Landmass layered with 3D ground PNG/JPG textures (Sand, Grass, Rock, Snow, Dirt, Cobble)
-        // 1=grass, 2=dirt, 3=cobble, 4=snow, 5=rock, 6=sand
         let customTexKey = "";
         if (customTex === 1) customTexKey = "grass";
         else if (customTex === 2) customTexKey = "dirt";
@@ -311,20 +281,42 @@ export function renderRegionThumbnail(src: ThumbnailSource, opts?: ThumbnailOpti
             }
           }
         } else {
-          // Standard procedural biome terrain
           const isBeach = h <= 1.2 && !snowy;
           if (isBeach) {
-            if (sandTex) { r = sandTex[0]; g = sandTex[1]; b = sandTex[2]; }
-            else { const sandVal = 0.88 + (n1 * 0.08 + n2 * 0.04); r = 224 * sandVal; g = 198 * sandVal; b = 142 * sandVal; }
+            if (sandTex) {
+              r = sandTex[0];
+              g = sandTex[1];
+              b = sandTex[2];
+            } else {
+              const sandVal = 0.88 + (n1 * 0.08 + n2 * 0.04);
+              r = 224 * sandVal;
+              g = 198 * sandVal;
+              b = 142 * sandVal;
+            }
           } else if (snowy) {
-            if (snowTex) { r = mix(snowTex[0], 255, 0.35); g = mix(snowTex[1], 255, 0.35); b = mix(snowTex[2], 255, 0.35); }
-            else { const snowVal = 0.94 + (n1 * 0.04 + n2 * 0.02); r = mix(225, 255, t) * snowVal; g = mix(230, 255, t) * snowVal; b = mix(242, 255, t) * snowVal; }
+            if (snowTex) {
+              r = mix(snowTex[0], 255, 0.35);
+              g = mix(snowTex[1], 255, 0.35);
+              b = mix(snowTex[2], 255, 0.35);
+            } else {
+              const snowVal = 0.94 + (n1 * 0.04 + n2 * 0.02);
+              r = mix(225, 255, t) * snowVal;
+              g = mix(230, 255, t) * snowVal;
+              b = mix(242, 255, t) * snowVal;
+            }
           } else {
-            if (grassTex) { r = mix(grassTex[0] * 0.85, base[0], 0.4); g = mix(grassTex[1] * 0.85, base[1], 0.4); b = mix(grassTex[2] * 0.85, base[2], 0.4); }
-            else { const grassVal = 0.82 + (n1 * 0.12 + n2 * 0.06 + n3 * 0.03); r = mix(base[0] * 0.65, mix(base[0], 210, 0.4), t) * grassVal; g = mix(base[1] * 0.65, mix(base[1], 200, 0.4), t) * grassVal; b = mix(base[2] * 0.65, mix(base[2], 185, 0.4), t) * grassVal; }
+            if (grassTex) {
+              r = mix(grassTex[0] * 0.85, base[0], 0.4);
+              g = mix(grassTex[1] * 0.85, base[1], 0.4);
+              b = mix(grassTex[2] * 0.85, base[2], 0.4);
+            } else {
+              const grassVal = 0.82 + (n1 * 0.12 + n2 * 0.06 + n3 * 0.03);
+              r = mix(base[0] * 0.65, mix(base[0], 210, 0.4), t) * grassVal;
+              g = mix(base[1] * 0.65, mix(base[1], 200, 0.4), t) * grassVal;
+              b = mix(base[2] * 0.65, mix(base[2], 185, 0.4), t) * grassVal;
+            }
           }
 
-          // High mountain rock ridges PNG/JPG texture (rock.jpg)
           if (t > 0.55) {
             const rf = clamp01((t - 0.55) / 0.45);
             if (rockTex && !snowy) {
@@ -334,12 +326,13 @@ export function renderRegionThumbnail(src: ThumbnailSource, opts?: ThumbnailOpti
             } else {
               const rockVal = 0.76 + (n1 * 0.16 + n2 * 0.08);
               const rock = snowy ? [190, 195, 205] : [135 * rockVal, 128 * rockVal, 120 * rockVal];
-              r = mix(r, rock[0]!, rf); g = mix(g, rock[1]!, rf); b = mix(b, rock[2]!, rf);
+              r = mix(r, rock[0]!, rf);
+              g = mix(g, rock[1]!, rf);
+              b = mix(b, rock[2]!, rf);
             }
           }
         }
 
-        // Apply Painted Road Blend (dirt paths painted via Road tool)
         if (roadBlend > 0) {
           const dirtSample = sampleImageTexture("dirt", u, v) ?? [160, 130, 95];
           r = mix(r, dirtSample[0], roadBlend * 0.9);
@@ -348,7 +341,6 @@ export function renderRegionThumbnail(src: ThumbnailSource, opts?: ThumbnailOpti
         }
       }
 
-      // Water overlay check for inland lakes / rivers
       if (waterArr && h > 0) {
         const wd = sampleGrid(waterArr, fx, fz);
         if (wd > 0.05) {
@@ -363,7 +355,6 @@ export function renderRegionThumbnail(src: ThumbnailSource, opts?: ThumbnailOpti
           g = mix(g, wg, m);
           b = mix(b, wb, m);
 
-          // Caustics on lake water
           const caustics = clamp01((n1 + n2) * 0.5 + 0.5) * 30 * (1.0 - depthRatio);
           r = Math.min(255, r + caustics);
           g = Math.min(255, g + caustics);
@@ -371,7 +362,6 @@ export function renderRegionThumbnail(src: ThumbnailSource, opts?: ThumbnailOpti
         }
       }
 
-      // NW hillshading
       const dhx = H(fx + gstep, fz) - H(fx - gstep, fz);
       const dhz = H(fx, fz + gstep) - H(fx, fz - gstep);
       const nx = -dhx * relief;
@@ -381,12 +371,10 @@ export function renderRegionThumbnail(src: ThumbnailSource, opts?: ThumbnailOpti
       const dot = (nx * lx + ny * ly + nz * lz) / (nl * ll);
       let shade = clamp01(0.65 + 0.85 * dot) + 0.12;
 
-      // Darken topographic contour line
       if (isContour && h > 0) {
         shade *= 0.82;
       }
 
-      // Ocean edge alpha fade for seamless blending into the map ocean background
       let edgeAlpha = 1.0;
       if (h <= 0) {
         const marginX = Math.min(px, size - 1 - px) / (size * 0.06);
@@ -404,7 +392,6 @@ export function renderRegionThumbnail(src: ThumbnailSource, opts?: ThumbnailOpti
   }
   ctx.putImageData(img, 0, 0);
 
-  // Overlay roads: draw real blueprint roads or paths connecting real villages/hubs
   const halfSpan = (N * src.pitch) / 2;
   const worldToCanvas = (lx: number, lz: number): [number, number] => {
     const px = ((lx + halfSpan) / (N * src.pitch)) * size;
@@ -415,7 +402,6 @@ export function renderRegionThumbnail(src: ThumbnailSource, opts?: ThumbnailOpti
   const villages = src.villages ?? [];
   const villageCoords = villages.map((v) => worldToCanvas(v.localX, v.localZ));
 
-  // Draw road paths connecting village hubs
   if (villageCoords.length >= 2) {
     ctx.lineWidth = Math.max(3, size / 60);
     ctx.strokeStyle = "rgba(70, 48, 24, 0.85)";
@@ -435,10 +421,6 @@ export function renderRegionThumbnail(src: ThumbnailSource, opts?: ThumbnailOpti
     ctx.stroke();
   }
 
-  // Village houses remain legible at every map zoom as small neutral-grey
-  // squares. `category: "building"` is deliberately not sufficient: it also
-  // covers wells, markets, barrels and fences used as village set dressing.
-  // Limit the symbol to the actual house models (plus procedural houses).
   const isVillageStructure = (localX: number, localZ: number): boolean =>
     villages.some((v) => Math.hypot(localX - v.localX, localZ - v.localZ) <= v.radius + 12);
   const isHouseModel = (model: string): boolean =>
@@ -462,7 +444,6 @@ export function renderRegionThumbnail(src: ThumbnailSource, opts?: ThumbnailOpti
     ctx.strokeRect(x - houseSide / 2, y - houseSide / 2, houseSide, houseSide);
   }
 
-  // Draw real village settlement hub circles
   for (const [vx, vy] of villageCoords) {
     ctx.fillStyle = "rgba(165, 115, 60, 0.95)";
     ctx.strokeStyle = "rgba(50, 30, 10, 0.9)";
@@ -473,7 +454,6 @@ export function renderRegionThumbnail(src: ThumbnailSource, opts?: ThumbnailOpti
     ctx.stroke();
   }
 
-  // Draw mountain peak hatchings (▲▲▲) dynamically at local elevation peaks in the real 3D heightmap
   const drawMtnPeak = (cx: number, cy: number, w: number, h: number) => {
     ctx.strokeStyle = "rgba(60, 65, 75, 0.75)";
     ctx.lineWidth = 1.5;
@@ -497,7 +477,6 @@ export function renderRegionThumbnail(src: ThumbnailSource, opts?: ThumbnailOpti
     for (let x = step; x < N - step; x += step) {
       const hVal = heights[z * N + x]!;
       if (hVal > peakThreshold) {
-        // Confirm local maximum
         const isPeak =
           hVal >= heights[(z - 1) * N + x]! &&
           hVal >= heights[(z + 1) * N + x]! &&
@@ -512,22 +491,16 @@ export function renderRegionThumbnail(src: ThumbnailSource, opts?: ThumbnailOpti
     }
   }
 
-  return canvas.toDataURL("image/png");
+  return canvas.convertToBlob({ type: "image/png" });
 }
 
-/**
- * Render a transparent land-only mask PNG (alpha=255 for dry land, alpha=0 for water/ocean).
- * Used by WorldMap to render dynamic shoreline glows that conform precisely to non-water terrain.
- */
-export function renderRegionLandMask(src: ThumbnailSource, opts?: ThumbnailOptions): string | null {
+async function renderLandMask(src: ThumbnailSource, opts?: ThumbnailOptions): Promise<Blob | null> {
   const N = Math.max(16, src.gridSize || 32);
   const heights = src.heights ?? [];
-  if (heights.length < N * N || typeof document === "undefined") return null;
+  if (heights.length < N * N) return null;
 
-  const size = Math.max(16, Math.min(opts?.edge ?? MAX_EDGE, 768));
-  const canvas = document.createElement("canvas");
-  canvas.width = size;
-  canvas.height = size;
+  const size = Math.max(16, Math.min(opts?.edge ?? 192, 768));
+  const canvas = new OffscreenCanvas(size, size);
   const ctx = canvas.getContext("2d");
   if (!ctx) return null;
 
@@ -536,10 +509,12 @@ export function renderRegionLandMask(src: ThumbnailSource, opts?: ThumbnailOptio
   const sampleGrid = (arr: ArrayLike<number>, fx: number, fz: number): number => {
     const x = fx < 0 ? 0 : fx > N - 1 ? N - 1 : fx;
     const z = fz < 0 ? 0 : fz > N - 1 ? N - 1 : fz;
-    const x0 = Math.floor(x), z0 = Math.floor(z);
+    const x0 = Math.floor(x),
+      z0 = Math.floor(z);
     const x1 = x0 + 1 > N - 1 ? N - 1 : x0 + 1;
     const z1 = z0 + 1 > N - 1 ? N - 1 : z0 + 1;
-    const tx = x - x0, tz = z - z0;
+    const tx = x - x0,
+      tz = z - z0;
     const a = arr[z0 * N + x0]! + (arr[z0 * N + x1]! - arr[z0 * N + x0]!) * tx;
     const b = arr[z1 * N + x0]! + (arr[z1 * N + x1]! - arr[z1 * N + x0]!) * tx;
     return a + (b - a) * tz;
@@ -573,5 +548,22 @@ export function renderRegionLandMask(src: ThumbnailSource, opts?: ThumbnailOptio
   }
 
   ctx.putImageData(img, 0, 0);
-  return canvas.toDataURL("image/png");
+  return canvas.convertToBlob({ type: "image/png" });
 }
+
+interface InMsg {
+  reqId: number;
+  kind: "thumbnail" | "mask";
+  src: ThumbnailSource;
+  opts?: ThumbnailOptions;
+}
+
+self.onmessage = async (e: MessageEvent<InMsg>) => {
+  const { reqId, kind, src, opts } = e.data;
+  try {
+    const blob = kind === "mask" ? await renderLandMask(src, opts) : await renderThumbnail(src, opts);
+    (self as unknown as Worker).postMessage({ reqId, blob });
+  } catch (err) {
+    (self as unknown as Worker).postMessage({ reqId, blob: null, error: String(err) });
+  }
+};

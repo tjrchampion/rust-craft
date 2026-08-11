@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { game as ui } from "./gameState.svelte";
+  import { app } from "./appState.svelte";
   import { getGame } from "../game/instance";
 
   let visible = $state(true);
@@ -48,10 +49,18 @@
       const y = inGame ? ui.cursorY : realY;
       if (containerEl) containerEl.style.transform = `translate3d(${x}px, ${y}px, 0)`;
 
-      // Hidden only while turning the camera (right-drag); otherwise shown,
-      // whether the pointer is captured (virtual cursor) or free (panel).
-      const wantVisible = !ui.isRightClickDragging;
+      // Hidden while turning the camera (right-drag) AND during any loading
+      // screen: the boot loader, the in-game region loader, and while a pre-game
+      // screen is still parsing its 3D models. Those loads block the main
+      // thread, so a visible cursor just stutters -- better to hide it until the
+      // loading screen clears (no cursor before the world is ready).
+      const loading = app.screen === "loading" || app.assetsLoading || ui.loading;
+      const wantVisible = !ui.isRightClickDragging && !loading;
       if (visible !== wantVisible) visible = wantVisible;
+
+      // Skip the (layout-forcing) hover hit-test while hidden -- pure waste, and
+      // elementFromPoint during a load only adds to the stall.
+      if (!wantVisible) return;
 
       const now = performance.now();
       if (now - lastCheckTime > 32) {

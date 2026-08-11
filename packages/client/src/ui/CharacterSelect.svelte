@@ -193,10 +193,14 @@
 
   onMount(() => {
     scene = new ClassPreviewScene(canvas, { pedestal: false });
+    app.assetsLoading = true;
     void scene
       .preloadAll()
       .then(() => scene?.setClass(stageClassId, stageAppearance.gender, stageAppearance, stageEquip))
-      .finally(() => (previewLoading = false));
+      .finally(() => {
+        previewLoading = false;
+        app.assetsLoading = false;
+      });
     // Fire-and-forget: warm base rigs / anim libs / hair while the player
     // browses character select. Modular outfit parts load on equip instead
     // of preloading every gender×slot GLTF (that path used to balloon VRAM).
@@ -206,6 +210,7 @@
     return () => {
       window.removeEventListener("resize", onResize);
       scene?.dispose();
+      app.assetsLoading = false;
     };
   });
 
@@ -330,7 +335,7 @@
     <button class="linkish" onclick={() => void app.logout()}>sign out</button>
   </div>
 
-  {#if mode === "select"}
+  {#if mode === "select" && !previewLoading}
     <div class="news-updates-panel rc-frame">
       <div class="news-panel-header">
         <span class="news-panel-title">📜 REALM NEWS & UPDATES</span>

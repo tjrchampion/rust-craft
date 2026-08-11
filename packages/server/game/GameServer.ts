@@ -156,12 +156,12 @@ import {
   InputMsg,
 } from "@rustcraft/shared";
 import {
-  buildRegionCollisionBVH,
   resolveCapsule,
   sampleGroundBelow,
   disposeRegionCollision,
   type RegionCollision,
   type PlacedCollider,
+  type CollisionMeshData,
 } from "@rustcraft/shared/collision";
 import { eq } from "drizzle-orm";
 import { db, schema } from "../db/client";
@@ -170,6 +170,7 @@ import {
   hasServerCollisionMesh,
   collisionModelKey,
 } from "../utils/collision";
+import { getRegionCollisionWorker } from "./regionCollisionWorker";
 import {
   type InvItem,
   type Container,
@@ -272,6 +273,11 @@ interface PlayerState {
   inventory: InvItem[];
   selectedSlot: number;
   dead: boolean;
+  /** Spawn protection window: true from join until the client sends `ready`
+   *  (region loaded) or `loadingUntil` passes. While true the player takes no
+   *  damage, so it can't die mid-load in a hostile area. */
+  loading: boolean;
+  loadingUntil: number;
   inputQueue: QueuedInput[];
   lastAckSeq: number;
   lastMoveMag: number;
@@ -482,6 +488,12 @@ export class GameServer {
    *  unregister so an editor edit re-bakes. `null` = built but nothing to
    *  collide (all assets un-meshed). Headless three-mesh-bvh. */
   private regionCollisionCache = new Map<string, RegionCollision | null>();
+  /** Regions whose BVH is currently building off-thread — gates re-dispatch so
+   *  we kick one worker build per region, not one per movement tick. */
+  private regionCollisionBuilding = new Set<string>();
+  /** Per-region build token. Bumped on invalidate so an in-flight worker result
+   *  for a since-edited/removed region is discarded instead of caching stale. */
+  private regionCollisionBuildSeq = new Map<string, number>();
   /** Capsule feet→head height (matches movement.ts's 1.7m head offset). */
   private static readonly PLAYER_CAPSULE_HEIGHT = 1.7;
   /** Regions whose NPCs/nodes/events (and dormant mob roster) are live.
@@ -695,6 +707,10 @@ export class GameServer {
       inventory: persisted.inventory,
       selectedSlot: 0,
       dead,
+      // Spawn protection until the client reports its region loaded (or 30s
+      // elapses as a safety net) -- see damagePlayer / the `ready` message.
+      loading: !dead,
+      loadingUntil: Date.now() + 30000,
       inputQueue: [],
       lastAckSeq: 0,
       lastMoveMag: 0,
@@ -1004,6 +1020,10 @@ export class GameServer {
         break;
       case "respawn":
         this.handleRespawn(player);
+        break;
+      case "ready":
+        // Region finished loading client-side -- lift spawn protection.
+        player.loading = false;
         break;
       case "pvp":
         this.handlePvpToggle(player, parsed.enabled);
@@ -3023,46 +3043,74 @@ export class GameServer {
     return out;
   }
 
-  /** Lazily build (and cache) the world-baked BVH collision for a region's
-   *  solid assets. Returns null when the region has no meshed solids. */
+  /** Region BVH collision, built lazily and OFF-THREAD. Returns the cached BVH
+   *  once ready, or null while it's still building (movement uses the analytic
+   *  box/circle colliders in the meantime — same fallback as the client). The
+   *  build is dispatched to a worker so a ~0.5s bake never stalls the loop for
+   *  every connected player. */
   private getRegionCollision(regionId: string): RegionCollision | null {
     const cached = this.regionCollisionCache.get(regionId);
-    if (cached !== undefined) return cached;
+    if (cached !== undefined) return cached; // ready (BVH or final null)
+    if (this.regionCollisionBuilding.has(regionId)) return null; // in flight
     const bp = this.regionBlueprints.get(regionId);
     if (!bp) {
       this.regionCollisionCache.set(regionId, null);
       return null;
     }
     const placed: PlacedCollider[] = [];
+    const meshes: Record<string, CollisionMeshData> = {};
     for (const a of regionAllAssets(bp)) {
       if (!a.solid) continue;
       const key = collisionModelKey(a.category, a.model);
       if (!hasServerCollisionMesh(key)) continue;
-      const sx = a.scaleX ?? a.scale ?? 1;
-      const sy = a.scaleY ?? a.scale ?? 1;
-      const sz = a.scaleZ ?? a.scale ?? 1;
+      const mesh = getServerCollisionMesh(key);
+      if (mesh) meshes[key] = mesh;
       placed.push({
         modelKey: key,
         x: a.localX,
         y: a.localY,
         z: a.localZ,
         yaw: a.yaw,
-        scaleX: sx,
-        scaleY: sy,
-        scaleZ: sz,
+        scaleX: a.scaleX ?? a.scale ?? 1,
+        scaleY: a.scaleY ?? a.scale ?? 1,
+        scaleZ: a.scaleZ ?? a.scale ?? 1,
       });
     }
+    if (placed.length === 0) {
+      this.regionCollisionCache.set(regionId, null);
+      return null;
+    }
     const origin = regionWorldOrigin(bp);
-    const col = buildRegionCollisionBVH(placed, getServerCollisionMesh, { x: origin.x, z: origin.z });
-    this.regionCollisionCache.set(regionId, col);
-    return col;
+    const token = (this.regionCollisionBuildSeq.get(regionId) ?? 0) + 1;
+    this.regionCollisionBuildSeq.set(regionId, token);
+    this.regionCollisionBuilding.add(regionId);
+    void getRegionCollisionWorker()
+      .build(placed, meshes, { x: origin.x, z: origin.z })
+      .then((col) => {
+        // Discard if the region was invalidated/removed while building (a newer
+        // token means a re-bake was requested; drop this stale result).
+        if (this.regionCollisionBuildSeq.get(regionId) !== token) {
+          if (col) disposeRegionCollision(col);
+          return;
+        }
+        this.regionCollisionCache.set(regionId, col);
+      })
+      .catch((err) => {
+        console.error("[game] region collision build failed:", err);
+      })
+      .finally(() => {
+        this.regionCollisionBuilding.delete(regionId);
+      });
+    return null;
   }
 
-  /** Drop a region's cached BVH so the next movement tick re-bakes it. */
+  /** Drop a region's cached BVH so the next movement tick re-bakes it. Bumps the
+   *  build token so any in-flight worker build for this region is discarded. */
   private invalidateRegionCollision(regionId: string): void {
     const cached = this.regionCollisionCache.get(regionId);
     if (cached) disposeRegionCollision(cached);
     this.regionCollisionCache.delete(regionId);
+    this.regionCollisionBuildSeq.set(regionId, (this.regionCollisionBuildSeq.get(regionId) ?? 0) + 1);
   }
 
   private handleRegionPortal(player: PlayerState, targetRegionId: string, portalId?: string): void {
@@ -4153,6 +4201,13 @@ export class GameServer {
     outcome: CombatOutcome = "hit",
   ): void {
     if (player.dead) return;
+    // Spawn protection: no damage while the player is still loading its region
+    // (until the client's `ready`, or the loadingUntil safety timeout). Prevents
+    // dying in a hostile area before anything has rendered.
+    if (player.loading) {
+      if (Date.now() < player.loadingUntil) return;
+      player.loading = false; // safety timeout elapsed -- treat as live
+    }
     // Single choke point for all incoming damage (melee, mob attacks, spells,
     // aura DoTs) so equipped armor passively mitigates everything uniformly.
     const amount = rawAmount * armorMitigation(this.computeStats(player).armor) * (player.blocking ? 0.5 : 1);
@@ -4288,6 +4343,18 @@ export class GameServer {
       ? (x: number, z: number, fromY: number, maxDrop: number) =>
           sampleGroundBelow(regionCol, x, z, fromY, PLAYER_BODY_RADIUS, maxDrop)
       : undefined;
+    // At a shared seam between two independently-sculpted regions the edge
+    // heights can differ by many meters; without this the cliff guard in
+    // stepMovement would treat every region border as a cliff and freeze the
+    // player at the edge. Only a true region-to-region crossing lifts the
+    // guard -- stepping into the void (no neighbor) still blocks.
+    const crossesRegionSeam = inContinent
+      ? (x0: number, z0: number, x1: number, z1: number) => {
+          const a = findRegionAtWorld(this.regionBlueprints.values(), x0, z0);
+          const b = findRegionAtWorld(this.regionBlueprints.values(), x1, z1);
+          return a !== null && b !== null && a.id !== b.id;
+        }
+      : undefined;
     const moveOpts = {
       mount: player.mount,
       inDungeon,
@@ -4296,6 +4363,7 @@ export class GameServer {
       regionAssets,
       meshResolve,
       meshGroundBelow,
+      crossesRegionSeam,
     };
     if (inputs.length === 0) {
       // Keep physics ticking (falling, water) even without fresh input.

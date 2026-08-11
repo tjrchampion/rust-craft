@@ -239,12 +239,17 @@ export class NodeManager {
   /** Spatial windowing (throttled) + per-frame shake/particle animation. */
   update(px: number, pz: number, timeMs: number, dt = 0.016): void {
     // Windowing: only re-evaluate which nodes are in-scene a few times a second.
-    if (timeMs - this.lastWindowUpdate >= 800) {
+    if (timeMs - this.lastWindowUpdate >= 500) {
       this.lastWindowUpdate = timeMs;
+      let buildBudget = 4;
       for (const entry of this.nodes.values()) {
         const near = dist2D(px, pz, entry.node.x, entry.node.z) < VISIBLE_RADIUS;
         if (near && !entry.inScene) {
-          if (!entry.mesh) entry.mesh = this.buildMesh(entry.node);
+          if (!entry.mesh) {
+            if (buildBudget <= 0) continue;
+            entry.mesh = this.buildMesh(entry.node);
+            buildBudget--;
+          }
           entry.mesh.visible = !entry.depleted;
           this.scene.add(entry.mesh);
           entry.inScene = true;

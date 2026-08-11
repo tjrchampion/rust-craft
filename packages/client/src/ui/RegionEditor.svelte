@@ -25,6 +25,7 @@
     type RegionQuestObjectiveKind,
     type RegionNPC,
     type QuickGrassSettings,
+    VENDORS,
   } from "@rustcraft/shared";
   import {
     RegionEditorScene,
@@ -3066,6 +3067,14 @@
         {:else if sel.markerKind === "npc"}
           <label>NPC Name <input type="text" value={sel.npcData?.name ?? sel.name} onchange={(e) => applyPatch({ name: (e.target as HTMLInputElement).value, npcData: { ...sel.npcData, name: (e.target as HTMLInputElement).value } })} /></label>
           <label>Title <input type="text" value={sel.npcData?.title ?? "<Questgiver>"} onchange={(e) => applyPatch({ npcData: { ...sel.npcData, title: (e.target as HTMLInputElement).value } })} /></label>
+          <label>Vendor Type
+            <select value={sel.npcData?.vendorId ?? ""} onchange={(e) => applyPatch({ npcData: { ...sel.npcData, vendorId: (e.target as HTMLSelectElement).value || undefined } })}>
+              <option value="">— None (Quest Giver) —</option>
+              {#each Object.values(VENDORS) as v}
+                <option value={v.id}>{v.name} — {v.title}</option>
+              {/each}
+            </select>
+          </label>
           <label>Model
             <select value={sel.npcData?.model ?? "Knight"} onchange={(e) => applyPatch({ npcData: { ...sel.npcData, model: (e.target as HTMLSelectElement).value } })}>
               <option value="Knight">Knight</option>
@@ -3084,6 +3093,9 @@
             <textarea rows="2" value={sel.npcData?.dialogue ?? ""} onchange={(e) => applyPatch({ npcData: { ...sel.npcData, dialogue: (e.target as HTMLTextAreaElement).value } })}></textarea>
           </label>
 
+          {#if sel.npcData?.vendorId}
+            <p class="hint">This NPC is a merchant. Interacting opens the vendor shop; quests are disabled.</p>
+          {:else}
           <div class="quest-section">
             <div class="quest-header">
               <h4>📜 Quests Offered</h4>
@@ -3144,6 +3156,7 @@
               </div>
             {/each}
           </div>
+          {/if}
         {/if}
         {#if sel.kind === "asset" && sel.category === "foliage"}
           <button class="build-village-btn" onclick={() => scene?.convertSelectedFoliageToResourceNodes()}>

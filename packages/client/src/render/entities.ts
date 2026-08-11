@@ -75,6 +75,7 @@ interface RemoteEntity {
   model: AnimatedModel;
   /** When set, `loadFrom` has not run yet — filled once the camera is near. */
   pendingLoad: { url: string; height: number; tint?: number } | null;
+  inLoadQueue?: boolean;
   nameplate?: THREE.Sprite;
   hpBar?: THREE.Sprite;
   partyTag?: string;
@@ -308,6 +309,7 @@ export class EntityManager {
    *  procedural quarks system built from SCHOOL_VFX for schools without one
    *  extracted yet. */
   private spellVfx: SpellVfxSystem;
+  private renderer: THREE.WebGLRenderer | null = null;
   /** Shader-driven flash layered on top of the particle burst -- particles
    *  alone read weak for the instantaneous punch a hit wants, this adds a
    *  school-parametrized noise/ring/spoke flash at the impact point. */
@@ -316,6 +318,10 @@ export class EntityManager {
    *  glows) -- follow the body instead of firing once at the impact point.
    *  See CharacterAuras; driven from Game via syncSelfBuffs / spawnHealAura. */
   private characterAuras = new CharacterAuras();
+  /** Queue of mobs awaiting model load/skeleton cloning within load radius.
+   *  Throttled to at most 1 mob per animation frame to prevent frame hitches. */
+  private pendingMobLoadQueue: RemoteEntity[] = [];
+  private inFlightMobLoad = false;
   /** Client Display settings -- toggled from System → Settings. */
   showPlayerNameplates = true;
   showMobNameplates = true;
@@ -342,10 +348,15 @@ export class EntityManager {
     this.scene.add(this.targetRing);
   }
 
+  setRenderer(renderer: THREE.WebGLRenderer): void {
+    this.renderer = renderer;
+  }
+
   /** Create the spell VFX materials/geometries once up front so the first
    *  spell burst no longer pays their initialization cost on the critical
    *  frame. */
   prewarmVfx(renderer?: THREE.WebGLRenderer, camera?: THREE.Camera): void {
+    if (renderer) this.renderer = renderer;
     for (const school of Object.keys(SCHOOL_VFX) as Array<keyof typeof SCHOOL_VFX>) {
       const profile = schoolProfile(school);
       const pool = this.sparkPools.get(school) ?? [];
@@ -387,7 +398,11 @@ export class EntityManager {
     }
 
     if (renderer && camera) {
-      renderer.compile(this.scene, camera);
+      if (typeof renderer.compileAsync === "function") {
+        void renderer.compileAsync(this.scene, camera).catch(() => {});
+      } else {
+        renderer.compile(this.scene, camera);
+      }
     }
 
     // Now turn everything invisible
@@ -1258,13 +1273,12 @@ export class EntityManager {
         this.cullSphere.center.set(entity.group.position.x, entity.group.position.y + 1, entity.group.position.z);
         inView = this.cullFrustum.intersectsSphere(this.cullSphere);
 
-        if (entity.pendingLoad) {
+        if (entity.pendingLoad && !entity.inLoadQueue) {
           const dx = entity.group.position.x - camera.position.x;
           const dz = entity.group.position.z - camera.position.z;
           if (dx * dx + dz * dz <= MOB_MODEL_LOAD_RADIUS * MOB_MODEL_LOAD_RADIUS) {
-            const pending = entity.pendingLoad;
-            entity.pendingLoad = null;
-            void entity.model.loadFrom(pending.url, pending.height, pending.tint);
+            entity.inLoadQueue = true;
+            this.pendingMobLoadQueue.push(entity);
           }
         }
       }
@@ -1307,6 +1321,8 @@ export class EntityManager {
         }
       }
     }
+
+    this.pumpMobLoadQueue(camera);
 
     this.updateTargetRing();
 
@@ -1622,7 +1638,60 @@ export class EntityManager {
     return this.entities.get(id)?.group ?? null;
   }
 
+  private pumpMobLoadQueue(camera: THREE.Camera | undefined): void {
+    if (this.inFlightMobLoad || this.pendingMobLoadQueue.length === 0) return;
+
+    // Prune stale/despawned entries
+    while (this.pendingMobLoadQueue.length > 0) {
+      const next = this.pendingMobLoadQueue[0]!;
+      if (!this.entities.has(next.id) || !next.pendingLoad) {
+        this.pendingMobLoadQueue.shift();
+        next.inLoadQueue = false;
+        continue;
+      }
+      break;
+    }
+    if (this.pendingMobLoadQueue.length === 0) return;
+
+    // Sort by proximity to camera so the closest mob loads first
+    if (camera && this.pendingMobLoadQueue.length > 1) {
+      const cx = camera.position.x;
+      const cz = camera.position.z;
+      this.pendingMobLoadQueue.sort((a, b) => {
+        const dxa = a.group.position.x - cx;
+        const dza = a.group.position.z - cz;
+        const dxb = b.group.position.x - cx;
+        const dzb = b.group.position.z - cz;
+        return dxa * dxa + dza * dza - (dxb * dxb + dzb * dzb);
+      });
+    }
+
+    const entity = this.pendingMobLoadQueue.shift();
+    if (!entity || !entity.pendingLoad) return;
+    const pending = entity.pendingLoad;
+    entity.pendingLoad = null;
+    this.inFlightMobLoad = true;
+
+    void entity.model
+      .loadFrom(pending.url, pending.height, pending.tint)
+      .then(() => {
+        if (this.renderer && camera) {
+          if (typeof this.renderer.compileAsync === "function") {
+            void this.renderer.compileAsync(entity.group, camera).catch(() => {});
+          } else {
+            this.renderer.compile(entity.group, camera);
+          }
+        }
+      })
+      .catch(() => {})
+      .finally(() => {
+        this.inFlightMobLoad = false;
+        entity.inLoadQueue = false;
+      });
+  }
+
   private disposeEntity(entity: RemoteEntity): void {
+    entity.inLoadQueue = false;
     this.characterAuras.clearGroup(entity.group);
     this.scene.remove(entity.group);
     if (entity.nameplate) {
@@ -1634,6 +1703,8 @@ export class EntityManager {
   }
 
   clear(): void {
+    this.pendingMobLoadQueue.length = 0;
+    this.inFlightMobLoad = false;
     for (const e of this.entities.values()) this.disposeEntity(e);
     for (const p of this.projectiles.values()) {
       const core = p.group.getObjectByName("core");
