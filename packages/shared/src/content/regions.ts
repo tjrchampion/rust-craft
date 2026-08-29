@@ -30,11 +30,175 @@ export const REGION_BIOME_LABELS: Record<RegionBiome, string> = {
   desert: "Deserts",
   arctic: "Arctic & Tundra",
   swamp: "Swamps & Wetlands",
-  volcanic: "Volcanic / Badlands",
+  volcanic: "Volcanoes / Badlands",
   alien: "Alien / Otherworldly",
-  underground: "Underground / Subterranean",
-  cosmic: "Cosmic / Spiritual Plane",
+  underground: "Wastelands / Subterranean",
+  cosmic: "Magical / Spiritual Plane",
 };
+
+export interface RegionBiomeDetail {
+  id: RegionBiome;
+  title: string;
+  subtitle: string;
+  description: string;
+  icon: string;
+  recommendedLevels: [number, number];
+  tags: string[];
+}
+
+export const REGION_BIOME_DETAILS: Record<RegionBiome, RegionBiomeDetail> = {
+  forest: {
+    id: "forest",
+    title: "Forests",
+    subtitle: "Temperate Woodlands",
+    description: "Woodland areas with paths, hidden camps, and starter quests.",
+    icon: "🌲",
+    recommendedLevels: [1, 5],
+    tags: ["Woodlands", "Starter Quests", "Timber"],
+  },
+  jungle: {
+    id: "jungle",
+    title: "Jungles",
+    subtitle: "Tropical Wilds",
+    description: "Tropical zones with dense plants, wild beasts, and ruins.",
+    icon: "🌴",
+    recommendedLevels: [10, 20],
+    tags: ["Tropical", "Wild Beasts", "Ancient Ruins"],
+  },
+  desert: {
+    id: "desert",
+    title: "Deserts",
+    subtitle: "Arid Dunes & Canyons",
+    description: "Dry expanses containing canyons, ruins, and high-level monsters.",
+    icon: "🏜️",
+    recommendedLevels: [25, 40],
+    tags: ["Canyons", "Dunes", "Relics"],
+  },
+  arctic: {
+    id: "arctic",
+    title: "Tundras",
+    subtitle: "Glacial Peaks & Frost Plains",
+    description: "Snowy mountains and frozen plains with low visibility.",
+    icon: "❄️",
+    recommendedLevels: [35, 50],
+    tags: ["Snowy Mountains", "Glaciers", "Frozen Beasts"],
+  },
+  swamp: {
+    id: "swamp",
+    title: "Swamps",
+    subtitle: "Murky Wetlands & Fens",
+    description: "Murky wetlands with fog, poison mechanics, and reptiles.",
+    icon: "🍄",
+    recommendedLevels: [15, 30],
+    tags: ["Wetlands", "Mist & Fog", "Herbs"],
+  },
+  volcanic: {
+    id: "volcanic",
+    title: "Volcanoes",
+    subtitle: "Scorched Ash & Magma",
+    description: "Lava fields, blackened earth, and endgame dungeons.",
+    icon: "🌋",
+    recommendedLevels: [45, 60],
+    tags: ["Lava Fields", "Black Earth", "Endgame"],
+  },
+  cosmic: {
+    id: "cosmic",
+    title: "Magical",
+    subtitle: "Supernatural Arcane Spheres",
+    description: "Supernatural zones with glowing flora and unique physics.",
+    icon: "✨",
+    recommendedLevels: [30, 55],
+    tags: ["Glowing Flora", "Arcane Spires", "Unique Physics"],
+  },
+  underground: {
+    id: "underground",
+    title: "Wastelands",
+    subtitle: "Corrupted Blightlands",
+    description: "Corrupted lands filled with undead, demons, or toxins.",
+    icon: "💀",
+    recommendedLevels: [20, 45],
+    tags: ["Corrupted Earth", "Undead", "Demons"],
+  },
+  grassland: {
+    id: "grassland",
+    title: "Grasslands",
+    subtitle: "Sunlit Rolling Plains",
+    description: "Rolling verdant hills, wildflowers, and peaceful meadows.",
+    icon: "🌱",
+    recommendedLevels: [1, 5],
+    tags: ["Meadows", "Rolling Hills", "Pastures"],
+  },
+  alien: {
+    id: "alien",
+    title: "Alien",
+    subtitle: "Otherworldly Xenosphere",
+    description: "Strange extraterrestrial flora, crystalline formations, and eldritch growths.",
+    icon: "🪐",
+    recommendedLevels: [40, 60],
+    tags: ["Crystals", "Eldritch", "Spiritual"],
+  },
+};
+
+const MMO_NAME_PREFIXES: Record<RegionBiome, string[]> = {
+  forest: ["Whispering", "Silverpine", "Elwynn", "Greenwood", "Shadowglen", "Mistwood", "Oakheart", "Briarwood", "Evergreen", "Sunvale", "Windrunner", "Amberfall", "Highpine", "Riverwood", "Deepwood", "Ravenwood", "Timberfall", "Staghorn"],
+  grassland: ["Windy", "Sunstrider", "Goldshire", "Highland", "Amber", "Wildrose", "Greenfield", "Sunbreeze", "Rolling", "Meadowvale", "Brightwood", "Dawnstar", "Fairbreeze"],
+  jungle: ["Stranglethorn", "Zul'Gurub", "Wildtide", "Feralas", "Jadefang", "Sunken", "Serpent", "Primal", "Viridian", "Razorfen", "Basilisk", "Emerald", "Bloodtusk", "Stormcrow", "Vinespire", "Feverwood", "Cobra", "Grizzly"],
+  desert: ["Tanaris", "Shifting", "Sunstrider", "Barren", "Dustwallow", "Scorched", "Anvil Rock", "Mirage", "Dreadwaste", "Cinder", "Redrock", "Brasswind", "Dunehaven", "Sunfire", "Solitude", "Ironclast", "Oasis", "Kharanos"],
+  arctic: ["Winterspring", "Frostfire", "Borean", "Stormpeaks", "Howling", "Icecrown", "Frozen", "Bitterwind", "Northrend", "Glacier", "Crystalpeak", "Snowdrift", "Rimefall", "Chillwind", "Palecrest", "Blizzard", "Everfrost"],
+  swamp: ["Sorrowmoss", "Dustwallow", "Murkwater", "Gloomfang", "Deadwood", "Shadowfang", "Blackmarsh", "Weeping", "Fogfen", "Bogmire", "Rotting", "Witchwood", "Mireblood", "Darkwater", "Fetid", "Toadstool", "Viper"],
+  volcanic: ["Searing", "Burning", "Molten", "Blackrock", "Fireplume", "Cinderfall", "Obsidian", "Ashwind", "Hellfire", "Inferno", "Brimstone", "Magmaforge", "Pyroclast", "Dragonspire", "Smoldering", "Dreadfire", "Igneous"],
+  cosmic: ["Astral", "Netherstorm", "Celestial", "Arcane", "Voidfall", "Starlight", "Dreamgrove", "Moonshadow", "Ethereal", "Twilight", "Lumina", "Starfall", "Chrono", "Mythic", "Nexus", "Radiant", "Spiritual", "Aether"],
+  underground: ["Dreadlands", "Blighted", "Plaguelands", "Corrupted", "Shadowmoon", "Felwood", "Necropolis", "Desolation", "Putrid", "Bonefield", "Ashen", "Doomspire", "Netherfell", "Scourge", "Malice", "Crypt", "Gloom"],
+  alien: ["Xenon", "Zeta", "Aetherial", "Cosmo", "Starlight", "Nebula", "Void", "Prismatic", "Crystal", "Eldritch", "Astral", "Chrono"],
+};
+
+const MMO_NAME_ROOTS: Record<RegionBiome, string[]> = {
+  forest: ["Glade", "Woods", "Forest", "Vale", "Grove", "Thicket", "Timberlands", "Highlands", "Valley", "Ridge", "Hollow", "Copse", "Run", "Shallows"],
+  grassland: ["Plains", "Meadow", "Highlands", "Fields", "Vale", "Reach", "Pastures", "Valley", "Savanna", "Steppe", "Bluffs"],
+  jungle: ["Canopy", "Wilds", "Reach", "Basin", "Jungle", "Cradle", "Depths", "Marsh", "Chasm", "Shrouds", "Coast", "Ruins", "Mire"],
+  desert: ["Sands", "Wastes", "Dunes", "Expanse", "Canyon", "Badlands", "Flats", "Plateau", "Gulch", "Steppes", "Gorge", "Bluffs", "Caldera"],
+  arctic: ["Peaks", "Ridge", "Tundra", "Fjord", "Pass", "Crag", "Bluffs", "Shiver", "Expanse", "Glacier", "Snowfields", "Heights", "Rift"],
+  swamp: ["Fen", "Marsh", "Mire", "Bog", "Wetlands", "Quagmire", "Cove", "Hollow", "Swale", "Slough", "Delta", "Basin"],
+  volcanic: ["Gorge", "Steppes", "Cauldron", "Caldera", "Ridge", "Peaks", "Crater", "Wastes", "Core", "Chasm", "Anvil", "Abyss"],
+  cosmic: ["Hollow", "Veil", "Reach", "Sanctum", "Expanse", "Vale", "Spires", "Basin", "Rift", "Nexus", "Haven", "Citadel", "Vault"],
+  underground: ["Barrens", "Hollow", "Wastes", "Ruins", "Basin", "Mire", "Decay", "Trench", "Graveyard", "Blight", "Reach", "Pit"],
+  alien: ["Spire", "Expanse", "Domain", "Hollow", "Void", "Nexus", "Crag", "Plaza", "Sanctuary", "Rift"],
+};
+
+const MMO_EPIC_SUFFIXES = [
+  "of the Ancients", "of Despair", "of Eternity", "of the Vanquished",
+  "Sanctuary", "Ruins", "Dominion", "Bastion", "Stronghold", "Wilds",
+];
+
+export function generateMmoRegionName(
+  biome: RegionBiome,
+  minLevel = 1,
+  rng: () => number = Math.random,
+): string {
+  const prefixes = MMO_NAME_PREFIXES[biome] ?? MMO_NAME_PREFIXES.forest;
+  const roots = MMO_NAME_ROOTS[biome] ?? MMO_NAME_ROOTS.forest;
+  const prefix = prefixes[Math.floor(rng() * prefixes.length)] ?? "Whispering";
+  const root = roots[Math.floor(rng() * roots.length)] ?? "Glade";
+
+  if (minLevel >= 40 && rng() < 0.35) {
+    const suffix = MMO_EPIC_SUFFIXES[Math.floor(rng() * MMO_EPIC_SUFFIXES.length)]!;
+    return `${prefix} ${root} ${suffix}`;
+  }
+  return `${prefix} ${root}`;
+}
+
+export function getBiomeLevelResourceTypes(biome: RegionBiome, minLevel = 1): string[] {
+  const common = ["tree", "rock", "berry_bush"];
+  if (minLevel <= 5) {
+    return [...common, "copper_vein", "tin_vein"];
+  } else if (minLevel <= 15) {
+    return [...common, "tin_vein", "iron_deposit"];
+  } else if (minLevel <= 30) {
+    return [...common, "iron_deposit", "mithril_deposit"];
+  } else {
+    return [...common, "mithril_deposit", "thorium_vein"];
+  }
+}
 
 /** Which real asset directory a RegionAsset's model lives under --
  *  unlike the dungeon editor's DungeonAsset (which only ever meant
@@ -846,6 +1010,19 @@ export function isRockLikeAssetModel(model: string): boolean {
   return false;
 }
 
+/** True for small/ground-cover foliage (grass, flowers, ferns, mushrooms,
+ *  bushes, dead branches, pebbles, small rocks) whose shadow contribution is
+ *  visually negligible but still costs a full alpha-tested shadow-depth pass
+ *  per instance in dense areas -- these skip shadow casting. Trees (oak,
+ *  pine, twisted, CommonTree, etc.) are deliberately excluded; their shadows
+ *  read clearly at a glance and stay on. Defaults to false (cast shadow) for
+ *  anything unmatched -- the safe default when uncertain. */
+export function isLowShadowValueFoliageModel(model: string): boolean {
+  if (isRockLikeAssetModel(model)) return true;
+  const file = model.replace(/^.*\//, "").replace(/\.(glb|gltf)$/i, "");
+  return /^(bush|fern|mushroom|dead|flower|grass|pebble|plant|moss)(_|$)/i.test(file);
+}
+
 /** True for bridge/dock/walkway/platform meshes -- wide spans meant to be
  *  walked ON, not blocked BY. Everything else that's marked solid (walls,
  *  buildings, rocks) hard-blocks at its measured footprint regardless of
@@ -1454,6 +1631,44 @@ export interface RegionWorldEvent {
   durationSec?: number;
 }
 
+/** A discoverable landmark placed in the region editor. Interacting within
+ *  interactRadius permanently reveals a revealRadius patch of map/minimap
+ *  fog-of-war for that character and plays a one-shot cinematic overlook.
+ *  Unlike RegionWorldEvent, discovery is binary and permanent -- no
+ *  cooldown/phase runtime state, so the server resolves it directly from the
+ *  blueprint on interact rather than seeding a live runtime object. */
+export interface RegionPoi {
+  id: string;
+  name: string;
+  localX: number;
+  localZ: number;
+  /** World-unit range required to trigger discovery via interact. Default 6
+   *  (matches the shrine interact-range convention). */
+  interactRadius?: number;
+  /** Hand-drawn fog-of-war reveal boundary, region-local absolute coordinates
+   *  (same convention as RegionRoad.points -- not offsets relative to the
+   *  marker). Authored in the Continent Layout Map's polygon tool; every POI
+   *  gets an auto-seeded octagon at placement time so this is never empty in
+   *  practice even before it's manually redrawn. */
+  revealShape: { x: number; z: number }[];
+  /** XP granted on first discovery (see GameServer.discoverPoi). Default 25 --
+   *  scaled like an easy achievement/low-tier mob kill, not a quest chain. */
+  rewardXp?: number;
+  /** Optional flavor text for the discovery toast / map tooltip. */
+  description?: string;
+  /** Optional icon id for map-marker rendering; falls back to a generic
+   *  landmark glyph if unset. */
+  icon?: string;
+  /** Optional 3D asset model path (e.g. `castle_ruins/CastleRuins.glb` or `building_church.gltf`) */
+  model?: string;
+  /** Asset category for model resolution (building, prop, or foliage) */
+  category?: RegionAssetCategory;
+  /** Orientation rotation in radians around the Y axis */
+  yaw?: number;
+  /** Uniform scale multiplier (default 1.0) */
+  scale?: number;
+}
+
 /** Personal reward tier after a successful world event. */
 export type WorldEventRewardTier = "gold" | "silver" | "bronze";
 
@@ -1523,15 +1738,23 @@ export interface RegionBlueprint {
   };
   /** Optional -- If true, this region is designated as the default Starting Town where new players spawn. */
   isStartingRegion?: boolean;
+  /** Optional -- Minimum intended character level for this region (e.g. 1, 3, 10). */
+  minLevel?: number;
+  /** Optional -- Maximum intended character level for this region (e.g. 3, 7, 20). */
+  maxLevel?: number;
   /** Optional -- Authored inter-region portals placed inside this region. */
   portals?: RegionPortalLink[];
   /** Optional -- Authored quest giver NPCs placed in this region. */
   npcs?: RegionNPC[];
   /** Optional -- placeable dynamic world events (cooldown → fight → loot). */
   worldEvents?: RegionWorldEvent[];
+  /** Optional -- discoverable landmarks (fog-of-war reveal + cinematic on interact). */
+  pois?: RegionPoi[];
   /** Optional -- flattened gridSize*gridSize water depth values (in world units).
    *  If absent or 0 at a cell, there is no water surface there. */
   waterHeights?: number[];
+  /** Optional -- Neighbor connectivity flags on the continent grid. */
+  neighborEdges?: RegionNeighborEdges;
   /** Optional -- flattened gridSize*gridSize texture paint ID values:
    *  0=auto/biome, 1=grass, 2=dirt, 3=cobble, 4=snow, 5=rock, 6=sand. */
   customTextures?: number[];
@@ -1623,23 +1846,26 @@ function regionHalfSpan(gridSize: number, pitch: number): number {
  *  both the client's region terrain mesh builder and anything placing
  *  assets/mobs/players onto the ground. Coordinates outside the grid clamp
  *  to the nearest edge rather than extrapolating. */
-export function sampleRegionHeight(blueprint: Pick<RegionBlueprint, "gridSize" | "pitch" | "heights">, x: number, z: number): number {
+export function sampleRegionHeight(blueprint: Pick<RegionBlueprint, "gridSize" | "pitch" | "heights"> & { gridSizeX?: number; gridSizeZ?: number }, x: number, z: number): number {
   const { gridSize, pitch, heights } = blueprint;
-  const half = regionHalfSpan(gridSize, pitch);
-  const gx = (x + half) / pitch;
-  const gz = (z + half) / pitch;
+  const gridSizeX = blueprint.gridSizeX ?? gridSize;
+  const gridSizeZ = blueprint.gridSizeZ ?? gridSize;
+  const halfX = regionHalfSpan(gridSizeX, pitch);
+  const halfZ = regionHalfSpan(gridSizeZ, pitch);
+  const gx = (x + halfX) / pitch;
+  const gz = (z + halfZ) / pitch;
   const x0 = Math.floor(gx);
   const z0 = Math.floor(gz);
   const tx = clamp(gx - x0, 0, 1);
   const tz = clamp(gz - z0, 0, 1);
-  const cx0 = clamp(x0, 0, gridSize - 1);
-  const cx1 = clamp(x0 + 1, 0, gridSize - 1);
-  const cz0 = clamp(z0, 0, gridSize - 1);
-  const cz1 = clamp(z0 + 1, 0, gridSize - 1);
-  const h00 = heights[cz0 * gridSize + cx0] ?? 0;
-  const h10 = heights[cz0 * gridSize + cx1] ?? 0;
-  const h01 = heights[cz1 * gridSize + cx0] ?? 0;
-  const h11 = heights[cz1 * gridSize + cx1] ?? 0;
+  const cx0 = clamp(x0, 0, gridSizeX - 1);
+  const cx1 = clamp(x0 + 1, 0, gridSizeX - 1);
+  const cz0 = clamp(z0, 0, gridSizeZ - 1);
+  const cz1 = clamp(z0 + 1, 0, gridSizeZ - 1);
+  const h00 = heights[cz0 * gridSizeX + cx0] ?? 0;
+  const h10 = heights[cz0 * gridSizeX + cx1] ?? 0;
+  const h01 = heights[cz1 * gridSizeX + cx0] ?? 0;
+  const h11 = heights[cz1 * gridSizeX + cx1] ?? 0;
   const a = h00 + (h10 - h00) * tx;
   const b = h01 + (h11 - h01) * tx;
   return a + (b - a) * tz;
@@ -1647,24 +1873,27 @@ export function sampleRegionHeight(blueprint: Pick<RegionBlueprint, "gridSize" |
 
 /** Bilinear water depth sample at local (x,z) over the blueprint's water grid.
  *  Returns 0 if no water is present. */
-export function sampleRegionWaterDepth(blueprint: Pick<RegionBlueprint, "gridSize" | "pitch"> & { waterHeights?: number[] }, x: number, z: number): number {
+export function sampleRegionWaterDepth(blueprint: Pick<RegionBlueprint, "gridSize" | "pitch"> & { gridSizeX?: number; gridSizeZ?: number; waterHeights?: number[] }, x: number, z: number): number {
   const { gridSize, pitch, waterHeights } = blueprint;
   if (!waterHeights || waterHeights.length === 0) return 0;
-  const half = regionHalfSpan(gridSize, pitch);
-  const gx = (x + half) / pitch;
-  const gz = (z + half) / pitch;
+  const gridSizeX = blueprint.gridSizeX ?? gridSize;
+  const gridSizeZ = blueprint.gridSizeZ ?? gridSize;
+  const halfX = regionHalfSpan(gridSizeX, pitch);
+  const halfZ = regionHalfSpan(gridSizeZ, pitch);
+  const gx = (x + halfX) / pitch;
+  const gz = (z + halfZ) / pitch;
   const x0 = Math.floor(gx);
   const z0 = Math.floor(gz);
   const tx = clamp(gx - x0, 0, 1);
   const tz = clamp(gz - z0, 0, 1);
-  const cx0 = clamp(x0, 0, gridSize - 1);
-  const cx1 = clamp(x0 + 1, 0, gridSize - 1);
-  const cz0 = clamp(z0, 0, gridSize - 1);
-  const cz1 = clamp(z0 + 1, 0, gridSize - 1);
-  const w00 = waterHeights[cz0 * gridSize + cx0] ?? 0;
-  const w10 = waterHeights[cz0 * gridSize + cx1] ?? 0;
-  const w01 = waterHeights[cz1 * gridSize + cx0] ?? 0;
-  const w11 = waterHeights[cz1 * gridSize + cx1] ?? 0;
+  const cx0 = clamp(x0, 0, gridSizeX - 1);
+  const cx1 = clamp(x0 + 1, 0, gridSizeX - 1);
+  const cz0 = clamp(z0, 0, gridSizeZ - 1);
+  const cz1 = clamp(z0 + 1, 0, gridSizeZ - 1);
+  const w00 = waterHeights[cz0 * gridSizeX + cx0] ?? 0;
+  const w10 = waterHeights[cz0 * gridSizeX + cx1] ?? 0;
+  const w01 = waterHeights[cz1 * gridSizeX + cx0] ?? 0;
+  const w11 = waterHeights[cz1 * gridSizeX + cx1] ?? 0;
   const a = w00 + (w10 - w00) * tx;
   const b = w01 + (w11 - w01) * tx;
   return Math.max(0, a + (b - a) * tz);
@@ -1675,10 +1904,743 @@ export function sampleRegionWaterDepth(blueprint: Pick<RegionBlueprint, "gridSiz
  *  sampleRegionHeight -- the region equivalent of shared terrain.ts's
  *  terrainSlope(), used both to keep procedural scatter off of cliff faces
  *  and to pick grass/rock/snow ground texture weights. */
-export function regionSlopeAt(blueprint: Pick<RegionBlueprint, "gridSize" | "pitch" | "heights">, x: number, z: number, eps = 1.5): number {
+export function regionSlopeAt(blueprint: Pick<RegionBlueprint, "gridSize" | "pitch" | "heights"> & { gridSizeX?: number; gridSizeZ?: number }, x: number, z: number, eps = 1.5): number {
   const hx = sampleRegionHeight(blueprint, x + eps, z) - sampleRegionHeight(blueprint, x - eps, z);
   const hz = sampleRegionHeight(blueprint, x, z + eps) - sampleRegionHeight(blueprint, x, z - eps);
   return Math.hypot(hx, hz) / (2 * eps);
+}
+
+export interface SeamStitchOptions {
+  /** Width in meters of the smooth blend transition zone along touching borders. Defaults to 60m (see stitchRegionSeams's doc comment on why -- a narrower margin lets an interior lake/river dip carve right up to the connecting seam). */
+  blendMargin?: number;
+  /** Minimum ground elevation in meters for land borders to prevent sub-surface water sinking. Defaults to 1.5m. */
+  minLandFloor?: number;
+  /** Lift touching land boundaries above sea level if they previously had coastal ocean falloff. Defaults to true. */
+  forceDrySeams?: boolean;
+}
+
+/**
+ * Dynamically stitches and harmonizes the terrain heights along bordering edges
+ * for any set of adjacent or touching regions on the world/continent layout.
+ *
+ * Along shared border seams (where two regions touch with 0-gap), Hermite cubic
+ * spline blending is applied over a configurable border margin so the two heightmaps
+ * meet at the EXACT same continuous elevation and slope, eliminating tears, cliffs,
+ * and seams.
+ */
+export function stitchRegionSeams(
+  blueprints: RegionBlueprint[],
+  options: SeamStitchOptions = {},
+): RegionBlueprint[] {
+  // Wider than the old 28m default -- a region's own interior lake/river
+  // carving is only gated by a comparatively narrow margin at generation
+  // time (see generateRandomRegionBlueprint's "neighborLandSafety"), so a
+  // lake seeded by noise in roughly the outer 20-40m of a bordered edge can
+  // land right where two regions are meant to connect. See
+  // HARD_FLOOR_MARGIN below for why the floor itself also needed
+  // strengthening, not just this margin.
+  const blendMargin = options.blendMargin ?? 60.0;
+  const minLandFloor = options.minLandFloor ?? 1.5;
+  const forceDrySeams = options.forceDrySeams !== false;
+  // Within this distance of the exact border, force dry land unconditionally
+  // (no averaging, no fade) -- a soft blend alone is too weak to fully
+  // cancel a multi-meter-deep lake dip before it fades out, which is
+  // exactly what left "only water" along seams that should have connected.
+  const HARD_FLOOR_MARGIN = 20.0;
+
+  if (!blueprints || blueprints.length <= 1) return blueprints;
+
+  // Spatial metadata for all blueprints
+  const boxes = blueprints.map((bp) => {
+    const gx = bp.gridSizeX ?? bp.gridSize;
+    const gz = bp.gridSizeZ ?? bp.gridSize;
+    const pitch = bp.pitch;
+    const halfX = regionHalfSpan(gx, pitch);
+    const halfZ = regionHalfSpan(gz, pitch);
+    const ox = bp.worldOriginX ?? 0;
+    const oz = bp.worldOriginZ ?? 0;
+    return {
+      bp,
+      gx,
+      gz,
+      pitch,
+      halfX,
+      halfZ,
+      ox,
+      oz,
+      minX: ox - halfX,
+      maxX: ox + halfX,
+      minZ: oz - halfZ,
+      maxZ: oz + halfZ,
+    };
+  });
+
+  return boxes.map((boxA, idxA) => {
+    const bpA = boxA.bp;
+    const { gx, gz, pitch, halfX, halfZ, ox: oxA, oz: ozA } = boxA;
+
+    // Find touching or near-border neighbors within blend reach
+    const reach = blendMargin + 4.0;
+    const neighbors = boxes.filter((boxB, idxB) => {
+      if (idxA === idxB) return false;
+      const overlapX = boxA.minX <= boxB.maxX + reach && boxA.maxX >= boxB.minX - reach;
+      const overlapZ = boxA.minZ <= boxB.maxZ + reach && boxA.maxZ >= boxB.minZ - reach;
+      return overlapX && overlapZ;
+    });
+
+    if (neighbors.length === 0) return bpA;
+
+    const newHeights = new Array<number>(gx * gz);
+    const newWater = new Array<number>(gx * gz);
+
+    for (let iz = 0; iz < gz; iz++) {
+      for (let ix = 0; ix < gx; ix++) {
+        const localX = ix * pitch - halfX;
+        const localZ = iz * pitch - halfZ;
+        const worldX = oxA + localX;
+        const worldZ = ozA + localZ;
+
+        const origH = bpA.heights[iz * gx + ix] ?? 0;
+
+        // Distance from this vertex to Region A's 4 outer boundaries
+        const distWest = localX + halfX;
+        const distEast = halfX - localX;
+        const distSouth = localZ + halfZ;
+        const distNorth = halfZ - localZ;
+        const minEdgeDist = Math.min(distWest, distEast, distSouth, distNorth);
+
+        if (minEdgeDist >= blendMargin) {
+          newHeights[iz * gx + ix] = origH;
+          newWater[iz * gx + ix] = origH <= 0 ? Math.max(0.6, -origH + 0.5) : 0;
+          continue;
+        }
+
+        let totalWeight = 0;
+        let weightedNeighborHeight = 0;
+
+        for (const boxB of neighbors) {
+          const bLocalX = worldX - boxB.ox;
+          const bLocalZ = worldZ - boxB.oz;
+
+          // Distance from this world coordinate to neighbor B's bounding box
+          const dxBox = Math.max(boxB.minX - worldX, worldX - boxB.maxX, 0);
+          const dzBox = Math.max(boxB.minZ - worldZ, worldZ - boxB.maxZ, 0);
+          const bDistToBox = Math.hypot(dxBox, dzBox);
+
+          if (bDistToBox <= blendMargin) {
+            const hB = sampleRegionHeight(boxB.bp, bLocalX, bLocalZ);
+            const influence = Math.max(0, 1.0 - (bDistToBox / blendMargin));
+            if (influence > 0) {
+              weightedNeighborHeight += hB * influence;
+              totalWeight += influence;
+            }
+          }
+        }
+
+        if (totalWeight > 0) {
+          const avgNeighborH = weightedNeighborHeight / totalWeight;
+          const t = clamp(minEdgeDist / blendMargin, 0, 1);
+          // Cubic Hermite smoothstep weight: s(t) = t^2 * (3 - 2t)
+          const s = t * t * (3 - 2 * t);
+
+          let seamH = (origH + avgNeighborH) * 0.5;
+          if (forceDrySeams && seamH < minLandFloor && (origH > -2.0 || avgNeighborH > -2.0)) {
+            seamH = Math.max(seamH, minLandFloor);
+          }
+
+          let blendedH = seamH * (1 - s) + origH * s;
+          // The (1-s)/s taper above always fades back toward origH, which
+          // can still be a multi-meter-deep interior lake/river dip that the
+          // floor-raise above only partially cancels once s has grown much
+          // past 0 -- exactly what left seams looking flooded. Within
+          // HARD_FLOOR_MARGIN of the actual border, override that taper and
+          // force dry land unconditionally, same reasoning as
+          // regenRegionCoastlines's identically-named constant.
+          if (forceDrySeams && minEdgeDist <= HARD_FLOOR_MARGIN && (origH > -2.0 || avgNeighborH > -2.0)) {
+            blendedH = Math.max(blendedH, minLandFloor);
+          }
+          newHeights[iz * gx + ix] = blendedH;
+          newWater[iz * gx + ix] = blendedH <= 0 ? Math.max(0.6, -blendedH + 0.5) : 0;
+        } else {
+          newHeights[iz * gx + ix] = origH;
+          newWater[iz * gx + ix] = origH <= 0 ? Math.max(0.6, -origH + 0.5) : 0;
+        }
+      }
+    }
+
+    // Same delta-based resnap as regenRegionCoastlines -- see its doc comment.
+    // Seam stitching reshapes the border band, so authored props sitting in
+    // it need to move with the terrain instead of floating/burying.
+    const oldHeightSampler = { gridSize: gx, gridSizeX: gx, gridSizeZ: gz, pitch, heights: bpA.heights };
+    const newHeightSampler = { gridSize: gx, gridSizeX: gx, gridSizeZ: gz, pitch, heights: newHeights };
+    const resnappedAssets = (bpA.assets ?? []).map((asset) => {
+      const delta =
+        sampleRegionHeight(newHeightSampler, asset.localX, asset.localZ) -
+        sampleRegionHeight(oldHeightSampler, asset.localX, asset.localZ);
+      return Math.abs(delta) > 0.01 ? { ...asset, localY: asset.localY + delta } : asset;
+    });
+
+    return {
+      ...bpA,
+      heights: newHeights,
+      waterHeights: newWater,
+      assets: resnappedAssets,
+    };
+  });
+}
+
+export interface CoastlineRegenOptions {
+  /** Width in meters of the coastal falloff transition margin. Defaults to 44m. */
+  coastMargin?: number;
+  /** Seabed depth below sea level in meters along the open outer sea boundary. Defaults to -5.5m. */
+  oceanDepth?: number;
+  /** Whether to synthesize natural offshore islets and sandbars in unbordered open sea. Defaults to true. */
+  generateIslands?: boolean;
+}
+
+export function detectRegionNeighborEdges(
+  target: Pick<RegionBlueprint, "id" | "gridSize" | "pitch" | "worldOriginX" | "worldOriginZ"> & { gridSizeX?: number; gridSizeZ?: number },
+  allRegions: Iterable<Pick<RegionBlueprint, "id" | "gridSize" | "pitch" | "worldOriginX" | "worldOriginZ"> & { gridSizeX?: number; gridSizeZ?: number }>,
+  tolerance = 36.0,
+): RegionNeighborEdges {
+  const gx = target.gridSizeX ?? target.gridSize;
+  const gz = target.gridSizeZ ?? target.gridSize;
+  const pitch = target.pitch;
+  const halfX = regionHalfSpan(gx, pitch);
+  const halfZ = regionHalfSpan(gz, pitch);
+  const ox = target.worldOriginX ?? 0;
+  const oz = target.worldOriginZ ?? 0;
+  const minX = ox - halfX;
+  const maxX = ox + halfX;
+  const minZ = oz - halfZ;
+  const maxZ = oz + halfZ;
+
+  let north = false;
+  let south = false;
+  let east = false;
+  let west = false;
+
+  for (const other of allRegions) {
+    if (other.id === target.id) continue;
+    const oGx = other.gridSizeX ?? other.gridSize;
+    const oGz = other.gridSizeZ ?? other.gridSize;
+    const oPitch = other.pitch;
+    const oHalfX = regionHalfSpan(oGx, oPitch);
+    const oHalfZ = regionHalfSpan(oGz, oPitch);
+    const oOx = other.worldOriginX ?? 0;
+    const oOz = other.worldOriginZ ?? 0;
+    const oMinX = oOx - oHalfX;
+    const oMaxX = oOx + oHalfX;
+    const oMinZ = oOz - oHalfZ;
+    const oMaxZ = oOz + oHalfZ;
+
+    // Check Z-overlap for West/East adjacency (at least 4m overlap)
+    const overlapZ = minZ < oMaxZ - 4.0 && maxZ > oMinZ + 4.0;
+    // Check X-overlap for North/South adjacency (at least 4m overlap)
+    const overlapX = minX < oMaxX - 4.0 && maxX > oMinX + 4.0;
+
+    // West: other region borders or slightly overlaps to the west
+    if (overlapZ && Math.abs(minX - oMaxX) <= tolerance) {
+      west = true;
+    }
+    // East: other region borders or slightly overlaps to the east
+    if (overlapZ && Math.abs(maxX - oMinX) <= tolerance) {
+      east = true;
+    }
+    // South: other region borders or slightly overlaps to the south
+    if (overlapX && Math.abs(minZ - oMaxZ) <= tolerance) {
+      south = true;
+    }
+    // North: other region borders or slightly overlaps to the north
+    if (overlapX && Math.abs(maxZ - oMinZ) <= tolerance) {
+      north = true;
+    }
+  }
+
+  return { north, south, east, west };
+}
+
+export interface RegionLandmassBounds {
+  minX: number;
+  maxX: number;
+  minZ: number;
+  maxZ: number;
+}
+
+export interface CoastlineRegenOptions {
+  coastMargin?: number;
+  oceanDepth?: number;
+  generateIslands?: boolean;
+  allRegions?: readonly RegionLandmassBounds[];
+}
+
+/**
+ * Computes the continuous distance in world space from (sampleX, sampleZ)
+ * to the outer perimeter of the union of all connected continent regions.
+ *
+ * For any multi-region layout (grid, staggered, L-shaped, diagonal, T-shaped, or irregular):
+ * - If moving along a cardinal direction (+X, -X, +Z, -Z) enters or stays within another region,
+ *   the land connection is continuous (dist = distance to the outermost edge of that connected chain).
+ * - Concave corners (e.g. where an outer corner of one region meets the side of another)
+ *   round smoothly into natural coastal bays and coves with zero square right angles.
+ * - Convex corners round into natural capes and headlands.
+ */
+export function computeLandmassDistanceToOcean(
+  sampleX: number,
+  sampleZ: number,
+  localX: number,
+  localZ: number,
+  halfX: number,
+  halfZ: number,
+  neighborEdges?: RegionNeighborEdges,
+  allRegions?: readonly RegionLandmassBounds[],
+): { distW: number; distE: number; distS: number; distN: number } {
+  if (allRegions && allRegions.length > 1) {
+    let minXSpan = Infinity;
+    let maxXSpan = -Infinity;
+    let minZSpan = Infinity;
+    let maxZSpan = -Infinity;
+
+    // Tolerance to handle small seam overlaps or abutting region borders
+    const tol = 6.0;
+
+    for (const r of allRegions) {
+      // Check if sampleZ is within this region's Z span
+      if (sampleZ >= r.minZ - tol && sampleZ <= r.maxZ + tol) {
+        minXSpan = Math.min(minXSpan, r.minX);
+        maxXSpan = Math.max(maxXSpan, r.maxX);
+      }
+      // Check if sampleX is within this region's X span
+      if (sampleX >= r.minX - tol && sampleX <= r.maxX + tol) {
+        minZSpan = Math.min(minZSpan, r.minZ);
+        maxZSpan = Math.max(maxZSpan, r.maxZ);
+      }
+    }
+
+    const distW = minXSpan !== Infinity ? sampleX - minXSpan : (neighborEdges?.west ? 9999.0 : localX + halfX);
+    const distE = maxXSpan !== -Infinity ? maxXSpan - sampleX : (neighborEdges?.east ? 9999.0 : halfX - localX);
+    const distS = minZSpan !== Infinity ? sampleZ - minZSpan : (neighborEdges?.south ? 9999.0 : localZ + halfZ);
+    const distN = maxZSpan !== -Infinity ? maxZSpan - sampleZ : (neighborEdges?.north ? 9999.0 : halfZ - localZ);
+
+    return {
+      distW: Math.max(0, distW),
+      distE: Math.max(0, distE),
+      distS: Math.max(0, distS),
+      distN: Math.max(0, distN),
+    };
+  }
+
+  // Fallback for standalone single region with 4-way boolean edges
+  const edges = neighborEdges ?? { west: false, east: false, south: false, north: false };
+  return {
+    distW: edges.west ? 9999.0 : Math.max(0, localX + halfX),
+    distE: edges.east ? 9999.0 : Math.max(0, halfX - localX),
+    distS: edges.south ? 9999.0 : Math.max(0, localZ + halfZ),
+    distN: edges.north ? 9999.0 : Math.max(0, halfZ - localZ),
+  };
+}
+
+/**
+ * Evaluates the continuous Signed Distance Field (SDF) to the outer perimeter of the continent landmass union.
+ * - Negative (< 0): inside the continent landmass. (Internal seams have large negative values -> 100% solid land).
+ * - Zero (= 0): the physical outer continent coastline.
+ * - Positive (> 0): in the open ocean.
+ *
+ * Guaranteed: Internal boundaries between adjacent regions are NEVER rounded or carved into.
+ * Only the outer perimeter that meets the ocean receives sweeping coastal curves.
+ */
+export function evaluateContinentLandmassSDF(
+  worldX: number,
+  worldZ: number,
+  localX: number,
+  localZ: number,
+  halfX: number,
+  halfZ: number,
+  neighborEdges?: RegionNeighborEdges,
+  allRegions?: readonly RegionLandmassBounds[],
+): number {
+  if (allRegions && allRegions.length > 1) {
+    const tol = 4.0;
+    let isInsideAny = false;
+
+    // Check if point is inside any region
+    for (const r of allRegions) {
+      if (
+        worldX >= r.minX - tol &&
+        worldX <= r.maxX + tol &&
+        worldZ >= r.minZ - tol &&
+        worldZ <= r.maxZ + tol
+      ) {
+        isInsideAny = true;
+        break;
+      }
+    }
+
+    if (isInsideAny) {
+      // Find the distance to exit the continent landmass in each cardinal direction
+      let minXSpan = Infinity;
+      let maxXSpan = -Infinity;
+      let minZSpan = Infinity;
+      let maxZSpan = -Infinity;
+
+      for (const r of allRegions) {
+        if (worldZ >= r.minZ - tol && worldZ <= r.maxZ + tol) {
+          minXSpan = Math.min(minXSpan, r.minX);
+          maxXSpan = Math.max(maxXSpan, r.maxX);
+        }
+        if (worldX >= r.minX - tol && worldX <= r.maxX + tol) {
+          minZSpan = Math.min(minZSpan, r.minZ);
+          maxZSpan = Math.max(maxZSpan, r.maxZ);
+        }
+      }
+
+      const distW = minXSpan !== Infinity ? worldX - minXSpan : (neighborEdges?.west ? 9999.0 : localX + halfX);
+      const distE = maxXSpan !== -Infinity ? maxXSpan - worldX : (neighborEdges?.east ? 9999.0 : halfX - localX);
+      const distS = minZSpan !== Infinity ? worldZ - minZSpan : (neighborEdges?.south ? 9999.0 : localZ + halfZ);
+      const distN = maxZSpan !== -Infinity ? maxZSpan - worldZ : (neighborEdges?.north ? 9999.0 : halfZ - localZ);
+
+      const minExitDist = Math.min(
+        Math.max(0, distW),
+        Math.max(0, distE),
+        Math.max(0, distS),
+        Math.max(0, distN),
+      );
+
+      return -minExitDist;
+    }
+
+    // Outside all regions (in ocean): distance to closest region bounding box
+    let minOceanDist = Infinity;
+    for (const r of allRegions) {
+      const cx = (r.minX + r.maxX) / 2;
+      const cz = (r.minZ + r.maxZ) / 2;
+      const bx = (r.maxX - r.minX) / 2;
+      const bz = (r.maxZ - r.minZ) / 2;
+      const dx = Math.max(0, Math.abs(worldX - cx) - bx);
+      const dz = Math.max(0, Math.abs(worldZ - cz) - bz);
+      const d = Math.hypot(dx, dz);
+      if (d < minOceanDist) minOceanDist = d;
+    }
+    return minOceanDist;
+  }
+
+  // Single region fallback:
+  let distW = neighborEdges?.west ? 9999.0 : localX + halfX;
+  let distE = neighborEdges?.east ? 9999.0 : halfX - localX;
+  let distS = neighborEdges?.south ? 9999.0 : localZ + halfZ;
+  let distN = neighborEdges?.north ? 9999.0 : halfZ - localZ;
+
+  const minExitDist = Math.min(
+    Math.max(0, distW),
+    Math.max(0, distE),
+    Math.max(0, distS),
+    Math.max(0, distN),
+  );
+
+  return -minExitDist;
+}
+
+/**
+ * Procedurally synthesizes rich, varied maritime coastal landforms on unbordered open sea edges:
+ * - Prominent Landforms: High Headlands, Promontory Cliffs, Capes, Sand Spits, Peninsulas.
+ * - Water Access & Depressions: Sheltered Coves, Inlets, Bays, and Sounds.
+ * - Interconnecting Paths: Sand Tombolos (wave-formed bridges to islands), Isthmuses, and Straits.
+ * - Maritime Archipelagos: Stepped sea stacks, barrier island chains, and sandbars.
+ *
+ * Guaranteed 100% preservation of neighbored inland borders.
+ */
+export function evaluateCoastalLandforms(
+  sampleX: number,
+  sampleZ: number,
+  localX: number,
+  localZ: number,
+  halfX: number,
+  halfZ: number,
+  neighborEdges: RegionNeighborEdges,
+  seedH: number,
+  baseMargin = 85.0,
+  allRegions?: readonly RegionLandmassBounds[],
+): {
+  falloff: number;
+  promontoryLift: number;
+  coveCarve: number;
+  spitRidge: number;
+  islandHeight: number;
+  inlandSafety: number;
+} {
+  // 1. Sweeping multi-scale 2D domain warping (Macro gulfs, peninsulas, sweeping coastal contours)
+  const macroWarpX = (fbm(seedH + 1101, sampleX, sampleZ, 300, 3) - 0.48) * 60.0
+                   + (fbm(seedH + 1102, sampleX * 1.8, sampleZ * 1.8, 120, 2) - 0.5) * 25.0;
+  const macroWarpZ = (fbm(seedH + 1201, sampleX + 513, sampleZ + 871, 300, 3) - 0.48) * 60.0
+                   + (fbm(seedH + 1202, (sampleX + 320) * 1.8, (sampleZ + 610) * 1.8, 120, 2) - 0.5) * 25.0;
+
+  const bayWarpX = (fbm(seedH + 1301, sampleX * 3.2, sampleZ * 3.2, 50, 2) - 0.5) * 12.0;
+  const bayWarpZ = (fbm(seedH + 1302, (sampleX + 111) * 3.2, (sampleZ + 222) * 3.2, 50, 2) - 0.5) * 12.0;
+
+  const totalWarpX = macroWarpX + bayWarpX;
+  const totalWarpZ = macroWarpZ + bayWarpZ;
+
+  const warpedSampleX = sampleX + totalWarpX;
+  const warpedSampleZ = sampleZ + totalWarpZ;
+  const warpedLocalX = localX + totalWarpX;
+  const warpedLocalZ = localZ + totalWarpZ;
+
+  const dLand = evaluateContinentLandmassSDF(
+    warpedSampleX,
+    warpedSampleZ,
+    warpedLocalX,
+    warpedLocalZ,
+    halfX,
+    halfZ,
+    neighborEdges,
+    allRegions,
+  );
+
+  // Map SDF to smooth coastal falloff:
+  // dLand >= 0 (perimeter & open sea) -> falloff = 0.0 (ocean floor)
+  // dLand in [-baseMargin, 0] -> smooth rise through shallows, beach, and dunes
+  // dLand <= -baseMargin (inland) -> falloff = 1.0 (dry continent land)
+  const coastWidth = Math.max(40.0, baseMargin);
+  const tCoast = clamp(-dLand / coastWidth, 0, 1);
+  const falloff = smoothstep(tCoast);
+
+  // Natural coastal interaction factor (1 in coastal shelf/water, 0 deep inland)
+  const coastZone = 1.0 - smoothstep(clamp(falloff, 0, 1));
+
+  // 2. Prominent High Headlands / Promontories / Capes (Jutting rocky vantage points like Monarch's Bluffs)
+  let promontoryLift = 0;
+  if (falloff > 0.10 && falloff < 0.96) {
+    const headlandNoise = fbm(seedH + 1201, sampleX, sampleZ, 55, 2);
+    if (headlandNoise > 0.52) {
+      const tHeadland = (headlandNoise - 0.52) / 0.48;
+      promontoryLift = Math.pow(tHeadland, 1.35) * 15.0 * (1.0 - Math.pow(falloff, 3.0));
+    }
+  }
+
+  // 3. Deep Marine Sounds, Fjords, and Sheltered Pirate Coves (Water Access)
+  let coveCarve = 0;
+  if (falloff > 0.10 && falloff < 0.96) {
+    // Wide ocean sounds / fjords cutting deep into coastal land
+    const soundNoise = Math.abs(fbm(seedH + 1401, sampleX, sampleZ, 85, 2) - 0.5);
+    const soundCarve = soundNoise < 0.08 ? Math.pow((0.08 - soundNoise) / 0.08, 1.25) * 8.0 : 0;
+
+    // Sheltered quiet coves and boat channels
+    const coveNoise = Math.abs(fbm(seedH + 1402, sampleX, sampleZ, 40, 2) - 0.5);
+    const localCove = coveNoise < 0.13 ? Math.pow((0.13 - coveNoise) / 0.13, 1.3) * 6.5 : 0;
+
+    coveCarve = (soundCarve + localCove) * (1.0 - Math.pow(falloff, 3.0));
+  }
+
+  // 4. Sand Spits, Isthmuses & Tombolos (Wave-Formed Sand Bridges Connecting Islands)
+  let spitRidge = 0;
+  if (falloff > 0.04 && falloff < 0.88) {
+    const tomboloNoise = Math.abs(fbm(seedH + 1301, sampleX, sampleZ, 60, 2) - 0.5);
+    if (tomboloNoise < 0.11) {
+      const tTombolo = (0.11 - tomboloNoise) / 0.11;
+      spitRidge = Math.pow(tTombolo, 1.5) * 4.6 * coastZone;
+    }
+  }
+
+  // 5. Maritime Archipelagos, Keys, Stepped Sea Stacks & Barrier Islets (like Cutlass Keys)
+  let islandHeight = 0;
+  if (falloff > 0.04 && falloff < 0.85) {
+    const islandFbm = fbm(seedH + 1501, sampleX, sampleZ, 42, 3);
+    const islandDetail = fbm(seedH + 1502, sampleX, sampleZ, 16, 2);
+    if (islandFbm > 0.50) {
+      const tIsland = (islandFbm - 0.50) / 0.50;
+      const peak = Math.pow(tIsland, 1.25) * 12.0 + (islandDetail - 0.5) * 2.2;
+      islandHeight = (1.2 + peak) * coastZone;
+    }
+  }
+
+  return { falloff, promontoryLift, coveCarve, spitRidge, islandHeight, inlandSafety: coastZone };
+}
+
+/**
+ * Regenerates unbordered outer edges of a region into natural coastline,
+ * sandy beaches, coastal shallows, and deep open ocean leading out to the horizon.
+ *
+ * Any edge marked false in `neighborEdges` (or not adjacent to another region)
+ * is sculpted with a smooth Hermite coastal slope down to `oceanDepth`,
+ * with populated water depths. Shared borders with neighboring regions are 100% preserved.
+ */
+export function regenRegionCoastlines(
+  blueprint: RegionBlueprint,
+  neighborEdges: RegionNeighborEdges = { north: false, south: false, east: false, west: false },
+  options: CoastlineRegenOptions = {},
+): RegionBlueprint {
+  const gx = blueprint.gridSizeX ?? blueprint.gridSize;
+  const gz = blueprint.gridSizeZ ?? blueprint.gridSize;
+  const pitch = blueprint.pitch;
+  const halfX = regionHalfSpan(gx, pitch);
+  const halfZ = regionHalfSpan(gz, pitch);
+  const coastMargin = options.coastMargin ?? Math.min(halfX * 0.65, halfZ * 0.65, 85.0);
+  const oceanDepth = options.oceanDepth ?? -5.5;
+  const generateIslands = options.generateIslands !== false;
+
+  const newHeights = [...blueprint.heights];
+  const newWater = new Array<number>(gx * gz);
+
+  const HARD_FLOOR_MARGIN = 20.0;
+  const TAPER_MARGIN = 70.0;
+  const connectorFloor = 2.0;
+  const seedH = hashString(blueprint.id || blueprint.name) ^ 0x9923;
+
+  for (let iz = 0; iz < gz; iz++) {
+    for (let ix = 0; ix < gx; ix++) {
+      const localX = ix * pitch - halfX;
+      const localZ = iz * pitch - halfZ;
+      const origH = blueprint.heights[iz * gx + ix] ?? 0;
+      const sampleX = (blueprint.worldOriginX ?? 0) + localX;
+      const sampleZ = (blueprint.worldOriginZ ?? 0) + localZ;
+
+      // Distance to neighbored inland boundaries (shared land seams with adjacent regions)
+      let minInlandDist = Infinity;
+      if (neighborEdges.west) minInlandDist = Math.min(minInlandDist, localX + halfX);
+      if (neighborEdges.east) minInlandDist = Math.min(minInlandDist, halfX - localX);
+      if (neighborEdges.south) minInlandDist = Math.min(minInlandDist, localZ + halfZ);
+      if (neighborEdges.north) minInlandDist = Math.min(minInlandDist, halfZ - localZ);
+
+      const coastal = evaluateCoastalLandforms(
+        sampleX,
+        sampleZ,
+        localX,
+        localZ,
+        halfX,
+        halfZ,
+        neighborEdges,
+        seedH,
+        coastMargin,
+        options.allRegions,
+      );
+
+      let baseH = origH;
+      if (baseH <= 0 && coastal.falloff > 0.05) {
+        const ox = blueprint.worldOriginX ?? 0;
+        const oz = blueprint.worldOriginZ ?? 0;
+        const { height: macroH } = evaluateContinentMacroTerrain(
+          sampleX,
+          sampleZ,
+          {
+            seed: blueprint.id || blueprint.name,
+            minX: ox - halfX,
+            maxX: ox + halfX,
+            minZ: oz - halfZ,
+            maxZ: oz + halfZ,
+            centerX: ox,
+            centerZ: oz,
+            radiusX: halfX * 0.95,
+            radiusZ: halfZ * 0.95,
+            allRegions: options.allRegions,
+          },
+          blueprint.biome,
+        );
+        baseH = Math.max(2.0, macroH);
+      }
+
+      // On inland shared seams away from open ocean, guarantee walkable dry ground
+      if (minInlandDist <= HARD_FLOOR_MARGIN && coastal.falloff >= 0.85) {
+        newHeights[iz * gx + ix] = Math.max(baseH, connectorFloor);
+      } else if (minInlandDist < TAPER_MARGIN && baseH < connectorFloor && coastal.falloff >= 0.85) {
+        const t = clamp((minInlandDist - HARD_FLOOR_MARGIN) / (TAPER_MARGIN - HARD_FLOOR_MARGIN), 0, 1);
+        const raiseBlend = 1 - t * t * (3 - 2 * t);
+        newHeights[iz * gx + ix] = baseH + (connectorFloor - baseH) * raiseBlend;
+      } else if (coastal.falloff >= 0.999) {
+        newHeights[iz * gx + ix] = baseH;
+      } else {
+        let coastH = baseH + coastal.promontoryLift - coastal.coveCarve;
+        coastH = oceanDepth + (coastH - oceanDepth) * coastal.falloff;
+        if (coastal.spitRidge > 0) {
+          coastH = Math.max(coastH, 0.8 + coastal.spitRidge);
+        }
+        if (generateIslands && coastal.islandHeight > 0) {
+          coastH = Math.max(coastH, coastal.islandHeight);
+        }
+        newHeights[iz * gx + ix] = coastH;
+      }
+
+      const h = newHeights[iz * gx + ix]!;
+      newWater[iz * gx + ix] = h <= 0 ? Math.max(0.6, -h + 0.5) : 0;
+    }
+  }
+
+  // Reposition assets/props by the height DELTA at their position (not a
+  // hard snap to the new ground) so they follow this bulk terrain rewrite
+  // instead of floating/burying, while any intentional vertical offset (a
+  // lantern above its post, a roof piece stacked on a wall) is preserved
+  // relative to the surface under it. Ordinary sculpting intentionally
+  // leaves authored localY alone (see regionInterior.ts's "do not re-snap to
+  // heightmap" comment) -- but a coastline/seam regen is exactly the kind of
+  // large-scale rewrite authored placements can't have anticipated, and
+  // skipping this is what left trees floating over/sunk into the terrain
+  // after a region's edges got reshaped.
+  const oldHeightSampler = { gridSize: gx, gridSizeX: gx, gridSizeZ: gz, pitch, heights: blueprint.heights };
+  const newHeightSampler = { gridSize: gx, gridSizeX: gx, gridSizeZ: gz, pitch, heights: newHeights };
+  const resnappedAssets = (blueprint.assets ?? []).map((asset) => {
+    const delta =
+      sampleRegionHeight(newHeightSampler, asset.localX, asset.localZ) -
+      sampleRegionHeight(oldHeightSampler, asset.localX, asset.localZ);
+    return Math.abs(delta) > 0.01 ? { ...asset, localY: asset.localY + delta } : asset;
+  });
+
+  // Clear resources or assets that ended up underwater (water depth > 0.5m)
+  const filteredAssets = resnappedAssets.filter((asset) => {
+    const gxIdx = clamp(Math.floor((asset.localX + halfX) / pitch), 0, gx - 1);
+    const gzIdx = clamp(Math.floor((asset.localZ + halfZ) / pitch), 0, gz - 1);
+    const h = newHeights[gzIdx * gx + gxIdx] ?? 0;
+    return h >= -0.5; // allow docks/piers slightly in water, but not deep seabed
+  });
+
+  const filteredNodes = (blueprint.resourceNodes ?? []).filter((node) => {
+    const gxIdx = clamp(Math.floor((node.localX + halfX) / pitch), 0, gx - 1);
+    const gzIdx = clamp(Math.floor((node.localZ + halfZ) / pitch), 0, gz - 1);
+    const h = newHeights[gzIdx * gx + gxIdx] ?? 0;
+    return h >= 0.2;
+  });
+
+  return {
+    ...blueprint,
+    heights: newHeights,
+    waterHeights: newWater,
+    neighborEdges,
+    assets: filteredAssets,
+    resourceNodes: filteredNodes,
+  };
+}
+
+/**
+ * Regenerates coastlines and open sea across an entire continent:
+ * Computes neighboring contacts for every region, and for any outer edge
+ * with no neighbor (perimeter), sculpts natural coastlines, beaches, and open sea.
+ */
+export function regenContinentCoastlines(
+  blueprints: RegionBlueprint[],
+  options: CoastlineRegenOptions = {},
+): RegionBlueprint[] {
+  if (!blueprints || blueprints.length === 0) return [];
+
+  const allRegions: RegionLandmassBounds[] = blueprints.map((b) => {
+    const gx = b.gridSizeX ?? b.gridSize;
+    const gz = b.gridSizeZ ?? b.gridSize;
+    const halfX = regionHalfSpan(gx, b.pitch);
+    const halfZ = regionHalfSpan(gz, b.pitch);
+    const ox = b.worldOriginX ?? 0;
+    const oz = b.worldOriginZ ?? 0;
+    return {
+      minX: ox - halfX,
+      maxX: ox + halfX,
+      minZ: oz - halfZ,
+      maxZ: oz + halfZ,
+    };
+  });
+
+  return blueprints.map((bp) => {
+    const neighborEdges = detectRegionNeighborEdges(bp, blueprints, 36.0);
+    return regenRegionCoastlines(bp, neighborEdges, {
+      ...options,
+      allRegions,
+    });
+  });
 }
 
 export function slugifyRegionName(name: string): string {
@@ -1711,16 +2673,16 @@ interface HeightPreset {
 }
 
 const REGION_HEIGHT_PRESETS: Record<RegionBiome, HeightPreset> = {
-  grassland: { amplitude: 9.0, cellSize: 65, octaves: 4, baseHeight: 0, peakThreshold: 0.72, mountainHeight: 28, jaggedAmp: 6.0 },
-  forest: { amplitude: 12.0, cellSize: 55, octaves: 4, baseHeight: 0, peakThreshold: 0.68, mountainHeight: 42, jaggedAmp: 9.0 },
-  jungle: { amplitude: 11.0, cellSize: 50, octaves: 4, baseHeight: 0, peakThreshold: 0.70, mountainHeight: 38, jaggedAmp: 8.0 },
-  desert: { amplitude: 10.0, cellSize: 60, octaves: 3, baseHeight: 0, peakThreshold: 0.65, mountainHeight: 48, jaggedAmp: 6.0 },
-  arctic: { amplitude: 16.0, cellSize: 45, octaves: 5, baseHeight: 1, peakThreshold: 0.50, mountainHeight: 75, jaggedAmp: 16.0 },
-  swamp: { amplitude: 3.5, cellSize: 65, octaves: 2, baseHeight: -1.2, peakThreshold: 1.1, mountainHeight: 0, jaggedAmp: 0 },
-  volcanic: { amplitude: 20.0, cellSize: 40, octaves: 5, baseHeight: 1, peakThreshold: 0.45, mountainHeight: 90, jaggedAmp: 20.0, crater: true },
-  alien: { amplitude: 15.0, cellSize: 45, octaves: 5, baseHeight: 0.5, peakThreshold: 0.52, mountainHeight: 70, jaggedAmp: 15.0 },
-  underground: { amplitude: 14.0, cellSize: 40, octaves: 5, baseHeight: -1, peakThreshold: 0.50, mountainHeight: 65, jaggedAmp: 16.0 },
-  cosmic: { amplitude: 16.0, cellSize: 45, octaves: 5, baseHeight: 0.5, peakThreshold: 0.55, mountainHeight: 72, jaggedAmp: 14.0, plateau: true },
+  grassland: { amplitude: 17.0, cellSize: 70, octaves: 4, baseHeight: -3.8, peakThreshold: 0.72, mountainHeight: 22, jaggedAmp: 3.0 },
+  forest: { amplitude: 18.0, cellSize: 65, octaves: 4, baseHeight: -3.4, peakThreshold: 0.70, mountainHeight: 26, jaggedAmp: 3.5 },
+  jungle: { amplitude: 17.0, cellSize: 55, octaves: 4, baseHeight: -3.2, peakThreshold: 0.68, mountainHeight: 25, jaggedAmp: 3.5 },
+  desert: { amplitude: 15.0, cellSize: 60, octaves: 3, baseHeight: -3.0, peakThreshold: 0.65, mountainHeight: 35, jaggedAmp: 4.5 },
+  arctic: { amplitude: 19.0, cellSize: 45, octaves: 5, baseHeight: -3.5, peakThreshold: 0.58, mountainHeight: 50, jaggedAmp: 10.0 },
+  swamp: { amplitude: 5.0, cellSize: 60, octaves: 3, baseHeight: -2.2, peakThreshold: 0.90, mountainHeight: 4, jaggedAmp: 1.0 },
+  volcanic: { amplitude: 20.0, cellSize: 42, octaves: 5, baseHeight: -3.5, peakThreshold: 0.50, mountainHeight: 65, jaggedAmp: 14.0, crater: true },
+  alien: { amplitude: 18.0, cellSize: 45, octaves: 5, baseHeight: -3.2, peakThreshold: 0.58, mountainHeight: 48, jaggedAmp: 10.0 },
+  underground: { amplitude: 15.0, cellSize: 40, octaves: 5, baseHeight: -2.0, peakThreshold: 0.55, mountainHeight: 40, jaggedAmp: 10.0 },
+  cosmic: { amplitude: 18.0, cellSize: 45, octaves: 5, baseHeight: -3.2, peakThreshold: 0.60, mountainHeight: 50, jaggedAmp: 10.0, plateau: true },
 };
 
 /** Max slope a scatter placement will tolerate before it's considered "on a
@@ -1741,11 +2703,11 @@ export const REGION_FOLIAGE: Record<RegionBiome, string[]> = {
   grassland: ["oak_1.glb", "oak_2.glb", "oak_4.glb", "bush.glb", "bush_flowers.glb", "fern.glb"],
   forest: ["oak_1.glb", "oak_2.glb", "oak_3.glb", "oak_4.glb", "oak_5.glb", "pine_1.glb", "pine_2.glb", "fern.glb", "mushroom.glb"],
   jungle: ["oak_2.glb", "oak_3.glb", "oak_5.glb", "twisted_1.glb", "bush_flowers.glb", "fern.glb", "mushroom.glb"],
-  desert: ["dead_1.glb", "dead_2.glb", "dead_3.glb", "rock_1.glb", "rock_2.glb"],
-  arctic: ["pine_1.glb", "pine_2.glb", "pine_3.glb", "pine_4.glb", "dead_1.glb", "dead_2.glb", "rock_2.glb"],
-  swamp: ["twisted_1.glb", "twisted_2.glb", "twisted_3.glb", "dead_1.glb", "dead_2.glb", "mushroom.glb", "fern.glb", "bush.glb"],
+  desert: ["dead_1.glb", "dead_2.glb", "dead_3.glb", "rock_1.glb", "rock_2.glb", "rock_3.glb"],
+  arctic: ["pine_1.glb", "pine_2.glb", "pine_3.glb", "dead_1.glb", "rock_1.glb", "rock_2.glb"],
+  swamp: ["twisted_1.glb", "twisted_2.glb", "twisted_3.glb", "dead_2.glb", "bush.glb", "mushroom.glb"],
   volcanic: ["dead_1.glb", "dead_2.glb", "dead_3.glb", "rock_1.glb", "rock_2.glb", "rock_3.glb"],
-  alien: ["rock_1.glb", "rock_2.glb", "rock_3.glb", "dead_3.glb", "twisted_3.glb", "mushroom.glb"],
+  alien: ["twisted_2.glb", "twisted_3.glb", "mushroom.glb", "fern.glb", "rock_3.glb"],
   underground: ["rock_1.glb", "rock_2.glb", "rock_3.glb", "mushroom.glb", "dead_2.glb"],
   cosmic: ["rock_2.glb", "rock_3.glb", "mushroom.glb", "bush_flowers.glb", "twisted_1.glb"],
 };
@@ -1758,45 +2720,77 @@ export const REGION_TREE_BRUSH: Record<RegionBiome, string[]> = {
   grassland: [
     "oak_1.glb", "oak_2.glb", "oak_3.glb", "oak_4.glb", "oak_5.glb",
     "pine_1.glb", "pine_2.glb", "pine_3.glb",
+    "stylized_nature/CommonTree_1.gltf", "stylized_nature/CommonTree_2.gltf", "stylized_nature/CommonTree_3.gltf",
+    "stylized_nature/CommonTree_4.gltf", "stylized_nature/CommonTree_5.gltf",
+    "free_lowpoly/tree_01.gltf", "free_lowpoly/tree_02.gltf", "free_lowpoly/tree_06.gltf", "free_lowpoly/tree_07.gltf",
+    "kaykit_hexagon/tree_single_A.gltf", "kaykit_hexagon/tree_single_B.gltf",
   ],
   forest: [
     "oak_1.glb", "oak_2.glb", "oak_3.glb", "oak_4.glb", "oak_5.glb",
     "pine_1.glb", "pine_2.glb", "pine_3.glb", "pine_4.glb", "pine_5.glb",
+    "stylized_nature/CommonTree_1.gltf", "stylized_nature/CommonTree_2.gltf", "stylized_nature/CommonTree_3.gltf",
+    "stylized_nature/CommonTree_4.gltf", "stylized_nature/CommonTree_5.gltf",
+    "stylized_nature/Pine_1.gltf", "stylized_nature/Pine_2.gltf", "stylized_nature/Pine_3.gltf",
+    "stylized_nature/Pine_4.gltf", "stylized_nature/Pine_5.gltf",
+    "free_lowpoly/tree_01.gltf", "free_lowpoly/tree_02.gltf", "free_lowpoly/fir_02.gltf", "free_lowpoly/tree_willow.gltf",
+    "kaykit_hexagon/tree_single_A.gltf", "kaykit_hexagon/tree_single_B.gltf",
   ],
   jungle: [
     "oak_2.glb", "oak_3.glb", "oak_4.glb", "oak_5.glb",
     "twisted_1.glb", "twisted_2.glb", "twisted_3.glb",
     "pine_1.glb", "pine_2.glb",
+    "stylized_nature/TwistedTree_1.gltf", "stylized_nature/TwistedTree_2.gltf", "stylized_nature/TwistedTree_3.gltf",
+    "stylized_nature/TwistedTree_4.gltf", "stylized_nature/TwistedTree_5.gltf",
+    "stylized_nature/CommonTree_1.gltf", "stylized_nature/CommonTree_2.gltf",
+    "free_lowpoly/tree_willow.gltf", "free_lowpoly/tree_01.gltf", "free_lowpoly/tree_02.gltf",
   ],
   desert: [
     "dead_1.glb", "dead_2.glb", "dead_3.glb",
     "twisted_1.glb", "twisted_2.glb", "twisted_3.glb",
+    "stylized_nature/DeadTree_1.gltf", "stylized_nature/DeadTree_2.gltf", "stylized_nature/DeadTree_3.gltf",
+    "stylized_nature/DeadTree_4.gltf", "stylized_nature/DeadTree_5.gltf",
+    "stylized_nature/TwistedTree_1.gltf",
+    "free_lowpoly/fallentree_02.gltf", "free_lowpoly/fallentree_04.gltf",
   ],
   arctic: [
     "pine_1.glb", "pine_2.glb", "pine_3.glb", "pine_4.glb", "pine_5.glb",
     "dead_1.glb", "dead_2.glb", "dead_3.glb",
+    "stylized_nature/Pine_1.gltf", "stylized_nature/Pine_2.gltf", "stylized_nature/Pine_3.gltf",
+    "stylized_nature/Pine_4.gltf", "stylized_nature/Pine_5.gltf",
+    "stylized_nature/DeadTree_1.gltf", "stylized_nature/DeadTree_2.gltf",
+    "free_lowpoly/fir_02.gltf",
   ],
   swamp: [
     "twisted_1.glb", "twisted_2.glb", "twisted_3.glb",
     "dead_1.glb", "dead_2.glb", "dead_3.glb",
     "oak_3.glb", "oak_5.glb",
+    "stylized_nature/TwistedTree_1.gltf", "stylized_nature/TwistedTree_2.gltf", "stylized_nature/TwistedTree_3.gltf",
+    "stylized_nature/TwistedTree_4.gltf", "stylized_nature/TwistedTree_5.gltf",
+    "stylized_nature/DeadTree_1.gltf", "stylized_nature/DeadTree_3.gltf",
+    "free_lowpoly/tree_willow.gltf", "free_lowpoly/fallentree_02.gltf", "free_lowpoly/fallentree_04.gltf",
   ],
   volcanic: [
     "dead_1.glb", "dead_2.glb", "dead_3.glb",
     "twisted_1.glb", "twisted_2.glb", "twisted_3.glb",
+    "stylized_nature/DeadTree_1.gltf", "stylized_nature/DeadTree_2.gltf", "stylized_nature/DeadTree_3.gltf",
+    "stylized_nature/DeadTree_4.gltf", "stylized_nature/DeadTree_5.gltf",
   ],
   alien: [
     "twisted_1.glb", "twisted_2.glb", "twisted_3.glb",
     "dead_1.glb", "dead_2.glb", "dead_3.glb",
+    "stylized_nature/TwistedTree_1.gltf", "stylized_nature/TwistedTree_2.gltf", "stylized_nature/TwistedTree_3.gltf",
+    "stylized_nature/TwistedTree_4.gltf", "stylized_nature/TwistedTree_5.gltf",
   ],
   underground: [
     "dead_1.glb", "dead_2.glb", "dead_3.glb",
     "twisted_2.glb", "twisted_3.glb",
+    "stylized_nature/DeadTree_2.gltf", "stylized_nature/DeadTree_4.gltf",
   ],
   cosmic: [
     "twisted_1.glb", "twisted_2.glb", "twisted_3.glb",
     "dead_2.glb", "dead_3.glb",
     "pine_4.glb", "pine_5.glb",
+    "stylized_nature/TwistedTree_3.gltf", "stylized_nature/TwistedTree_5.gltf",
   ],
 };
 
@@ -1870,17 +2864,17 @@ export function pickRegionMob(biome: RegionBiome, roll: number): string {
 }
 
 export const REGION_COLOR_PRESETS: Record<RegionBiome, RegionColorGrading> = {
-  // Soft atmospheric fog — foliage is distance-culled to the terrain ADT ring.
-  grassland: { skyColor: "#8fc7ff", fogColor: "#bcd9f0", fogDensity: 0.006, ambientColor: "#ffffff", ambientIntensity: 0.9, sunColor: "#fff3d6", sunIntensity: 1.1, groundTint: "#8aa04f", skyPreset: "sunny" },
-  forest: { skyColor: "#6fa8d8", fogColor: "#9fc2a8", fogDensity: 0.01, ambientColor: "#dcefe0", ambientIntensity: 0.8, sunColor: "#fff0c8", sunIntensity: 0.95, groundTint: "#4d7a3a", skyPreset: "overcast" },
-  jungle: { skyColor: "#5c9bd1", fogColor: "#7fae7a", fogDensity: 0.014, ambientColor: "#c9f0c0", ambientIntensity: 0.85, sunColor: "#fff8d0", sunIntensity: 1.0, groundTint: "#3c6b2f", skyPreset: "sunny" },
-  desert: { skyColor: "#f5d98a", fogColor: "#f0dca0", fogDensity: 0.01, ambientColor: "#fff2c0", ambientIntensity: 0.95, sunColor: "#fff0b0", sunIntensity: 1.2, groundTint: "#ffffff", skyPreset: "sunny" },
-  arctic: { skyColor: "#c9e3f5", fogColor: "#e8f4fb", fogDensity: 0.012, ambientColor: "#eaf6ff", ambientIntensity: 1.0, sunColor: "#fdfdff", sunIntensity: 1.15, groundTint: "#ffffff", skyPreset: "overcast" },
-  swamp: { skyColor: "#7d8a73", fogColor: "#6d7a63", fogDensity: 0.02, ambientColor: "#aab89a", ambientIntensity: 0.55, sunColor: "#d8dcc0", sunIntensity: 0.6, groundTint: "#515f3a", skyPreset: "overcast" },
-  volcanic: { skyColor: "#3a1f1a", fogColor: "#5c2a1e", fogDensity: 0.018, ambientColor: "#ff8a5c", ambientIntensity: 0.5, sunColor: "#ff6a3c", sunIntensity: 0.9, groundTint: "#6a4432", skyPreset: "stormy" },
-  alien: { skyColor: "#2a1a4a", fogColor: "#4a2a6a", fogDensity: 0.016, ambientColor: "#c08aff", ambientIntensity: 0.6, sunColor: "#8affea", sunIntensity: 0.8, groundTint: "#8a6fd6", skyPreset: "mystical" },
-  underground: { skyColor: "#0d0d14", fogColor: "#1a1a24", fogDensity: 0.03, ambientColor: "#6a7aa0", ambientIntensity: 0.35, sunColor: "#8a9ac0", sunIntensity: 0.4, groundTint: "#5a6a8a", skyPreset: "stormy" },
-  cosmic: { skyColor: "#160a2e", fogColor: "#301a5a", fogDensity: 0.014, ambientColor: "#b0a0ff", ambientIntensity: 0.55, sunColor: "#ffd0f0", sunIntensity: 0.7, groundTint: "#a090e0", skyPreset: "mystical" },
+  // Atmospheric perspective tuned for crystal clear foregrounds and stunning long-distance vistas
+  grassland: { skyColor: "#8fc7ff", fogColor: "#bcd9f0", fogDensity: 0.0009, ambientColor: "#ffffff", ambientIntensity: 0.9, sunColor: "#fff3d6", sunIntensity: 1.1, groundTint: "#8aa04f", skyPreset: "sunny" },
+  forest: { skyColor: "#6fa8d8", fogColor: "#9fc2a8", fogDensity: 0.0012, ambientColor: "#dcefe0", ambientIntensity: 0.8, sunColor: "#fff0c8", sunIntensity: 0.95, groundTint: "#4d7a3a", skyPreset: "overcast" },
+  jungle: { skyColor: "#5c9bd1", fogColor: "#7fae7a", fogDensity: 0.0015, ambientColor: "#c9f0c0", ambientIntensity: 0.85, sunColor: "#fff8d0", sunIntensity: 1.0, groundTint: "#3c6b2f", skyPreset: "sunny" },
+  desert: { skyColor: "#f5d98a", fogColor: "#f0dca0", fogDensity: 0.0010, ambientColor: "#fff2c0", ambientIntensity: 0.95, sunColor: "#fff0b0", sunIntensity: 1.2, groundTint: "#ffffff", skyPreset: "sunny" },
+  arctic: { skyColor: "#c9e3f5", fogColor: "#e8f4fb", fogDensity: 0.0013, ambientColor: "#eaf6ff", ambientIntensity: 1.0, sunColor: "#fdfdff", sunIntensity: 1.15, groundTint: "#ffffff", skyPreset: "overcast" },
+  swamp: { skyColor: "#7d8a73", fogColor: "#6d7a63", fogDensity: 0.0022, ambientColor: "#aab89a", ambientIntensity: 0.55, sunColor: "#d8dcc0", sunIntensity: 0.6, groundTint: "#515f3a", skyPreset: "overcast" },
+  volcanic: { skyColor: "#3a1f1a", fogColor: "#5c2a1e", fogDensity: 0.0018, ambientColor: "#ff8a5c", ambientIntensity: 0.5, sunColor: "#ff6a3c", sunIntensity: 0.9, groundTint: "#6a4432", skyPreset: "stormy" },
+  alien: { skyColor: "#2a1a4a", fogColor: "#4a2a6a", fogDensity: 0.0016, ambientColor: "#c08aff", ambientIntensity: 0.6, sunColor: "#8affea", sunIntensity: 0.8, groundTint: "#8a6fd6", skyPreset: "mystical" },
+  underground: { skyColor: "#0d0d14", fogColor: "#1a1a24", fogDensity: 0.0035, ambientColor: "#6a7aa0", ambientIntensity: 0.35, sunColor: "#8a9ac0", sunIntensity: 0.4, groundTint: "#5a6a8a", skyPreset: "stormy" },
+  cosmic: { skyColor: "#160a2e", fogColor: "#301a5a", fogDensity: 0.0014, ambientColor: "#b0a0ff", ambientIntensity: 0.55, sunColor: "#ffd0f0", sunIntensity: 0.7, groundTint: "#a090e0", skyPreset: "mystical" },
 };
 
 function pick<T>(arr: readonly T[], rng: () => number): T {
@@ -1914,44 +2908,154 @@ function flattenHeights(
   }
 }
 
-/** Author-facing knobs for the "Generate" button, exposed as sliders in the
- *  editor before a draft is rolled -- heightScale multiplies every vertical
- *  dimension of the height formula (rolling amplitude, mountain bump, jagged
- *  crag detail) so the same biome can read as gentle hills or a full-blown
- *  mountain range; treeDensity multiplies the foliage/rock scatter counts;
- *  worldSize is the region's total span (both axes) in world units. Both
- *  heightScale/treeDensity are plain multipliers on the biome preset, not
- *  new noise fields, so the biome's own character (grassland vs volcanic)
- *  is preserved either way. */
+export type LandscapeVariant =
+  | "natural"        // Standard natural topography with organic offshore barrier islands & lake islets
+  | "archipelago"    // Island chain, tropical/forested atolls, sandbars, and offshore islet clusters
+  | "fjords"         // Deep glacial ocean inlets carving into the mainland, sea stacks & cliffs
+  | "highland"       // Elevated stepped plateaus, craggy mountain ridges, and mountain passes
+  | "river_valley"   // Wide meandering river basin with floodplains & river delta islands
+  | "caldera"        // Sunken volcanic crater lake with a central sanctuary island
+  | "badlands";      // Step mesas, deep canyons, tiered sandstone ravines
+
+export interface RegionNeighborEdges {
+  west?: boolean;  // -X edge shares a border with a neighboring region
+  east?: boolean;  // +X edge shares a border with a neighboring region
+  north?: boolean; // -Z edge shares a border with a neighboring region
+  south?: boolean; // +Z edge shares a border with a neighboring region
+}
+
+export interface ContinentMacroContext {
+  seed: string;
+  minX: number;
+  maxX: number;
+  minZ: number;
+  maxZ: number;
+  centerX: number;
+  centerZ: number;
+  radiusX: number;
+  radiusZ: number;
+  heightScale?: number;
+  layoutPattern?: ContinentLayoutPattern;
+  landscapeDistribution?: string;
+  allRegions?: readonly RegionLandmassBounds[];
+}
+
+/**
+ * Evaluates the unified continuous continent macro terrain field at any world position (sampleX, sampleZ).
+ * Guarantees 100% boundary height & normal parity between any adjacent regions on the continent,
+ * while generating sweeping mountain spines, meandering continental river systems, lake basins,
+ * smooth coastal ocean falloffs, beaches, and natural offshore archipelagos.
+ */
+export function evaluateContinentMacroTerrain(
+  sampleX: number,
+  sampleZ: number,
+  ctx: ContinentMacroContext,
+  localBiome: RegionBiome = "grassland",
+  localVariant: LandscapeVariant = "natural",
+): { height: number; waterHeight: number; continentLandFactor: number } {
+  const seedH = hashString(ctx.seed) ^ 0x1234;
+  const heightScale = ctx.heightScale ?? 1.0;
+
+  const variant = ctx.landscapeDistribution ?? localVariant;
+  const isArchipelago = variant === "archipelago" || ctx.layoutPattern === "archipelago";
+
+  // 1. Continental Topography: Mountain Ranges, Ridges, Hills, and Plains
+  // Continental mountain spine (continuous ridge noise crossing multiple regions)
+  const ridge1 = 1.0 - Math.abs(fbm(seedH + 401, sampleX, sampleZ, 240, 3) - 0.5) * 2.0;
+  const ridge2 = 1.0 - Math.abs(fbm(seedH + 402, sampleX * 1.4, sampleZ * 1.4, 150, 2) - 0.5) * 2.0;
+  const ridgeSharp = Math.pow(Math.max(0, ridge1 * 0.7 + ridge2 * 0.3), 2.2);
+  const mountainH = ridgeSharp * (26.0 * heightScale);
+
+  // Continental rolling hills, broad plains, and micro-relief
+  const macroRelief = (fbm(seedH + 201, sampleX, sampleZ, 360, 2) - 0.35) * 16.0;
+  const midHills = (fbm(seedH + 301, sampleX, sampleZ, 120, 3) - 0.5) * 8.5;
+  const microDetail = (fbm(seedH + 777, sampleX, sampleZ, 45, 3) - 0.5) * 3.5;
+
+  // 2. Continental Hydrography: Meandering Rivers & Inland Lakes
+  const riverVal = Math.abs(fbm(seedH + 601, sampleX * 0.55, sampleZ * 0.55, 160, 2) - 0.5);
+  let riverCarve = 0;
+  if (riverVal < 0.048) {
+    const tR = (0.048 - riverVal) / 0.048;
+    riverCarve = Math.pow(tR, 1.3) * (localVariant === "river_valley" ? 8.5 : 6.0);
+  }
+
+  const lakeNoise = fbm(seedH + 602, sampleX, sampleZ, 240, 2);
+  let lakeCarve = 0;
+  if (macroRelief < 1.0 && lakeNoise < 0.32) {
+    const tL = (0.32 - lakeNoise) / 0.32;
+    lakeCarve = Math.pow(tL, 1.4) * 6.0;
+  }
+
+  let mainlandH = macroRelief + midHills + microDetail + mountainH - riverCarve - lakeCarve + 3.8;
+
+  // 3. Wetland & Swamp Biome Inundation (creates rich shallow marshes, murky channels, and inland pools)
+  if (localBiome === "swamp") {
+    const swampPond = (fbm(seedH + 661, sampleX * 0.7, sampleZ * 0.7, 45, 2) - 0.45) * 4.5;
+    mainlandH -= 4.5 + swampPond;
+  }
+
+  // 4. Archipelago and Island Variations
+  if (isArchipelago) {
+    const lagoonNoise = fbm(seedH + 771, sampleX * 0.8, sampleZ * 0.8, 38, 2);
+    mainlandH = -3.5 + (lagoonNoise - 0.5) * 4.0;
+  }
+
+  // 4. Offshore Islands & Atolls in coastal / archipelago waters
+  if (isArchipelago) {
+    const islandScale = 28;
+    const islandThresh = 0.38;
+    const islandFbm = fbm(seedH + 801, sampleX * 0.85, sampleZ * 0.85, islandScale, 3);
+    const islandDetail = fbm(seedH + 901, sampleX * 2.2, sampleZ * 2.2, 16, 2);
+
+    if (islandFbm > islandThresh) {
+      const tPeak = (islandFbm - islandThresh) / (1.0 - islandThresh);
+      const peakHeight = 9.5;
+      const islandElevation = Math.pow(tPeak, 1.2) * peakHeight + (islandDetail - 0.5) * 1.4;
+      const islandH = 1.2 + islandElevation; // Elevated dry land (+1.2m to +10.5m)
+      const islandBlend = smoothstep(clamp((islandFbm - islandThresh) / 0.08, 0, 1));
+      mainlandH = mainlandH * (1 - islandBlend) + islandH * islandBlend;
+    }
+  }
+
+  const finalH = mainlandH;
+  const waterHeight = finalH <= 0 ? Math.max(0.6, -finalH + 0.5) : 0;
+  return { height: finalH, waterHeight, continentLandFactor: 1.0 };
+}
+
 export interface RegionGenerateOptions {
   heightScale: number;
   treeDensity: number;
   worldSize: number;
+  mobDensity?: number;
+  resourceDensity?: number;
+  resourceVariety?: string[];
+  minLevel?: number;
+  maxLevel?: number;
+  gridSizeX?: number;
+  gridSizeZ?: number;
+  gridSize?: number;
+  pitch?: number;
+  worldOriginX?: number;
+  worldOriginZ?: number;
+  worldSeed?: string;
+  neighborEdges?: RegionNeighborEdges;
+  landscapeVariant?: LandscapeVariant;
+  continentContext?: ContinentMacroContext;
 }
 
-export const DEFAULT_REGION_GENERATE_OPTIONS: RegionGenerateOptions = { heightScale: 1, treeDensity: 1, worldSize: 282 };
+export const DEFAULT_REGION_GENERATE_OPTIONS: RegionGenerateOptions = {
+  heightScale: 1,
+  treeDensity: 1,
+  mobDensity: 1,
+  resourceDensity: 1,
+  worldSize: 282,
+  minLevel: 1,
+  maxLevel: 5,
+  landscapeVariant: "natural",
+};
 
-/** Heightmap sample spacing -- fixed regardless of worldSize so a bigger
- *  world just means more grid cells at the same resolution, not blockier
- *  terrain. gridSize is derived from worldSize/pitch below. */
 const REGION_PITCH = 2.5;
 
-/** Fraction of the half-span, at the outer edge, given over to the
- *  boundary mountain ring (see below). */
-const BOUNDARY_RING_FRACTION = 0.15;
-/** How tall the boundary ring rises at the very edge (scaled by
- *  heightScale like every other vertical dimension) -- steep enough that
- *  stepMovement's per-step height-delta check (>2.5 units) rejects any
- *  attempt to climb it well before the peak, making it a real impassable
- *  wall rather than just a tall backdrop. */
-const BOUNDARY_MOUNTAIN_HEIGHT = 130;
-const BOUNDARY_JAGGED_AMP = 18;
-
-/** Random single-biome standalone region for the region editor's "Generate"
- *  button -- fills a real sculpted heightmap (not the open world's infinite
- *  noise function) with biome-appropriate foliage/rock scatter, 1-3 named
- *  villages, mob spawns, and a default (still fully editable) color-grading
- *  preset. Pass a fresh seed each click for a different draft. */
 export function generateRandomRegionBlueprint(
   seed: string,
   biome: RegionBiome,
@@ -1960,196 +3064,114 @@ export function generateRandomRegionBlueprint(
 ): RegionBlueprint {
   const opts = { ...DEFAULT_REGION_GENERATE_OPTIONS, ...options };
   const rng = mulberry32(hashString(seed) ^ 0x8d3a1f);
-  const noiseSeed = hashString(`${seed}_h`) ^ 0x1234;
-  const pitch = REGION_PITCH;
-  const gridSize = clamp(Math.round(opts.worldSize / pitch) + 1, 16, 160);
-  const half = regionHalfSpan(gridSize, pitch);
-  const preset = REGION_HEIGHT_PRESETS[biome];
-  const amplitude = preset.amplitude * opts.heightScale;
-  const mountainHeight = preset.mountainHeight * opts.heightScale;
-  const jaggedAmp = preset.jaggedAmp * opts.heightScale;
+  const variant: LandscapeVariant = opts.landscapeVariant ?? "natural";
 
-  const heights: number[] = new Array(gridSize * gridSize);
-  const craterX = (rng() - 0.5) * half;
-  const craterZ = (rng() - 0.5) * half;
-  const craterRadius = 30 + rng() * 20;
-  for (let gz = 0; gz < gridSize; gz++) {
-    for (let gx = 0; gx < gridSize; gx++) {
-      const x = gx * pitch - half;
-      const z = gz * pitch - half;
-      // Elevation field (0-1): the primary shape driver. Low elevation reads
-      // as a valley (h dips below baseHeight below), high elevation rises
-      // into foothills and, once it clears peakThreshold, a real mountain.
-      const e = fbm(noiseSeed, x, z, preset.cellSize, 2);
-      const detail = fbm(noiseSeed + 777, x, z, preset.cellSize * 0.35, preset.octaves);
-      let h = preset.baseHeight + (e - 0.5) * amplitude * 2 + (detail - 0.5) * amplitude * 0.8;
+  const pitch = opts.pitch ?? REGION_PITCH;
+  const gridSizeX = opts.gridSizeX ?? opts.gridSize ?? clamp(Math.round(opts.worldSize / pitch) + 1, 16, 160);
+  const gridSizeZ = opts.gridSizeZ ?? opts.gridSize ?? clamp(Math.round(opts.worldSize / pitch) + 1, 16, 160);
+  const halfX = regionHalfSpan(gridSizeX, pitch);
+  const halfZ = regionHalfSpan(gridSizeZ, pitch);
 
-      const mountainT = smoothstep(clamp((e - preset.peakThreshold) / Math.max(0.001, 1 - preset.peakThreshold), 0, 1));
-      if (mountainT > 0) {
-        const jagged = fbm(noiseSeed + 999, x, z, preset.cellSize * 0.18, 3) - 0.5;
-        h += mountainT * mountainHeight + jagged * jaggedAmp * mountainT;
-      }
+  const originX = opts.worldOriginX ?? 0;
+  const originZ = opts.worldOriginZ ?? 0;
 
-      if (preset.crater) {
-        const d = Math.hypot(x - craterX, z - craterZ);
-        if (d < craterRadius) h -= (1 - d / craterRadius) * amplitude * 1.5;
-      }
-      if (preset.plateau) {
-        const d = Math.hypot(x, z);
-        if (d < half * 0.4) h += (1 - d / (half * 0.4)) * amplitude * 0.8;
-      }
+  const hasNeighborWest = opts.neighborEdges?.west === true;
+  const hasNeighborEast = opts.neighborEdges?.east === true;
+  const hasNeighborSouth = opts.neighborEdges?.south === true;
+  const hasNeighborNorth = opts.neighborEdges?.north === true;
 
-      // Outer Ocean Water Ring -- surrounds the map with open ocean water.
-      const edgeDist = half - Math.max(Math.abs(x), Math.abs(z));
-      const ringBand = half * BOUNDARY_RING_FRACTION;
-      const ringT = smoothstep(clamp(1 - edgeDist / ringBand, 0, 1));
-      if (ringT > 0) {
-        h = lerp(h, -2.5, ringT * 0.95);
-      }
+  // Derive or use the continent macro context
+  const continentCtx: ContinentMacroContext = opts.continentContext ?? {
+    seed: opts.worldSeed ?? seed,
+    minX: originX - halfX,
+    maxX: originX + halfX,
+    minZ: originZ - halfZ,
+    maxZ: originZ + halfZ,
+    centerX: originX,
+    centerZ: originZ,
+    radiusX: halfX * 0.95,
+    radiusZ: halfZ * 0.95,
+    heightScale: opts.heightScale ?? 1.0,
+    landscapeDistribution: variant,
+  };
 
-      heights[gz * gridSize + gx] = h;
-    }
-  }
+  const margin = Math.min(halfX * 0.65, halfZ * 0.65, 85.0);
 
-  // Water depth grid
-  const waterHeights = new Float32Array(gridSize * gridSize);
+  const heights: number[] = new Array(gridSizeX * gridSizeZ);
+  const waterHeights = new Float32Array(gridSizeX * gridSizeZ);
 
-  // Fill outer ocean water depth
-  for (let gz = 0; gz < gridSize; gz++) {
-    const wz = gz * pitch - half;
-    for (let gx = 0; gx < gridSize; gx++) {
-      const wx = gx * pitch - half;
-      const edgeDist = half - Math.max(Math.abs(wx), Math.abs(wz));
-      const ringBand = half * BOUNDARY_RING_FRACTION;
-      const ringT = smoothstep(clamp(1 - edgeDist / ringBand, 0, 1));
-      if (ringT > 0) {
-        waterHeights[gz * gridSize + gx] = ringT * 3.5 + 0.5;
-      }
-    }
-  }
+  const regionMinX = originX - halfX;
+  const regionMaxX = originX + halfX;
+  const regionMinZ = originZ - halfZ;
+  const regionMaxZ = originZ + halfZ;
 
-  // 1. Procedural Lakes in Valley Depressions
-  const lakeCount = 1 + Math.floor(rng() * 2);
-  const lakeCenters: { x: number; z: number; radius: number }[] = [];
+  const neighborEdges = opts.neighborEdges ?? { west: false, east: false, south: false, north: false };
+  const seedH = continentCtx ? hashString(continentCtx.seed) ^ 0x47a9 : hashString(`${seed}_coast`) ^ 0x47a9;
 
-  for (let l = 0; l < lakeCount; l++) {
-    const lx = (rng() - 0.5) * half * 1.1;
-    const lz = (rng() - 0.5) * half * 1.1;
-    const lakeRadius = 24 + rng() * 16;
-    lakeCenters.push({ x: lx, z: lz, radius: lakeRadius });
+  // Sample the unified world-space continent macro terrain
+  for (let gz = 0; gz < gridSizeZ; gz++) {
+    const z = gz * pitch - halfZ;
+    const sampleZ = originZ + z;
 
-    for (let gz = 0; gz < gridSize; gz++) {
-      const wz = gz * pitch - half;
-      for (let gx = 0; gx < gridSize; gx++) {
-        const wx = gx * pitch - half;
-        const dist = Math.hypot(wx - lx, wz - lz);
-        if (dist < lakeRadius) {
-          const falloff = 1 - dist / lakeRadius;
-          const idx = gz * gridSize + gx;
-          // Carve ground basin into heights
-          heights[idx]! -= falloff * falloff * 4.5;
-          // Fill water depth
-          const waterDepth = falloff * 3.2 + 0.6;
-          if (waterDepth > waterHeights[idx]!) {
-            waterHeights[idx] = waterDepth;
-          }
-        }
-      }
-    }
-  }
+    for (let gx = 0; gx < gridSizeX; gx++) {
+      const x = gx * pitch - halfX;
+      const sampleX = originX + x;
 
-  // 2. Procedural Long Winding River Spanning Across the Entire Map
-  if (biome !== "desert" && biome !== "volcanic") {
-    // Pick start near one outer edge of the map and end at the opposite edge (or main lake)
-    const angle = rng() * Math.PI * 2;
-    const sx = Math.cos(angle) * half * 0.88;
-    const sz = Math.sin(angle) * half * 0.88;
-
-    let ex = -sx;
-    let ez = -sz;
-
-    if (lakeCenters.length > 0 && rng() > 0.3) {
-      ex = lakeCenters[0]!.x;
-      ez = lakeCenters[0]!.z;
-    }
-
-    // Generate 6 control points across the map for sweeping S-curve meanders
-    const riverControlPoints: { x: number; z: number }[] = [];
-    const numControl = 6;
-    const perpX = -Math.sin(angle);
-    const perpZ = Math.cos(angle);
-
-    for (let c = 0; c <= numControl; c++) {
-      const t = c / numControl;
-      const basePx = sx + (ex - sx) * t;
-      const basePz = sz + (ez - sz) * t;
-      // Swaying meander perpendicular to general flow
-      const wave = Math.sin(t * Math.PI * 3.5 + (noiseSeed % 100)) * (32.0 + rng() * 16.0);
-      riverControlPoints.push({
-        x: basePx + perpX * wave,
-        z: basePz + perpZ * wave,
-      });
-    }
-
-    // High resolution spline interpolation across the whole map (250 steps)
-    const channelWidth = 8.5;
-    const bankWidth = 22.0;
-    const riverSteps = 250;
-
-    for (let s = 0; s <= riverSteps; s++) {
-      const t = s / riverSteps;
-      const segIndex = clamp(Math.floor(t * numControl), 0, numControl - 1);
-      const segT = t * numControl - segIndex;
-      const p0 = riverControlPoints[Math.max(0, segIndex - 1)]!;
-      const p1 = riverControlPoints[segIndex]!;
-      const p2 = riverControlPoints[Math.min(numControl, segIndex + 1)]!;
-      const p3 = riverControlPoints[Math.min(numControl, segIndex + 2)]!;
-
-      // Catmull-Rom spline curve formula
-      const tt = segT * segT;
-      const ttt = tt * segT;
-      const px = 0.5 * (
-        (2 * p1.x) +
-        (-p0.x + p2.x) * segT +
-        (2 * p0.x - 5 * p1.x + 4 * p2.x - p3.x) * tt +
-        (-p0.x + 3 * p1.x - 3 * p2.x + p3.x) * ttt
-      );
-      const pz = 0.5 * (
-        (2 * p1.z) +
-        (-p0.z + p2.z) * segT +
-        (2 * p0.z - 5 * p1.z + 4 * p2.z - p3.z) * tt +
-        (-p0.z + 3 * p1.z - 3 * p2.z + p3.z) * ttt
+      const { height: sampledH } = evaluateContinentMacroTerrain(
+        sampleX,
+        sampleZ,
+        continentCtx,
+        biome,
+        variant,
       );
 
-      // Sample base uncarved terrain height along the river path
-      const pathBaseH = Math.max(0, heights[clamp(Math.floor((pz + half) / pitch), 0, gridSize - 1) * gridSize + clamp(Math.floor((px + half) / pitch), 0, gridSize - 1)] ?? 0);
+      const coastal = evaluateCoastalLandforms(
+        sampleX,
+        sampleZ,
+        x,
+        z,
+        halfX,
+        halfZ,
+        neighborEdges,
+        seedH,
+        margin,
+        continentCtx.allRegions,
+      );
 
-      for (let gz = 0; gz < gridSize; gz++) {
-        const wz = gz * pitch - half;
-        for (let gx = 0; gx < gridSize; gx++) {
-          const wx = gx * pitch - half;
-          const dist = Math.hypot(wx - px, wz - pz);
-          const idx = gz * gridSize + gx;
+      let h = sampledH + coastal.promontoryLift - coastal.coveCarve;
 
-          if (dist <= channelWidth) {
-            const falloff = 1 - (dist / channelWidth) * (dist / channelWidth);
-            // Smooth riverbed carving: target river surface level follows valley gradient
-            const targetRiverBed = Math.min(heights[idx]!, Math.min(pathBaseH * 0.3, 2.0)) - falloff * 1.8;
-            heights[idx] = targetRiverBed;
-
-            // Dynamically set water depth so water surface sits flush at riverbanks
-            const waterDepth = falloff * 2.2 + 0.6;
-            if (waterDepth > waterHeights[idx]!) {
-              waterHeights[idx] = waterDepth;
-            }
-          } else if (dist <= bankWidth) {
-            // Smooth natural banks sloping gently into river channel
-            const bankT = (dist - channelWidth) / (bankWidth - channelWidth);
-            const targetBankH = Math.min(pathBaseH * 0.4 + 1.2, heights[idx]!);
-            heights[idx] = lerp(heights[idx]!, targetBankH, (1 - bankT) * 0.7);
-          }
-        }
+      // Outer coastline ocean falloff on unbordered edges
+      if (coastal.falloff < 1.0) {
+        const oceanFloor = -5.5;
+        h = oceanFloor + (h - oceanFloor) * coastal.falloff;
       }
+
+      // Spit / Tombolo sand ridges connecting to shore/islands
+      if (coastal.spitRidge > 0) {
+        h = Math.max(h, 0.8 + coastal.spitRidge);
+      }
+
+      // Maritime barrier islands & sea stacks
+      if (coastal.islandHeight > 0) {
+        h = Math.max(h, coastal.islandHeight);
+      }
+
+      // Ensure dry ground around entry point (0, 0)
+      const distToSpawn = Math.hypot(x, z);
+      if (distToSpawn < 22) {
+        const spawnSafety = smoothstep(clamp(distToSpawn / 22, 0, 1));
+        const spawnFloor = 1.5;
+        h = Math.max(h, spawnFloor * (1 - spawnSafety) + h * spawnSafety);
+      }
+
+      heights[gz * gridSizeX + gx] = h;
+      waterHeights[gz * gridSizeX + gx] = h <= 0 ? Math.max(0.6, -h + 0.5) : 0;
+    }
+  }
+  for (let i = 0; i < heights.length; i++) {
+    const h = heights[i]!;
+    if (h <= 0) {
+      waterHeights[i] = Math.max(0.6, -h + 0.5);
     }
   }
 
@@ -2157,7 +3179,11 @@ export function generateRandomRegionBlueprint(
     id: "",
     name,
     biome,
-    gridSize,
+    minLevel: opts.minLevel ?? 1,
+    maxLevel: opts.maxLevel ?? (opts.minLevel ? opts.minLevel + 4 : 5),
+    gridSize: Math.max(gridSizeX, gridSizeZ),
+    gridSizeX,
+    gridSizeZ,
     pitch,
     heights,
     waterHeights: Array.from(waterHeights),
@@ -2172,139 +3198,607 @@ export function generateRandomRegionBlueprint(
     entryLocal: { x: 0, z: 0 },
     portalWorldX: 0,
     portalWorldZ: 0,
+    worldOriginX: opts.worldOriginX ?? 0,
+    worldOriginZ: opts.worldOriginZ ?? 0,
   };
 
-  // Reject candidate placements that land in water (depth > 0.05) or on steep cliff faces
+  // Reject candidate placements that land in water, near beach/shorelines, or on steep cliff faces
   const maxScatterSlope = REGION_MAX_SCATTER_SLOPE[biome];
-  function placeOnDryTerrain(): { x: number; z: number } {
-    let x = 0;
-    let z = 0;
-    for (let attempt = 0; attempt < 12; attempt++) {
-      x = (rng() - 0.5) * half * 1.8;
-      z = (rng() - 0.5) * half * 1.8;
+  const minElevation = biome === "swamp" || biome === "underground" ? 0.15 : 1.0;
+  const minPerimeterY = biome === "swamp" || biome === "underground" ? 0.05 : 0.35;
+
+  function placeOnDryTerrain(bufferRadius = 5): { x: number; z: number } | null {
+    const minBoundX = -halfX + bufferRadius + 2;
+    const maxBoundX = halfX - bufferRadius - 2;
+    const minBoundZ = -halfZ + bufferRadius + 2;
+    const maxBoundZ = halfZ - bufferRadius - 2;
+
+    const spanX = Math.max(2, maxBoundX - minBoundX);
+    const spanZ = Math.max(2, maxBoundZ - minBoundZ);
+
+    for (let attempt = 0; attempt < 16; attempt++) {
+      const x = minBoundX + rng() * spanX;
+      const z = minBoundZ + rng() * spanZ;
+
+      // 1. Center check: must be dry ground well above water and beaches (sea level = 0)
       const waterDepth = sampleRegionWaterDepth(blueprint, x, z);
+      const y = sampleRegionHeight(blueprint, x, z);
       const slope = regionSlopeAt(blueprint, x, z);
-      if (waterDepth <= 0.05 && slope <= maxScatterSlope) break;
-    }
-    return { x, z };
-  }
-
-  // 3. Foliage & Rock Scatter (strictly placed on dry ground)
-  const foliage = REGION_FOLIAGE[biome];
-  const rocks = REGION_ROCK_PROPS[biome];
-  const foliageCount = Math.round((110 + Math.floor(rng() * 70)) * opts.treeDensity);
-  for (let i = 0; i < foliageCount; i++) {
-    const { x, z } = placeOnDryTerrain();
-    const model = pick(foliage, rng);
-    blueprint.assets.push({
-      model, category: "foliage", localX: x, localY: sampleRegionHeight(blueprint, x, z), localZ: z,
-      yaw: rng() * Math.PI * 2, scale: 0.8 + rng() * 0.5,
-    });
-  }
-  const rockCount = Math.round((25 + Math.floor(rng() * 20)) * opts.treeDensity);
-  for (let i = 0; i < rockCount; i++) {
-    const { x, z } = placeOnDryTerrain();
-    const model = pick(rocks, rng);
-    blueprint.assets.push({
-      model, category: "prop", localX: x, localY: sampleRegionHeight(blueprint, x, z), localZ: z,
-      yaw: rng() * Math.PI * 2, scale: 0.8 + rng() * 0.8,
-    });
-  }
-
-  // 4. Procedural Village Building at Village Markers
-  const villageCount = 1 + Math.floor(rng() * 3);
-  for (let v = 0; v < villageCount; v++) {
-    const vx = (rng() - 0.5) * half * 1.2;
-    const vz = (rng() - 0.5) * half * 1.2;
-    const vname = pick(REGION_VILLAGE_FIRST, rng) + pick(REGION_VILLAGE_SECOND, rng);
-
-    // Carve level clearing for village AND drain any water in village clearing
-    flattenHeights(heights, gridSize, pitch, half, blueprint, vx, vz, 28);
-    for (let gz = 0; gz < gridSize; gz++) {
-      const wz = gz * pitch - half;
-      for (let gx = 0; gx < gridSize; gx++) {
-        const wx = gx * pitch - half;
-        if (Math.hypot(wx - vx, wz - vz) <= 28) {
-          waterHeights[gz * gridSize + gx] = 0;
-          if (blueprint.waterHeights) blueprint.waterHeights[gz * gridSize + gx] = 0;
-        }
+      if (waterDepth > 0.01 || y < minElevation || slope > maxScatterSlope) {
+        continue;
       }
+
+      // 2. Radial clearance checks: 4 cardinal samples around perimeter
+      const pN = sampleRegionWaterDepth(blueprint, x, z + bufferRadius);
+      const pS = sampleRegionWaterDepth(blueprint, x, z - bufferRadius);
+      const pE = sampleRegionWaterDepth(blueprint, x + bufferRadius, z);
+      const pW = sampleRegionWaterDepth(blueprint, x - bufferRadius, z);
+      if (pN > 0.01 || pS > 0.01 || pE > 0.01 || pW > 0.01) {
+        continue;
+      }
+
+      return { x, z };
     }
-    blueprint.villages.push({ name: vname, localX: vx, localZ: vz, radius: 24 });
+    return null;
+  }
 
-    // Central Landmark Plaza (Well or Market)
-    const centerLandmark = rng() > 0.5 ? "building_well.gltf" : "building_market.gltf";
-    blueprint.assets.push({
-      model: centerLandmark,
-      category: "building",
-      localX: vx,
-      localY: sampleRegionHeight(blueprint, vx, vz),
-      localZ: vz,
-      yaw: rng() * Math.PI * 2,
-      scale: 2.4,
-    });
+  const areaScale = Math.max(0.1, ((gridSizeX - 1) * pitch * ((gridSizeZ - 1) * pitch)) / (282 * 282));
 
-    // Ring of Medieval Buildings facing center plaza (scaled up to full imposing house height)
-    const buildingCount = 5 + Math.floor(rng() * 4); // 5-8 houses per village
-    const villageRoadPoints: { x: number; z: number }[] = [{ x: vx, z: vz }];
+  // 2. Tree Scatter (strictly placed on dry ground with diverse models and natural size variance)
+  const treeDensity = opts.treeDensity ?? 1.0;
+  if (treeDensity > 0.01) {
+    const treeModels = REGION_TREE_BRUSH[biome] ?? REGION_TREE_BRUSH.grassland;
+    const treeCount = Math.min(260, Math.max(8, Math.round((110 + Math.floor(rng() * 50)) * treeDensity * areaScale)));
 
-    for (let b = 0; b < buildingCount; b++) {
-      const angle = (b / buildingCount) * Math.PI * 2 + (rng() - 0.5) * 0.35;
-      const dist = 12 + rng() * 8;
-      const bx = vx + Math.cos(angle) * dist;
-      const bz = vz + Math.sin(angle) * dist;
-      const buildingModel = pick(VILLAGE_BUILDING_MODELS, rng);
+    for (let i = 0; i < treeCount; i++) {
+      const scaleRoll = rng();
+      let scale: number;
+      if (scaleRoll < 0.25) {
+        scale = 0.55 + rng() * 0.35;
+      } else if (scaleRoll < 0.75) {
+        scale = 0.95 + rng() * 0.55;
+      } else if (scaleRoll < 0.93) {
+        scale = 1.55 + rng() * 0.65;
+      } else {
+        scale = 2.25 + rng() * 0.85;
+      }
 
-      // Rotate facing central plaza
-      const facingYaw = angle + Math.PI + (rng() - 0.5) * 0.2;
+      const clearance = Math.max(4.0, scale * 2.6);
+      const pos = placeOnDryTerrain(clearance);
+      if (!pos) continue;
 
+      const model = pick(treeModels, rng);
       blueprint.assets.push({
-        model: buildingModel,
-        category: "building",
-        localX: bx,
-        localY: sampleRegionHeight(blueprint, bx, bz),
-        localZ: bz,
-        yaw: facingYaw,
-        scale: 3.8 + rng() * 0.6,
+        model,
+        category: "foliage",
+        localX: pos.x,
+        localY: sampleRegionHeight(blueprint, pos.x, pos.z),
+        localZ: pos.z,
+        yaw: rng() * Math.PI * 2,
+        scale: Math.round(scale * 100) / 100,
       });
+    }
+  }
 
-      villageRoadPoints.push({ x: bx, z: bz });
-
-      // Clutter & Set-Dressing (barrels, crates, fences, buckets)
-      const clutterCount = 2 + Math.floor(rng() * 3);
-      for (let c = 0; c < clutterCount; c++) {
-        const cAngle = facingYaw + (rng() - 0.5) * 1.5;
-        const cDist = 3.5 + rng() * 3;
-        const cx = bx + Math.cos(cAngle) * cDist;
-        const cz = bz + Math.sin(cAngle) * cDist;
-        const clutterModel = pick(VILLAGE_CLUTTER_MODELS, rng);
-
-        blueprint.assets.push({
-          model: clutterModel,
-          category: "building",
-          localX: cx,
-          localY: sampleRegionHeight(blueprint, cx, cz),
-          localZ: cz,
-          yaw: rng() * Math.PI * 2,
-          scale: 1.4 + rng() * 0.3,
+  // 3. Mob Spawns
+  const mobDensity = opts.mobDensity ?? 1.0;
+  if (mobDensity > 0.01) {
+    const mobCount = Math.min(36, Math.max(2, Math.round((14 + Math.floor(rng() * 10)) * mobDensity * areaScale)));
+    for (let i = 0; i < mobCount; i++) {
+      const pos = placeOnDryTerrain(3.0);
+      if (pos) {
+        blueprint.mobSpawns.push({
+          localX: pos.x,
+          localZ: pos.z,
+          difficulty: Math.max(0.5, Math.min(3.0, (blueprint.minLevel ?? 1) / 10)),
         });
       }
     }
-
-    // Connect village building roads
-    if (villageRoadPoints.length >= 2) {
-      blueprint.roads?.push({ points: villageRoadPoints, width: 4.5 });
-    }
   }
 
-  const mobCount = 12 + Math.floor(rng() * 10);
-  for (let i = 0; i < mobCount; i++) {
-    const x = (rng() - 0.5) * half * 1.7;
-    const z = (rng() - 0.5) * half * 1.7;
-    const nearVillage = blueprint.villages.some((v) => Math.hypot(x - v.localX, z - v.localZ) < v.radius + 15);
-    if (nearVillage) continue;
-    blueprint.mobSpawns.push({ localX: x, localZ: z });
+  // 4. Resource Node Scatter
+  const resourceDensity = opts.resourceDensity ?? 1.0;
+  if (resourceDensity > 0.01) {
+    const nodeVariety = (opts.resourceVariety && opts.resourceVariety.length > 0)
+      ? opts.resourceVariety
+      : getBiomeLevelResourceTypes(biome, blueprint.minLevel ?? 1);
+
+    const resourceNodes: RegionResourceNode[] = [];
+    const nodeCount = Math.min(48, Math.max(3, Math.round((26 + Math.floor(rng() * 14)) * resourceDensity * areaScale)));
+    for (let i = 0; i < nodeCount; i++) {
+      const type = pick(nodeVariety, rng);
+      const pos = placeOnDryTerrain(2.5);
+      if (pos) {
+        resourceNodes.push({
+          id: `res_${i}_${Math.floor(rng() * 100000)}`,
+          type,
+          localX: pos.x,
+          localZ: pos.z,
+          variant: Math.round(rng() * 100) / 100,
+        });
+      }
+    }
+    blueprint.resourceNodes = resourceNodes;
   }
 
   return blueprint;
 }
+
+export type ContinentLayoutPattern =
+  | "continent"
+  | "grid"
+  | "linear"
+  | "rectangle_wide"
+  | "rectangle_tall"
+  | "isthmus"
+  | "archipelago";
+
+export type ContinentSizeVariation = "uniform" | "varied" | "rectangular" | "organic";
+export type ContinentBiomeDistribution = "thematic_continent" | "single_biome" | "diverse_mosaic";
+export type ContinentLevelProgression = "tiered" | "uniform";
+export type ContinentScalePreset =
+  | "micro"
+  | "compact"
+  | "small"
+  | "medium"
+  | "large"
+  | "massive"
+  | "colossal"
+  | "titanic"
+  | "mythic";
+
+export interface MultiRegionContinentOptions {
+  seed?: string;
+  regionCount: number;
+  layout: ContinentLayoutPattern;
+  sizeVariation: ContinentSizeVariation;
+  continentScale?: ContinentScalePreset;
+  baseGridSize?: number;
+  biomeDistribution: ContinentBiomeDistribution;
+  primaryBiome?: RegionBiome;
+  levelProgression: ContinentLevelProgression;
+  baseMinLevel?: number;
+  baseMaxLevel?: number;
+  heightScale?: number;
+  treeDensity?: number;
+  mobDensity?: number;
+  resourceDensity?: number;
+  pitch?: number;
+  landscapeDistribution?: "auto" | LandscapeVariant;
+}
+
+export function continentScaleToGridSize(scale: ContinentScalePreset = "massive"): number {
+  switch (scale) {
+    case "micro": return 32;     // ~190m/zone
+    case "compact": return 48;   // ~288m/zone
+    case "small": return 64;     // ~384m/zone
+    case "medium": return 80;    // ~480m/zone
+    case "large": return 96;     // ~570m/zone
+    case "colossal": return 160; // ~954m/zone
+    case "titanic": return 192;  // ~1146m/zone
+    case "mythic": return 256;   // ~1536m/zone
+    case "massive":
+    default: return 128;         // ~762m/zone
+  }
+}
+
+export const DEFAULT_CONTINENT_OPTIONS: MultiRegionContinentOptions = {
+  regionCount: 4,
+  layout: "continent",
+  sizeVariation: "varied",
+  continentScale: "massive",
+  biomeDistribution: "thematic_continent",
+  primaryBiome: "forest",
+  levelProgression: "tiered",
+  baseMinLevel: 1,
+  baseMaxLevel: 5,
+  heightScale: 1.0,
+  treeDensity: 1.0,
+  mobDensity: 1.0,
+  resourceDensity: 1.0,
+  pitch: 6,
+  landscapeDistribution: "auto",
+};
+
+const THEMATIC_BIOMES_CYCLE: RegionBiome[] = [
+  "forest",
+  "grassland",
+  "swamp",
+  "desert",
+  "jungle",
+  "arctic",
+  "volcanic",
+  "underground",
+  "cosmic",
+  "alien",
+];
+
+export interface ContinentPlannedSlot {
+  index: number;
+  col: number;
+  row: number;
+  gridSizeX: number;
+  gridSizeZ: number;
+  worldOriginX: number;
+  worldOriginZ: number;
+  biome: RegionBiome;
+  minLevel: number;
+  maxLevel: number;
+  isStartingRegion: boolean;
+  name: string;
+  seed: string;
+  neighborEdges: RegionNeighborEdges;
+  landscapeVariant: LandscapeVariant;
+}
+
+export function planMultiRegionContinent(
+  options: Partial<MultiRegionContinentOptions> = {},
+): {
+  planned: ContinentPlannedSlot[];
+  continentSeed: string;
+  pitch: number;
+  opts: MultiRegionContinentOptions;
+  continentContext: ContinentMacroContext;
+} {
+  const opts = { ...DEFAULT_CONTINENT_OPTIONS, ...options };
+  const continentSeed = opts.seed || `${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+  const rng = mulberry32(hashString(continentSeed) ^ 0x4f882a);
+  const count = clamp(opts.regionCount, 2, 16);
+  const pitch = opts.pitch ?? 6;
+  const baseSize = opts.baseGridSize ?? continentScaleToGridSize(opts.continentScale);
+
+  // Determine grid dimensions
+  let cols: number;
+  let rows: number;
+  if (opts.layout === "linear") {
+    cols = count;
+    rows = 1;
+  } else if (opts.layout === "rectangle_wide") {
+    if (count <= 3) {
+      cols = count; rows = 1;
+    } else if (count <= 6) {
+      cols = Math.ceil(count / 2); rows = 2;
+    } else if (count <= 10) {
+      cols = Math.ceil(count / 2); rows = 2;
+    } else {
+      cols = Math.ceil(count / 3); rows = 3;
+    }
+  } else if (opts.layout === "rectangle_tall") {
+    if (count <= 3) {
+      cols = 1; rows = count;
+    } else if (count <= 6) {
+      cols = 2; rows = Math.ceil(count / 2);
+    } else if (count <= 10) {
+      cols = 2; rows = Math.ceil(count / 2);
+    } else {
+      cols = 3; rows = Math.ceil(count / 3);
+    }
+  } else if (opts.layout === "isthmus") {
+    cols = Math.max(3, count <= 4 ? 3 : Math.ceil(count / 2));
+    rows = count <= 3 ? 1 : 2;
+  } else if (count === 2) {
+    cols = 2; rows = 1;
+  } else if (count === 3) {
+    cols = 3; rows = 1;
+  } else if (count <= 4) {
+    cols = 2; rows = 2;
+  } else if (count <= 6) {
+    cols = 3; rows = 2;
+  } else if (count <= 9) {
+    cols = 3; rows = 3;
+  } else if (count <= 12) {
+    cols = 4; rows = 3;
+  } else {
+    cols = 4; rows = 4;
+  }
+
+  // Column X-grid sizes & Row Z-grid sizes (keeps all adjacent column/row seams 100% flush)
+  const colGridX: number[] = new Array(cols).fill(baseSize);
+  const rowGridZ: number[] = new Array(rows).fill(baseSize);
+
+  if (opts.layout === "rectangle_wide") {
+    for (let c = 0; c < cols; c++) {
+      colGridX[c] = Math.min(256, Math.max(32, Math.round(baseSize * 1.2)));
+    }
+  } else if (opts.layout === "rectangle_tall") {
+    for (let r = 0; r < rows; r++) {
+      rowGridZ[r] = Math.min(256, Math.max(32, Math.round(baseSize * 1.2)));
+    }
+  }
+
+  if (opts.sizeVariation === "varied") {
+    const centerCol = Math.floor(cols / 2);
+    const centerRow = Math.floor(rows / 2);
+
+    for (let c = 0; c < cols; c++) {
+      if (c === centerCol) {
+        colGridX[c] = Math.min(256, Math.round(colGridX[c]! * 1.25));
+      } else if ((c === 0 || c === cols - 1) && cols >= 4) {
+        colGridX[c] = Math.max(32, Math.round(colGridX[c]! * 0.85));
+      }
+    }
+
+    for (let r = 0; r < rows; r++) {
+      if (r === centerRow) {
+        rowGridZ[r] = Math.min(256, Math.round(rowGridZ[r]! * 1.25));
+      } else if ((r === 0 || r === rows - 1) && rows >= 4) {
+        rowGridZ[r] = Math.max(32, Math.round(rowGridZ[r]! * 0.85));
+      }
+    }
+  } else if (opts.sizeVariation === "rectangular") {
+    // Individual zones generated with distinct rectangular aspect ratios
+    for (let c = 0; c < cols; c++) {
+      const colMult = c % 2 === 0 ? 1.25 : 0.85;
+      colGridX[c] = Math.min(256, Math.max(32, Math.round(baseSize * colMult)));
+    }
+    for (let r = 0; r < rows; r++) {
+      const rowMult = r % 2 === 0 ? 0.85 : 1.25;
+      rowGridZ[r] = Math.min(256, Math.max(32, Math.round(baseSize * rowMult)));
+    }
+  } else if (opts.sizeVariation === "organic") {
+    for (let c = 0; c < cols; c++) {
+      const rJitter = 0.85 + (((rng() * 1000) % 35) / 100);
+      colGridX[c] = Math.min(256, Math.max(32, Math.round(baseSize * rJitter)));
+    }
+    for (let r = 0; r < rows; r++) {
+      const rJitter = 0.85 + (((rng() * 1000) % 35) / 100);
+      rowGridZ[r] = Math.min(256, Math.max(32, Math.round(baseSize * rJitter)));
+    }
+  }
+
+  // Calculate contiguous column widths and row heights in world meters
+  const colWidthMeters: number[] = new Array(cols).fill(0);
+  for (let c = 0; c < cols; c++) {
+    colWidthMeters[c] = (colGridX[c]! - 1) * pitch;
+  }
+  const rowHeightMeters: number[] = new Array(rows).fill(0);
+  for (let r = 0; r < rows; r++) {
+    rowHeightMeters[r] = (rowGridZ[r]! - 1) * pitch;
+  }
+
+  // Cumulative edge coordinates so touching columns/rows have ZERO gaps
+  const colEdgeX: number[] = new Array(cols + 1).fill(0);
+  const colCenterX: number[] = new Array(cols).fill(0);
+  for (let c = 0; c < cols; c++) {
+    colCenterX[c] = colEdgeX[c]! + colWidthMeters[c]! / 2;
+    colEdgeX[c + 1] = colEdgeX[c]! + colWidthMeters[c]!;
+  }
+  const totalWidth = colEdgeX[cols]!;
+
+  const rowEdgeZ: number[] = new Array(rows + 1).fill(0);
+  const rowCenterZ: number[] = new Array(rows).fill(0);
+  for (let r = 0; r < rows; r++) {
+    rowCenterZ[r] = rowEdgeZ[r]! + rowHeightMeters[r]! / 2;
+    rowEdgeZ[r + 1] = rowEdgeZ[r]! + rowHeightMeters[r]!;
+  }
+  const totalHeight = rowEdgeZ[rows]!;
+
+  // Plan region slot positions and metadata
+  const plannedRaw: Array<Omit<ContinentPlannedSlot, "neighborEdges" | "seed">> = [];
+  let currentIdx = 0;
+  for (let r = 0; r < rows && currentIdx < count; r++) {
+    for (let c = 0; c < cols && currentIdx < count; c++) {
+      const sizeX = colGridX[c]!;
+      const sizeZ = rowGridZ[r]!;
+      const worldOriginX = colCenterX[c]! - totalWidth / 2;
+      const worldOriginZ = rowCenterZ[r]! - totalHeight / 2;
+
+      // Biome assignment
+      let regionBiome: RegionBiome = opts.primaryBiome ?? "forest";
+      if (opts.biomeDistribution === "thematic_continent") {
+        if (worldOriginZ < -totalHeight * 0.2) {
+          regionBiome = "arctic";
+        } else if (worldOriginZ > totalHeight * 0.2) {
+          regionBiome = worldOriginX > 0 ? "jungle" : "desert";
+        } else if (worldOriginX > totalWidth * 0.2) {
+          regionBiome = "swamp";
+        } else if (worldOriginX < -totalWidth * 0.2) {
+          regionBiome = "volcanic";
+        } else {
+          regionBiome = currentIdx === 0 ? "forest" : "grassland";
+        }
+      } else if (opts.biomeDistribution === "diverse_mosaic") {
+        regionBiome = THEMATIC_BIOMES_CYCLE[currentIdx % THEMATIC_BIOMES_CYCLE.length]!;
+      }
+
+      // Level assignment
+      let minLvl = opts.baseMinLevel ?? 1;
+      let maxLvl = opts.baseMaxLevel ?? 5;
+      const isStarting = currentIdx === 0;
+
+      if (opts.levelProgression === "tiered") {
+        if (isStarting) {
+          minLvl = 1;
+          maxLvl = 5;
+        } else {
+          const distFromStart = Math.hypot(
+            worldOriginX - (plannedRaw[0]?.worldOriginX ?? 0),
+            worldOriginZ - (plannedRaw[0]?.worldOriginZ ?? 0),
+          );
+          const tier = Math.min(3, Math.floor(distFromStart / 600) + 1);
+          if (tier === 1) {
+            minLvl = 10;
+            maxLvl = 20;
+          } else if (tier === 2) {
+            minLvl = 25;
+            maxLvl = 40;
+          } else {
+            minLvl = 45;
+            maxLvl = 60;
+          }
+        }
+      }
+
+      // Landscape Variant determination
+      let landscapeVariant: LandscapeVariant = "natural";
+      if (opts.landscapeDistribution && opts.landscapeDistribution !== "auto") {
+        landscapeVariant = opts.landscapeDistribution;
+      } else if (opts.layout === "archipelago") {
+        landscapeVariant = "archipelago";
+      } else {
+        const isOuterCoast = c === 0 || c === cols - 1 || r === 0 || r === rows - 1;
+        const roll = rng();
+        if (isOuterCoast) {
+          if (roll < 0.35) landscapeVariant = "archipelago";
+          else if (roll < 0.60) landscapeVariant = "fjords";
+          else if (roll < 0.80) landscapeVariant = "river_valley";
+          else landscapeVariant = "natural";
+        } else {
+          if (roll < 0.30) landscapeVariant = "highland";
+          else if (roll < 0.55) landscapeVariant = "river_valley";
+          else if (roll < 0.72) landscapeVariant = "caldera";
+          else if (roll < 0.86) landscapeVariant = "badlands";
+          else landscapeVariant = "natural";
+        }
+      }
+
+      const name = generateMmoRegionName(regionBiome, minLvl, rng);
+      plannedRaw.push({
+        index: currentIdx,
+        col: c,
+        row: r,
+        gridSizeX: sizeX,
+        gridSizeZ: sizeZ,
+        worldOriginX,
+        worldOriginZ,
+        biome: regionBiome,
+        minLevel: minLvl,
+        maxLevel: maxLvl,
+        isStartingRegion: isStarting,
+        name,
+        landscapeVariant,
+      });
+
+      currentIdx++;
+    }
+  }
+
+  // Calculate neighbor edges for each region
+  const eps = 4.0; // edge adjacency threshold
+  const planned: ContinentPlannedSlot[] = [];
+
+  for (let i = 0; i < plannedRaw.length; i++) {
+    const p = plannedRaw[i]!;
+    const halfX = ((p.gridSizeX - 1) * pitch) / 2;
+    const halfZ = ((p.gridSizeZ - 1) * pitch) / 2;
+    const minX = p.worldOriginX - halfX;
+    const maxX = p.worldOriginX + halfX;
+    const minZ = p.worldOriginZ - halfZ;
+    const maxZ = p.worldOriginZ + halfZ;
+
+    const neighborEdges: RegionNeighborEdges = {
+      west: false,
+      east: false,
+      north: false,
+      south: false,
+    };
+
+    for (let j = 0; j < plannedRaw.length; j++) {
+      if (i === j) continue;
+      const other = plannedRaw[j]!;
+      const otherHalfX = ((other.gridSizeX - 1) * pitch) / 2;
+      const otherHalfZ = ((other.gridSizeZ - 1) * pitch) / 2;
+      const oMinX = other.worldOriginX - otherHalfX;
+      const oMaxX = other.worldOriginX + otherHalfX;
+      const oMinZ = other.worldOriginZ - otherHalfZ;
+      const oMaxZ = other.worldOriginZ + otherHalfZ;
+
+      const overlapZ = minZ <= oMaxZ + eps && maxZ >= oMinZ - eps;
+      const overlapX = minX <= oMaxX + eps && maxX >= oMinX - eps;
+
+      if (overlapZ) {
+        if (Math.abs(minX - oMaxX) <= eps) neighborEdges.west = true;
+        if (Math.abs(maxX - oMinX) <= eps) neighborEdges.east = true;
+      }
+      if (overlapX) {
+        if (Math.abs(minZ - oMaxZ) <= eps) neighborEdges.south = true;
+        if (Math.abs(maxZ - oMinZ) <= eps) neighborEdges.north = true;
+      }
+    }
+
+    const regionSeed = `${continentSeed}_r${i}`;
+    planned.push({
+      ...p,
+      seed: regionSeed,
+      neighborEdges,
+    });
+  }
+
+  let minWorldX = Infinity;
+  let maxWorldX = -Infinity;
+  let minWorldZ = Infinity;
+  let maxWorldZ = -Infinity;
+
+  for (const p of planned) {
+    const halfX = ((p.gridSizeX - 1) * pitch) / 2;
+    const halfZ = ((p.gridSizeZ - 1) * pitch) / 2;
+    if (p.worldOriginX - halfX < minWorldX) minWorldX = p.worldOriginX - halfX;
+    if (p.worldOriginX + halfX > maxWorldX) maxWorldX = p.worldOriginX + halfX;
+    if (p.worldOriginZ - halfZ < minWorldZ) minWorldZ = p.worldOriginZ - halfZ;
+    if (p.worldOriginZ + halfZ > maxWorldZ) maxWorldZ = p.worldOriginZ + halfZ;
+  }
+
+  const allRegionsBounds: RegionLandmassBounds[] = planned.map((p) => {
+    const hX = ((p.gridSizeX - 1) * pitch) / 2;
+    const hZ = ((p.gridSizeZ - 1) * pitch) / 2;
+    return {
+      minX: p.worldOriginX - hX,
+      maxX: p.worldOriginX + hX,
+      minZ: p.worldOriginZ - hZ,
+      maxZ: p.worldOriginZ + hZ,
+    };
+  });
+
+  const continentContext: ContinentMacroContext = {
+    seed: continentSeed,
+    minX: minWorldX,
+    maxX: maxWorldX,
+    minZ: minWorldZ,
+    maxZ: maxWorldZ,
+    centerX: (minWorldX + maxWorldX) / 2,
+    centerZ: (minWorldZ + maxWorldZ) / 2,
+    radiusX: (maxWorldX - minWorldX) / 2 + 50,
+    radiusZ: (maxWorldZ - minWorldZ) / 2 + 50,
+    heightScale: opts.heightScale ?? 1.0,
+    layoutPattern: opts.layout,
+    landscapeDistribution: opts.landscapeDistribution,
+    allRegions: allRegionsBounds,
+  };
+
+  return { planned, continentSeed, pitch, opts, continentContext };
+}
+
+export function generateMultiRegionContinent(
+  options: Partial<MultiRegionContinentOptions> = {},
+): RegionBlueprint[] {
+  const { planned, continentSeed, pitch, opts, continentContext } = planMultiRegionContinent(options);
+  const results: RegionBlueprint[] = [];
+
+  for (let i = 0; i < planned.length; i++) {
+    const p = planned[i]!;
+    const bp = generateRandomRegionBlueprint(p.seed, p.biome, p.name, {
+      heightScale: opts.heightScale ?? 1.0,
+      treeDensity: opts.treeDensity ?? 1.0,
+      mobDensity: opts.mobDensity ?? 1.0,
+      resourceDensity: opts.resourceDensity ?? 1.0,
+      gridSizeX: p.gridSizeX,
+      gridSizeZ: p.gridSizeZ,
+      pitch,
+      minLevel: p.minLevel,
+      maxLevel: p.maxLevel,
+      worldOriginX: p.worldOriginX,
+      worldOriginZ: p.worldOriginZ,
+      worldSeed: continentSeed,
+      neighborEdges: p.neighborEdges,
+      landscapeVariant: p.landscapeVariant,
+      continentContext,
+    });
+
+    bp.id = `region_${Date.now()}_${i}`;
+    bp.isStartingRegion = p.isStartingRegion;
+    results.push(bp);
+  }
+
+  return results;
+}
+

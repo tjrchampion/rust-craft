@@ -32,7 +32,10 @@ export const InputMsg = z.object({
 
 export const InteractMsg = z.object({
   t: z.literal("interact"),
-  nodeId: z.string().max(32),
+  // Authored region node ids are `region_<regionId>_node_<marker-id>` --
+  // comfortably longer than 32 chars once regionId/marker-id are realistic
+  // (e.g. "region_new_region_node_marker_9907" is 34 chars already).
+  nodeId: z.string().max(128),
 });
 
 export const DrinkMsg = z.object({ t: z.literal("drink") });
@@ -499,6 +502,8 @@ export type ServerMsg =
       npcs: NpcSnap[];
       questLog: QuestLogEntry[];
       achievements: AchievementSnap[];
+      /** Permanently-discovered RegionPoi ids for this character. */
+      discoveredPoiIds: string[];
       /** Unclaimed level-up care packages (HUD chest). */
       levelRewards?: LevelRewardChest[];
       serverTime: number;
@@ -570,6 +575,20 @@ export type ServerMsg =
   | { t: "questLog"; quests: QuestLogEntry[] }
   | { t: "achievements"; achievements: AchievementSnap[] }
   | { t: "achievementUnlocked"; id: string; name: string; xp: number; items: { itemId: string; qty: number }[] }
+  | {
+      t: "poiDiscovered";
+      poiId: string;
+      regionId: string;
+      name: string;
+      description?: string;
+      x: number;
+      y: number;
+      z: number;
+      /** World-space fog-reveal polygon (server-converted from the POI's
+       *  region-local revealShape) -- client never needs the blueprint. */
+      revealShape: { x: number; z: number }[];
+      xp: number;
+    }
   | { t: "questComplete"; questId: string; questName: string; xp: number; items: { itemId: string; qty: number }[] }
   | {
       t: "dungeonState";

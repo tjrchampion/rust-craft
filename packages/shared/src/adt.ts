@@ -16,8 +16,20 @@ export const ADT_SIZE = 64;
 export const ADT_RING = 3;
 
 /** Extra Chebyshev steps to keep loaded after leaving the stream ring —
- *  avoids thrash/reload hitches when walking near a tile boundary. */
-export const ADT_KEEP_EXTRA = 1;
+ *  avoids thrash/reload hitches when walking near a tile boundary. Must stay
+ *  larger than ADT_LOAD_LEAD (a tile built at the load-lead ring shouldn't
+ *  immediately qualify for disposal). */
+export const ADT_KEEP_EXTRA = 2;
+
+/** Extra Chebyshev steps built (and rendered -- there's no separate hidden
+ *  state, a built tile is a visible tile) beyond the nominal stream ring,
+ *  purely to give tiles a buffer of real walking distance to finish
+ *  building while still comfortably inside the fogged-out zone, instead of
+ *  starting construction only once a tile is already expected to be in
+ *  clear view. The extra ring itself sits farther out (denser fog), so
+ *  rendering it early costs a little more geometry but isn't visually
+ *  wrong the way over-drawing grass would be. */
+export const ADT_LOAD_LEAD = 1;
 
 /** Grass is fine detail — one step inside the terrain ring. */
 export const ADT_GRASS_RING = 2;
@@ -34,17 +46,19 @@ export function adtRingRadiusMeters(ring: number): number {
 }
 
 /** Linear Fog near — light atmospheric fade, well inside village stream. */
-export const OVERWORLD_FOG_NEAR = adtRingRadiusMeters(ADT_RING) * 0.55; // ~123 m
+export const OVERWORLD_FOG_NEAR = 300;
 
 /** Linear Fog far — soft horizon; trees/villages are distance-culled separately. */
-export const OVERWORLD_FOG_FAR = adtRingRadiusMeters(ADT_VILLAGE_RING) * 1.4; // ~314 m
+export const OVERWORLD_FOG_FAR = 2600;
+
+/** Reference distance for calibrating REGION_FOG_DENSITY_MIN -- calibrated
+ *  for expansive panoramic views across neighboring regions and mountain peaks. */
+const REGION_FOG_REFERENCE_METERS = 1100;
 
 /**
- * Soft floor for region FogExp2 (~35% transmittance at the village ring).
- * Foliage is distance-culled to the terrain ADT ring, so fog only needs a
- * gentle horizon — not a hard wall at the stream edge.
- */
-export const REGION_FOG_DENSITY_MIN = -Math.log(0.35) / adtRingRadiusMeters(ADT_VILLAGE_RING);
+ * Floor for region FogExp2 density (~35% transmittance at 1100m, soft haze).
+ * Keeps local regions crystal clear while smoothly blending distant horizons. */
+export const REGION_FOG_DENSITY_MIN = Math.sqrt(-Math.log(0.35)) / REGION_FOG_REFERENCE_METERS;
 
 export function clampRegionFogDensity(density: number): number {
   return Math.max(density, REGION_FOG_DENSITY_MIN);

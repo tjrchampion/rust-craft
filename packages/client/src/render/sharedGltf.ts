@@ -170,8 +170,8 @@ export function enableSharedGltfTextures(loader: GLTFLoader): void {
       const textureDef = json.textures[textureIndex];
       if (!textureDef) return null;
       const sourceDef = json.images[textureDef.source];
-      // Embedded bufferView / data-URI images stay on the default path.
-      if (!sourceDef?.uri || sourceDef.uri.startsWith("data:")) return null;
+      // Embedded bufferView / data-URI / blob-URI images stay on the default path.
+      if (!sourceDef?.uri || sourceDef.uri.startsWith("data:") || sourceDef.uri.startsWith("blob:") || sourceDef.bufferView !== undefined) return null;
 
       const resolved = THREE.LoaderUtils.resolveURL(sourceDef.uri, parser.options.path);
       const sampler = json.samplers?.[textureDef.sampler ?? -1] ?? {};

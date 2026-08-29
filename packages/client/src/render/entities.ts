@@ -10,7 +10,7 @@ import type {
   CharacterGender,
   CharacterAppearance,
 } from "@rustcraft/shared";
-import { wrapAngle, mobDef, itemDef, auraDef } from "@rustcraft/shared";
+import { wrapAngle, mobDef, itemDef, auraDef, INTEREST_RADIUS } from "@rustcraft/shared";
 import { buildNameplate, buildCampfire, buildHorse, buildRaft, buildPartyTagSprite } from "./models";
 import { game } from "../ui/gameState.svelte";
 import { AnimatedModel, PLAYER_ANIMS, mobModelSpec, logicalFromState, dodgeLogicalFor } from "./gltf";
@@ -21,6 +21,7 @@ import { SpellVfxSystem } from "./spellVfx";
 import { CharacterAuras } from "./characterAuras";
 import { SchoolFlashSystem } from "./schoolFlash";
 import { sound } from "../game/sound";
+import { perfTime, perfTimeAsync } from "./perfBus";
 import type * as QUARKS from "three.quarks";
 
 // Snapshots broadcast at a full 20Hz (see GameServer.tick), so 2 snapshot
@@ -29,14 +30,16 @@ import type * as QUARKS from "three.quarks";
 // own zero-latency client-side prediction.
 const INTERP_DELAY_MS = 130;
 const DESPAWN_AFTER_MS = 1200;
-/** Defer GLB/anim binding for mobs/pets until within this range of the camera. */
-const MOB_MODEL_LOAD_RADIUS = 72;
-/** Stop advancing AnimationMixer/state-machine for in-frustum but distant
- *  entities -- frozen mid-pose at range is imperceptible (same idea as
- *  regionInterior.ts's npcAnimReach2 for region NPCs), but a crowded view
- *  full of far-off players/mobs was paying full mixer-update cost for all of
- *  them every frame regardless of how small they render on screen. */
-const ANIM_UPDATE_RADIUS = 70;
+/** Defer GLB/anim binding for mobs/pets until within this range of the camera.
+ *  Matches server INTEREST_RADIUS so streamed mobs immediately begin loading their model asset. */
+const MOB_MODEL_LOAD_RADIUS = INTEREST_RADIUS;
+/** Cap on renderer.compile() prewarm calls per frame from drainCompileQueue --
+ *  a crowd of players resolving their appearance at once shouldn't just move
+ *  the pile-up from render() to here. */
+const MAX_COMPILES_PER_FRAME = 2;
+/** Stop advancing AnimationMixer/state-machine for in-frustum entities beyond this range.
+ *  Matches server INTEREST_RADIUS so mobs visible across the draw distance animate properly. */
+const ANIM_UPDATE_RADIUS = INTEREST_RADIUS;
 
 /** PlayerSnap's gear fields are optional on the wire (server omits them when
  *  unchanged since this viewer's last snapshot of that player -- see
@@ -82,6 +85,11 @@ interface Sample {
 interface RemoteEntity {
   kind: "player" | "mob" | "pet";
   id: string;
+  /** MobDef id (e.g. "wolf") for kind "mob"/"pet" (both resolve a MobDef for
+   *  their model); null for players. Set once at spawn -- a given entity id
+   *  never changes species. Used to match live mobs against a kill-quest's
+   *  objectiveTarget (see nearestMobOfType). */
+  mobType: string | null;
   name: string | null;
   classId: string;
   gender: CharacterGender;
@@ -341,6 +349,13 @@ export class EntityManager {
    *  Throttled to at most 1 mob per animation frame to prevent frame hitches. */
   private pendingMobLoadQueue: RemoteEntity[] = [];
   private inFlightMobLoad = false;
+  /** Players (mobs/pets use pendingMobLoadQueue instead, which precompiles as
+   *  part of its own load step) whose body + appearance just finished loading
+   *  and need a renderer.compile() prewarm before their first real draw --
+   *  drained a couple per frame from update() so several players resolving
+   *  at once (e.g. walking into a crowd) don't all pay their shader-link
+   *  stall on the same render() frame. */
+  private pendingCompileQueue: RemoteEntity[] = [];
   /** Client Display settings -- toggled from System → Settings. */
   showPlayerNameplates = true;
   showMobNameplates = true;
@@ -463,14 +478,24 @@ export class EntityManager {
     let barY = kind === "player" ? 2.05 : 1.5;
     let plateColor = "#9fd0ff";
     let plateName = name;
+    let mobTypeId: string | null = null;
+    /** Resolves once this player's body + appearance are fully attached --
+     *  used below (after `entity` exists) to queue a renderer.compile()
+     *  prewarm, same as the mob/pet branch's pendingLoad path gets via
+     *  pumpMobLoadQueue. undefined for mob/pet (they use pendingLoad instead). */
+    let readyForCompile: Promise<void> | undefined;
 
     if (kind === "player") {
       model = new AnimatedModel(PLAYER_ANIMS);
       const g = gender ?? "male";
-      void model.loadFrom(playerModelUrl(g), 1.8);
-      if (appearance) void model.applyAppearance(g, appearance);
+      const loaded = perfTimeAsync("entity:player:loadFrom", () => model.loadFrom(playerModelUrl(g), 1.8), name ?? id);
+      const tinted = appearance
+        ? perfTimeAsync("entity:player:applyAppearance", () => model.applyAppearance(g, appearance), name ?? id)
+        : Promise.resolve();
+      readyForCompile = Promise.all([loaded, tinted]).then(() => {});
     } else {
-      const def = mobDef(mobType ?? "wolf");
+      mobTypeId = mobType ?? "wolf";
+      const def = mobDef(mobTypeId);
       const spec = mobModelSpec(def.render.model);
       model = new AnimatedModel(spec.anims);
       // Defer GLB clone + clip bind until the camera is close — spawning a
@@ -500,6 +525,7 @@ export class EntityManager {
     const entity: RemoteEntity = {
       kind,
       id,
+      mobType: mobTypeId,
       name: plateName,
       classId: classId ?? "warrior",
       gender: gender ?? "male",
@@ -537,6 +563,11 @@ export class EntityManager {
       lastHpFrac: -1,
     };
     this.entities.set(id, entity);
+    if (readyForCompile) {
+      void readyForCompile.then(() => {
+        if (this.entities.has(id)) this.pendingCompileQueue.push(entity);
+      });
+    }
     return entity;
   }
 
@@ -1358,6 +1389,7 @@ export class EntityManager {
     }
 
     this.pumpMobLoadQueue(camera);
+    this.drainCompileQueue(camera);
 
     this.updateTargetRing();
 
@@ -1601,6 +1633,26 @@ export class EntityManager {
     return best;
   }
 
+  /** Nearest live mob of a specific species within range, for kill-quest map
+   *  markers -- only ever sees mobs already streamed to this client (within
+   *  server INTEREST_RADIUS and not yet despawned-stale), same visibility
+   *  scope as nearestHostileMob/the live red mob dots on the map. There's no
+   *  server-authoritative "nearest wolf in the whole zone" query; this is a
+   *  client-local proxy, so it can legitimately find nothing nearby. */
+  nearestMobOfType(x: number, z: number, mobType: string, maxRange: number): { x: number; z: number } | null {
+    let best: { x: number; z: number } | null = null;
+    let bestDist = maxRange;
+    for (const e of this.entities.values()) {
+      if (e.kind !== "mob" || e.hp <= 0 || e.mobType !== mobType) continue;
+      const d = Math.hypot(e.group.position.x - x, e.group.position.z - z);
+      if (d < bestDist) {
+        bestDist = d;
+        best = { x: e.group.position.x, z: e.group.position.z };
+      }
+    }
+    return best;
+  }
+
   /** Flinch reaction on taking damage -- a one-shot, so it's safe to call on
    *  every damage tick (e.g. a DoT) without fighting the movement/idle loop. */
   playHit(id: string): void {
@@ -1734,8 +1786,7 @@ export class EntityManager {
     entity.pendingLoad = null;
     this.inFlightMobLoad = true;
 
-    void entity.model
-      .loadFrom(pending.url, pending.height, pending.tint)
+    void perfTimeAsync("entity:mob:loadFrom", () => entity.model.loadFrom(pending.url, pending.height, pending.tint), entity.id)
       .then(() => {
         if (this.renderer && camera) {
           // Sync compile() only -- this runs continuously during live gameplay
@@ -1744,7 +1795,7 @@ export class EntityManager {
           // condition that makes compileAsync()'s internal setTimeout poll
           // throw an uncatchable TypeError (see Game.ts's prewarm360GpuPass
           // comment). Not hypothetical -- reproduced in this codebase.
-          this.renderer.compile(entity.group, camera);
+          perfTime("entity:mob:compile", () => this.renderer!.compile(entity.group, camera), entity.id);
         }
       })
       .catch(() => {})
@@ -1752,6 +1803,23 @@ export class EntityManager {
         this.inFlightMobLoad = false;
         entity.inLoadQueue = false;
       });
+  }
+
+  /** Precompile shaders for players whose body + appearance just finished
+   *  loading (see readyForCompile in createEntity) -- same fix as
+   *  pumpMobLoadQueue's own compile() call, just for the one path that
+   *  didn't have it: remote players attach immediately (no distance-gated
+   *  pendingLoad queue like mobs/pets), so without this their first real
+   *  render paid the GPU shader-link stall directly. Capped per frame so a
+   *  crowd of players resolving at once doesn't just move the pile-up from
+   *  render() to here. */
+  private drainCompileQueue(camera: THREE.Camera | undefined): void {
+    if (!this.renderer || !camera || this.pendingCompileQueue.length === 0) return;
+    for (let i = 0; i < MAX_COMPILES_PER_FRAME && this.pendingCompileQueue.length > 0; i++) {
+      const entity = this.pendingCompileQueue.shift()!;
+      if (!this.entities.has(entity.id)) continue;
+      perfTime("entity:player:compile", () => this.renderer!.compile(entity.group, camera), entity.id);
+    }
   }
 
   private disposeEntity(entity: RemoteEntity): void {
@@ -1768,6 +1836,7 @@ export class EntityManager {
 
   clear(): void {
     this.pendingMobLoadQueue.length = 0;
+    this.pendingCompileQueue.length = 0;
     this.inFlightMobLoad = false;
     for (const e of this.entities.values()) this.disposeEntity(e);
     for (const p of this.projectiles.values()) {

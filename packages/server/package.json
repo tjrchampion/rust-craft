@@ -12,6 +12,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@gltf-transform/core": "^4.4.2",
     "@rustcraft/shared": "workspace:*",
     "arctic": "^3.7.0",
     "dotenv": "^17.4.2",

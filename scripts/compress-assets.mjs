@@ -25,12 +25,19 @@ function checkKtxAvailable() {
   }
 }
 
+// modular/base/*.glb (the shared player-body rigs -- Regular/Teen/Superhero
+// Male/Female) visibly broke after KTX2 compression (reported in-game after
+// running this script against the full library) -- skip them until that's
+// root-caused. Every other modular/* piece (Hair, etc.) compressed fine.
+const EXCLUDED_DIRS = [path.join("modular", "base")];
+
 function findGlbFiles(dir) {
   let files = [];
   const entries = fs.readdirSync(dir, { withFileTypes: true });
   for (const entry of entries) {
     const fullPath = path.join(dir, entry.name);
     if (entry.isDirectory()) {
+      if (EXCLUDED_DIRS.some((excluded) => fullPath.includes(excluded))) continue;
       files = files.concat(findGlbFiles(fullPath));
     } else if (entry.isFile() && entry.name.endsWith(".glb")) {
       files.push(fullPath);

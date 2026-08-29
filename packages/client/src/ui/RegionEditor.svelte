@@ -4,6 +4,11 @@
   import {
     REGION_BIOMES,
     REGION_BIOME_LABELS,
+    REGION_BIOME_DETAILS,
+    generateMmoRegionName,
+    getBiomeLevelResourceTypes,
+    generateMultiRegionContinent,
+    planMultiRegionContinent,
     REGION_COLOR_PRESETS,
     REGION_MUSIC_TRACKS,
     REGION_FOG_DENSITY_MIN,
@@ -18,6 +23,7 @@
     DEFAULT_QUICK_GRASS_SETTINGS,
     QUICK_GRASS_PRESETS,
     type RegionBiome,
+    type RegionBiomeDetail,
     type RegionBlueprint,
     type RegionColorGrading,
     type SkyPresetId,
@@ -25,6 +31,20 @@
     type RegionQuestObjectiveKind,
     type RegionNPC,
     type QuickGrassSettings,
+    type RegionMapPoi,
+    type ContinentLayoutPattern,
+    type ContinentSizeVariation,
+    type ContinentBiomeDistribution,
+    type ContinentLevelProgression,
+    type ContinentScalePreset,
+    type RegionNeighborEdges,
+    type LandscapeVariant,
+    stitchRegionSeams,
+    regenRegionCoastlines,
+    regenContinentCoastlines,
+    detectRegionNeighborEdges,
+    regionHalfSpanX,
+    regionHalfSpanZ,
     VENDORS,
   } from "@rustcraft/shared";
   import {
@@ -39,6 +59,7 @@
   import {
     REGION_PROP_PALETTE,
     REGION_PALETTE_PACKS,
+    POI_LANDMARK_PRESETS,
     regionAssetDisplayName,
     regionGroupPack,
   } from "../render/regionPropPalette";
@@ -72,16 +93,24 @@
       name: string;
       biome: RegionBiome;
       gridSize: number;
+      gridSizeX?: number;
+      gridSizeZ?: number;
       pitch: number;
       worldOriginX: number;
       worldOriginZ: number;
+      minLevel?: number;
+      maxLevel?: number;
+      pois?: RegionMapPoi[];
     }[]
   >([]);
   let regionId = $state<string>("");
   let regionName = $state("New Region");
   let biome = $state<RegionBiome>("grassland");
+  let minLevel = $state(1);
+  let maxLevel = $state(5);
   let regionSizeX = $state(32);
   let regionSizeZ = $state(32);
+  let regionPitch = $state(6);
   let portalWorldX = $state(0);
   let portalWorldZ = $state(0);
   let worldOriginX = $state(0);
@@ -91,6 +120,12 @@
   let showContinentMap = $state(false);
   let layoutTiles = $state<LayoutTile[]>([]);
   let layoutSaving = $state(false);
+  /** Live progress for the Stitch Borders / Regen Coastlines batch tools --
+   *  each is a fetch phase (0-50%) then a save phase (50-100%), tracked by a
+   *  counter incremented as each per-region request resolves (not a fake
+   *  timer) so the bar/percentage reflect real work happening. null hides
+   *  the overlay. */
+  let opProgress = $state<{ label: string; current: number; total: number; pct: number } | null>(null);
   /** Load edge-adjacent regions into the 3D view (read-only) for seam moulding. */
   let showNeighborRegions = $state(false);
   let neighborLoading = $state(false);
@@ -139,6 +174,75 @@
   let status = $state<string | null>(null);
   let deleteConfirmOpen = $state(false);
   let deleteInProgress = $state(false);
+
+  // --- Procedural World Generator Modal State ---
+  let showGenerateModal = $state(false);
+  let genModalMode = $state<"single" | "continent">("single");
+
+  // Single Region Generator State
+  let genBiome = $state<RegionBiome>("forest");
+  let genLandscapeVariant = $state<LandscapeVariant>("natural");
+  let genName = $state("Whispering Glade");
+  let genMinLevel = $state(1);
+  let genMaxLevel = $state(5);
+  let genHeightScale = $state(1.0);
+  let genTreeDensity = $state(1.0);
+  let genMobDensity = $state(1.0);
+  let genResourceDensity = $state(1.0);
+  let genResourceVariety = $state<Record<string, boolean>>({
+    tree: true,
+    rock: true,
+    berry_bush: true,
+    copper_vein: true,
+    tin_vein: true,
+    iron_deposit: false,
+    mithril_deposit: false,
+    thorium_vein: false,
+  });
+  let genWorldSize = $state(282);
+  let genGridSizeX = $state(48);
+  let genGridSizeZ = $state(48);
+  let genPitch = $state(6);
+  let genSeed = $state("");
+
+  // Multi-Region Continent Generator State
+  let continentCount = $state(4);
+  let continentLayout = $state<ContinentLayoutPattern>("continent");
+  let continentScale = $state<ContinentScalePreset>("massive");
+  let continentSizeVariation = $state<ContinentSizeVariation>("varied");
+  let continentLandscapeVariant = $state<LandscapeVariant | "auto">("auto");
+  let continentBiomeDist = $state<ContinentBiomeDistribution>("thematic_continent");
+  let continentLevelProg = $state<ContinentLevelProgression>("tiered");
+  let continentPrimaryBiome = $state<RegionBiome>("forest");
+  let continentHeightScale = $state(1.0);
+  let continentTreeDensity = $state(1.0);
+  let continentMobDensity = $state(1.0);
+  let continentResourceDensity = $state(1.0);
+  let continentPitch = $state(6);
+  let continentSeed = $state("");
+  let isGeneratingContinent = $state(false);
+  let continentProgress = $state<{
+    active: boolean;
+    current: number;
+    total: number;
+    percent: number;
+    currentName: string;
+    currentBiome: RegionBiome;
+    currentLevelRange: string;
+    stage: string;
+    detail: string;
+  }>({
+    active: false,
+    current: 0,
+    total: 0,
+    percent: 0,
+    currentName: "",
+    currentBiome: "forest",
+    currentLevelRange: "1–5",
+    stage: "Initializing",
+    detail: "",
+  });
+
   type MenuId = "file" | "edit" | "region" | "tools" | "world";
   let activeDropdown = $state<MenuId | null>(null);
   let toolSearchQuery = $state("");
@@ -167,31 +271,53 @@
         name: r.name,
         biome: r.biome,
         gridSize: r.gridSize,
+        gridSizeX: r.gridSizeX ?? r.gridSize,
+        gridSizeZ: r.gridSizeZ ?? r.gridSize,
         pitch: r.pitch,
         worldOriginX: r.worldOriginX,
         worldOriginZ: r.worldOriginZ,
+        minLevel: r.minLevel,
+        maxLevel: r.maxLevel,
+        pois: r.pois,
       });
     }
-    // Overlay the currently open region (may be unsaved / locally moved).
+    // Overlay the currently open region (may be unsaved / locally moved) --
+    // pois come straight from the live scene (exportBlueprint), not the
+    // catalog fetch, so unsaved POI placements/shapes show up immediately.
     if (regionId || regionName) {
       const id = regionId || "__draft__";
+      const livePois = scene?.exportBlueprint().pois;
       byId.set(id, {
         id,
         name: regionName || "Draft",
         biome,
         gridSize: span?.gridSize ?? byId.get(id)?.gridSize ?? 80,
+        gridSizeX: span?.gridSizeX ?? byId.get(id)?.gridSizeX ?? 80,
+        gridSizeZ: span?.gridSizeZ ?? byId.get(id)?.gridSizeZ ?? 80,
         pitch: span?.pitch ?? byId.get(id)?.pitch ?? 2.5,
         worldOriginX,
         worldOriginZ,
+        minLevel,
+        maxLevel,
+        pois: livePois?.map((p) => ({
+          id: p.id,
+          name: p.name,
+          localX: p.localX,
+          localZ: p.localZ,
+          revealShape: p.revealShape ?? [],
+        })),
       });
     }
     return [...byId.values()];
   }
 
-  async function openContinentMap(): Promise<void> {
+  let continentMapFocusPoiId = $state<string | null>(null);
+
+  async function openContinentMap(focusPoiId?: string): Promise<void> {
     activeDropdown = null;
     await refreshRegionList();
     layoutTiles = buildLayoutTiles();
+    continentMapFocusPoiId = focusPoiId ?? null;
     showContinentMap = true;
   }
 
@@ -205,10 +331,13 @@
     neighborLoading = true;
     try {
       await refreshRegionList();
+      const span = scene.getLayoutSpan();
       const edit = {
         id: regionId || "__draft__",
-        gridSize: scene.getLayoutSpan().gridSize,
-        pitch: scene.getLayoutSpan().pitch,
+        gridSize: span.gridSize,
+        gridSizeX: span.gridSizeX,
+        gridSizeZ: span.gridSizeZ,
+        pitch: span.pitch,
         worldOriginX,
         worldOriginZ,
       };
@@ -296,6 +425,286 @@
     }
   }
 
+  /** A hung/never-responding request must not be able to wedge the whole
+   *  batch forever -- Promise.all(...) never settles until EVERY promise
+   *  does, so one stuck fetch (slow server-side write, dropped connection)
+   *  used to leave the progress bar parked at whatever % had been reached
+   *  and the operation never finishing. Aborts + rejects after `timeoutMs`
+   *  so the per-region try/catch/finally below always runs and the batch
+   *  always completes. */
+  async function fetchWithTimeout(url: string, opts: RequestInit, timeoutMs = 20000): Promise<Response> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      return await fetch(url, { ...opts, signal: controller.signal });
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /** Fetches every layout tile's full blueprint (current position embedded),
+   *  reporting progress as each request resolves. Every tile is always
+   *  fetched -- even when only a subset is selected for the write-back --
+   *  because stitchRegionSeams/regenContinentCoastlines need the FULL set to
+   *  sample real neighbor heights and detect true edge adjacency; only the
+   *  save step below is scoped to the selection. */
+  async function fetchLayoutBlueprints(label: string): Promise<RegionBlueprint[]> {
+    const bps: RegionBlueprint[] = [];
+    const relevant = layoutTiles.filter((t) => t.id !== "__draft__");
+    if (relevant.length === 0) return bps;
+    let done = 0;
+    const failed: string[] = [];
+    opProgress = { label, current: 0, total: relevant.length, pct: 0 };
+    await Promise.all(
+      relevant.map(async (t) => {
+        try {
+          if (t.id === regionId && scene) {
+            const currentBp = scene.exportBlueprint();
+            currentBp.worldOriginX = t.worldOriginX;
+            currentBp.worldOriginZ = t.worldOriginZ;
+            bps.push(currentBp);
+          } else {
+            const res = await fetchWithTimeout(app.apiUrl(`/api/regions/${encodeURIComponent(t.id)}`), { credentials: "include" });
+            if (res.ok) {
+              const data = (await res.json()) as { blueprint: RegionBlueprint };
+              if (data.blueprint) {
+                data.blueprint.worldOriginX = t.worldOriginX;
+                data.blueprint.worldOriginZ = t.worldOriginZ;
+                bps.push(data.blueprint);
+              }
+            } else {
+              failed.push(t.name);
+            }
+          }
+        } catch (err) {
+          console.warn("Failed to fetch region blueprint:", t.id, err);
+          failed.push(t.name);
+        } finally {
+          done++;
+          opProgress = { label, current: done, total: relevant.length, pct: Math.round((done / relevant.length) * 50) };
+        }
+      }),
+    );
+    if (failed.length > 0) {
+      console.warn("Timed out or failed to fetch:", failed.join(", "));
+    }
+    return bps;
+  }
+
+  /** Saves only the blueprints in `writeIds` (the tools compute a result for
+   *  every fetched region, but the user only wants the selected subset
+   *  actually written), reporting progress as each save resolves. Returns
+   *  the failed/timed-out region names too -- callers fold that into their
+   *  own final status message instead of it being silently overwritten by
+   *  a blanket "success" line. */
+  async function saveSelectedBlueprints(
+    label: string,
+    results: RegionBlueprint[],
+    writeIds: Set<string> | null,
+  ): Promise<{ savedCount: number; failed: string[] }> {
+    const toSave = writeIds ? results.filter((bp) => writeIds.has(bp.id)) : results;
+    if (toSave.length === 0) return { savedCount: 0, failed: [] };
+    let savedCount = 0;
+    let done = 0;
+    const failed: string[] = [];
+    opProgress = { label, current: 0, total: toSave.length, pct: 50 };
+    await Promise.all(
+      toSave.map(async (bp) => {
+        try {
+          const res = await fetchWithTimeout(app.apiUrl("/api/debug/region-blueprint"), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            credentials: "include",
+            body: JSON.stringify({ blueprint: bp }),
+          });
+          if (res.ok) savedCount++;
+          else failed.push(bp.name);
+        } catch (err) {
+          console.error("Failed to save blueprint:", bp.name, err);
+          failed.push(bp.name);
+        } finally {
+          done++;
+          opProgress = { label, current: done, total: toSave.length, pct: 50 + Math.round((done / toSave.length) * 50) };
+        }
+      }),
+    );
+    if (failed.length > 0) {
+      console.warn("Timed out or failed to save:", failed.join(", "));
+    }
+    return { savedCount, failed };
+  }
+
+  /** `selectedIds` empty/omitted = operate on the whole continent (previous
+   *  behavior); non-empty = only write back the chosen regions (still uses
+   *  every region's terrain as blend context -- see fetchLayoutBlueprints). */
+  async function stitchContinentBorderSeams(selectedIds: string[] = []): Promise<void> {
+    if (!layoutTiles || layoutTiles.length <= 1) {
+      status = "Need at least 2 regions on the continent to stitch border terrain.";
+      return;
+    }
+    layoutSaving = true;
+    try {
+      const bps = await fetchLayoutBlueprints("Fetching region terrain…");
+      if (bps.length <= 1) {
+        status = "Could not load enough region blueprints to stitch.";
+        return;
+      }
+
+      opProgress = { label: `Stitching border seams across ${bps.length} regions…`, current: 0, total: 1, pct: 50 };
+      const stitched = stitchRegionSeams(bps, { blendMargin: 60.0, minLandFloor: 1.5, forceDrySeams: true });
+
+      const writeIds = selectedIds.length > 0 ? new Set(selectedIds) : null;
+      const { savedCount, failed } = await saveSelectedBlueprints("Saving stitched terrain…", stitched, writeIds);
+
+      const curStitched = stitched.find((bp) => bp.id === regionId);
+      if (curStitched && (!writeIds || writeIds.has(regionId)) && scene) {
+        await scene.loadBlueprint(curStitched);
+      }
+
+      const savedIds = writeIds ?? new Set(stitched.map((bp) => bp.id));
+      layoutTiles = layoutTiles.map((t) => (savedIds.has(t.id) ? { ...t, dirty: false } : t));
+      await refreshRegionList();
+      if (showNeighborRegions) await syncNeighborRegions();
+
+      status =
+        failed.length > 0
+          ? `🪄 Stitched ${savedCount} region${savedCount === 1 ? "" : "s"} -- timed out/failed: ${failed.join(", ")}.`
+          : `🪄 Stitched and harmonized border terrain across ${savedCount} connected region${savedCount === 1 ? "" : "s"}.`;
+    } catch (err) {
+      console.error("Failed to stitch continent border seams:", err);
+      status = `Failed to stitch border seams: ${String(err)}`;
+    } finally {
+      layoutSaving = false;
+      opProgress = null;
+    }
+  }
+
+  async function regenActiveRegionCoastlines(): Promise<void> {
+    if (!scene) return;
+    const span = scene.getLayoutSpan();
+    const edit = {
+      id: regionId || "__draft__",
+      gridSize: span.gridSize,
+      gridSizeX: span.gridSizeX,
+      gridSizeZ: span.gridSizeZ,
+      pitch: span.pitch,
+      worldOriginX,
+      worldOriginZ,
+    };
+    const neighborEdges = detectRegionNeighborEdges(edit, regionList, 36.0);
+    const allRegions = regionList.map((r) => {
+      const gX = r.gridSizeX ?? r.gridSize;
+      const gZ = r.gridSizeZ ?? r.gridSize;
+      const hX = ((gX - 1) * r.pitch) / 2;
+      const hZ = ((gZ - 1) * r.pitch) / 2;
+      const oX = r.worldOriginX ?? 0;
+      const oZ = r.worldOriginZ ?? 0;
+      return {
+        minX: oX - hX,
+        maxX: oX + hX,
+        minZ: oZ - hZ,
+        maxZ: oZ + hZ,
+      };
+    });
+    scene.regenCoastlines(neighborEdges, allRegions);
+    const unneighbored = [
+      !neighborEdges.west && "West",
+      !neighborEdges.east && "East",
+      !neighborEdges.south && "South",
+      !neighborEdges.north && "North",
+    ].filter(Boolean);
+    status = unneighbored.length > 0
+      ? `🌊 Regenerated ocean coastlines on perimeter edges: ${unneighbored.join(", ")}.`
+      : `All 4 edges are connected to neighbors; internal land borders preserved.`;
+  }
+
+  async function regenContinentOceanCoastlines(selectedIds: string[] = []): Promise<void> {
+    if (!layoutTiles || layoutTiles.length === 0) return;
+    layoutSaving = true;
+    try {
+      const bps = await fetchLayoutBlueprints("Fetching region terrain…");
+      if (bps.length === 0) {
+        status = "Could not load region blueprints.";
+        return;
+      }
+
+      opProgress = { label: `Sculpting natural coastlines & open seas across ${bps.length} regions…`, current: 0, total: 1, pct: 50 };
+      const coastBps = regenContinentCoastlines(bps);
+
+      const writeIds = selectedIds.length > 0 ? new Set(selectedIds) : null;
+      const { savedCount, failed } = await saveSelectedBlueprints("Saving coastline terrain…", coastBps, writeIds);
+
+      const curCoast = coastBps.find((bp) => bp.id === regionId);
+      if (curCoast && (!writeIds || writeIds.has(regionId)) && scene) {
+        await scene.loadBlueprint(curCoast);
+      }
+
+      const savedIds = writeIds ?? new Set(coastBps.map((bp) => bp.id));
+      layoutTiles = layoutTiles.map((t) => (savedIds.has(t.id) ? { ...t, dirty: false } : t));
+      await refreshRegionList();
+      if (showNeighborRegions) await syncNeighborRegions();
+
+      status =
+        failed.length > 0
+          ? `🌊 Regenerated ${savedCount} region${savedCount === 1 ? "" : "s"} -- timed out/failed: ${failed.join(", ")}.`
+          : `🌊 Regenerated natural ocean coastlines and beaches across ${savedCount} region${savedCount === 1 ? "" : "s"}.`;
+    } catch (err) {
+      console.error("Failed to regenerate continent ocean coastlines:", err);
+      status = `Failed to generate coastlines: ${String(err)}`;
+    } finally {
+      layoutSaving = false;
+      opProgress = null;
+    }
+  }
+
+  async function handleDeleteRegionFromContinent(id: string, name: string): Promise<void> {
+    if (!id || id === "__draft__") return;
+    status = `Deleting "${name}" from continent…`;
+    try {
+      const res = await fetch(app.apiUrl("/api/debug/region-blueprint-delete"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ id }),
+      });
+      if (!res.ok) {
+        status = `Failed to delete "${name}".`;
+        return;
+      }
+
+      // Remove from layoutTiles
+      layoutTiles = layoutTiles.filter((t) => t.id !== id);
+      // Remove from regionList
+      regionList = regionList.filter((r) => r.id !== id);
+
+      if (localStorage.getItem("rustcraft_last_region_id") === id) {
+        localStorage.removeItem("rustcraft_last_region_id");
+      }
+
+      // If the currently active 3D region was deleted, switch to another
+      if (regionId === id) {
+        const next = regionList[0];
+        if (next) {
+          await loadRegion(next.id);
+          status = `Deleted "${name}". Switched active region to "${next.name}".`;
+        } else {
+          newRegion();
+          status = `Deleted "${name}".`;
+        }
+      } else {
+        status = `Deleted "${name}" from continent.`;
+      }
+
+      await refreshRegionList();
+      if (showNeighborRegions) {
+        await syncNeighborRegions();
+      }
+    } catch (err) {
+      console.error("Failed to delete region from continent:", err);
+      status = "Failed to delete region.";
+    }
+  }
+
   let saveTimeout: number | null = null;
   function scheduleSave(): void {
     if (saveTimeout !== null) window.clearTimeout(saveTimeout);
@@ -347,6 +756,10 @@
       const isEditingText = ["INPUT", "TEXTAREA", "SELECT"].includes(activeTag);
 
       if (e.key === "Escape") {
+        if (showGenerateModal) {
+          showGenerateModal = false;
+          return;
+        }
         if (deleteConfirmOpen) {
           if (!deleteInProgress) deleteConfirmOpen = false;
           return;
@@ -446,16 +859,7 @@
   }
 
   function pickModel(model: string, category: "building" | "foliage" | "prop"): void {
-    armedMarker = null;
-    sculptMode = null;
-    volumeStampShape = null;
-    volumeSculptBrushActive = false;
-    volumeClaySculptActive = false;
-    waterBrushMode = null;
-    roadPaintActive = false;
-    houseToolActive = false;
-    castleToolActive = false;
-    fantasticBuildingToolActive = false;
+    cancelArmed();
     armedModel = model;
     scene?.armPlacement(model, category);
   }
@@ -466,16 +870,7 @@
   }
 
   function pickMarker(kind: EditorMarkerKind): void {
-    armedModel = null;
-    sculptMode = null;
-    volumeStampShape = null;
-    volumeSculptBrushActive = false;
-    volumeClaySculptActive = false;
-    waterBrushMode = null;
-    roadPaintActive = false;
-    houseToolActive = false;
-    castleToolActive = false;
-    fantasticBuildingToolActive = false;
+    cancelArmed();
     armedMarker = kind;
     scene?.armMarkerPlacement(kind);
     if (kind === "mobSpawn") {
@@ -495,98 +890,41 @@
   }
 
   function pickSculpt(mode: SculptMode): void {
-    armedModel = null;
-    armedMarker = null;
-    waterBrushMode = null;
-    roadPaintActive = false;
-    houseToolActive = false;
-    castleToolActive = false;
-    fantasticBuildingToolActive = false;
-    volumeStampShape = null;
-    volumeSculptBrushActive = false;
-    volumeClaySculptActive = false;
-    sculptMode = sculptMode === mode ? null : mode;
-    scene?.setSculptMode(sculptMode);
+    const next = sculptMode === mode ? null : mode;
+    cancelArmed();
+    sculptMode = next;
+    scene?.setSculptMode(next);
   }
 
   /** Freeform volume place -- stamps one 3D primitive at a time (click/light drag). */
   function pickVolumeStamp(shape: TerrainVolumeShape): void {
-    armedModel = null;
-    armedMarker = null;
-    sculptMode = null;
-    waterBrushMode = null;
-    roadPaintActive = false;
-    houseToolActive = false;
-    castleToolActive = false;
-    fantasticBuildingToolActive = false;
-    randomTreeBrushActive = false;
-    grassBrushActive = false;
-    grassEraseBrushActive = false;
-    eraseBrushActive = false;
-    texturePaintMode = null;
-    armedLightColor = null;
-    armedFogColor = null;
-    armedBarrier = false;
-    armedCloudShape = null;
-    volumeSculptBrushActive = false;
-    volumeClaySculptActive = false;
-    volumeStampShape = volumeStampShape === shape ? null : shape;
-    if (volumeStampShape) scene?.armVolumeStamp(volumeStampShape, volumeMaterial, "place");
+    const next = volumeStampShape === shape ? null : shape;
+    cancelArmed();
+    volumeStampShape = next;
+    if (next) scene?.armVolumeStamp(next, volumeMaterial, "place");
     else scene?.disarm();
   }
 
   /** Continuous drag brush -- sprays overlapping volume stamps along the stroke. */
   function pickVolumeSculptBrush(): void {
-    armedModel = null;
-    armedMarker = null;
-    sculptMode = null;
-    waterBrushMode = null;
-    roadPaintActive = false;
-    houseToolActive = false;
-    castleToolActive = false;
-    fantasticBuildingToolActive = false;
-    randomTreeBrushActive = false;
-    grassBrushActive = false;
-    grassEraseBrushActive = false;
-    eraseBrushActive = false;
-    texturePaintMode = null;
-    armedLightColor = null;
-    armedFogColor = null;
-    armedBarrier = false;
-    armedCloudShape = null;
-    volumeClaySculptActive = false;
     const next = !volumeSculptBrushActive;
+    const nextShape = next ? (volumeStampShape ?? "boulder") : null;
+    cancelArmed();
     volumeSculptBrushActive = next;
-    volumeStampShape = next ? (volumeStampShape ?? "boulder") : null;
-    if (next) scene?.armVolumeStamp(volumeStampShape ?? "boulder", volumeMaterial, "sculpt");
+    volumeStampShape = nextShape;
+    if (next) scene?.armVolumeStamp(nextShape ?? "boulder", volumeMaterial, "sculpt");
     else scene?.disarm();
   }
 
   /** Blender-style 3D clay: Add piles boulder/block on the surface; Sub carves holes. */
   function pickVolumeClaySculpt(): void {
-    armedModel = null;
-    armedMarker = null;
-    sculptMode = null;
-    waterBrushMode = null;
-    roadPaintActive = false;
-    houseToolActive = false;
-    castleToolActive = false;
-    fantasticBuildingToolActive = false;
-    randomTreeBrushActive = false;
-    grassBrushActive = false;
-    grassEraseBrushActive = false;
-    eraseBrushActive = false;
-    texturePaintMode = null;
-    armedLightColor = null;
-    armedFogColor = null;
-    armedBarrier = false;
-    armedCloudShape = null;
-    volumeSculptBrushActive = false;
     const next = !volumeClaySculptActive;
-    volumeClaySculptActive = next;
     const shape =
       volumeStampShape === "block" || volumeStampShape === "boulder" ? volumeStampShape : "boulder";
-    volumeStampShape = next ? shape : null;
+    const nextShape = next ? shape : null;
+    cancelArmed();
+    volumeClaySculptActive = next;
+    volumeStampShape = nextShape;
     volumeSculptOp = "add";
     if (next) {
       scene?.armVolumeStamp(shape, volumeMaterial, "clay");
@@ -612,18 +950,10 @@
   }
 
   function pickWaterBrush(mode: WaterBrushMode): void {
-    armedModel = null;
-    armedMarker = null;
-    sculptMode = null;
-    volumeStampShape = null;
-    volumeSculptBrushActive = false;
-    volumeClaySculptActive = false;
-    roadPaintActive = false;
-    houseToolActive = false;
-    castleToolActive = false;
-    fantasticBuildingToolActive = false;
-    waterBrushMode = waterBrushMode === mode ? null : mode;
-    scene?.setWaterBrushMode(waterBrushMode);
+    const next = waterBrushMode === mode ? null : mode;
+    cancelArmed();
+    waterBrushMode = next;
+    scene?.setWaterBrushMode(next);
   }
 
   function toggleWaterPhysics(): void {
@@ -636,18 +966,10 @@
   }
 
   function pickRoadTool(): void {
-    armedModel = null;
-    armedMarker = null;
-    sculptMode = null;
-    volumeStampShape = null;
-    volumeSculptBrushActive = false;
-    volumeClaySculptActive = false;
-    waterBrushMode = null;
-    houseToolActive = false;
-    castleToolActive = false;
-    fantasticBuildingToolActive = false;
-    roadPaintActive = !roadPaintActive;
-    if (roadPaintActive) scene?.armRoadPainting();
+    const next = !roadPaintActive;
+    cancelArmed();
+    roadPaintActive = next;
+    if (next) scene?.armRoadPainting();
     else scene?.disarm();
   }
 
@@ -670,22 +992,10 @@
   let fantasticBuildingType = $state<FantasticBuildingType>("random");
 
   function pickRandomTreeBrush(): void {
-    armedModel = null;
-    armedMarker = null;
-    sculptMode = null;
-    volumeStampShape = null;
-    volumeSculptBrushActive = false;
-    volumeClaySculptActive = false;
-    waterBrushMode = null;
-    roadPaintActive = false;
-    grassBrushActive = false;
-    grassEraseBrushActive = false;
-    eraseBrushActive = false;
-    houseToolActive = false;
-    castleToolActive = false;
-    fantasticBuildingToolActive = false;
-    randomTreeBrushActive = !randomTreeBrushActive;
-    scene?.setRandomTreeBrush(randomTreeBrushActive);
+    const next = !randomTreeBrushActive;
+    cancelArmed();
+    randomTreeBrushActive = next;
+    scene?.setRandomTreeBrush(next);
   }
 
   /** One-click house generator (see houseGen.ts / RegionEditorScene's
@@ -695,63 +1005,19 @@
    *  Stays armed so you can drop several in a row -- click the same type
    *  again, pick another tool, or hit Escape to stop. */
   function pickHouseTool(type: HouseType = houseType): void {
-    armedModel = null;
-    armedMarker = null;
-    sculptMode = null;
-    volumeStampShape = null;
-    volumeSculptBrushActive = false;
-    volumeClaySculptActive = false;
-    waterBrushMode = null;
-    roadPaintActive = false;
-    randomTreeBrushActive = false;
-    grassBrushActive = false;
-    grassEraseBrushActive = false;
-    eraseBrushActive = false;
-    texturePaintMode = null;
-    armedLightColor = null;
-    armedFogColor = null;
-    armedBarrier = false;
-    armedCloudShape = null;
-    castleToolActive = false;
-    fantasticBuildingToolActive = false;
     // Re-clicking the same type disarms; picking a different type switches.
-    if (houseToolActive && houseType === type) {
-      houseToolActive = false;
-      castleToolActive = false;
-      fantasticBuildingToolActive = false;
-      scene?.disarm();
-      return;
-    }
+    const disarming = houseToolActive && houseType === type;
+    cancelArmed();
+    if (disarming) return;
     houseType = type;
     houseToolActive = true;
     scene?.armHousePlacement(type);
   }
 
   function pickCastleTool(): void {
-    armedModel = null;
-    armedMarker = null;
-    sculptMode = null;
-    volumeStampShape = null;
-    volumeSculptBrushActive = false;
-    volumeClaySculptActive = false;
-    waterBrushMode = null;
-    roadPaintActive = false;
-    randomTreeBrushActive = false;
-    grassBrushActive = false;
-    grassEraseBrushActive = false;
-    eraseBrushActive = false;
-    texturePaintMode = null;
-    armedLightColor = null;
-    armedFogColor = null;
-    armedBarrier = false;
-    armedCloudShape = null;
-    houseToolActive = false;
-    fantasticBuildingToolActive = false;
-    if (castleToolActive) {
-      castleToolActive = false;
-      scene?.disarm();
-      return;
-    }
+    const disarming = castleToolActive;
+    cancelArmed();
+    if (disarming) return;
     castleToolActive = true;
     scene?.armCastlePlacement({
       style: castleStyle,
@@ -766,30 +1032,9 @@
    *  waterwheel for mill types) wherever you next click, as ordinary editable
    *  assets sharing a groupId. Stays armed for dropping several in a row. */
   function pickFantasticBuildingTool(): void {
-    armedModel = null;
-    armedMarker = null;
-    sculptMode = null;
-    volumeStampShape = null;
-    volumeSculptBrushActive = false;
-    volumeClaySculptActive = false;
-    waterBrushMode = null;
-    roadPaintActive = false;
-    randomTreeBrushActive = false;
-    grassBrushActive = false;
-    grassEraseBrushActive = false;
-    eraseBrushActive = false;
-    texturePaintMode = null;
-    armedLightColor = null;
-    armedFogColor = null;
-    armedBarrier = false;
-    armedCloudShape = null;
-    houseToolActive = false;
-    castleToolActive = false;
-    if (fantasticBuildingToolActive) {
-      fantasticBuildingToolActive = false;
-      scene?.disarm();
-      return;
-    }
+    const disarming = fantasticBuildingToolActive;
+    cancelArmed();
+    if (disarming) return;
     fantasticBuildingToolActive = true;
     scene?.armFantasticBuildingPlacement(fantasticBuildingType);
   }
@@ -809,65 +1054,24 @@
   }
 
   function pickGrassBrush(): void {
-    armedModel = null;
-    armedMarker = null;
-    sculptMode = null;
-    volumeStampShape = null;
-    volumeSculptBrushActive = false;
-    volumeClaySculptActive = false;
-    waterBrushMode = null;
-    roadPaintActive = false;
-    randomTreeBrushActive = false;
-    grassEraseBrushActive = false;
-    eraseBrushActive = false;
-    houseToolActive = false;
-    castleToolActive = false;
-    fantasticBuildingToolActive = false;
-    grassBrushActive = !grassBrushActive;
-    scene?.setGrassBrush(grassBrushActive);
+    const next = !grassBrushActive;
+    cancelArmed();
+    grassBrushActive = next;
+    scene?.setGrassBrush(next);
   }
 
   function pickGrassEraseBrush(): void {
-    armedModel = null;
-    armedMarker = null;
-    sculptMode = null;
-    volumeStampShape = null;
-    volumeSculptBrushActive = false;
-    volumeClaySculptActive = false;
-    waterBrushMode = null;
-    roadPaintActive = false;
-    randomTreeBrushActive = false;
-    grassBrushActive = false;
-    eraseBrushActive = false;
-    houseToolActive = false;
-    castleToolActive = false;
-    fantasticBuildingToolActive = false;
-    grassEraseBrushActive = !grassEraseBrushActive;
-    scene?.setGrassEraseBrush(grassEraseBrushActive);
+    const next = !grassEraseBrushActive;
+    cancelArmed();
+    grassEraseBrushActive = next;
+    scene?.setGrassEraseBrush(next);
   }
 
   function pickEraseBrush(): void {
-    armedModel = null;
-    armedMarker = null;
-    sculptMode = null;
-    volumeStampShape = null;
-    volumeSculptBrushActive = false;
-    volumeClaySculptActive = false;
-    waterBrushMode = null;
-    roadPaintActive = false;
-    randomTreeBrushActive = false;
-    grassBrushActive = false;
-    grassEraseBrushActive = false;
-    texturePaintMode = null;
-    armedLightColor = null;
-    armedFogColor = null;
-    armedBarrier = false;
-    armedCloudShape = null;
-    houseToolActive = false;
-    castleToolActive = false;
-    fantasticBuildingToolActive = false;
-    eraseBrushActive = !eraseBrushActive;
-    scene?.setEraseBrush(eraseBrushActive);
+    const next = !eraseBrushActive;
+    cancelArmed();
+    eraseBrushActive = next;
+    scene?.setEraseBrush(next);
   }
 
   let texturePaintMode = $state<number | null>(null);
@@ -878,51 +1082,17 @@
   let armedCloudShape = $state<"cumulus" | "wispy" | "flat" | null>(null);
 
   function pickTexture(mode: number | null): void {
-    armedModel = null;
-    armedMarker = null;
-    sculptMode = null;
-    volumeStampShape = null;
-    volumeSculptBrushActive = false;
-    volumeClaySculptActive = false;
-    waterBrushMode = null;
-    roadPaintActive = false;
-    randomTreeBrushActive = false;
-    grassBrushActive = false;
-    grassEraseBrushActive = false;
-    eraseBrushActive = false;
-    armedLightColor = null;
-    armedFogColor = null;
-    armedBarrier = false;
-    armedCloudShape = null;
-    houseToolActive = false;
-    castleToolActive = false;
-    fantasticBuildingToolActive = false;
-    texturePaintMode = texturePaintMode === mode ? null : mode;
-    scene?.setTexturePaintMode(texturePaintMode);
+    const next = texturePaintMode === mode ? null : mode;
+    cancelArmed();
+    texturePaintMode = next;
+    scene?.setTexturePaintMode(next);
   }
 
   function pickLightColor(color: string): void {
-    armedModel = null;
-    armedMarker = null;
-    sculptMode = null;
-    volumeStampShape = null;
-    volumeSculptBrushActive = false;
-    volumeClaySculptActive = false;
-    waterBrushMode = null;
-    roadPaintActive = false;
-    randomTreeBrushActive = false;
-    grassBrushActive = false;
-    grassEraseBrushActive = false;
-    eraseBrushActive = false;
-    texturePaintMode = null;
-    houseToolActive = false;
-    castleToolActive = false;
-    fantasticBuildingToolActive = false;
-    armedFogColor = null;
-    armedBarrier = false;
-    armedCloudShape = null;
-    armedLightColor = armedLightColor === color ? null : color;
-    if (armedLightColor) scene?.armLightPlacement(armedLightColor);
+    const next = armedLightColor === color ? null : color;
+    cancelArmed();
+    armedLightColor = next;
+    if (next) scene?.armLightPlacement(next);
     else scene?.disarm();
   }
 
@@ -935,80 +1105,28 @@
   }
 
   function pickFogTool(color: string, shape: "sphere" | "box" = "sphere"): void {
-    armedModel = null;
-    armedMarker = null;
-    sculptMode = null;
-    volumeStampShape = null;
-    volumeSculptBrushActive = false;
-    volumeClaySculptActive = false;
-    waterBrushMode = null;
-    roadPaintActive = false;
-    randomTreeBrushActive = false;
-    grassBrushActive = false;
-    grassEraseBrushActive = false;
-    eraseBrushActive = false;
-    texturePaintMode = null;
-    houseToolActive = false;
-    castleToolActive = false;
-    fantasticBuildingToolActive = false;
-    armedLightColor = null;
-    armedBarrier = false;
-    armedCloudShape = null;
     const same = armedFogColor === color && armedFogShape === shape;
-    armedFogColor = same ? null : color;
+    const next = same ? null : color;
+    cancelArmed();
+    armedFogColor = next;
     armedFogShape = shape;
-    if (armedFogColor) scene?.armFogPlacement(armedFogColor, armedFogShape);
+    if (next) scene?.armFogPlacement(next, shape);
     else scene?.disarm();
   }
 
   function pickBarrierTool(): void {
-    armedModel = null;
-    armedMarker = null;
-    sculptMode = null;
-    volumeStampShape = null;
-    volumeSculptBrushActive = false;
-    volumeClaySculptActive = false;
-    waterBrushMode = null;
-    roadPaintActive = false;
-    randomTreeBrushActive = false;
-    grassBrushActive = false;
-    grassEraseBrushActive = false;
-    eraseBrushActive = false;
-    texturePaintMode = null;
-    houseToolActive = false;
-    castleToolActive = false;
-    fantasticBuildingToolActive = false;
-    armedLightColor = null;
-    armedFogColor = null;
-    armedCloudShape = null;
-    armedBarrier = !armedBarrier;
-    if (armedBarrier) scene?.armBarrierPlacement();
+    const next = !armedBarrier;
+    cancelArmed();
+    armedBarrier = next;
+    if (next) scene?.armBarrierPlacement();
     else scene?.disarm();
   }
 
   function pickCloudTool(shape: "cumulus" | "wispy" | "flat"): void {
-    armedModel = null;
-    armedMarker = null;
-    sculptMode = null;
-    volumeStampShape = null;
-    volumeSculptBrushActive = false;
-    volumeClaySculptActive = false;
-    waterBrushMode = null;
-    roadPaintActive = false;
-    randomTreeBrushActive = false;
-    grassBrushActive = false;
-    grassEraseBrushActive = false;
-    eraseBrushActive = false;
-    texturePaintMode = null;
-    houseToolActive = false;
-    castleToolActive = false;
-    fantasticBuildingToolActive = false;
-    armedLightColor = null;
-    armedFogColor = null;
-    armedBarrier = false;
-    const same = armedCloudShape === shape;
-    armedCloudShape = same ? null : shape;
-    if (armedCloudShape) scene?.armCloudPlacement(armedCloudShape);
+    const next = armedCloudShape === shape ? null : shape;
+    cancelArmed();
+    armedCloudShape = next;
+    if (next) scene?.armCloudPlacement(next);
     else scene?.disarm();
   }
 
@@ -1198,9 +1316,14 @@
           name: string;
           biome: RegionBiome;
           gridSize: number;
+          gridSizeX?: number;
+          gridSizeZ?: number;
           pitch: number;
           worldOriginX: number;
           worldOriginZ: number;
+          minLevel?: number;
+          maxLevel?: number;
+          pois?: RegionMapPoi[];
         }[];
       };
       regionList = data.regions.map((r) => ({
@@ -1208,9 +1331,14 @@
         name: r.name,
         biome: r.biome,
         gridSize: r.gridSize ?? 80,
+        gridSizeX: r.gridSizeX ?? r.gridSize ?? 80,
+        gridSizeZ: r.gridSizeZ ?? r.gridSize ?? 80,
         pitch: r.pitch ?? 2.5,
         worldOriginX: r.worldOriginX ?? 0,
         worldOriginZ: r.worldOriginZ ?? 0,
+        minLevel: r.minLevel,
+        maxLevel: r.maxLevel,
+        pois: r.pois,
       }));
     } catch {
       // Region list is a convenience for the editor's dropdown
@@ -1232,8 +1360,12 @@
       regionId = data.blueprint.id;
       regionName = data.blueprint.name;
       biome = data.blueprint.biome;
+      minLevel = data.blueprint.minLevel ?? 1;
+      maxLevel = data.blueprint.maxLevel ?? (data.blueprint.minLevel ? data.blueprint.minLevel + 4 : 5);
       regionSizeX = data.blueprint.gridSizeX ?? data.blueprint.gridSize ?? 32;
       regionSizeZ = data.blueprint.gridSizeZ ?? data.blueprint.gridSize ?? 32;
+      regionPitch = data.blueprint.pitch ?? 6;
+      worldSize = Math.round(Math.max((regionSizeX - 1) * regionPitch, (regionSizeZ - 1) * regionPitch));
       portalWorldX = data.blueprint.portalWorldX;
       portalWorldZ = data.blueprint.portalWorldZ;
       worldOriginX = data.blueprint.worldOriginX ?? 0;
@@ -1256,17 +1388,150 @@
     }
   }
 
-  async function generateDraft(): Promise<void> {
+  function openGenerateModal(asNewRegion = false): void {
+    closeMenus();
+    genBiome = biome;
+    genMinLevel = minLevel;
+    genMaxLevel = maxLevel;
+    genHeightScale = heightScale;
+    genTreeDensity = treeDensity;
+    genMobDensity = 1.0;
+    genResourceDensity = 1.0;
+    genPitch = regionPitch;
+    genGridSizeX = regionSizeX;
+    genGridSizeZ = regionSizeZ;
+    genWorldSize = worldSize;
+    genSeed = `${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+
+    // Set resource variety according to level
+    const activeTypes = new Set(getBiomeLevelResourceTypes(genBiome, genMinLevel));
+    for (const t of PLACEABLE_REGION_NODE_TYPES) {
+      genResourceVariety[t] = activeTypes.has(t);
+    }
+
+    if (asNewRegion || regionName === "New Region" || !regionName) {
+      genName = generateMmoRegionName(genBiome, genMinLevel);
+    } else {
+      genName = regionName;
+    }
+    showGenerateModal = true;
+  }
+
+  function selectModalBiome(b: RegionBiome): void {
+    genBiome = b;
+    const detail = REGION_BIOME_DETAILS[b];
+    if (detail) {
+      genMinLevel = detail.recommendedLevels[0];
+      genMaxLevel = detail.recommendedLevels[1];
+    }
+    const activeTypes = new Set(getBiomeLevelResourceTypes(genBiome, genMinLevel));
+    for (const t of PLACEABLE_REGION_NODE_TYPES) {
+      genResourceVariety[t] = activeTypes.has(t);
+    }
+    genName = generateMmoRegionName(genBiome, genMinLevel);
+  }
+
+  function rerollModalName(): void {
+    genName = generateMmoRegionName(genBiome, genMinLevel);
+  }
+
+  function rerollModalSeed(): void {
+    genSeed = `${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+  }
+
+  function setModalLevelPreset(min: number, max: number): void {
+    genMinLevel = min;
+    genMaxLevel = max;
+    const activeTypes = new Set(getBiomeLevelResourceTypes(genBiome, genMinLevel));
+    for (const t of PLACEABLE_REGION_NODE_TYPES) {
+      genResourceVariety[t] = activeTypes.has(t);
+    }
+    genName = generateMmoRegionName(genBiome, genMinLevel);
+  }
+
+  function setModalSizePreset(x: number, z: number, pitch = 6): void {
+    genGridSizeX = x;
+    genGridSizeZ = z;
+    genPitch = pitch;
+    genWorldSize = Math.round(Math.max((x - 1) * pitch, (z - 1) * pitch));
+  }
+
+  async function executeWorldGeneration(): Promise<void> {
     if (!scene) return;
-    const seed = `${Date.now()}_${Math.random().toString(36).slice(2)}`;
-    status = "Generating draft...";
-    const bp = generateRandomRegionBlueprint(seed, biome, regionName, { heightScale, treeDensity, worldSize });
+    showGenerateModal = false;
+    status = `Generating ${genBiome} world: "${genName}"...`;
+
+    biome = genBiome;
+    regionName = genName;
+    minLevel = genMinLevel;
+    maxLevel = genMaxLevel;
+    heightScale = genHeightScale;
+    treeDensity = genTreeDensity;
+    regionPitch = genPitch;
+    regionSizeX = genGridSizeX;
+    regionSizeZ = genGridSizeZ;
+    worldSize = genWorldSize;
+
+    const halfX = ((genGridSizeX - 1) * genPitch) / 2;
+    const halfZ = ((genGridSizeZ - 1) * genPitch) / 2;
+    const minX = worldOriginX - halfX;
+    const maxX = worldOriginX + halfX;
+    const minZ = worldOriginZ - halfZ;
+    const maxZ = worldOriginZ + halfZ;
+    const eps = 4.0;
+    const neighborEdges: RegionNeighborEdges = { west: false, east: false, north: false, south: false };
+
+    for (const other of regionList) {
+      if (other.id === regionId) continue;
+      const oHalfX = regionHalfSpanX(other);
+      const oHalfZ = regionHalfSpanZ(other);
+      const oMinX = (other.worldOriginX ?? 0) - oHalfX;
+      const oMaxX = (other.worldOriginX ?? 0) + oHalfX;
+      const oMinZ = (other.worldOriginZ ?? 0) - oHalfZ;
+      const oMaxZ = (other.worldOriginZ ?? 0) + oHalfZ;
+
+      const overlapZ = minZ <= oMaxZ + eps && maxZ >= oMinZ - eps;
+      const overlapX = minX <= oMaxX + eps && maxX >= oMinX - eps;
+
+      if (overlapZ) {
+        if (Math.abs(minX - oMaxX) <= eps) neighborEdges.west = true;
+        if (Math.abs(maxX - oMinX) <= eps) neighborEdges.east = true;
+      }
+      if (overlapX) {
+        if (Math.abs(minZ - oMaxZ) <= eps) neighborEdges.south = true;
+        if (Math.abs(maxZ - oMinZ) <= eps) neighborEdges.north = true;
+      }
+    }
+
+    const selectedVariety = Object.entries(genResourceVariety)
+      .filter(([_, enabled]) => enabled)
+      .map(([k]) => k);
+
+    const bp = generateRandomRegionBlueprint(genSeed || Date.now().toString(), genBiome, genName, {
+      heightScale: genHeightScale,
+      treeDensity: genTreeDensity,
+      mobDensity: genMobDensity,
+      resourceDensity: genResourceDensity,
+      resourceVariety: selectedVariety.length > 0 ? selectedVariety : undefined,
+      worldSize: genWorldSize,
+      gridSizeX: genGridSizeX,
+      gridSizeZ: genGridSizeZ,
+      pitch: genPitch,
+      minLevel: genMinLevel,
+      maxLevel: genMaxLevel,
+      worldOriginX,
+      worldOriginZ,
+      neighborEdges,
+      landscapeVariant: genLandscapeVariant,
+    });
+
     bp.id = regionId;
     bp.portalWorldX = portalWorldX;
     bp.portalWorldZ = portalWorldZ;
     bp.worldOriginX = worldOriginX;
     bp.worldOriginZ = worldOriginZ;
     bp.musicTrack = musicTrack;
+
     await scene.loadBlueprint(bp);
     scene.initHistory();
     colorGrading = scene.getColorGrading();
@@ -1274,13 +1539,206 @@
     wind = scene.getWind();
     grassSway = scene.getGrassSway();
     grassSettings = scene.getGrassSettings();
-    status = "Generated a random region -- review, tweak, then Save.";
+    status = `Generated "${genName}" (${REGION_BIOME_LABELS[genBiome]}) -- Level ${genMinLevel}–${genMaxLevel}.`;
     if (showNeighborRegions) await syncNeighborRegions();
+  }
+
+  function rerollContinentSeed(): void {
+    continentSeed = `${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+  }
+
+  async function executeContinentGeneration(): Promise<void> {
+    if (!scene || isGeneratingContinent) return;
+    isGeneratingContinent = true;
+
+    const seed = continentSeed || `${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+    status = `Planning continent (${continentCount} regions)...`;
+
+    continentProgress = {
+      active: true,
+      current: 0,
+      total: continentCount,
+      percent: 2,
+      currentName: "Continent Blueprint Matrix",
+      currentBiome: continentPrimaryBiome,
+      currentLevelRange: "1–60",
+      stage: "Planning Continent Layout & Borders...",
+      detail: `Computing contiguous grid coordinates and shared border seams for ${continentCount} zones...`,
+    };
+
+    // Yield to let UI render the loading overlay
+    await new Promise((r) => setTimeout(r, 40));
+
+    try {
+      const { planned, continentSeed: cSeed, pitch: cPitch, opts: cOpts, continentContext: cCtx } = planMultiRegionContinent({
+        seed,
+        regionCount: continentCount,
+        layout: continentLayout,
+        sizeVariation: continentSizeVariation,
+        continentScale,
+        biomeDistribution: continentBiomeDist,
+        primaryBiome: continentPrimaryBiome,
+        levelProgression: continentLevelProg,
+        heightScale: continentHeightScale,
+        treeDensity: continentTreeDensity,
+        mobDensity: continentMobDensity,
+        resourceDensity: continentResourceDensity,
+        pitch: continentPitch,
+        landscapeDistribution: continentLandscapeVariant,
+      });
+
+      const createdBlueprints: RegionBlueprint[] = [];
+
+      for (let i = 0; i < planned.length; i++) {
+        const p = planned[i]!;
+        const basePct = Math.round((i / planned.length) * 90);
+
+        continentProgress = {
+          active: true,
+          current: i + 1,
+          total: planned.length,
+          percent: Math.max(5, basePct + 2),
+          currentName: p.name,
+          currentBiome: p.biome,
+          currentLevelRange: `Lv. ${p.minLevel}–${p.maxLevel}`,
+          stage: `Sculpting ${REGION_BIOME_LABELS[p.biome]} (${i + 1}/${planned.length})`,
+          detail: `Generating continuous world noise (${p.gridSizeX}×${p.gridSizeZ}) • Origin (${p.worldOriginX}, ${p.worldOriginZ})...`,
+        };
+
+        // Yield to animation frame so Svelte updates the DOM and progress bar
+        await new Promise((r) => requestAnimationFrame(r));
+        await new Promise((r) => setTimeout(r, 16));
+
+        const bp = generateRandomRegionBlueprint(p.seed, p.biome, p.name, {
+          heightScale: cOpts.heightScale,
+          treeDensity: cOpts.treeDensity,
+          mobDensity: cOpts.mobDensity,
+          resourceDensity: cOpts.resourceDensity,
+          gridSizeX: p.gridSizeX,
+          gridSizeZ: p.gridSizeZ,
+          pitch: cPitch,
+          minLevel: p.minLevel,
+          maxLevel: p.maxLevel,
+          worldOriginX: p.worldOriginX,
+          worldOriginZ: p.worldOriginZ,
+          worldSeed: cSeed,
+          neighborEdges: p.neighborEdges,
+          landscapeVariant: p.landscapeVariant,
+          continentContext: cCtx,
+        });
+
+        bp.id = `region_${Date.now()}_${i}`;
+        bp.isStartingRegion = p.isStartingRegion;
+        createdBlueprints.push(bp);
+
+        continentProgress = {
+          ...continentProgress,
+          percent: Math.min(92, basePct + Math.round((0.8 / planned.length) * 90)),
+          stage: `Saving ${p.name} to Database (${i + 1}/${planned.length})`,
+          detail: `Persisting region blueprint, mob spawns, and resource nodes to server...`,
+        };
+
+        await new Promise((r) => requestAnimationFrame(r));
+
+        const res = await fetch(app.apiUrl("/api/debug/region-blueprint"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({ blueprint: bp }),
+        });
+
+        if (!res.ok) {
+          const text = await res.text().catch(() => "");
+          console.error(`[ContinentGen] Failed to save region ${p.name}:`, res.status, text);
+          throw new Error(`Failed to save region ${p.name} (${res.status}): ${text}`);
+        }
+
+        const data = (await res.json().catch(() => ({}))) as { ok?: boolean; id?: string };
+        if (data.id) {
+          bp.id = data.id;
+        }
+      }
+
+      continentProgress = {
+        active: true,
+        current: planned.length,
+        total: planned.length,
+        percent: 96,
+        currentName: createdBlueprints[0]?.name ?? "Starting Capital",
+        currentBiome: createdBlueprints[0]?.biome ?? "forest",
+        currentLevelRange: "All Zones",
+        stage: "Mounting Continent into 3D Viewport...",
+        detail: `Loaded ${createdBlueprints.length} seamless connected regions. Synchronizing 3D neighbor meshes...`,
+      };
+
+      await new Promise((r) => setTimeout(r, 40));
+
+      // Pick starting region (isStartingRegion = true or index 0)
+      const primary = createdBlueprints.find((b) => b.isStartingRegion) ?? createdBlueprints[0]!;
+      regionId = primary.id;
+      regionName = primary.name;
+      biome = primary.biome;
+      minLevel = primary.minLevel ?? 1;
+      maxLevel = primary.maxLevel ?? 5;
+      heightScale = continentHeightScale;
+      treeDensity = continentTreeDensity;
+      regionPitch = primary.pitch ?? continentPitch;
+      regionSizeX = primary.gridSizeX ?? primary.gridSize ?? 64;
+      regionSizeZ = primary.gridSizeZ ?? primary.gridSize ?? 64;
+      worldSize = Math.round(Math.max((regionSizeX - 1) * regionPitch, (regionSizeZ - 1) * regionPitch));
+      worldOriginX = primary.worldOriginX ?? 0;
+      worldOriginZ = primary.worldOriginZ ?? 0;
+
+      localStorage.setItem("rustcraft_last_region_id", primary.id);
+      const url = new URL(window.location.href);
+      url.searchParams.set("region", primary.id);
+      window.history.replaceState({}, "", url.toString());
+
+      await scene.loadBlueprint(primary);
+      scene.initHistory();
+      colorGrading = scene.getColorGrading();
+      grassColor = scene.getGrassColor();
+      wind = scene.getWind();
+      grassSway = scene.getGrassSway();
+      grassSettings = scene.getGrassSettings();
+
+      showNeighborRegions = true;
+      await refreshRegionList();
+      await syncNeighborRegions();
+
+      continentProgress = {
+        active: true,
+        current: planned.length,
+        total: planned.length,
+        percent: 100,
+        currentName: primary.name,
+        currentBiome: primary.biome,
+        currentLevelRange: `Lv. ${primary.minLevel}–${primary.maxLevel}`,
+        stage: "Continent Ready!",
+        detail: `Successfully generated and loaded ${createdBlueprints.length} connected regions.`,
+      };
+
+      await new Promise((r) => setTimeout(r, 400));
+
+      status = `Continent generated! Created ${createdBlueprints.length} seamless connected regions.`;
+      showGenerateModal = false;
+    } catch (err) {
+      console.error("Continent generation failed:", err);
+      status = `Failed to generate/save continent: ${String(err)}`;
+    } finally {
+      isGeneratingContinent = false;
+      continentProgress.active = false;
+    }
+  }
+
+  async function generateDraft(): Promise<void> {
+    openGenerateModal(false);
   }
 
   function newRegion(): void {
     regionId = "";
-    regionName = "New Region";
+    minLevel = 1;
+    maxLevel = 5;
     portalWorldX = 0;
     portalWorldZ = 0;
     // Place new regions to the right of the current furthest tile.
@@ -1294,7 +1752,7 @@
     worldOriginX = maxX + half;
     worldOriginZ = 0;
     musicTrack = null;
-    void generateDraft();
+    openGenerateModal(true);
   }
 
   function pickMusicTrack(trackId: string | null): void {
@@ -1313,6 +1771,8 @@
       worldOriginX,
       worldOriginZ,
       isStartingRegion,
+      minLevel,
+      maxLevel,
       musicTrack,
     });
     status = "Saving...";
@@ -1355,12 +1815,16 @@
       worldOriginX: worldOriginX + 60,
       worldOriginZ: worldOriginZ + 60,
       isStartingRegion: false,
+      minLevel,
+      maxLevel,
       musicTrack,
     });
 
     const blueprint = scene.exportBlueprint();
     blueprint.id = newId;
     blueprint.name = newName;
+    blueprint.minLevel = minLevel;
+    blueprint.maxLevel = maxLevel;
 
     status = `Duplicating as "${newName}"…`;
     try {
@@ -1454,6 +1918,8 @@
       worldOriginX,
       worldOriginZ,
       isStartingRegion,
+      minLevel,
+      maxLevel,
       musicTrack,
     });
     const blueprint = scene.exportBlueprint();
@@ -1481,6 +1947,12 @@
       regionId = blueprint.id;
       regionName = blueprint.name;
       biome = blueprint.biome;
+      minLevel = blueprint.minLevel ?? 1;
+      maxLevel = blueprint.maxLevel ?? (blueprint.minLevel ? blueprint.minLevel + 4 : 5);
+      regionSizeX = blueprint.gridSizeX ?? blueprint.gridSize ?? 32;
+      regionSizeZ = blueprint.gridSizeZ ?? blueprint.gridSize ?? 32;
+      regionPitch = blueprint.pitch ?? 6;
+      worldSize = Math.round(Math.max((regionSizeX - 1) * regionPitch, (regionSizeZ - 1) * regionPitch));
       portalWorldX = blueprint.portalWorldX;
       portalWorldZ = blueprint.portalWorldZ;
       worldOriginX = blueprint.worldOriginX ?? 0;
@@ -1596,26 +2068,119 @@
               <span>Starting Town</span>
             </label>
             <div class="menu-sep"></div>
-            <div class="menu-section">Region Dimensions (Grid Width × Height)</div>
+            <div class="menu-section">Level Difficulty Range</div>
             <div class="menu-row">
               <label class="menu-field">
-                Width (X)
+                Min Level
+                <input
+                  type="number"
+                  min="1"
+                  max="100"
+                  bind:value={minLevel}
+                  onchange={() => {
+                    if (minLevel > maxLevel) maxLevel = minLevel;
+                    scene?.setMeta({ minLevel, maxLevel });
+                  }}
+                />
+              </label>
+              <label class="menu-field">
+                Max Level
+                <input
+                  type="number"
+                  min="1"
+                  max="100"
+                  bind:value={maxLevel}
+                  onchange={() => {
+                    if (maxLevel < minLevel) minLevel = maxLevel;
+                    scene?.setMeta({ minLevel, maxLevel });
+                  }}
+                />
+              </label>
+            </div>
+            <div class="level-presets-row">
+              <button
+                type="button"
+                class="level-preset-chip"
+                class:active={minLevel === 1 && maxLevel === 3}
+                onclick={() => { minLevel = 1; maxLevel = 3; scene?.setMeta({ minLevel, maxLevel }); }}
+              >1 - 3</button>
+              <button
+                type="button"
+                class="level-preset-chip"
+                class:active={minLevel === 3 && maxLevel === 7}
+                onclick={() => { minLevel = 3; maxLevel = 7; scene?.setMeta({ minLevel, maxLevel }); }}
+              >3 - 7</button>
+              <button
+                type="button"
+                class="level-preset-chip"
+                class:active={minLevel === 7 && maxLevel === 12}
+                onclick={() => { minLevel = 7; maxLevel = 12; scene?.setMeta({ minLevel, maxLevel }); }}
+              >7 - 12</button>
+              <button
+                type="button"
+                class="level-preset-chip"
+                class:active={minLevel === 12 && maxLevel === 16}
+                onclick={() => { minLevel = 12; maxLevel = 16; scene?.setMeta({ minLevel, maxLevel }); }}
+              >12 - 16</button>
+              <button
+                type="button"
+                class="level-preset-chip"
+                class:active={minLevel === 16 && maxLevel === 20}
+                onclick={() => { minLevel = 16; maxLevel = 20; scene?.setMeta({ minLevel, maxLevel }); }}
+              >16 - 20</button>
+            </div>
+            <div class="menu-sep"></div>
+            <div class="menu-section">Region Dimensions & Real-World Size</div>
+            <div class="dim-card">
+              <div class="dim-card-header">
+                <span class="dim-card-title">Real World Size</span>
+                <span class="dim-card-meters">{Math.round((regionSizeX - 1) * regionPitch)} m × {Math.round((regionSizeZ - 1) * regionPitch)} m</span>
+              </div>
+              <div class="dim-card-sub">
+                Area: {(((regionSizeX - 1) * regionPitch * (regionSizeZ - 1) * regionPitch) / 1000000).toFixed(3)} km² ({Math.round((regionSizeX - 1) * regionPitch * (regionSizeZ - 1) * regionPitch).toLocaleString()} m²)
+              </div>
+            </div>
+            <div class="menu-row">
+              <label class="menu-field">
+                Width (X Vertices)
                 <input
                   type="number"
                   min="8"
                   max="256"
                   bind:value={regionSizeX}
-                  onchange={() => scene?.resizeRegionGrid(regionSizeX, regionSizeZ)}
+                  onchange={() => {
+                    scene?.resizeRegionGrid(regionSizeX, regionSizeZ);
+                    worldSize = Math.round(Math.max((regionSizeX - 1) * regionPitch, (regionSizeZ - 1) * regionPitch));
+                  }}
                 />
               </label>
               <label class="menu-field">
-                Height (Z)
+                Height (Z Vertices)
                 <input
                   type="number"
                   min="8"
                   max="256"
                   bind:value={regionSizeZ}
-                  onchange={() => scene?.resizeRegionGrid(regionSizeX, regionSizeZ)}
+                  onchange={() => {
+                    scene?.resizeRegionGrid(regionSizeX, regionSizeZ);
+                    worldSize = Math.round(Math.max((regionSizeX - 1) * regionPitch, (regionSizeZ - 1) * regionPitch));
+                  }}
+                />
+              </label>
+              <label class="menu-field">
+                Cell Pitch (m/cell)
+                <input
+                  type="number"
+                  min="1"
+                  max="32"
+                  step="0.5"
+                  bind:value={regionPitch}
+                  onchange={() => {
+                    if (scene) {
+                      void scene.setPitch(regionPitch);
+                    }
+                    worldSize = Math.round(Math.max((regionSizeX - 1) * regionPitch, (regionSizeZ - 1) * regionPitch));
+                  }}
                 />
               </label>
             </div>
@@ -1624,27 +2189,47 @@
                 onclick={() => {
                   regionSizeX = 16;
                   regionSizeZ = 16;
+                  worldSize = Math.round(15 * regionPitch);
                   void scene?.resizeRegionGrid(16, 16);
-                }}>16×16 (Small)</button
+                }}>16×16 ({Math.round(15 * regionPitch)}m)</button
               >
               <button
                 onclick={() => {
                   regionSizeX = 32;
                   regionSizeZ = 32;
+                  worldSize = Math.round(31 * regionPitch);
                   void scene?.resizeRegionGrid(32, 32);
-                }}>32×32 (Medium)</button
+                }}>32×32 ({Math.round(31 * regionPitch)}m)</button
               >
               <button
                 onclick={() => {
                   regionSizeX = 64;
                   regionSizeZ = 64;
+                  worldSize = Math.round(63 * regionPitch);
                   void scene?.resizeRegionGrid(64, 64);
-                }}>64×64 (Large)</button
+                }}>64×64 ({Math.round(63 * regionPitch)}m)</button
+              >
+              <button
+                onclick={() => {
+                  regionSizeX = 80;
+                  regionSizeZ = 80;
+                  worldSize = Math.round(79 * regionPitch);
+                  void scene?.resizeRegionGrid(80, 80);
+                }}>80×80 ({Math.round(79 * regionPitch)}m)</button
+              >
+              <button
+                onclick={() => {
+                  regionSizeX = 128;
+                  regionSizeZ = 128;
+                  worldSize = Math.round(127 * regionPitch);
+                  void scene?.resizeRegionGrid(128, 128);
+                }}>128×128 ({Math.round(127 * regionPitch)}m)</button
               >
               <button
                 onclick={() => {
                   regionSizeX = 64;
                   regionSizeZ = 32;
+                  worldSize = Math.round(63 * regionPitch);
                   void scene?.resizeRegionGrid(64, 32);
                 }}>64×32 (Wide)</button
               >
@@ -1652,6 +2237,7 @@
                 onclick={() => {
                   regionSizeX = 32;
                   regionSizeZ = 64;
+                  worldSize = Math.round(63 * regionPitch);
                   void scene?.resizeRegionGrid(32, 64);
                 }}>32×64 (Tall)</button
               >
@@ -1724,6 +2310,7 @@
                   <button onclick={() => menuAction(() => { void scene?.rotateRegion(270); })}>🔄 Rotate Region 270° Clockwise</button>
 
                   <div class="menu-section">Global Terrain Elevation</div>
+                  <button onclick={() => menuAction(() => void regenActiveRegionCoastlines())}>🌊 Regen Ocean Coastlines on Open Edges</button>
                   <button onclick={() => menuAction(() => scene?.autoCarveNaturalWater())}>🌊 Auto-Carve Natural Valleys & Add Water</button>
                   <button onclick={() => menuAction(() => scene?.raiseTerrainAboveSeaLevel(1.5))}>⬆ Raise All Submerged Land Above Sea Level (+1.5m)</button>
                   <button onclick={() => menuAction(() => scene?.shiftTerrainElevation(2.0))}>▲ Shift Entire Terrain Up (+2.0m)</button>
@@ -1742,16 +2329,19 @@
               {/if}
 
               {#if toolCategoryFilter === "all" || toolCategoryFilter === "water" || toolCategoryFilter === "terrain" || toolSearchQuery}
-                {#if !toolSearchQuery || "paint texture road dirt cobble snow rock sand auto".includes(toolSearchQuery.toLowerCase())}
+                {#if !toolSearchQuery || "paint texture road dirt cobble snow rock sand mud lava gravel auto".includes(toolSearchQuery.toLowerCase())}
                   <div class="menu-section">Ground Texture & Roads</div>
-                  <button class:active={texturePaintMode === 0} onclick={() => menuAction(() => pickTexture(0))}>Auto / Biome Texture</button>
-                  <button class:active={texturePaintMode === 1} onclick={() => menuAction(() => pickTexture(1))}>Grass Texture [P]</button>
-                  <button class:active={texturePaintMode === 2} onclick={() => menuAction(() => pickTexture(2))}>Dirt Texture</button>
-                  <button class:active={texturePaintMode === 3} onclick={() => menuAction(() => pickTexture(3))}>Cobble Texture</button>
-                  <button class:active={texturePaintMode === 4} onclick={() => menuAction(() => pickTexture(4))}>Snow Texture</button>
-                  <button class:active={texturePaintMode === 5} onclick={() => menuAction(() => pickTexture(5))}>Rock Texture</button>
-                  <button class:active={texturePaintMode === 6} onclick={() => menuAction(() => pickTexture(6))}>Sand Texture</button>
-                  <button class:active={roadPaintActive} onclick={() => menuAction(pickRoadTool)}>Dirt Road Painter [R]</button>
+                  <button class:active={texturePaintMode === 0} onclick={() => menuAction(() => pickTexture(0))}>🌿 Auto / Biome Texture</button>
+                  <button class:active={texturePaintMode === 1} onclick={() => menuAction(() => pickTexture(1))}>🌱 Grass Texture [P]</button>
+                  <button class:active={texturePaintMode === 2} onclick={() => menuAction(() => pickTexture(2))}>🍂 Dirt / Earth Texture</button>
+                  <button class:active={texturePaintMode === 3} onclick={() => menuAction(() => pickTexture(3))}>🧱 Cobble Road Texture</button>
+                  <button class:active={texturePaintMode === 4} onclick={() => menuAction(() => pickTexture(4))}>❄️ Snow Texture</button>
+                  <button class:active={texturePaintMode === 5} onclick={() => menuAction(() => pickTexture(5))}>🪨 Rock / Cliff Texture</button>
+                  <button class:active={texturePaintMode === 6} onclick={() => menuAction(() => pickTexture(6))}>🏖️ Sand Texture</button>
+                  <button class:active={texturePaintMode === 7} onclick={() => menuAction(() => pickTexture(7))}>🪵 Mud / Swamp Texture</button>
+                  <button class:active={texturePaintMode === 8} onclick={() => menuAction(() => pickTexture(8))}>🌋 Lava / Scorched Ash Texture</button>
+                  <button class:active={texturePaintMode === 9} onclick={() => menuAction(() => pickTexture(9))}>🪨 Gravel / Scree Texture</button>
+                  <button class:active={roadPaintActive} onclick={() => menuAction(pickRoadTool)}>🛤️ Dirt Road Painter [R]</button>
                 {/if}
               {/if}
 
@@ -1795,7 +2385,7 @@
               {/if}
 
               {#if toolCategoryFilter === "all" || toolCategoryFilter === "markers" || toolSearchQuery}
-                {#if !toolSearchQuery || "marker spawn mob node village portal npc quest event".includes(toolSearchQuery.toLowerCase())}
+                {#if !toolSearchQuery || "marker spawn mob node village portal npc quest event poi landmark".includes(toolSearchQuery.toLowerCase())}
                   <div class="menu-section">World Markers</div>
                   <button class:active={armedMarker === "mobSpawn"} onclick={() => menuAction(() => pickMarker("mobSpawn"))}>Mob Spawn</button>
                   <button class:active={armedMarker === "resourceNode"} onclick={() => menuAction(() => pickMarker("resourceNode"))}>Resource Node</button>
@@ -1804,6 +2394,7 @@
                   <button class:active={armedMarker === "portal"} onclick={() => menuAction(() => pickMarker("portal"))}>Region Portal</button>
                   <button class:active={armedMarker === "npc"} onclick={() => menuAction(() => pickMarker("npc"))}>Quest Giver NPC</button>
                   <button class:active={armedMarker === "worldEvent"} onclick={() => menuAction(() => pickMarker("worldEvent"))}>World Event</button>
+                  <button class:active={armedMarker === "poi"} onclick={() => menuAction(() => pickMarker("poi"))}>Point of Interest</button>
                 {/if}
               {/if}
             </div>
@@ -1838,18 +2429,32 @@
             <div class="menu-sep"></div>
             <label class="menu-field">
               Terrain Height
-              <input type="range" min="0.25" max="2.5" step="0.05" bind:value={heightScale} />
+              <input type="range" min="0.25" max="3.0" step="0.05" bind:value={heightScale} />
+              <span class="readout">{heightScale.toFixed(2)}x</span>
             </label>
             <label class="menu-field">
               Tree Density
               <input type="range" min="0.25" max="2.5" step="0.05" bind:value={treeDensity} />
+              <span class="readout">{treeDensity.toFixed(2)}x</span>
             </label>
             <label class="menu-field">
               World Size
-              <input type="range" min="140" max="700" step="20" bind:value={worldSize} />
-              <span class="readout">{worldSize}m</span>
+              <input
+                type="range"
+                min="60"
+                max="1200"
+                step="20"
+                bind:value={worldSize}
+                oninput={() => {
+                  const newSize = Math.max(8, Math.min(256, Math.round(worldSize / regionPitch) + 1));
+                  regionSizeX = newSize;
+                  regionSizeZ = newSize;
+                  void scene?.resizeRegionGrid(regionSizeX, regionSizeZ);
+                }}
+              />
+              <span class="readout">{worldSize}m ({regionSizeX}×{regionSizeZ} @ {regionPitch}m)</span>
             </label>
-            <button class="menu-action" onclick={() => menuAction(() => { void generateDraft(); })}>Re-Generate World</button>
+      <button class="menu-action gen-world-action" onclick={() => menuAction(() => openGenerateModal(false))}>✨ Procedural World Generator…</button>
             <div class="menu-sep"></div>
             <label class="menu-field">
               Portal X <input type="number" step="1" bind:value={portalWorldX} />
@@ -1946,6 +2551,9 @@
 
       {#if status}<span class="status" title={status}>{status}</span>{/if}
 
+      <button class="generate-world-top-btn" onclick={() => openGenerateModal(false)} title="Procedural World Generator">
+        ✨ Generate World…
+      </button>
       <button class="save-btn" onclick={() => { void saveToServer(); }} title="Save (⌘S)">Save</button>
       <button class="playtest-btn" class:active={playtestActive} onclick={togglePlaytest} title="Walk around the region">
         {playtestActive ? "Exit Playtest" : "Playtest"}
@@ -1985,6 +2593,41 @@
           <option value={b}>{REGION_BIOME_LABELS[b]}</option>
         {/each}
       </select>
+      <div class="level-quick-badge" title="Region Level Difficulty Range">
+        <span class="lvl-label">Lv.</span>
+        <input
+          type="number"
+          class="lvl-num-input"
+          min="1"
+          max="100"
+          bind:value={minLevel}
+          onchange={() => {
+            if (minLevel > maxLevel) maxLevel = minLevel;
+            scene?.setMeta({ minLevel, maxLevel });
+          }}
+          title="Min Level"
+        />
+        <span class="lvl-sep">–</span>
+        <input
+          type="number"
+          class="lvl-num-input"
+          min="1"
+          max="100"
+          bind:value={maxLevel}
+          onchange={() => {
+            if (maxLevel < minLevel) minLevel = maxLevel;
+            scene?.setMeta({ minLevel, maxLevel });
+          }}
+          title="Max Level"
+        />
+      </div>
+      <div
+        class="dim-quick-badge"
+        title="Region World Size: {Math.round((regionSizeX - 1) * regionPitch)}m × {Math.round((regionSizeZ - 1) * regionPitch)}m ({regionSizeX}×{regionSizeZ} vertices @ {regionPitch}m pitch)"
+      >
+        <span class="dim-icon">📐</span>
+        <span class="dim-val">{Math.round((regionSizeX - 1) * regionPitch)}m × {Math.round((regionSizeZ - 1) * regionPitch)}m</span>
+      </div>
     </div>
   </div>
 
@@ -2015,7 +2658,7 @@
         {:else if waterBrushMode}
           💧 Water Mode: <strong>{waterBrushMode === "add" ? "DROP WATER" : "DRAIN WATER"}</strong>
         {:else if texturePaintMode !== null}
-          🎨 Texture Paint: <strong>{["AUTO", "GRASS", "DIRT", "COBBLESTONE", "SNOW", "ROCK", "SAND"][texturePaintMode]}</strong>
+          🎨 Texture Paint: <strong>{["AUTO", "GRASS", "DIRT", "COBBLESTONE", "SNOW", "ROCK", "SAND", "MUD", "LAVA / ASH", "GRAVEL"][texturePaintMode] ?? "CUSTOM"}</strong>
         {:else if armedLightColor !== null}
           💡 Light Placement: <strong>PLACE LIGHT SOURCE</strong>
         {:else if armedFogColor !== null}
@@ -2068,6 +2711,23 @@
             <input type="range" min="2" max="30" value={brushRadius} oninput={(e) => updateBrushRadius(Number((e.target as HTMLInputElement).value))} />
             <span>{brushRadius}m</span>
           </label>
+          {#if texturePaintMode !== null}
+            <label class="context-field">
+              Layer
+              <select value={texturePaintMode} onchange={(e) => pickTexture(Number((e.target as HTMLSelectElement).value))}>
+                <option value={0}>🌿 Auto / Biome</option>
+                <option value={1}>🌱 Grass (Grass001)</option>
+                <option value={2}>🍂 Dirt (Ground023)</option>
+                <option value={3}>🧱 Cobble (PavingStones046)</option>
+                <option value={4}>❄️ Snow (Snow010A)</option>
+                <option value={5}>🪨 Rock / Cliff (Rock026)</option>
+                <option value={6}>🏖️ Sand (Ground080)</option>
+                <option value={7}>🪵 Mud / Swamp (Ground071)</option>
+                <option value={8}>🌋 Lava / Scorched (Lava004)</option>
+                <option value={9}>🪨 Gravel / Scree (Gravel024)</option>
+              </select>
+            </label>
+          {/if}
           {#if volumeClaySculptActive}
             <label class="context-field">
               Mode
@@ -2167,7 +2827,10 @@
     <ContinentLayoutMap
       tiles={layoutTiles}
       currentRegionId={regionId || "__draft__"}
+      currentBlueprint={scene ? scene.exportBlueprint() : null}
       saving={layoutSaving}
+      progress={opProgress}
+      focusPoiId={continentMapFocusPoiId}
       onTilesChange={onLayoutTilesChange}
       onClose={() => {
         showContinentMap = false;
@@ -2178,6 +2841,16 @@
       onOpenRegion={(id) => {
         showContinentMap = false;
         void loadRegion(id);
+      }}
+      onDeleteRegion={handleDeleteRegionFromContinent}
+      onStitchSeams={stitchContinentBorderSeams}
+      onRegenCoastlines={regenContinentOceanCoastlines}
+      onPoiShapeSaved={(poiId, revealShape) => {
+        // No-op if this POI isn't loaded in the currently-open 3D scene --
+        // prevents the scene's stale in-memory copy from clobbering the
+        // shape just saved (possibly for a different region entirely) the
+        // next time this scene's own Save runs.
+        scene?.refreshPoiShape(poiId, revealShape);
       }}
     />
   {/if}
@@ -2226,6 +2899,1092 @@
             onclick={() => { void confirmDeleteRegion(); }}
           >{deleteInProgress ? "Deleting…" : "Delete Region"}</button>
         </div>
+      </div>
+    </div>
+  {/if}
+
+  {#if showGenerateModal}
+    <!-- Procedural World Generator Modal -->
+    <div
+      class="world-gen-modal-overlay"
+      role="presentation"
+      onclick={(e) => {
+        if (e.target === e.currentTarget && !isGeneratingContinent) showGenerateModal = false;
+      }}
+    >
+      <div
+        class="world-gen-modal rc-frame"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="world-gen-title"
+      >
+        <div class="gen-header">
+          <div class="gen-header-title">
+            <span class="gen-icon">✨</span>
+            <div>
+              <h2 id="world-gen-title">Procedural World Generator</h2>
+              <p class="gen-subtitle">
+                {genModalMode === "single"
+                  ? "Configure biome ecosystem, terrain contours, mob difficulty, resources, and region boundaries."
+                  : "Generate full multi-region continents or archipelagos with neighbor-aware seamless continuous terrain."}
+              </p>
+            </div>
+          </div>
+
+          <div class="gen-mode-tabs">
+            <button
+              type="button"
+              class="gen-mode-tab"
+              class:active={genModalMode === "single"}
+              onclick={() => (genModalMode = "single")}
+            >
+              Single Region
+            </button>
+            <button
+              type="button"
+              class="gen-mode-tab"
+              class:active={genModalMode === "continent"}
+              onclick={() => (genModalMode = "continent")}
+            >
+              🗺️ Multi-Region Continent
+            </button>
+          </div>
+
+          <button type="button" class="gen-close-btn" disabled={isGeneratingContinent} onclick={() => (showGenerateModal = false)}>✕</button>
+        </div>
+
+        {#if genModalMode === "single"}
+          <div class="gen-modal-body">
+            <!-- 1. Biome Selection -->
+            <div class="gen-section">
+              <div class="gen-section-header">
+                <span class="gen-section-title">1. Biome Ecosystem</span>
+                <span class="gen-section-hint">Select the environmental archetype and climate</span>
+              </div>
+
+              <div class="biome-grid">
+                {#each [
+                  REGION_BIOME_DETAILS.forest,
+                  REGION_BIOME_DETAILS.jungle,
+                  REGION_BIOME_DETAILS.desert,
+                  REGION_BIOME_DETAILS.arctic,
+                  REGION_BIOME_DETAILS.swamp,
+                  REGION_BIOME_DETAILS.volcanic,
+                  REGION_BIOME_DETAILS.cosmic,
+                  REGION_BIOME_DETAILS.underground,
+                ] as b (b.id)}
+                  <button
+                    type="button"
+                    class="biome-card"
+                    class:selected={genBiome === b.id}
+                    onclick={() => selectModalBiome(b.id)}
+                  >
+                    <div class="biome-card-top">
+                      <span class="biome-card-icon">{b.icon}</span>
+                      <div class="biome-card-heading">
+                        <span class="biome-card-title">{b.title}</span>
+                        <span class="biome-card-badge">Lv. {b.recommendedLevels[0]}–{b.recommendedLevels[1]}</span>
+                      </div>
+                    </div>
+                    <div class="biome-card-desc">{b.description}</div>
+                    <div class="biome-card-tags">
+                      {#each b.tags as tag}
+                        <span class="biome-tag">{tag}</span>
+                      {/each}
+                    </div>
+                  </button>
+                {/each}
+              </div>
+
+              <div class="other-biomes-row">
+                <span class="other-biomes-label">Other Archetypes:</span>
+                <button
+                  type="button"
+                  class="other-biome-chip"
+                  class:active={genBiome === "grassland"}
+                  onclick={() => selectModalBiome("grassland")}
+                >
+                  🌱 Grasslands & Savannas
+                </button>
+                <button
+                  type="button"
+                  class="other-biome-chip"
+                  class:active={genBiome === "alien"}
+                  onclick={() => selectModalBiome("alien")}
+                >
+                  🪐 Alien Xenosphere
+                </button>
+              </div>
+            </div>
+
+            <!-- 2. Level Area Difficulty & Mob Tier -->
+            <div class="gen-section">
+              <div class="gen-section-header">
+                <span class="gen-section-title">2. Level Area & Mob Difficulty</span>
+                <span class="gen-section-hint">Dictates monster strength, spawn tiers, and encounter danger</span>
+              </div>
+
+              <div class="level-presets-row">
+                <button
+                  type="button"
+                  class="level-chip"
+                  class:active={genMinLevel === 1 && genMaxLevel === 5}
+                  onclick={() => setModalLevelPreset(1, 5)}
+                >
+                  🛡️ 1 – 5 (Starter Zone)
+                </button>
+                <button
+                  type="button"
+                  class="level-chip"
+                  class:active={genMinLevel === 5 && genMaxLevel === 12}
+                  onclick={() => setModalLevelPreset(5, 12)}
+                >
+                  ⚔️ 5 – 12 (Low Level)
+                </button>
+                <button
+                  type="button"
+                  class="level-chip"
+                  class:active={genMinLevel === 12 && genMaxLevel === 25}
+                  onclick={() => setModalLevelPreset(12, 25)}
+                >
+                  🔥 12 – 25 (Mid Level)
+                </button>
+                <button
+                  type="button"
+                  class="level-chip"
+                  class:active={genMinLevel === 25 && genMaxLevel === 40}
+                  onclick={() => setModalLevelPreset(25, 40)}
+                >
+                  ☠️ 25 – 40 (High Level)
+                </button>
+                <button
+                  type="button"
+                  class="level-chip"
+                  class:active={genMinLevel === 40 && genMaxLevel === 60}
+                  onclick={() => setModalLevelPreset(40, 60)}
+                >
+                  👑 40 – 60 (Endgame)
+                </button>
+              </div>
+
+              <div class="gen-row-inputs">
+                <label class="gen-field">
+                  <span class="gen-label">Min Level</span>
+                  <input
+                    type="number"
+                    min="1"
+                    max="100"
+                    bind:value={genMinLevel}
+                    onchange={() => {
+                      if (genMinLevel > genMaxLevel) genMaxLevel = genMinLevel;
+                    }}
+                  />
+                </label>
+                <label class="gen-field">
+                  <span class="gen-label">Max Level</span>
+                  <input
+                    type="number"
+                    min="1"
+                    max="100"
+                    bind:value={genMaxLevel}
+                    onchange={() => {
+                      if (genMaxLevel < genMinLevel) genMinLevel = genMaxLevel;
+                    }}
+                  />
+                </label>
+                <div class="difficulty-banner">
+                  <span class="diff-title">
+                    {#if genMaxLevel <= 5}
+                      🔰 Starter Valley (Novice Friendly)
+                    {:else if genMaxLevel <= 15}
+                      ⚔️ Adventurer's Frontier
+                    {:else if genMaxLevel <= 30}
+                      🔥 Perilous Wilds
+                    {:else if genMaxLevel <= 45}
+                      💀 Deadly Badlands
+                    {:else}
+                      👑 Legendary Endgame Domain
+                    {/if}
+                  </span>
+                  <span class="diff-desc">Mobs scale between Lv. {genMinLevel} and Lv. {genMaxLevel} with matching drop tables</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- 3. Biome Tuning (Terrain, Foliage, Mobs, Resources) -->
+            <div class="gen-section">
+              <div class="gen-section-header">
+                <span class="gen-section-title">3. Ecosystem & Density Tuning</span>
+                <span class="gen-section-hint">Fine-tune hill elevation, tree density, monster count, and gatherables</span>
+              </div>
+
+              <div class="sliders-grid">
+                <div class="slider-box">
+                  <div class="slider-top">
+                    <span class="slider-label">Terrain Elevation & Hills</span>
+                    <span class="slider-val">{genHeightScale.toFixed(2)}x</span>
+                  </div>
+                  <input type="range" min="0.25" max="3.0" step="0.05" bind:value={genHeightScale} />
+                  <span class="slider-hint">Higher values create towering rolling green knolls and mountain ridges</span>
+                </div>
+
+                <div class="slider-box">
+                  <div class="slider-top">
+                    <span class="slider-label">Tree & Foliage Density</span>
+                    <span class="slider-val">{genTreeDensity.toFixed(2)}x</span>
+                  </div>
+                  <input type="range" min="0.0" max="2.5" step="0.05" bind:value={genTreeDensity} />
+                  <span class="slider-hint">Controls woodland canopy coverage and natural plant clusters</span>
+                </div>
+
+                <div class="slider-box">
+                  <div class="slider-top">
+                    <span class="slider-label">Mob Spawn Density</span>
+                    <span class="slider-val">{genMobDensity.toFixed(2)}x</span>
+                  </div>
+                  <input type="range" min="0.0" max="2.5" step="0.05" bind:value={genMobDensity} />
+                  <span class="slider-hint">Controls monster population and territorial patrol packs</span>
+                </div>
+
+                <div class="slider-box">
+                  <div class="slider-top">
+                    <span class="slider-label">Resource Node Density</span>
+                    <span class="slider-val">{genResourceDensity.toFixed(2)}x</span>
+                  </div>
+                  <input type="range" min="0.0" max="2.5" step="0.05" bind:value={genResourceDensity} />
+                  <span class="slider-hint">Density of gatherable trees, ore veins, rocks, and herb bushes</span>
+                </div>
+              </div>
+
+              <!-- Resource Variety Filters -->
+              <div class="resource-variety-section">
+                <div class="resource-variety-header">
+                  <span class="resource-variety-title">Resource Variety Filters</span>
+                  <div class="resource-variety-actions">
+                    <button
+                      type="button"
+                      class="variety-action-btn"
+                      onclick={() => {
+                        for (const t of PLACEABLE_REGION_NODE_TYPES) genResourceVariety[t] = true;
+                      }}
+                    >Select All</button>
+                    <button
+                      type="button"
+                      class="variety-action-btn"
+                      onclick={() => {
+                        const activeTypes = new Set(getBiomeLevelResourceTypes(genBiome, genMinLevel));
+                        for (const t of PLACEABLE_REGION_NODE_TYPES) genResourceVariety[t] = activeTypes.has(t);
+                      }}
+                    >Level Defaults</button>
+                  </div>
+                </div>
+
+                <div class="resource-chips-grid">
+                  {#each PLACEABLE_REGION_NODE_TYPES as nodeType}
+                    <button
+                      type="button"
+                      class="resource-chip"
+                      class:active={genResourceVariety[nodeType]}
+                      onclick={() => (genResourceVariety[nodeType] = !genResourceVariety[nodeType])}
+                    >
+                      <span class="chip-icon">
+                        {#if nodeType === "tree"}🌲
+                        {:else if nodeType === "rock"}🪨
+                        {:else if nodeType === "berry_bush"}🫐
+                        {:else if nodeType === "copper_vein"}🥉
+                        {:else if nodeType === "tin_vein"}🥈
+                        {:else if nodeType === "iron_deposit"}⚔️
+                        {:else if nodeType === "mithril_deposit"}💎
+                        {:else if nodeType === "thorium_vein"}⚡
+                        {:else}📦{/if}
+                      </span>
+                      <span class="chip-name">{nodeTypeDef(nodeType).name}</span>
+                      <span class="chip-check">{genResourceVariety[nodeType] ? "✓" : "–"}</span>
+                    </button>
+                  {/each}
+                </div>
+              </div>
+            </div>
+
+            <!-- 4. Landscape Morphology & Island Variants -->
+            <div class="gen-section">
+              <div class="gen-section-header">
+                <span class="gen-section-title">4. Landscape Morphology & Islands</span>
+                <span class="gen-section-hint">Select natural landform archetypes, offshore islands, fjords, or river valleys</span>
+              </div>
+
+              <div class="continent-layout-grid">
+                <button
+                  type="button"
+                  class="layout-card"
+                  class:selected={genLandscapeVariant === "natural"}
+                  onclick={() => (genLandscapeVariant = "natural")}
+                >
+                  <span class="layout-icon">🌿</span>
+                  <div class="layout-info">
+                    <span class="layout-title">Natural Organic</span>
+                    <span class="layout-desc">Standard biome topography with natural coastal barrier islands & lake islets</span>
+                  </div>
+                </button>
+
+                <button
+                  type="button"
+                  class="layout-card"
+                  class:selected={genLandscapeVariant === "archipelago"}
+                  onclick={() => (genLandscapeVariant = "archipelago")}
+                >
+                  <span class="layout-icon">🏝️</span>
+                  <div class="layout-info">
+                    <span class="layout-title">Archipelago & Islands</span>
+                    <span class="layout-desc">Tropical/forested island chains, sandbars, atolls, and shallow channel crossings</span>
+                  </div>
+                </button>
+
+                <button
+                  type="button"
+                  class="layout-card"
+                  class:selected={genLandscapeVariant === "fjords"}
+                  onclick={() => (genLandscapeVariant = "fjords")}
+                >
+                  <span class="layout-icon">🌊</span>
+                  <div class="layout-info">
+                    <span class="layout-title">Coastal Fjords</span>
+                    <span class="layout-desc">Deep glacial ocean inlets carving inland with sheer sea cliffs and sea stack islets</span>
+                  </div>
+                </button>
+
+                <button
+                  type="button"
+                  class="layout-card"
+                  class:selected={genLandscapeVariant === "river_valley"}
+                  onclick={() => (genLandscapeVariant = "river_valley")}
+                >
+                  <span class="layout-icon">🏞️</span>
+                  <div class="layout-info">
+                    <span class="layout-title">Meandering River Valley</span>
+                    <span class="layout-desc">Wide winding river channel with fertile floodplains and delta sandbar islands</span>
+                  </div>
+                </button>
+
+                <button
+                  type="button"
+                  class="layout-card"
+                  class:selected={genLandscapeVariant === "highland"}
+                  onclick={() => (genLandscapeVariant = "highland")}
+                >
+                  <span class="layout-icon">🏔️</span>
+                  <div class="layout-info">
+                    <span class="layout-title">Highland Plateaus</span>
+                    <span class="layout-desc">Stepped elevated tablelands, rock escarpments, and high mountain passes</span>
+                  </div>
+                </button>
+
+                <button
+                  type="button"
+                  class="layout-card"
+                  class:selected={genLandscapeVariant === "caldera"}
+                  onclick={() => (genLandscapeVariant = "caldera")}
+                >
+                  <span class="layout-icon">🌋</span>
+                  <div class="layout-info">
+                    <span class="layout-title">Sunken Caldera & Lake</span>
+                    <span class="layout-desc">Sunken crater lake with an elevated ring rim and a central sanctuary island</span>
+                  </div>
+                </button>
+
+                <button
+                  type="button"
+                  class="layout-card"
+                  class:selected={genLandscapeVariant === "badlands"}
+                  onclick={() => (genLandscapeVariant = "badlands")}
+                >
+                  <span class="layout-icon">🏜️</span>
+                  <div class="layout-info">
+                    <span class="layout-title">Canyon Badlands</span>
+                    <span class="layout-desc">Stepped terraced mesas, deep dry canyon ravines, and layered rock formations</span>
+                  </div>
+                </button>
+              </div>
+            </div>
+
+            <!-- 5. Map Size & World Dimensions -->
+            <div class="gen-section">
+              <div class="gen-section-header">
+                <span class="gen-section-title">5. Map Size & World Dimensions</span>
+                <span class="gen-section-hint">Scale the landmass footprint and vertex mesh resolution</span>
+              </div>
+
+              <div class="size-presets-row">
+                <button
+                  type="button"
+                  class="size-chip"
+                  class:active={genGridSizeX === 32 && genGridSizeZ === 32}
+                  onclick={() => setModalSizePreset(32, 32, 6)}
+                >
+                  🏝️ Small (186m • 32×32)
+                </button>
+                <button
+                  type="button"
+                  class="size-chip"
+                  class:active={genGridSizeX === 64 && genGridSizeZ === 64}
+                  onclick={() => setModalSizePreset(64, 64, 6)}
+                >
+                  🗺️ Medium (378m • 64×64)
+                </button>
+                <button
+                  type="button"
+                  class="size-chip"
+                  class:active={genGridSizeX === 80 && genGridSizeZ === 80}
+                  onclick={() => setModalSizePreset(80, 80, 6)}
+                >
+                  🏔️ Large (474m • 80×80)
+                </button>
+                <button
+                  type="button"
+                  class="size-chip"
+                  class:active={genGridSizeX === 128 && genGridSizeZ === 128}
+                  onclick={() => setModalSizePreset(128, 128, 6)}
+                >
+                  🌌 Epic (762m • 128×128)
+                </button>
+              </div>
+
+              <div class="gen-row-inputs">
+                <label class="gen-field">
+                  <span class="gen-label">Width (X Vertices)</span>
+                  <input
+                    type="number"
+                    min="8"
+                    max="256"
+                    bind:value={genGridSizeX}
+                    onchange={() => {
+                      genWorldSize = Math.round(Math.max((genGridSizeX - 1) * genPitch, (genGridSizeZ - 1) * genPitch));
+                    }}
+                  />
+                </label>
+                <label class="gen-field">
+                  <span class="gen-label">Length (Z Vertices)</span>
+                  <input
+                    type="number"
+                    min="8"
+                    max="256"
+                    bind:value={genGridSizeZ}
+                    onchange={() => {
+                      genWorldSize = Math.round(Math.max((genGridSizeX - 1) * genPitch, (genGridSizeZ - 1) * genPitch));
+                    }}
+                  />
+                </label>
+                <label class="gen-field">
+                  <span class="gen-label">Pitch (m/cell)</span>
+                  <input
+                    type="number"
+                    min="1"
+                    max="32"
+                    step="0.5"
+                    bind:value={genPitch}
+                    onchange={() => {
+                      genWorldSize = Math.round(Math.max((genGridSizeX - 1) * genPitch, (genGridSizeZ - 1) * genPitch));
+                    }}
+                  />
+                </label>
+                <div class="size-banner">
+                  <span class="size-summary-title">Total Area: {(((genGridSizeX - 1) * genPitch * (genGridSizeZ - 1) * genPitch) / 1000000).toFixed(3)} km²</span>
+                  <span class="size-summary-dim">{Math.round((genGridSizeX - 1) * genPitch)}m × {Math.round((genGridSizeZ - 1) * genPitch)}m real-world span</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- 6. MMO Region Name & Seed -->
+            <div class="gen-section">
+              <div class="gen-section-header">
+                <span class="gen-section-title">6. Region Identity & Seed</span>
+                <span class="gen-section-hint">Auto-generated fantasy MMO region title and procedural RNG seed</span>
+              </div>
+
+              <div class="identity-grid">
+                <div class="identity-field">
+                  <span class="gen-label">MMO Region Name</span>
+                  <div class="input-with-button">
+                    <input type="text" bind:value={genName} placeholder="e.g. Whispering Glade" />
+                    <button type="button" class="action-mini-btn" onclick={rerollModalName} title="Generate new MMO name">
+                      🎲 Re-Roll
+                    </button>
+                  </div>
+                </div>
+
+                <div class="identity-field">
+                  <span class="gen-label">Procedural Seed</span>
+                  <div class="input-with-button">
+                    <input type="text" bind:value={genSeed} placeholder="Seed string" />
+                    <button type="button" class="action-mini-btn" onclick={rerollModalSeed} title="Randomize seed">
+                      🎲 Random
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        {:else}
+          <!-- Multi-Region Continent Mode -->
+          <div class="gen-modal-body">
+            <!-- 1. Continent Scale & Region Count -->
+            <div class="gen-section">
+              <div class="gen-section-header">
+                <span class="gen-section-title">1. Continent Scale & Region Count</span>
+                <span class="gen-section-hint">Select how many interconnected regions to generate across the world map</span>
+              </div>
+
+              <!-- Region Count Quick Presets -->
+              <div class="level-presets-row">
+                <button
+                  type="button"
+                  class="level-chip"
+                  class:active={continentCount === 2}
+                  onclick={() => (continentCount = 2)}
+                >
+                  🏝️ Duo (2 Regions)
+                </button>
+                <button
+                  type="button"
+                  class="level-chip"
+                  class:active={continentCount === 4}
+                  onclick={() => (continentCount = 4)}
+                >
+                  🗺️ Kingdom (4 Regions)
+                </button>
+                <button
+                  type="button"
+                  class="level-chip"
+                  class:active={continentCount === 6}
+                  onclick={() => (continentCount = 6)}
+                >
+                  🏔️ Province (6 Regions)
+                </button>
+                <button
+                  type="button"
+                  class="level-chip"
+                  class:active={continentCount === 8}
+                  onclick={() => (continentCount = 8)}
+                >
+                  🌌 Continent (8 Regions)
+                </button>
+                <button
+                  type="button"
+                  class="level-chip"
+                  class:active={continentCount === 12}
+                  onclick={() => (continentCount = 12)}
+                >
+                  👑 Empire (12 Regions)
+                </button>
+              </div>
+
+              <!-- Continent Scale Presets (Massive Sizing) -->
+              <div class="gen-section-header" style="margin-top: 6px;">
+                <span class="gen-section-title">Region Scale (Zone Footprint)</span>
+                <span class="gen-section-hint">Controls how huge and expansive each individual region will be</span>
+              </div>
+
+              <div class="size-presets-row" style="flex-wrap: wrap; gap: 6px;">
+                <button
+                  type="button"
+                  class="size-chip"
+                  class:active={continentScale === "micro"}
+                  onclick={() => (continentScale = "micro")}
+                >
+                  ⚡ Micro (32×32 • 190m/zone)
+                </button>
+                <button
+                  type="button"
+                  class="size-chip"
+                  class:active={continentScale === "compact"}
+                  onclick={() => (continentScale = "compact")}
+                >
+                  🔹 Compact (48×48 • 288m/zone)
+                </button>
+                <button
+                  type="button"
+                  class="size-chip"
+                  class:active={continentScale === "small"}
+                  onclick={() => (continentScale = "small")}
+                >
+                  🌱 Small (64×64 • 384m/zone)
+                </button>
+                <button
+                  type="button"
+                  class="size-chip"
+                  class:active={continentScale === "medium"}
+                  onclick={() => (continentScale = "medium")}
+                >
+                  🌿 Medium (80×80 • 480m/zone)
+                </button>
+                <button
+                  type="button"
+                  class="size-chip"
+                  class:active={continentScale === "large"}
+                  onclick={() => (continentScale = "large")}
+                >
+                  🏔️ Large (96×96 • 570m/zone)
+                </button>
+                <button
+                  type="button"
+                  class="size-chip"
+                  class:active={continentScale === "massive"}
+                  onclick={() => (continentScale = "massive")}
+                >
+                  🌟 Massive (128×128 • 762m/zone)
+                </button>
+                <button
+                  type="button"
+                  class="size-chip"
+                  class:active={continentScale === "colossal"}
+                  onclick={() => (continentScale = "colossal")}
+                >
+                  🌌 Colossal (160×160 • 954m/zone)
+                </button>
+                <button
+                  type="button"
+                  class="size-chip"
+                  class:active={continentScale === "titanic"}
+                  onclick={() => (continentScale = "titanic")}
+                >
+                  👑 Titanic (192×192 • 1.15km/zone)
+                </button>
+                <button
+                  type="button"
+                  class="size-chip"
+                  class:active={continentScale === "mythic"}
+                  onclick={() => (continentScale = "mythic")}
+                >
+                  🪐 Mythic (256×256 • 1.54km/zone)
+                </button>
+              </div>
+
+              <div class="gen-row-inputs">
+                <label class="gen-field" style="flex: 1; max-width: 280px;">
+                  <span class="gen-label">Total Regions ({continentCount})</span>
+                  <input type="range" min="2" max="16" step="1" bind:value={continentCount} />
+                </label>
+                <div class="size-banner">
+                  <span class="size-summary-title">
+                    World Scale: {continentCount} joined zones ({continentScale === "mythic" ? "1.54km" : continentScale === "titanic" ? "1.15km" : continentScale === "colossal" ? "954m" : continentScale === "large" ? "570m" : continentScale === "medium" ? "480m" : continentScale === "small" ? "384m" : continentScale === "compact" ? "288m" : continentScale === "micro" ? "190m" : "762m"} each)
+                  </span>
+                  <span class="size-summary-dim">
+                    Total contiguous continent span: ~{continentCount <= 4 ? "1.5km × 1.5km" : continentCount <= 9 ? "2.3km × 2.3km" : "3.0km × 3.0km"} with seamless flush borders
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <!-- 2. Continent Layout & Size Variance -->
+            <div class="gen-section">
+              <div class="gen-section-header">
+                <span class="gen-section-title">2. Layout Pattern & Size Variation</span>
+                <span class="gen-section-hint">Arrangement of landmasses, aspect ratios, and size variation</span>
+              </div>
+
+              <div class="continent-layout-grid">
+                <button
+                  type="button"
+                  class="layout-card"
+                  class:selected={continentLayout === "continent"}
+                  onclick={() => (continentLayout = "continent")}
+                >
+                  <span class="layout-icon">🗺️</span>
+                  <div class="layout-info">
+                    <span class="layout-title">Continent Cluster</span>
+                    <span class="layout-desc">Packed contiguous landmass around a central capital with ocean on outer coasts</span>
+                  </div>
+                </button>
+
+                <button
+                  type="button"
+                  class="layout-card"
+                  class:selected={continentLayout === "rectangle_wide"}
+                  onclick={() => (continentLayout = "rectangle_wide")}
+                >
+                  <span class="layout-icon">🌅</span>
+                  <div class="layout-info">
+                    <span class="layout-title">Panoramic Rectangle (Wide)</span>
+                    <span class="layout-desc">Wide horizontal continent with panoramic coastlines and broad province spans</span>
+                  </div>
+                </button>
+
+                <button
+                  type="button"
+                  class="layout-card"
+                  class:selected={continentLayout === "rectangle_tall"}
+                  onclick={() => (continentLayout = "rectangle_tall")}
+                >
+                  <span class="layout-icon">🏔️</span>
+                  <div class="layout-info">
+                    <span class="layout-title">Corridor Rectangle (Tall)</span>
+                    <span class="layout-desc">Vertical north-to-south continent stretching from frozen poles to tropical seas</span>
+                  </div>
+                </button>
+
+                <button
+                  type="button"
+                  class="layout-card"
+                  class:selected={continentLayout === "isthmus"}
+                  onclick={() => (continentLayout = "isthmus")}
+                >
+                  <span class="layout-icon">🌉</span>
+                  <div class="layout-info">
+                    <span class="layout-title">Isthmus Landbridge</span>
+                    <span class="layout-desc">Twin major continental landmasses connected by a strategic narrow land bridge</span>
+                  </div>
+                </button>
+
+                <button
+                  type="button"
+                  class="layout-card"
+                  class:selected={continentLayout === "grid"}
+                  onclick={() => (continentLayout = "grid")}
+                >
+                  <span class="layout-icon">🔲</span>
+                  <div class="layout-info">
+                    <span class="layout-title">Grid Matrix</span>
+                    <span class="layout-desc">Symmetric rectangular grid of adjacent provinces with shared seams</span>
+                  </div>
+                </button>
+
+                <button
+                  type="button"
+                  class="layout-card"
+                  class:selected={continentLayout === "linear"}
+                  onclick={() => (continentLayout = "linear")}
+                >
+                  <span class="layout-icon">⛓️</span>
+                  <div class="layout-info">
+                    <span class="layout-title">Linear Frontier</span>
+                    <span class="layout-desc">Sequential chain of zones progressing from starter town to apex mountain danger</span>
+                  </div>
+                </button>
+
+                <button
+                  type="button"
+                  class="layout-card"
+                  class:selected={continentLayout === "archipelago"}
+                  onclick={() => (continentLayout = "archipelago")}
+                >
+                  <span class="layout-icon">🏝️</span>
+                  <div class="layout-info">
+                    <span class="layout-title">Archipelago Realm</span>
+                    <span class="layout-desc">Island chain with varying land sizes and connecting straits</span>
+                  </div>
+                </button>
+              </div>
+
+              <div class="gen-row-inputs" style="margin-top: 6px;">
+                <div class="gen-field" style="flex: 1;">
+                  <span class="gen-label">Size & Aspect Ratio Variation</span>
+                  <div class="size-presets-row" style="flex-wrap: wrap; gap: 6px;">
+                    <button
+                      type="button"
+                      class="size-chip"
+                      class:active={continentSizeVariation === "varied"}
+                      onclick={() => (continentSizeVariation = "varied")}
+                    >
+                      🌟 Varied Sizes (Large Capital + Medium Provinces + Outposts)
+                    </button>
+                    <button
+                      type="button"
+                      class="size-chip"
+                      class:active={continentSizeVariation === "rectangular"}
+                      onclick={() => (continentSizeVariation = "rectangular")}
+                    >
+                      📐 Rectangular Aspect Ratios (Wider & Taller Zone Proportions)
+                    </button>
+                    <button
+                      type="button"
+                      class="size-chip"
+                      class:active={continentSizeVariation === "organic"}
+                      onclick={() => (continentSizeVariation = "organic")}
+                    >
+                      🌿 Organic Asymmetric (Natural randomized zone dimensions)
+                    </button>
+                    <button
+                      type="button"
+                      class="size-chip"
+                      class:active={continentSizeVariation === "uniform"}
+                      onclick={() => (continentSizeVariation = "uniform")}
+                    >
+                      ⏹️ Uniform Sizes (Matched Identical Grids)
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="gen-row-inputs" style="margin-top: 6px;">
+                <div class="gen-field" style="flex: 1;">
+                  <span class="gen-label">Landscape & Island Morphology</span>
+                  <div class="size-presets-row" style="flex-wrap: wrap; gap: 6px;">
+                    <button
+                      type="button"
+                      class="size-chip"
+                      class:active={continentLandscapeVariant === "auto"}
+                      onclick={() => (continentLandscapeVariant = "auto")}
+                    >
+                      🎲 Auto (Diverse Natural Islands & Valleys)
+                    </button>
+                    <button
+                      type="button"
+                      class="size-chip"
+                      class:active={continentLandscapeVariant === "archipelago"}
+                      onclick={() => (continentLandscapeVariant = "archipelago")}
+                    >
+                      🏝️ Archipelago & Islands
+                    </button>
+                    <button
+                      type="button"
+                      class="size-chip"
+                      class:active={continentLandscapeVariant === "fjords"}
+                      onclick={() => (continentLandscapeVariant = "fjords")}
+                    >
+                      🌊 Coastal Fjords
+                    </button>
+                    <button
+                      type="button"
+                      class="size-chip"
+                      class:active={continentLandscapeVariant === "river_valley"}
+                      onclick={() => (continentLandscapeVariant = "river_valley")}
+                    >
+                      🏞️ River Valleys
+                    </button>
+                    <button
+                      type="button"
+                      class="size-chip"
+                      class:active={continentLandscapeVariant === "highland"}
+                      onclick={() => (continentLandscapeVariant = "highland")}
+                    >
+                      🏔️ Highland Plateaus
+                    </button>
+                    <button
+                      type="button"
+                      class="size-chip"
+                      class:active={continentLandscapeVariant === "caldera"}
+                      onclick={() => (continentLandscapeVariant = "caldera")}
+                    >
+                      🌋 Volcanic Calderas
+                    </button>
+                    <button
+                      type="button"
+                      class="size-chip"
+                      class:active={continentLandscapeVariant === "badlands"}
+                      onclick={() => (continentLandscapeVariant = "badlands")}
+                    >
+                      🏜️ Canyon Badlands
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 3. Biome Distribution & Level Scaling -->
+            <div class="gen-section">
+              <div class="gen-section-header">
+                <span class="gen-section-title">3. Biome Distribution & Level Progression</span>
+                <span class="gen-section-hint">Climate zones, starter placement, and monster difficulty across the map</span>
+              </div>
+
+              <div class="sliders-grid">
+                <div class="slider-box">
+                  <span class="slider-label">Biome Distribution Mode</span>
+                  <div class="level-presets-row" style="margin-top: 4px;">
+                    <button
+                      type="button"
+                      class="level-chip"
+                      class:active={continentBiomeDist === "thematic_continent"}
+                      onclick={() => (continentBiomeDist = "thematic_continent")}
+                    >
+                      🌍 Thematic Continent (Frozen North, Arid South, etc.)
+                    </button>
+                    <button
+                      type="button"
+                      class="level-chip"
+                      class:active={continentBiomeDist === "diverse_mosaic"}
+                      onclick={() => (continentBiomeDist = "diverse_mosaic")}
+                    >
+                      🎨 Diverse Mosaic (Varied per Region)
+                    </button>
+                    <button
+                      type="button"
+                      class="level-chip"
+                      class:active={continentBiomeDist === "single_biome"}
+                      onclick={() => (continentBiomeDist = "single_biome")}
+                    >
+                      🌲 Single Biome Realm
+                    </button>
+                  </div>
+                  {#if continentBiomeDist === "single_biome"}
+                    <label class="gen-field" style="margin-top: 6px;">
+                      <span class="gen-label">Primary Biome</span>
+                      <select bind:value={continentPrimaryBiome} style="background: #11141c; color: #f8fafc; border: 1px solid #333c4e; border-radius: 4px; padding: 4px 8px;">
+                        {#each REGION_BIOMES as b}
+                          <option value={b}>{REGION_BIOME_LABELS[b]}</option>
+                        {/each}
+                      </select>
+                    </label>
+                  {/if}
+                </div>
+
+                <div class="slider-box">
+                  <span class="slider-label">Level Progression</span>
+                  <div class="level-presets-row" style="margin-top: 4px;">
+                    <button
+                      type="button"
+                      class="level-chip"
+                      class:active={continentLevelProg === "tiered"}
+                      onclick={() => (continentLevelProg = "tiered")}
+                    >
+                      📈 Tiered Progression (Lv. 1–5 Starter → Lv. 45–60 Outer)
+                    </button>
+                    <button
+                      type="button"
+                      class="level-chip"
+                      class:active={continentLevelProg === "uniform"}
+                      onclick={() => (continentLevelProg = "uniform")}
+                    >
+                      ⚖️ Uniform Level Scaling
+                    </button>
+                  </div>
+                  <div class="difficulty-banner" style="margin-top: 6px;">
+                    <span class="diff-title">
+                      {continentLevelProg === "tiered" ? "⚔️ Tiered MMO Adventure" : "🛡️ Consistent Level Range"}
+                    </span>
+                    <span class="diff-desc">
+                      {continentLevelProg === "tiered"
+                        ? "Capital starts at Lv. 1–5, distant provinces scale to dangerous endgame zones."
+                        : "All generated regions follow baseline difficulty."}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 4. Global Continent Sliders & Seed -->
+            <div class="gen-section">
+              <div class="gen-section-header">
+                <span class="gen-section-title">4. Terrain Elevation, Densities & World Seed</span>
+                <span class="gen-section-hint">Coherent noise amplitude and procedural continent seed</span>
+              </div>
+
+              <div class="sliders-grid">
+                <div class="slider-box">
+                  <div class="slider-top">
+                    <span class="slider-label">Terrain Elevation</span>
+                    <span class="slider-val">{continentHeightScale.toFixed(2)}x</span>
+                  </div>
+                  <input type="range" min="0.25" max="3.0" step="0.05" bind:value={continentHeightScale} />
+                </div>
+
+                <div class="slider-box">
+                  <div class="slider-top">
+                    <span class="slider-label">Tree & Foliage Density</span>
+                    <span class="slider-val">{continentTreeDensity.toFixed(2)}x</span>
+                  </div>
+                  <input type="range" min="0.0" max="2.5" step="0.05" bind:value={continentTreeDensity} />
+                </div>
+
+                <div class="slider-box">
+                  <div class="slider-top">
+                    <span class="slider-label">Mob Spawn Density</span>
+                    <span class="slider-val">{continentMobDensity.toFixed(2)}x</span>
+                  </div>
+                  <input type="range" min="0.0" max="2.5" step="0.05" bind:value={continentMobDensity} />
+                </div>
+
+                <div class="slider-box">
+                  <div class="slider-top">
+                    <span class="slider-label">Resource Node Density</span>
+                    <span class="slider-val">{continentResourceDensity.toFixed(2)}x</span>
+                  </div>
+                  <input type="range" min="0.0" max="2.5" step="0.05" bind:value={continentResourceDensity} />
+                </div>
+              </div>
+
+              <div class="identity-field" style="margin-top: 6px;">
+                <span class="gen-label">Continent Shared Seed</span>
+                <div class="input-with-button">
+                  <input type="text" bind:value={continentSeed} placeholder="Continent World Seed" />
+                  <button type="button" class="action-mini-btn" onclick={rerollContinentSeed} title="Randomize seed">
+                    🎲 Random
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        {/if}
+
+        <!-- Modal Footer Actions -->
+        <div class="gen-modal-footer">
+          <button type="button" class="gen-btn cancel" disabled={isGeneratingContinent} onclick={() => (showGenerateModal = false)}>
+            Cancel
+          </button>
+          {#if genModalMode === "single"}
+            <button type="button" class="gen-btn primary" onclick={() => { void executeWorldGeneration(); }}>
+              ✨ Generate World
+            </button>
+          {:else}
+            <button
+              type="button"
+              class="gen-btn primary"
+              disabled={isGeneratingContinent}
+              onclick={() => { void executeContinentGeneration(); }}
+            >
+              {isGeneratingContinent ? "⏳ Generating Continent…" : `✨ Generate ${continentCount}-Region Continent`}
+            </button>
+          {/if}
+        </div>
+
+        {#if continentProgress.active}
+          <div class="continent-loader-overlay">
+            <div class="continent-loader-card">
+              <div class="loader-pulse-ring">
+                <span class="loader-spinner">🌍</span>
+              </div>
+              <h3 class="loader-headline">{continentProgress.stage}</h3>
+              <p class="loader-subtext">{continentProgress.detail}</p>
+
+              <!-- Progress Bar Track & Bar -->
+              <div class="loader-progress-box">
+                <div class="loader-progress-track">
+                  <div
+                    class="loader-progress-fill"
+                    style="width: {Math.min(100, Math.max(3, continentProgress.percent))}%;"
+                  >
+                    <div class="loader-shimmer"></div>
+                  </div>
+                </div>
+                <div class="loader-meta-row">
+                  <span class="meta-step">Province {continentProgress.current} of {continentProgress.total}</span>
+                  <span class="meta-pct">{continentProgress.percent}%</span>
+                </div>
+              </div>
+
+              <!-- Active Zone Preview Chip -->
+              {#if continentProgress.currentName}
+                <div class="loader-region-chip">
+                  <span class="chip-biome-icon">
+                    {continentProgress.currentBiome === "forest" ? "🌲" :
+                     continentProgress.currentBiome === "grassland" ? "🌾" :
+                     continentProgress.currentBiome === "desert" ? "🏜️" :
+                     continentProgress.currentBiome === "jungle" ? "🌴" :
+                     continentProgress.currentBiome === "arctic" ? "❄️" :
+                     continentProgress.currentBiome === "swamp" ? "🐊" :
+                     continentProgress.currentBiome === "volcanic" ? "🌋" :
+                     continentProgress.currentBiome === "underground" ? "⛏️" :
+                     continentProgress.currentBiome === "cosmic" ? "✨" : "👽"}
+                  </span>
+                  <div class="chip-text">
+                    <span class="chip-title">{continentProgress.currentName}</span>
+                    <span class="chip-badge">{REGION_BIOME_LABELS[continentProgress.currentBiome]} • {continentProgress.currentLevelRange}</span>
+                  </div>
+                </div>
+              {/if}
+            </div>
+          </div>
+        {/if}
       </div>
     </div>
   {/if}
@@ -3055,6 +4814,85 @@
               {/each}
             </select>
           </label>
+        {:else if sel.markerKind === "poi"}
+          <label>Name <input type="text" value={sel.name ?? "Point of Interest"} onchange={(e) => applyPatch({ name: (e.target as HTMLInputElement).value })} /></label>
+          <label>Landmark Model
+            <select
+              value={sel.poiModel ?? ""}
+              onchange={(e) => {
+                const val = (e.target as HTMLSelectElement).value;
+                if (!val) {
+                  applyPatch({ poiModel: undefined, poiCategory: undefined });
+                } else {
+                  const preset = POI_LANDMARK_PRESETS.find((p) => p.model === val || p.id === val);
+                  if (preset) {
+                    applyPatch({
+                      poiModel: preset.model,
+                      poiCategory: preset.category,
+                      scale: preset.defaultScale ?? sel.scale ?? 1,
+                    });
+                  } else {
+                    applyPatch({ poiModel: val });
+                  }
+                }
+              }}
+            >
+              <option value="">— None (Teal Sphere Gizmo) —</option>
+              <optgroup label="Landmark Presets">
+                {#each POI_LANDMARK_PRESETS as preset}
+                  <option value={preset.model}>{preset.name}</option>
+                {/each}
+              </optgroup>
+              {#if armedModel && !POI_LANDMARK_PRESETS.some((p) => p.model === armedModel)}
+                <optgroup label="Armed Palette Asset">
+                  <option value={armedModel}>Asset: {regionAssetDisplayName(armedModel)}</option>
+                </optgroup>
+              {/if}
+            </select>
+          </label>
+          {#if sel.poiModel}
+            <div class="field-row">
+              <label>Scale
+                <input
+                  type="range"
+                  min="0.2"
+                  max="4.0"
+                  step="0.1"
+                  value={sel.scale ?? 1}
+                  oninput={(e) => applyPatch({ scale: Number((e.target as HTMLInputElement).value) })}
+                />
+                <span>{(sel.scale ?? 1).toFixed(1)}x</span>
+              </label>
+            </div>
+            <div class="field-row">
+              <label>Yaw (deg)
+                <input
+                  type="range"
+                  min="0"
+                  max="360"
+                  step="5"
+                  value={Math.round((((sel.yaw ?? 0) * 180) / Math.PI + 360) % 360)}
+                  oninput={(e) => applyPatch({ yaw: (Number((e.target as HTMLInputElement).value) * Math.PI) / 180 })}
+                />
+                <span>{Math.round((((sel.yaw ?? 0) * 180) / Math.PI + 360) % 360)}°</span>
+              </label>
+            </div>
+          {/if}
+          <label>Interact Radius (m)
+            <input type="number" min="2" max="20" step="1" value={sel.interactRadius ?? 6} onchange={(e) => applyPatch({ interactRadius: Number((e.target as HTMLInputElement).value) })} />
+          </label>
+          <div class="field-row">
+            <span class="field-label">Reveal Boundary</span>
+            <span class="shape-summary">{sel.revealShape?.length ?? 0} points (octagon default)</span>
+          </div>
+          <button type="button" class="rc-btn" onclick={() => void openContinentMap(sel.id)}>Draw Boundary…</button>
+          <label>Reward XP
+            <input type="number" min="0" max="500" step="5" value={sel.rewardXp ?? 25} onchange={(e) => applyPatch({ rewardXp: Number((e.target as HTMLInputElement).value) })} />
+          </label>
+          <label>Description
+            <textarea rows="3" value={sel.description ?? ""} onchange={(e) => applyPatch({ description: (e.target as HTMLTextAreaElement).value })}></textarea>
+          </label>
+          <p class="hint">Interacting within Interact Radius permanently reveals the hand-drawn Boundary on the minimap/world map for that character, grants Reward XP, and plays a short camera pan. Draw or redraw the boundary in the Continent Layout Map.</p>
         {:else if sel.markerKind === "portal"}
           <label>Portal Label <input type="text" value={sel.name ?? "Portal to Region"} onchange={(e) => applyPatch({ name: (e.target as HTMLInputElement).value })} /></label>
           <label>Destination
@@ -3462,6 +5300,112 @@
   .name-input {
     width: 110px;
     font-weight: 500;
+  }
+  .level-quick-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    background: #0f131a;
+    border: 1px solid #3b485d;
+    border-radius: 5px;
+    padding: 2px 6px;
+    font-size: 11px;
+  }
+  .level-quick-badge .lvl-label {
+    color: #f59e0b;
+    font-weight: 700;
+    font-size: 10px;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+  }
+  .level-quick-badge .lvl-num-input {
+    width: 28px;
+    background: #181f2a;
+    border: 1px solid #2d3748;
+    color: #f1f5f9;
+    border-radius: 3px;
+    padding: 1px 3px;
+    font-size: 11px;
+    font-weight: 600;
+    text-align: center;
+  }
+  .level-quick-badge .lvl-num-input:focus {
+    outline: none;
+    border-color: #f59e0b;
+  }
+  .level-quick-badge .lvl-sep {
+    color: #64748b;
+    font-weight: 600;
+  }
+  .dim-quick-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    background: #0f172a;
+    border: 1px solid #334155;
+    border-radius: 5px;
+    padding: 2px 7px;
+    font-size: 11px;
+    color: #38bdf8;
+    font-weight: 600;
+  }
+  .dim-quick-badge .dim-icon {
+    font-size: 11px;
+  }
+  .dim-card {
+    background: #0b1120;
+    border: 1px solid #1e293b;
+    border-radius: 6px;
+    padding: 8px 10px;
+    margin: 4px 6px 8px;
+  }
+  .dim-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 12px;
+  }
+  .dim-card-title {
+    color: #94a3b8;
+    font-weight: 500;
+  }
+  .dim-card-meters {
+    color: #38bdf8;
+    font-weight: 700;
+    font-size: 13px;
+    letter-spacing: 0.3px;
+  }
+  .dim-card-sub {
+    font-size: 10px;
+    color: #64748b;
+    margin-top: 2px;
+  }
+  .level-presets-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    padding: 4px 6px 8px;
+  }
+  .level-preset-chip {
+    background: #181f2a;
+    border: 1px solid #2e3a4e;
+    color: #cbd5e1;
+    border-radius: 4px;
+    padding: 3px 8px;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+  .level-preset-chip:hover {
+    background: #243044;
+    color: #fff;
+    border-color: #f59e0b;
+  }
+  .level-preset-chip.active {
+    background: #78350f;
+    border-color: #f59e0b;
+    color: #fef3c7;
   }
   .save-btn {
     background: #2f5d3a;
@@ -3902,6 +5846,20 @@
     opacity: 0.7;
     line-height: 1.35;
   }
+  .properties .shape-summary {
+    font-size: 12px;
+    opacity: 0.8;
+  }
+  .properties .field-row {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin-bottom: 4px;
+  }
+  .properties .field-label {
+    font-size: 12px;
+    opacity: 0.85;
+  }
   .properties label,
   .color-panel label {
     display: flex;
@@ -4312,5 +6270,958 @@
     padding: 6px;
     overflow-y: auto;
     max-height: 380px;
+  }
+
+  /* --- Top-bar & Menu Procedural World Generator Action --- */
+  .generate-world-top-btn {
+    background: linear-gradient(135deg, #935116 0%, #b7791f 50%, #d69e2e 100%);
+    color: #fffbf0;
+    border: 1px solid #f6e05e;
+    border-radius: 4px;
+    padding: 3px 10px;
+    font-size: 11.5px;
+    font-weight: 650;
+    cursor: pointer;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.7);
+    box-shadow: 0 2px 6px rgba(183, 121, 31, 0.35);
+    transition: all 0.15s ease;
+    margin-right: 4px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .generate-world-top-btn:hover {
+    background: linear-gradient(135deg, #a45d1b 0%, #ca8a04 50%, #ecc94b 100%);
+    box-shadow: 0 0 10px rgba(236, 201, 75, 0.55);
+    transform: translateY(-1px);
+  }
+  .gen-world-action {
+    color: #f6e05e !important;
+    font-weight: 600;
+  }
+
+  /* --- Procedural World Generator Modal --- */
+  .world-gen-modal-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 20000;
+    background: rgba(8, 10, 15, 0.82);
+    backdrop-filter: blur(5px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    box-sizing: border-box;
+  }
+
+  .world-gen-modal {
+    width: min(940px, 96vw);
+    max-height: min(92vh, 880px);
+    background: #151821;
+    border: 1px solid #3c465c;
+    border-radius: 10px;
+    box-shadow: 0 24px 64px rgba(0, 0, 0, 0.85), 0 0 0 1px rgba(255, 215, 0, 0.12);
+    color: #dce6f2;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    animation: modalFadeIn 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  @keyframes modalFadeIn {
+    from {
+      opacity: 0;
+      transform: scale(0.97) translateY(8px);
+    }
+    to {
+      opacity: 1;
+      transform: scale(1) translateY(0);
+    }
+  }
+
+  .gen-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 20px;
+    background: linear-gradient(180deg, #1f2533 0%, #171b26 100%);
+    border-bottom: 1px solid #2d3648;
+    flex-shrink: 0;
+  }
+
+  .gen-header-title {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .gen-icon {
+    font-size: 24px;
+    line-height: 1;
+    filter: drop-shadow(0 0 6px rgba(246, 224, 94, 0.6));
+  }
+
+  .gen-header h2 {
+    margin: 0;
+    font-size: 17px;
+    font-weight: 700;
+    color: #f8fafc;
+    letter-spacing: 0.2px;
+  }
+
+  .gen-subtitle {
+    margin: 2px 0 0;
+    font-size: 11.5px;
+    color: #94a3b8;
+    line-height: 1.35;
+  }
+
+  .gen-mode-tabs {
+    display: flex;
+    align-items: center;
+    background: #11141c;
+    border: 1px solid #2e374a;
+    border-radius: 6px;
+    padding: 2px;
+    gap: 2px;
+  }
+
+  .gen-mode-tab {
+    background: transparent;
+    border: none;
+    border-radius: 4px;
+    padding: 6px 12px;
+    font-size: 12px;
+    font-weight: 600;
+    color: #94a3b8;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    white-space: nowrap;
+  }
+  .gen-mode-tab:hover {
+    color: #f1f5f9;
+  }
+  .gen-mode-tab.active {
+    background: #252e42;
+    color: #fbbf24;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+  }
+
+  .gen-close-btn {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    color: #94a3b8;
+    border-radius: 6px;
+    width: 28px;
+    height: 28px;
+    font-size: 13px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.12s ease;
+  }
+  .gen-close-btn:hover {
+    background: rgba(255, 255, 255, 0.12);
+    color: #fff;
+  }
+
+  /* Continent Layout Pattern Cards */
+  .continent-layout-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 10px;
+  }
+  @media (max-width: 820px) {
+    .continent-layout-grid {
+      grid-template-columns: repeat(2, 1fr);
+    }
+  }
+
+  .layout-card {
+    background: #181d28;
+    border: 1px solid #2e374a;
+    border-radius: 6px;
+    padding: 10px 12px;
+    text-align: left;
+    cursor: pointer;
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    transition: all 0.15s ease;
+    user-select: none;
+  }
+  .layout-card:hover {
+    background: #1e2433;
+    border-color: #43516e;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  }
+  .layout-card.selected {
+    background: #1f2738;
+    border-color: #f59e0b;
+    box-shadow: 0 0 0 1px #f59e0b, 0 4px 16px rgba(245, 158, 11, 0.25);
+  }
+
+  .layout-icon {
+    font-size: 22px;
+    line-height: 1;
+    flex-shrink: 0;
+    margin-top: 2px;
+  }
+
+  .layout-info {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+  }
+
+  .layout-title {
+    font-size: 12.5px;
+    font-weight: 700;
+    color: #f8fafc;
+  }
+
+  .layout-desc {
+    font-size: 10.5px;
+    color: #94a3b8;
+    line-height: 1.35;
+  }
+
+  .gen-modal-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 18px 22px;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    box-sizing: border-box;
+  }
+
+  .gen-section {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    background: rgba(22, 26, 36, 0.6);
+    border: 1px solid #283042;
+    border-radius: 8px;
+    padding: 14px 16px;
+  }
+
+  .gen-section-header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 6px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    padding-bottom: 6px;
+  }
+
+  .gen-section-title {
+    font-size: 13px;
+    font-weight: 700;
+    color: #f1f5f9;
+    letter-spacing: 0.3px;
+    text-transform: uppercase;
+  }
+
+  .gen-section-hint {
+    font-size: 11px;
+    color: #818cf8;
+  }
+
+  /* Biome Grid (4x2) */
+  .biome-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 10px;
+  }
+  @media (max-width: 820px) {
+    .biome-grid {
+      grid-template-columns: repeat(2, 1fr);
+    }
+  }
+
+  .biome-card {
+    background: #181d28;
+    border: 1px solid #2e374a;
+    border-radius: 6px;
+    padding: 10px 11px;
+    text-align: left;
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    transition: all 0.15s ease;
+    position: relative;
+    user-select: none;
+  }
+  .biome-card:hover {
+    background: #1e2433;
+    border-color: #43516e;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  }
+  .biome-card.selected {
+    background: #1f2738;
+    border-color: #f59e0b;
+    box-shadow: 0 0 0 1px #f59e0b, 0 4px 16px rgba(245, 158, 11, 0.25);
+  }
+
+  .biome-card-top {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .biome-card-icon {
+    font-size: 20px;
+    line-height: 1;
+    flex-shrink: 0;
+  }
+
+  .biome-card-heading {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+
+  .biome-card-title {
+    font-size: 12.5px;
+    font-weight: 700;
+    color: #f8fafc;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .biome-card-badge {
+    font-size: 10px;
+    font-weight: 600;
+    color: #f59e0b;
+  }
+
+  .biome-card-desc {
+    font-size: 10.5px;
+    color: #94a3b8;
+    line-height: 1.35;
+    flex: 1;
+  }
+
+  .biome-card-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 3px;
+    margin-top: 2px;
+  }
+
+  .biome-tag {
+    font-size: 9.5px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 3px;
+    padding: 1px 5px;
+    color: #cbd5e1;
+  }
+
+  .other-biomes-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 4px;
+    flex-wrap: wrap;
+  }
+
+  .other-biomes-label {
+    font-size: 11px;
+    color: #94a3b8;
+  }
+
+  .other-biome-chip {
+    background: #181d28;
+    border: 1px solid #2e374a;
+    border-radius: 4px;
+    padding: 4px 10px;
+    font-size: 11px;
+    color: #cbd5e1;
+    cursor: pointer;
+    transition: all 0.12s;
+  }
+  .other-biome-chip:hover {
+    background: #202738;
+    color: #fff;
+  }
+  .other-biome-chip.active {
+    background: #232c40;
+    border-color: #f59e0b;
+    color: #f59e0b;
+    font-weight: 600;
+  }
+
+  /* Level Presets Row */
+  .level-presets-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .level-chip {
+    background: #181d28;
+    border: 1px solid #2e374a;
+    border-radius: 4px;
+    padding: 5px 10px;
+    font-size: 11px;
+    font-weight: 500;
+    color: #cbd5e1;
+    cursor: pointer;
+    transition: all 0.12s;
+  }
+  .level-chip:hover {
+    background: #202838;
+    color: #fff;
+  }
+  .level-chip.active {
+    background: #1e3a8a;
+    border-color: #3b82f6;
+    color: #93c5fd;
+    font-weight: 600;
+  }
+
+  .gen-row-inputs {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+
+  .gen-field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 90px;
+  }
+
+  .gen-label {
+    font-size: 10.5px;
+    font-weight: 600;
+    color: #94a3b8;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+  }
+
+  .gen-field input {
+    background: #11141c;
+    border: 1px solid #333c4e;
+    border-radius: 4px;
+    padding: 6px 8px;
+    color: #f8fafc;
+    font-size: 12px;
+    font-weight: 600;
+  }
+  .gen-field input:focus {
+    outline: none;
+    border-color: #f59e0b;
+  }
+
+  .difficulty-banner {
+    flex: 1;
+    min-width: 220px;
+    background: rgba(30, 41, 59, 0.6);
+    border: 1px solid #334155;
+    border-radius: 6px;
+    padding: 8px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .diff-title {
+    font-size: 12px;
+    font-weight: 700;
+    color: #fde047;
+  }
+
+  .diff-desc {
+    font-size: 10.5px;
+    color: #94a3b8;
+  }
+
+  /* Sliders Grid */
+  .sliders-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 12px;
+  }
+  @media (max-width: 700px) {
+    .sliders-grid {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  .slider-box {
+    background: #181d28;
+    border: 1px solid #2a3344;
+    border-radius: 6px;
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .slider-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  .slider-label {
+    font-size: 11.5px;
+    font-weight: 650;
+    color: #e2e8f0;
+  }
+
+  .slider-val {
+    font-size: 11.5px;
+    font-weight: 700;
+    color: #f59e0b;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+
+  .slider-box input[type="range"] {
+    accent-color: #f59e0b;
+    cursor: pointer;
+    margin: 4px 0 2px;
+  }
+
+  .slider-hint {
+    font-size: 10px;
+    color: #8590a6;
+    line-height: 1.3;
+  }
+
+  /* Resource Variety Filters */
+  .resource-variety-section {
+    margin-top: 4px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .resource-variety-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  .resource-variety-title {
+    font-size: 11px;
+    font-weight: 700;
+    color: #cbd5e1;
+    text-transform: uppercase;
+  }
+
+  .resource-variety-actions {
+    display: flex;
+    gap: 6px;
+  }
+
+  .variety-action-btn {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 3px;
+    padding: 2px 7px;
+    font-size: 10px;
+    color: #94a3b8;
+    cursor: pointer;
+  }
+  .variety-action-btn:hover {
+    background: rgba(255, 255, 255, 0.12);
+    color: #fff;
+  }
+
+  .resource-chips-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 6px;
+  }
+  @media (max-width: 700px) {
+    .resource-chips-grid {
+      grid-template-columns: repeat(2, 1fr);
+    }
+  }
+
+  .resource-chip {
+    background: #181d28;
+    border: 1px solid #2e374a;
+    border-radius: 4px;
+    padding: 5px 8px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+    transition: all 0.12s;
+    text-align: left;
+    color: #94a3b8;
+  }
+  .resource-chip:hover {
+    border-color: #4a5772;
+    color: #cbd5e1;
+  }
+  .resource-chip.active {
+    background: #1a273b;
+    border-color: #2563eb;
+    color: #f8fafc;
+  }
+
+  .chip-icon {
+    font-size: 14px;
+    line-height: 1;
+  }
+
+  .chip-name {
+    font-size: 11px;
+    font-weight: 500;
+    flex: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .chip-check {
+    font-size: 11px;
+    font-weight: 700;
+    color: #3b82f6;
+  }
+
+  /* Size Presets Row */
+  .size-presets-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .size-chip {
+    background: #181d28;
+    border: 1px solid #2e374a;
+    border-radius: 4px;
+    padding: 5px 10px;
+    font-size: 11px;
+    font-weight: 500;
+    color: #cbd5e1;
+    cursor: pointer;
+    transition: all 0.12s;
+  }
+  .size-chip:hover {
+    background: #202838;
+    color: #fff;
+  }
+  .size-chip.active {
+    background: #064e3b;
+    border-color: #059669;
+    color: #6ee7b7;
+    font-weight: 600;
+  }
+
+  .size-banner {
+    flex: 1;
+    min-width: 200px;
+    background: rgba(6, 78, 59, 0.25);
+    border: 1px solid #065f46;
+    border-radius: 6px;
+    padding: 8px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .size-summary-title {
+    font-size: 12px;
+    font-weight: 700;
+    color: #a7f3d0;
+  }
+
+  .size-summary-dim {
+    font-size: 10.5px;
+    color: #6ee7b7;
+  }
+
+  /* Identity Grid */
+  .identity-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 12px;
+  }
+  @media (max-width: 700px) {
+    .identity-grid {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  .identity-field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .input-with-button {
+    display: flex;
+    gap: 6px;
+  }
+
+  .input-with-button input {
+    flex: 1;
+    background: #11141c;
+    border: 1px solid #333c4e;
+    border-radius: 4px;
+    padding: 7px 10px;
+    color: #f8fafc;
+    font-size: 12.5px;
+    font-weight: 600;
+  }
+  .input-with-button input:focus {
+    outline: none;
+    border-color: #f59e0b;
+  }
+
+  .action-mini-btn {
+    background: #222938;
+    border: 1px solid #3b465c;
+    border-radius: 4px;
+    padding: 0 12px;
+    font-size: 11px;
+    font-weight: 600;
+    color: #dce6f2;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: all 0.12s;
+  }
+  .action-mini-btn:hover {
+    background: #2f394d;
+    color: #fff;
+  }
+
+  /* Modal Footer */
+  .gen-modal-footer {
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    gap: 10px;
+    padding: 14px 20px;
+    background: #13161f;
+    border-top: 1px solid #283042;
+    flex-shrink: 0;
+  }
+
+  .gen-btn {
+    border-radius: 5px;
+    padding: 8px 18px;
+    font-size: 13px;
+    font-weight: 650;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+
+  .gen-btn.cancel {
+    background: #202634;
+    border: 1px solid #343f54;
+    color: #cbd5e1;
+  }
+  .gen-btn.cancel:hover {
+    background: #2b3346;
+    color: #fff;
+  }
+
+  .gen-btn.primary {
+    background: linear-gradient(135deg, #b45309 0%, #d97706 50%, #f59e0b 100%);
+    border: 1px solid #fde047;
+    color: #fff;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+    box-shadow: 0 3px 12px rgba(217, 119, 6, 0.4);
+  }
+  .gen-btn.primary:hover {
+    background: linear-gradient(135deg, #d97706 0%, #f59e0b 50%, #fbbf24 100%);
+    box-shadow: 0 4px 18px rgba(251, 191, 36, 0.55);
+    transform: translateY(-1px);
+  }
+
+  /* Continent Generation Loader Overlay */
+  .continent-loader-overlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(8, 10, 15, 0.92);
+    backdrop-filter: blur(8px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+    border-radius: 8px;
+    padding: 24px;
+    animation: fadeInLoader 0.2s ease-out;
+  }
+
+  @keyframes fadeInLoader {
+    from { opacity: 0; transform: scale(0.98); }
+    to { opacity: 1; transform: scale(1); }
+  }
+
+  .continent-loader-card {
+    background: linear-gradient(180deg, #151b27 0%, #0e121a 100%);
+    border: 1px solid #3b465c;
+    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.8), 0 0 30px rgba(245, 158, 11, 0.15);
+    border-radius: 8px;
+    padding: 28px 32px;
+    width: 100%;
+    max-width: 520px;
+    text-align: center;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .loader-pulse-ring {
+    width: 64px;
+    height: 64px;
+    border-radius: 50%;
+    background: radial-gradient(circle, rgba(245, 158, 11, 0.25) 0%, rgba(245, 158, 11, 0.05) 70%, transparent 100%);
+    border: 2px solid rgba(245, 158, 11, 0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 28px;
+    box-shadow: 0 0 20px rgba(245, 158, 11, 0.3);
+    animation: pulseRing 1.8s infinite ease-in-out;
+  }
+
+  @keyframes pulseRing {
+    0%, 100% { transform: scale(1); box-shadow: 0 0 16px rgba(245, 158, 11, 0.3); }
+    50% { transform: scale(1.08); box-shadow: 0 0 28px rgba(245, 158, 11, 0.6); }
+  }
+
+  .loader-spinner {
+    display: inline-block;
+    animation: rotateGlobe 6s linear infinite;
+  }
+
+  @keyframes rotateGlobe {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+  }
+
+  .loader-headline {
+    margin: 0;
+    font-size: 17px;
+    font-weight: 700;
+    color: #f8fafc;
+    letter-spacing: 0.2px;
+  }
+
+  .loader-subtext {
+    margin: 0;
+    font-size: 12px;
+    color: #94a3b8;
+    line-height: 1.4;
+    max-width: 440px;
+  }
+
+  .loader-progress-box {
+    width: 100%;
+    margin-top: 6px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .loader-progress-track {
+    width: 100%;
+    height: 12px;
+    background: #090c12;
+    border: 1px solid #283042;
+    border-radius: 6px;
+    overflow: hidden;
+    position: relative;
+  }
+
+  .loader-progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #d97706 0%, #f59e0b 50%, #fbbf24 100%);
+    border-radius: 6px;
+    position: relative;
+    transition: width 0.18s ease-out;
+    box-shadow: 0 0 12px rgba(245, 158, 11, 0.6);
+  }
+
+  .loader-shimmer {
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(90deg, transparent 0%, rgba(255, 255, 255, 0.4) 50%, transparent 100%);
+    animation: shimmerSlide 1.5s infinite;
+  }
+
+  @keyframes shimmerSlide {
+    0% { transform: translateX(-100%); }
+    100% { transform: translateX(200%); }
+  }
+
+  .loader-meta-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 11.5px;
+    font-weight: 600;
+    color: #cbd5e1;
+    padding: 0 2px;
+  }
+
+  .meta-step {
+    color: #94a3b8;
+  }
+
+  .meta-pct {
+    color: #f59e0b;
+    font-weight: 700;
+  }
+
+  .loader-region-chip {
+    margin-top: 4px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: #11151f;
+    border: 1px solid #2a3345;
+    border-radius: 6px;
+    padding: 8px 14px;
+    width: 100%;
+    box-sizing: border-box;
+    text-align: left;
+  }
+
+  .chip-biome-icon {
+    font-size: 20px;
+    flex-shrink: 0;
+  }
+
+  .chip-text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    overflow: hidden;
+  }
+
+  .chip-title {
+    font-size: 13px;
+    font-weight: 700;
+    color: #f8fafc;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .chip-badge {
+    font-size: 11px;
+    font-weight: 600;
+    color: #f59e0b;
   }
 </style>

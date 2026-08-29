@@ -18,6 +18,7 @@
   import MiniMap from "./MiniMap.svelte";
   import WorldMap from "./WorldMap.svelte";
   import LootModal from "./LootModal.svelte";
+  import DiscoveryModal from "./DiscoveryModal.svelte";
   import MenuShortcuts from "./MenuShortcuts.svelte";
   import PlayerContextMenu from "./PlayerContextMenu.svelte";
   import VendorWindow from "./VendorWindow.svelte";
@@ -173,6 +174,9 @@
   <VendorWindow />
   <WorldMap />
   <LootModal />
+  {#if game.discoveryReward}
+    <DiscoveryModal reward={game.discoveryReward} />
+  {/if}
   {#if game.playerContextMenu}
     <PlayerContextMenu
       x={game.playerContextMenu.x}

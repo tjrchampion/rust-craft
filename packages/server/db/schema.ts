@@ -132,6 +132,19 @@ export const characterAchievements = pgTable(
   (t) => [primaryKey({ columns: [t.characterId, t.achievementId] })],
 );
 
+export const characterPoiDiscoveries = pgTable(
+  "character_poi_discoveries",
+  {
+    characterId: uuid("character_id")
+      .notNull()
+      .references(() => characters.id, { onDelete: "cascade" }),
+    /** RegionPoi.id -- discovery is binary/permanent, no progress counter. */
+    poiId: text("poi_id").notNull(),
+    discoveredAt: timestamp("discovered_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.characterId, t.poiId] })],
+);
+
 // Base building lands in Milestone 2; schema exists now so saves survive it.
 export const structures = pgTable(
   "structures",

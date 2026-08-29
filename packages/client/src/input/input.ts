@@ -148,10 +148,21 @@ export class InputManager {
   /** Timestamp of the last tap of each WASD key, for double-tap-to-dodge. */
   private lastTapTime: Partial<Record<string, number>> = {};
 
+  private cleanups: (() => void)[] = [];
+
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
 
-    window.addEventListener("keydown", (e) => {
+    const addWin = <K extends keyof WindowEventMap>(type: K, listener: (ev: WindowEventMap[K]) => any, options?: boolean | AddEventListenerOptions) => {
+      window.addEventListener(type, listener, options);
+      this.cleanups.push(() => window.removeEventListener(type, listener, options));
+    };
+    const addDoc = <K extends keyof DocumentEventMap>(type: K, listener: (ev: DocumentEventMap[K]) => any, options?: boolean | AddEventListenerOptions) => {
+      document.addEventListener(type, listener, options);
+      this.cleanups.push(() => document.removeEventListener(type, listener, options));
+    };
+
+    addWin("keydown", (e) => {
       const target = e.target as HTMLElement | null;
       const typing = this.isTypingTarget(target);
       if (typing) return;
@@ -165,17 +176,17 @@ export class InputManager {
       this.keys.add(e.code);
       this.lastDevice = "kbm";
     });
-    window.addEventListener("keyup", (e) => {
+    addWin("keyup", (e) => {
       this.keys.delete(e.code);
     });
-    window.addEventListener("blur", () => {
+    addWin("blur", () => {
       this.keys.clear();
       this.leftDown = false;
       this.rightDown = false;
       ui.isRightClickDragging = false;
     });
 
-    document.addEventListener("pointerlockchange", () => {
+    addDoc("pointerlockchange", () => {
       this.pointerLocked = document.pointerLockElement === canvas;
       ui.pointerCaptured = this.pointerLocked;
       if (this.pointerLocked) {
@@ -190,7 +201,7 @@ export class InputManager {
         ui.isRightClickDragging = false;
       }
     });
-    window.addEventListener("pointermove", (e: PointerEvent) => {
+    addWin("pointermove", (e: PointerEvent) => {
       const dx = e.movementX ?? 0;
       const dy = e.movementY ?? 0;
       if (this.pointerLocked) {
@@ -222,7 +233,7 @@ export class InputManager {
         }
       }
     });
-    window.addEventListener("pointerdown", (e: PointerEvent) => {
+    addWin("pointerdown", (e: PointerEvent) => {
       if (e.button === 0) this.leftDown = true;
       if (e.button === 2) this.rightDown = true;
       if (e.button === 0 || e.button === 2) this.lastDevice = "kbm";
@@ -246,7 +257,7 @@ export class InputManager {
         this.synthMouse(this.downEl, "mousedown", e, 0);
       }
     });
-    window.addEventListener("pointerup", (e: PointerEvent) => {
+    addWin("pointerup", (e: PointerEvent) => {
       if (e.button === 0) this.leftDown = false;
       if (e.button === 2) {
         this.rightDown = false;
@@ -266,30 +277,36 @@ export class InputManager {
         this.downEl = null;
       }
     });
-    const blockMenu = (e: Event) => {
-      e.preventDefault();
-      return false;
-    };
-    window.oncontextmenu = blockMenu;
-    document.oncontextmenu = blockMenu;
-    canvas.oncontextmenu = blockMenu;
-    window.onauxclick = blockMenu;
-    document.onauxclick = blockMenu;
-    canvas.onauxclick = blockMenu;
 
-    window.addEventListener("contextmenu", (e) => {
+    addWin("contextmenu", (e) => {
       e.preventDefault();
     }, true);
-    window.addEventListener("auxclick", (e) => {
+    addWin("auxclick", (e) => {
       e.preventDefault();
     }, true);
-    window.addEventListener("wheel", (e) => {
+    addWin("wheel", (e) => {
       // Prefer pixel deltas; line-mode mice often report ±1 / ±100 depending on browser.
       const dy = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaMode === 2 ? e.deltaY * 40 : e.deltaY;
       this.wheelAccum += dy;
     });
-    window.addEventListener("gamepadconnected", () => {
+    addWin("gamepadconnected", () => {
       this.lastDevice = "gamepad";
+    });
+    addWin("blur", () => {
+      this.keys.clear();
+      this.pressedQueue.clear();
+      this.leftDown = false;
+      this.rightDown = false;
+      ui.isRightClickDragging = false;
+    });
+    addDoc("visibilitychange", () => {
+      if (document.hidden) {
+        this.keys.clear();
+        this.pressedQueue.clear();
+        this.leftDown = false;
+        this.rightDown = false;
+        ui.isRightClickDragging = false;
+      }
     });
 
     // Start the software cursor centred, then capture the pointer -- we're
@@ -299,6 +316,14 @@ export class InputManager {
     this.vy = this.lastMouseY = Math.floor(window.innerHeight / 2);
     this.publishCursor();
     this.requestLock();
+  }
+
+  dispose(): void {
+    for (const cleanup of this.cleanups) cleanup();
+    this.cleanups = [];
+    this.keys.clear();
+    this.pressedQueue.clear();
+    if (this.pointerLocked) document.exitPointerLock?.();
   }
 
   private isTypingTarget(t: EventTarget | null): boolean {

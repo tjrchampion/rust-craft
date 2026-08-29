@@ -59,6 +59,9 @@ importers:
 
   packages/server:
     dependencies:
+      '@gltf-transform/core':
+        specifier: ^4.4.2
+        version: 4.4.2
       '@rustcraft/shared':
         specifier: workspace:*
         version: link:../shared

@@ -2,7 +2,7 @@
   import { game } from "./gameState.svelte";
   import { generateVillages } from "@rustcraft/shared";
   import { getGame } from "../game/instance";
-  import { requestRegionThumbnailAsync } from "../render/worldMapThumbnailWorker";
+  import { requestRegionThumbnailAsync, requestRegionArtistMapAsync } from "../render/worldMapThumbnailWorker";
 
   const SIZE = 200;
   const CENTER = SIZE / 2;
@@ -28,13 +28,17 @@
   // and cached; re-rendered only when we cross into a different region.
   type RegionBounds = { minX: number; maxX: number; minZ: number; maxZ: number };
   type NpcBlip = { id: string; name: string; x: number; z: number; kind: "vendor" | "quest" | "npc" };
+  type PoiBlip = { id: string; name: string; x: number; z: number; revealShape: { x: number; z: number }[] };
+  type CachedMinimap = { thumb: string; artistMap?: string; bounds: RegionBounds; npcs: NpcBlip[]; pois: PoiBlip[] };
+  const thumbCache = new Map<string, CachedMinimap>();
   let loadedRegionId: string | null = null; // plain (non-reactive) load guard
   let regionThumb = $state<string | null>(null);
+  let regionArtistMap = $state<string | null>(null);
   let regionBounds = $state<RegionBounds | null>(null);
   let regionNpcs = $state<NpcBlip[]>([]);
-  const thumbCache = new Map<string, { thumb: string; bounds: RegionBounds; npcs: NpcBlip[] }>();
+  let regionPois = $state<PoiBlip[]>([]);
 
-  // Tick so live entities (mobs, party) refresh on the minimap even when the
+  // Blip recompute heartbeat -- entities/party/spawns mutate in-place as the
   // player is standing still (their positions aren't Svelte-reactive state).
   let blipTick = $state(0);
   $effect(() => {
@@ -47,14 +51,18 @@
     if (id === loadedRegionId) return;
     loadedRegionId = id;
     regionThumb = null;
+    regionArtistMap = null;
     regionBounds = null;
     regionNpcs = [];
+    regionPois = [];
     if (!id) return;
     const cached = thumbCache.get(id);
     if (cached) {
       regionThumb = cached.thumb;
+      regionArtistMap = cached.artistMap ?? null;
       regionBounds = cached.bounds;
       regionNpcs = cached.npcs;
+      regionPois = cached.pois;
       return;
     }
     const g = getGame();
@@ -64,8 +72,10 @@
     if (prewarmed) {
       thumbCache.set(id, prewarmed);
       regionThumb = prewarmed.thumb;
+      regionArtistMap = prewarmed.artistMap ?? null;
       regionBounds = prewarmed.bounds;
       regionNpcs = prewarmed.npcs;
+      regionPois = prewarmed.pois;
       return;
     }
     void (async () => {
@@ -96,18 +106,32 @@
             ? "quest"
             : "npc",
       }));
-      // Bounds + NPC/village markers are cheap -- show them immediately. The
-      // terrain raster is a heavy synchronous canvas fill, so render it during
-      // idle so it never blocks the HUD (spell bar, etc.) from painting; the
-      // background fills in a beat later.
+      const pois: PoiBlip[] = (bp.pois ?? []).map((p) => ({
+        id: p.id,
+        name: p.name,
+        x: origin.x + p.localX,
+        z: origin.z + p.localZ,
+        revealShape: (p.revealShape ?? []).map((v) => ({ x: origin.x + v.x, z: origin.z + v.z })),
+      }));
+      // Bounds + NPC/village/POI markers are cheap -- show them immediately.
+      // The terrain raster is a heavy synchronous canvas fill, so render it
+      // during idle so it never blocks the HUD (spell bar, etc.) from
+      // painting; the background fills in a beat later.
       if (loadedRegionId === id) {
         regionBounds = bounds;
         regionNpcs = npcs;
+        regionPois = pois;
       }
-      const thumb = await requestRegionThumbnailAsync(bp, { edge: 224 });
+      const [thumb, artistMap] = await Promise.all([
+        requestRegionThumbnailAsync(bp, { edge: 224 }),
+        requestRegionArtistMapAsync(bp, { edge: 224 }),
+      ]);
       if (loadedRegionId !== id || !thumb) return;
-      thumbCache.set(id, { thumb, bounds, npcs });
-      if (loadedRegionId === id) regionThumb = thumb;
+      thumbCache.set(id, { thumb, artistMap: artistMap ?? undefined, bounds, npcs, pois });
+      if (loadedRegionId === id) {
+        regionThumb = thumb;
+        regionArtistMap = artistMap;
+      }
     })();
   });
 
@@ -146,6 +170,40 @@
       worldDist: dist / SCALE,
     };
   }
+
+  /** Unclamped projection for fog-reveal circles -- project()'s edge-clamping
+   *  is right for compass arrows (always show *a* direction) but wrong here:
+   *  a discovered POI far outside the current view must NOT paint a hole
+   *  pinned to the rim, it should just not be visible at all. */
+  function projectRaw(wx: number, wz: number): { x: number; y: number; dist: number } {
+    const dx = -(wx - game.playerX) * SCALE;
+    const dy = -(wz - game.playerZ) * SCALE;
+    return { x: CENTER + dx, y: CENTER + dy, dist: Math.hypot(dx, dy) };
+  }
+
+  // Soft-edged hand-drawn "hole" punched in the fog veil per discovered POI
+  // in this region -- the polygon is the author's actual revealShape, not a
+  // circle. Filters out shapes that can't reach the visible disc at all
+  // (e.g. zoomed in tight, POI far away) rather than clamping them to the
+  // edge like quest/village markers do; the cull is a cheap "any vertex
+  // close enough" check, not exact polygon/circle intersection -- reveal
+  // shapes are modest local areas, never large enough for that gap to matter.
+  const poiFogPoints = $derived.by(() => {
+    return regionPois
+      .filter((poi) => game.discoveredPoiIds.has(poi.id) && poi.revealShape.length >= 3)
+      .map((poi) => {
+        const pts = poi.revealShape.map((v) => projectRaw(v.x, v.z));
+        const minDist = Math.min(...pts.map((p) => p.dist));
+        return { id: poi.id, points: pts.map((p) => `${p.x},${p.y}`).join(" "), minDist };
+      })
+      .filter((f) => f.minDist < RADIUS + 40);
+  });
+
+  const poiPoints = $derived(
+    regionPois
+      .filter((poi) => game.discoveredPoiIds.has(poi.id))
+      .map((poi) => ({ id: poi.id, name: poi.name, p: project(poi.x, poi.z) })),
+  );
 
   const villagePoints = $derived(villages.map((v) => ({ id: v.id, p: project(v.x, v.z) })));
   const questPoints = $derived(game.questMarkers.map((m) => ({ ...m, p: project(m.x, m.z) })));
@@ -226,7 +284,7 @@
     };
   });
 
-  const GLYPH: Record<string, string> = { available: "!", complete: "?", active: "?", escort: "🛡️" };
+  const GLYPH: Record<string, string> = { available: "!", complete: "?", active: "?", escort: "🛡️", kill: "⚔" };
 
   function openRegionMap(): void {
     if (game.self?.dead) return;
@@ -254,6 +312,15 @@
           <stop offset="0%" stop-color="rgba(40, 48, 58, 0.75)" />
           <stop offset="100%" stop-color="rgba(8, 10, 14, 0.88)" />
         </radialGradient>
+        <!-- ===================== Cloud Fog of War ===================== -->
+        <mask id="mm-fog-mask" maskUnits="userSpaceOnUse" x="0" y="0" width={SIZE} height={SIZE}>
+          <rect x="0" y="0" width={SIZE} height={SIZE} fill="white" />
+          <g filter="url(#mm-fog-cloud-edge)">
+            {#each poiFogPoints as f (f.id)}
+              <polygon points={f.points} fill="black" />
+            {/each}
+          </g>
+        </mask>
       </defs>
       <circle cx={CENTER} cy={CENTER} r={RADIUS} class="mm-bg" />
       {#if regionThumb && regionImg}
@@ -275,9 +342,18 @@
           </g>
         </g>
       {/if}
+      <!-- Under-cloud markers: terrain and static locations covered by clouds until revealed -->
       <g clip-path="url(#mm-clip)">
         {#each mobPoints as m, i (i)}
           <circle cx={m.x} cy={m.y} r="2" class="mm-mob" />
+        {/each}
+        {#each poiPoints as poi (poi.id)}
+          {#if poi.p.onMap}
+            <polygon
+              points="{poi.p.x},{poi.p.y - 3.5} {poi.p.x + 3},{poi.p.y} {poi.p.x},{poi.p.y + 3.5} {poi.p.x - 3},{poi.p.y}"
+              class="mm-poi"
+            />
+          {/if}
         {/each}
         {#each villagePoints as v (v.id)}
           {#if v.p.onMap}
@@ -296,6 +372,33 @@
             {/if}
           {/if}
         {/each}
+        {#each worldEventPoints as ev (ev.id)}
+          {#if ev.p.onMap}
+            <circle cx={ev.p.x} cy={ev.p.y} r="7" class="mm-event-ring" />
+            <circle cx={ev.p.x} cy={ev.p.y} r="3.5" class="mm-event-dot mm-event-{ev.phase}" />
+          {/if}
+        {/each}
+      </g>
+
+      <!-- ==================== Artist Map Fog Cover Blanket ==================== -->
+      {#if regionBounds && regionImg}
+        <g clip-path="url(#mm-clip)" mask="url(#mm-fog-mask)" pointer-events="none">
+          <g transform="translate({regionImg.imgLeft + regionImg.imgW}, 0) scale(-1, 1)">
+            <image
+              class="mm-region-cloud"
+              href={regionArtistMap ?? "/assets/ui/artist_map_fog.jpg"}
+              x="0"
+              y={regionImg.imgTop}
+              width={regionImg.imgW}
+              height={regionImg.imgH}
+              preserveAspectRatio="none"
+            />
+          </g>
+        </g>
+      {/if}
+
+      <!-- Top markers: Quest compass pointers and party members visible above clouds -->
+      <g clip-path="url(#mm-clip)">
         {#each questPoints as q (q.id)}
           {#if q.p.onMap}
             <circle cx={q.p.x} cy={q.p.y} r="6.5" class="mm-quest-dot mm-{q.marker}" />
@@ -305,12 +408,6 @@
         {#each partyPoints as pm (pm.id)}
           {#if pm.p.onMap}
             <circle cx={pm.p.x} cy={pm.p.y} r="4" class="mm-party-dot" />
-          {/if}
-        {/each}
-        {#each worldEventPoints as ev (ev.id)}
-          {#if ev.p.onMap}
-            <circle cx={ev.p.x} cy={ev.p.y} r="7" class="mm-event-ring" />
-            <circle cx={ev.p.x} cy={ev.p.y} r="3.5" class="mm-event-dot mm-event-{ev.phase}" />
           {/if}
         {/each}
       </g>
@@ -426,6 +523,9 @@
     opacity: 0.92;
     pointer-events: none;
   }
+  .mm-region-cloud {
+    pointer-events: none;
+  }
   .mm-rim {
     fill: none;
     stroke: rgba(196, 163, 90, 0.75);
@@ -447,6 +547,11 @@
     fill: var(--rc-ink-dim);
     stroke: rgba(0, 0, 0, 0.6);
     stroke-width: 0.5;
+  }
+  .mm-poi {
+    fill: #2de8c6;
+    stroke: rgba(0, 0, 0, 0.7);
+    stroke-width: 0.6;
   }
   .mm-mob {
     fill: #e0402e;
@@ -500,6 +605,12 @@
   }
   .mm-arrow.mm-escort {
     fill: #33b5e5;
+  }
+  .mm-quest-dot.mm-kill {
+    fill: #e0402e;
+  }
+  .mm-arrow.mm-kill {
+    fill: #e0402e;
   }
   .mm-quest-dot.mm-complete {
     animation: mm-pulse 1.6s ease-in-out infinite;

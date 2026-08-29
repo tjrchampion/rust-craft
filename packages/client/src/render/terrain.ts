@@ -2,7 +2,7 @@ import * as THREE from "three";
 import {
   terrainHeight, terrainSlope, biomeAt, generatePaths, distPointToSegment, ZONE_SIZE, WATER_LEVEL,
   adtKey, adtWorldBounds,
-  sampleRegionHeight, regionSlopeAt,
+  sampleRegionHeight, regionSlopeAt, sampleRegionWaterDepth,
   type RegionBlueprint, type RegionBiome, type RegionRoad,
 } from "@rustcraft/shared";
 import {
@@ -26,25 +26,50 @@ const MUD_SWAMP = new THREE.Color(0x453d29);
 const WHITE = new THREE.Color(0xffffff);
 
 const textureLoader = new THREE.TextureLoader();
-function tiledTexture(url: string): THREE.Texture {
+
+function tiledColorTexture(url: string): THREE.Texture {
   const tex = textureLoader.load(url);
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
   tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 8;
   return tex;
 }
 
-/** Photo-sourced ground textures (ambientCG, CC0), blended per-vertex by biome/slope/height. */
-const GROUND_TEXTURES = {
-  grass: tiledTexture("/assets/textures/terrain/grass.jpg"),
-  rock: tiledTexture("/assets/textures/terrain/rock.jpg"),
-  sand: tiledTexture("/assets/textures/terrain/sand.jpg"),
-  snow: tiledTexture("/assets/textures/terrain/snow.jpg"),
-  dirt: tiledTexture("/assets/textures/terrain/dirt.jpg"),
-  cobble: tiledTexture("/assets/textures/terrain/cobble.png"),
+function tiledDataTexture(url: string): THREE.Texture {
+  const tex = textureLoader.load(url);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.colorSpace = THREE.NoColorSpace;
+  tex.anisotropy = 4;
+  return tex;
+}
+
+/** Photo-sourced authentic PBR ground textures (ambientCG, CC0), blended per-vertex. */
+export const GROUND_TEXTURES = {
+  grass: tiledColorTexture("/assets/textures/terrain/Grass001_Color.jpg"),
+  grassN: tiledDataTexture("/assets/textures/terrain/Grass001_NormalGL.jpg"),
+  dirt: tiledColorTexture("/assets/textures/terrain/Ground023_Color.jpg"),
+  dirtN: tiledDataTexture("/assets/textures/terrain/Ground023_NormalGL.jpg"),
+  rock: tiledColorTexture("/assets/textures/terrain/Rock026_Color.jpg"),
+  rockN: tiledDataTexture("/assets/textures/terrain/Rock026_NormalGL.jpg"),
+  sand: tiledColorTexture("/assets/textures/terrain/Ground080_Color.jpg"),
+  sandN: tiledDataTexture("/assets/textures/terrain/Ground080_NormalGL.jpg"),
+  snow: tiledColorTexture("/assets/textures/terrain/Snow010A_Color.jpg"),
+  snowN: tiledDataTexture("/assets/textures/terrain/Snow010A_NormalGL.jpg"),
+  cobble: tiledColorTexture("/assets/textures/terrain/PavingStones046_Color.jpg"),
+  cobbleN: tiledDataTexture("/assets/textures/terrain/PavingStones046_NormalGL.jpg"),
+  mud: tiledColorTexture("/assets/textures/terrain/Ground071_Color.jpg"),
+  mudN: tiledDataTexture("/assets/textures/terrain/Ground071_NormalGL.jpg"),
+  lava: tiledColorTexture("/assets/textures/terrain/Lava004_Color.jpg"),
+  lavaN: tiledDataTexture("/assets/textures/terrain/Lava004_NormalGL.jpg"),
+  gravel: tiledColorTexture("/assets/textures/terrain/Gravel024_Color.jpg"),
+  gravelN: tiledDataTexture("/assets/textures/terrain/Gravel024_NormalGL.jpg"),
+  groundAO: tiledDataTexture("/assets/textures/terrain/GroundAO_Packed.png"),
 };
 
-/** Injects a 6-way texture blend (grass/rock/sand/snow/dirt/cobble) into the standard Lambert shader. */
+/** Injects an 8-way PBR texture blend with normal mapping & cavity AO into the standard Lambert shader. */
+/** Injects a 9-way PBR texture blend with cavity AO and macro modulation into the standard Lambert shader. */
 export function applyGroundBlendShader(mat: THREE.MeshLambertMaterial): void {
+  mat.customProgramCacheKey = () => "groundBlend_pbr_v4";
   mat.onBeforeCompile = (shader) => {
     shader.uniforms.tGrass = { value: GROUND_TEXTURES.grass };
     shader.uniforms.tRock = { value: GROUND_TEXTURES.rock };
@@ -52,17 +77,23 @@ export function applyGroundBlendShader(mat: THREE.MeshLambertMaterial): void {
     shader.uniforms.tSnow = { value: GROUND_TEXTURES.snow };
     shader.uniforms.tDirt = { value: GROUND_TEXTURES.dirt };
     shader.uniforms.tCobble = { value: GROUND_TEXTURES.cobble };
+    shader.uniforms.tMud = { value: GROUND_TEXTURES.mud };
+    shader.uniforms.tLava = { value: GROUND_TEXTURES.lava };
+    shader.uniforms.tGravel = { value: GROUND_TEXTURES.gravel };
+    shader.uniforms.tGroundAO = { value: GROUND_TEXTURES.groundAO };
     shader.uniforms.uTiling = { value: TERRAIN_TILING };
 
     shader.vertexShader = shader.vertexShader
       .replace(
         "#include <common>",
         `#include <common>
-        attribute vec3 weightsA;
-        attribute vec3 weightsB;
+        attribute vec4 weightsA;
+        attribute vec4 weightsB;
+        attribute float weightsC;
         attribute vec2 terrainUv;
-        varying vec3 vWeightsA;
-        varying vec3 vWeightsB;
+        varying vec4 vWeightsA;
+        varying vec4 vWeightsB;
+        varying float vWeightsC;
         varying vec2 vTerrainUv;`,
       )
       .replace(
@@ -70,6 +101,7 @@ export function applyGroundBlendShader(mat: THREE.MeshLambertMaterial): void {
         `#include <begin_vertex>
         vWeightsA = weightsA;
         vWeightsB = weightsB;
+        vWeightsC = weightsC;
         vTerrainUv = terrainUv;`,
       );
 
@@ -83,23 +115,98 @@ export function applyGroundBlendShader(mat: THREE.MeshLambertMaterial): void {
         uniform sampler2D tSnow;
         uniform sampler2D tDirt;
         uniform sampler2D tCobble;
+        uniform sampler2D tMud;
+        uniform sampler2D tLava;
+        uniform sampler2D tGravel;
+        uniform sampler2D tGroundAO;
         uniform float uTiling;
-        varying vec3 vWeightsA;
-        varying vec3 vWeightsB;
+        varying vec4 vWeightsA;
+        varying vec4 vWeightsB;
+        varying float vWeightsC;
         varying vec2 vTerrainUv;`,
       )
       .replace(
         "#include <color_fragment>",
         `#include <color_fragment>
         vec2 tuv = vTerrainUv * uTiling;
+        vec2 tuvMacro = vTerrainUv * (uTiling * 0.12);
+
+        vec3 cGrass  = texture2D(tGrass,  tuv).rgb;
+        vec3 cRock   = texture2D(tRock,   tuv).rgb;
+        vec3 cSand   = texture2D(tSand,   tuv).rgb;
+        vec3 cSnow   = texture2D(tSnow,   tuv).rgb;
+        vec3 cDirt   = texture2D(tDirt,   tuv).rgb;
+        vec3 cCobble = texture2D(tCobble, tuv).rgb;
+        vec3 cMud    = texture2D(tMud,    tuv).rgb;
+        vec3 cLava   = texture2D(tLava,   tuv).rgb;
+        vec3 cGravel = texture2D(tGravel, tuv).rgb;
+
+        vec4 aoSample = texture2D(tGroundAO, tuv);
+        vec4 macroSample = texture2D(tGroundAO, tuvMacro);
+
+        // Break up straight linear vertex weight interpolation across quad edges using macro/micro noise:
+        float blendJitter = (macroSample.r - 0.5) * 0.32 + (aoSample.g - 0.5) * 0.16;
+
+        vec4 wA = vWeightsA;
+        vec4 wB = vWeightsB;
+        float wC = vWeightsC;
+
+        // Zero out trace weights (<0.015) so unpainted/dry surfaces stay 100% pure without sand bleeding into grass:
+        if (wA.x < 0.015) wA.x = 0.0;
+        if (wA.y < 0.015) wA.y = 0.0;
+        if (wA.z < 0.015) wA.z = 0.0;
+        if (wA.w < 0.015) wA.w = 0.0;
+        if (wB.x < 0.015) wB.x = 0.0;
+        if (wB.y < 0.015) wB.y = 0.0;
+        if (wB.z < 0.015) wB.z = 0.0;
+        if (wB.w < 0.015) wB.w = 0.0;
+        if (wC < 0.015) wC = 0.0;
+
+        // Texture height profile for organic height-blended transitions:
+        if (wA.x > 0.0) wA.x *= max(0.01, (dot(cGrass, vec3(0.299, 0.587, 0.114)) * 0.6 + 0.4) + blendJitter);
+        if (wA.y > 0.0) wA.y *= max(0.01, (dot(cRock, vec3(0.299, 0.587, 0.114)) * 0.6 + 0.4) + blendJitter * 0.5);
+        if (wA.z > 0.0) wA.z *= max(0.01, (dot(cSand, vec3(0.299, 0.587, 0.114)) * 0.6 + 0.4) - blendJitter);
+        if (wA.w > 0.0) wA.w *= max(0.01, (dot(cSnow, vec3(0.299, 0.587, 0.114)) * 0.6 + 0.4) + blendJitter);
+        if (wB.x > 0.0) wB.x *= max(0.01, (dot(cDirt, vec3(0.299, 0.587, 0.114)) * 0.6 + 0.4) - blendJitter);
+        if (wB.y > 0.0) wB.y *= max(0.01, (dot(cCobble, vec3(0.299, 0.587, 0.114)) * 0.6 + 0.4));
+        if (wB.z > 0.0) wB.z *= max(0.01, (dot(cMud, vec3(0.299, 0.587, 0.114)) * 0.6 + 0.4) - blendJitter);
+        if (wB.w > 0.0) wB.w *= max(0.01, (dot(cLava, vec3(0.299, 0.587, 0.114)) * 0.6 + 0.4));
+        if (wC > 0.0)   wC   *= max(0.01, (dot(cGravel, vec3(0.299, 0.587, 0.114)) * 0.6 + 0.4));
+
+        float totalW = wA.x + wA.y + wA.z + wA.w + wB.x + wB.y + wB.z + wB.w + wC;
+        if (totalW > 0.0001) {
+          wA /= totalW;
+          wB /= totalW;
+          wC /= totalW;
+        }
+
         vec3 groundColor =
-          texture2D(tGrass,  tuv).rgb * vWeightsA.x +
-          texture2D(tRock,   tuv).rgb * vWeightsA.y +
-          texture2D(tSand,   tuv).rgb * vWeightsA.z +
-          texture2D(tSnow,   tuv).rgb * vWeightsB.x +
-          texture2D(tDirt,   tuv).rgb * vWeightsB.y +
-          texture2D(tCobble, tuv).rgb * vWeightsB.z;
-        diffuseColor.rgb = groundColor * mix(vec3(1.0), vColor.rgb, 0.55);`,
+          cGrass  * wA.x +
+          cRock   * wA.y +
+          cSand   * wA.z +
+          cSnow   * wA.w +
+          cDirt   * wB.x +
+          cCobble * wB.y +
+          cMud    * wB.z +
+          cLava   * wB.w +
+          cGravel * wC;
+
+        float ao = 
+          aoSample.r * wA.x +
+          aoSample.b * wA.y +
+          aoSample.a * wA.z +
+          1.0        * wA.w +
+          aoSample.g * wB.x +
+          aoSample.b * wB.y +
+          aoSample.g * wB.z +
+          0.95       * wB.w +
+          aoSample.b * wC;
+        ao = clamp(ao, 0.45, 1.0);
+
+        float macroMod = mix(0.92, 1.08, (macroSample.r + macroSample.g) * 0.5);
+        groundColor *= macroMod;
+
+        diffuseColor.rgb = groundColor * ao * mix(vec3(1.0), vColor.rgb, 0.52);`,
       );
   };
 }
@@ -122,9 +229,9 @@ function buildTerrainMesh(
   const pos = geo.attributes.position as THREE.BufferAttribute;
   const terrainUv = (geo.attributes.uv as THREE.BufferAttribute).array as Float32Array;
   const tints = new Float32Array(pos.count * 3);
-  // weightsA = [grass, rock, sand], weightsB = [snow, dirt, cobble]
-  const weightsA = new Float32Array(pos.count * 3);
-  const weightsB = new Float32Array(pos.count * 3);
+  // weightsA = [grass, rock, sand, snow], weightsB = [dirt, cobble, mud, lava]
+  const weightsA = new Float32Array(pos.count * 4);
+  const weightsB = new Float32Array(pos.count * 4);
   const tint = new THREE.Color();
 
   for (let i = 0; i < pos.count; i++) {
@@ -151,10 +258,13 @@ function buildTerrainMesh(
     } else if (biome === "swamp" && y < WATER_LEVEL + 1.4) {
       wDirt = 1;
       tint.copy(MUD_SWAMP);
-    } else if (y < WATER_LEVEL + 0.6) {
-      wSand = 1;
-    } else if (slope > 0.75 || y > 24) {
-      if (y > 26) wSnow = 1;
+    } else if (y < WATER_LEVEL + 1.3) {
+      const isSubmerged = y <= WATER_LEVEL;
+      const sandShore = isSubmerged ? 1.0 : clampNum((WATER_LEVEL + 1.3 - y) / 1.1, 0, 1);
+      wSand = sandShore;
+      wGrass = 1 - sandShore;
+    } else if (slope > 0.85 || y > 55) {
+      if (y > 75) wSnow = 1;
       else wRock = 1;
     } else {
       wGrass = 1;
@@ -169,7 +279,7 @@ function buildTerrainMesh(
                 ? GRASS_SWAMP
                 : GRASS_FOREST,
       );
-      if (biome === "mountain" && slope > 0.45) {
+      if (biome === "mountain" && slope > 0.65) {
         wRock = 0.5;
         wGrass = 0.5;
       }
@@ -197,22 +307,25 @@ function buildTerrainMesh(
     }
 
     const sum = wGrass + wRock + wSand + wSnow + wDirt || 1;
-    weightsA[i * 3] = wGrass / sum;
-    weightsA[i * 3] = wGrass / sum;
-    weightsA[i * 3 + 1] = wRock / sum;
-    weightsA[i * 3 + 2] = wSand / sum;
-    weightsB[i * 3] = wSnow / sum;
-    weightsB[i * 3 + 1] = wDirt / sum;
-    weightsB[i * 3 + 2] = 0;
+    weightsA[i * 4 + 0] = wGrass / sum;
+    weightsA[i * 4 + 1] = wRock / sum;
+    weightsA[i * 4 + 2] = wSand / sum;
+    weightsA[i * 4 + 3] = wSnow / sum;
+    weightsB[i * 4 + 0] = wDirt / sum;
+    weightsB[i * 4 + 1] = 0;
+    weightsB[i * 4 + 2] = 0;
+    weightsB[i * 4 + 3] = 0;
 
     tints[i * 3] = tint.r;
     tints[i * 3 + 1] = tint.g;
     tints[i * 3 + 2] = tint.b;
   }
 
+  const weightsC = new Float32Array(pos.count);
   geo.setAttribute("color", new THREE.BufferAttribute(tints, 3));
-  geo.setAttribute("weightsA", new THREE.BufferAttribute(weightsA, 3));
-  geo.setAttribute("weightsB", new THREE.BufferAttribute(weightsB, 3));
+  geo.setAttribute("weightsA", new THREE.BufferAttribute(weightsA, 4));
+  geo.setAttribute("weightsB", new THREE.BufferAttribute(weightsB, 4));
+  geo.setAttribute("weightsC", new THREE.BufferAttribute(weightsC, 1));
   geo.setAttribute("terrainUv", new THREE.BufferAttribute(terrainUv, 2));
   geo.computeVertexNormals();
 
@@ -267,11 +380,25 @@ export function sampleRegionCustomTexture(
   return blueprint.customTextures[cz * blueprint.gridSize + cx] ?? 0;
 }
 
-/** Ground texture weights (grass/rock/sand/snow/dirt/cobble) + tint for a single
+export interface RegionGroundWeights {
+  wGrass: number;
+  wRock: number;
+  wSand: number;
+  wSnow: number;
+  wDirt: number;
+  wCobble: number;
+  wMud: number;
+  wLava: number;
+  wGravel: number;
+  tint: THREE.Color;
+}
+
+/** Ground texture weights (grass/rock/sand/snow/dirt/cobble/mud/lava/gravel) + tint for a single
  *  region-editor vertex, given its own biome, height, local slope, an
  *  optional 0-1 road blend (see regionRoadBlendAt), an optional
  *  author-chosen groundTint override (RegionColorGrading.groundTint), and an
- *  optional custom painted texture ID (1=grass, 2=dirt, 3=cobble, 4=snow, 5=rock, 6=sand). */
+ *  optional custom painted texture ID:
+ *  0=auto, 1=grass, 2=dirt, 3=cobble, 4=snow, 5=rock, 6=sand, 7=mud, 8=lava, 9=gravel. */
 export function regionGroundWeights(
   biome: RegionBiome,
   y: number,
@@ -279,14 +406,31 @@ export function regionGroundWeights(
   roadBlend = 0,
   groundTint?: string,
   customTex = 0,
-): { wGrass: number; wRock: number; wSand: number; wSnow: number; wDirt: number; wCobble: number; tint: THREE.Color } {
+  waterDepth = 0,
+  edgeDist = Infinity,
+  neighborGroundTint?: string,
+): RegionGroundWeights {
   let wGrass = 0;
   let wRock = 0;
   let wSand = 0;
   let wSnow = 0;
   let wDirt = 0;
   let wCobble = 0;
+  let wMud = 0;
+  let wLava = 0;
+  let wGravel = 0;
   const tint = groundTint ? new THREE.Color(groundTint) : REGION_GRASS_TINTS[biome].clone();
+
+  // Smooth seamless border blending toward adjacent neighbor color if provided
+  if (neighborGroundTint) {
+    const edgeBlendDist = 32.0;
+    const edgeFactor = clampNum(edgeDist / edgeBlendDist, 0, 1);
+    const smoothEdge = edgeFactor * edgeFactor * (3 - 2 * edgeFactor);
+    if (smoothEdge < 1.0) {
+      const targetColor = new THREE.Color(neighborGroundTint);
+      tint.lerp(targetColor, 1 - smoothEdge);
+    }
+  }
 
   if (customTex === 1) wGrass = 1;
   else if (customTex === 2) wDirt = 1;
@@ -294,21 +438,69 @@ export function regionGroundWeights(
   else if (customTex === 4) wSnow = 1;
   else if (customTex === 5) wRock = 1;
   else if (customTex === 6) wSand = 1;
+  else if (customTex === 7) wMud = 1;
+  else if (customTex === 8) wLava = 1;
+  else if (customTex === 9) wGravel = 1;
   else {
+    // Water & Shoreline calculation:
+    // Sand is only for actual waterbeds (waterDepth > 0.02), submerged ground (y <= 0), or the immediate tidal wash at sea level (y < 0.8m).
+    let sandShore = 0;
+    if (waterDepth > 0.02) {
+      sandShore = clampNum(waterDepth * 2.0, 0.4, 1.0);
+    } else if (y <= 0.0) {
+      sandShore = 1.0;
+    } else if (y < 0.8) {
+      sandShore = clampNum((0.8 - y) / 0.8, 0, 1);
+    }
+
     if (biome === "desert") {
       wSand = 1;
+      if (slope > 0.75) wRock = 0.6;
     } else if (biome === "swamp") {
-      wDirt = clampNum(0.35 + Math.max(0, -y) * 0.08, 0, 1);
-      wGrass = 1 - wDirt;
-    } else if (slope > 0.8 || y > 22) {
-      if (y > 26 || biome === "arctic") wSnow = 1;
-      else wRock = 1;
-    } else {
-      wGrass = 1;
-      if (slope > 0.45) {
-        wRock = 0.5;
-        wGrass = 0.5;
+      wMud = clampNum(0.45 + Math.max(0, -y) * 0.08, 0, 1);
+      wDirt = (1 - wMud) * 0.4;
+      wGrass = (1 - wMud) * 0.6;
+      if (sandShore > 0) {
+        wSand = sandShore * 0.85;
+        wMud *= 1 - sandShore * 0.5;
+        wGrass *= 1 - sandShore;
       }
+      if (slope > 0.7) wRock = 0.5;
+    } else if (biome === "arctic") {
+      if (sandShore > 0) {
+        wSand = sandShore;
+        wSnow = 1 - sandShore;
+      } else {
+        wSnow = 1;
+      }
+      if (slope > 0.75) wRock = 0.7;
+    } else if (biome === "volcanic") {
+      wLava = 0.5 * (1 - sandShore * 0.5);
+      wSand = sandShore * 0.7;
+      wRock = 0.5;
+      if (slope > 0.6) wRock = 0.8;
+    } else if (biome === "underground") {
+      wRock = 0.7 * (1 - sandShore * 0.6);
+      wDirt = 0.3 * (1 - sandShore * 0.6);
+      wSand = sandShore;
+    } else {
+      // Grassland, Forest, Jungle, Alien, Cosmic (Temperate & Grassy Biomes)
+      // Pure lush green hills with rock only on steep cliff faces or high alpine altitudes:
+      const rockSlope = clampNum((slope - 0.72) / 0.38, 0, 1);
+      const alpineRock = clampNum((y - 55) / 20, 0, 1);
+      const alpineSnow = clampNum((y - 75) / 15, 0, 1);
+
+      const effectiveRock = Math.max(rockSlope * 0.85, alpineRock);
+
+      if (alpineSnow > 0) {
+        wSnow = alpineSnow;
+        wRock = (1 - alpineSnow) * effectiveRock;
+        wGrass = (1 - alpineSnow) * (1 - effectiveRock) * (1 - sandShore);
+      } else {
+        wRock = effectiveRock;
+        wGrass = (1 - effectiveRock) * (1 - sandShore);
+      }
+      wSand = (1 - effectiveRock) * sandShore;
     }
     if (roadBlend > 0) {
       const keep = 1 - roadBlend;
@@ -316,12 +508,14 @@ export function regionGroundWeights(
       wRock *= keep;
       wSand *= keep;
       wSnow *= keep;
+      wMud *= keep;
+      wLava *= keep;
       wDirt = wDirt * keep + roadBlend;
       tint.lerp(WHITE, roadBlend);
     }
   }
 
-  const sum = wGrass + wRock + wSand + wSnow + wDirt + wCobble || 1;
+  const sum = wGrass + wRock + wSand + wSnow + wDirt + wCobble + wMud + wLava + wGravel || 1;
   return {
     wGrass: wGrass / sum,
     wRock: wRock / sum,
@@ -329,6 +523,9 @@ export function regionGroundWeights(
     wSnow: wSnow / sum,
     wDirt: wDirt / sum,
     wCobble: wCobble / sum,
+    wMud: wMud / sum,
+    wLava: wLava / sum,
+    wGravel: wGravel / sum,
     tint,
   };
 }
@@ -368,39 +565,49 @@ export function regionRoadBlendAt(roads: RegionRoad[], x: number, z: number): nu
   let best = 0;
   for (const road of roads) {
     let minDist = Infinity;
-    for (let i = 0; i < road.points.length - 1; i++) {
-      const a = road.points[i]!;
-      const b = road.points[i + 1]!;
-      const d = distPointToSegment(x, z, a.x, a.z, b.x, b.z);
+    const pts = road.points;
+    if (pts.length < 2) continue;
+    const halfWidth = road.width / 2;
+    for (let i = 0; i < pts.length - 1; i++) {
+      const p1 = pts[i];
+      const p2 = pts[i + 1];
+      if (!p1 || !p2) continue;
+      const d = distPointToSegment(x, z, p1.x, p1.z, p2.x, p2.z);
       if (d < minDist) minDist = d;
-      if (minDist < 0.3) break;
+      if (minDist <= halfWidth) break;
     }
-    const half = road.width / 2;
     let blend = 0;
-    if (minDist < half) blend = 1;
-    else if (minDist < half + 1.5) blend = 1 - (minDist - half) / 1.5;
+    if (minDist <= halfWidth) blend = 1.0;
+    else if (minDist < halfWidth + 1.8) {
+      blend = 1.0 - (minDist - halfWidth) / 1.8;
+    }
     if (blend > best) best = blend;
   }
   return best;
 }
 
-/** Full textured terrain mesh for an in-game region interior -- reads the
- *  blueprint's own sculpted heightmap via sampleRegionHeight/regionSlopeAt
- *  (continuous, bilinear) rather than assuming any vertex-to-grid-cell
+/** Full-region mesh built synchronously from a RegionBlueprint -- used by the
+ *  in-game RegionViewer / RegionTransition overlay for previewing and
+ *  visiting regions. Height sampling uses the exact same bilinear
+ *  interpolation as the client heightmap for pixel-perfect physics
  *  correspondence, and reuses the exact same ground-blend shader the open
  *  world's terrain uses instead of a single flat material color. */
 export function buildRegionBlueprintTerrain(
-  blueprint: Pick<RegionBlueprint, "gridSize" | "pitch" | "heights" | "biome" | "roads" | "colorGrading" | "customTextures">,
+  blueprint: Pick<RegionBlueprint, "gridSize" | "pitch" | "heights" | "biome" | "roads" | "colorGrading" | "customTextures"> & { gridSizeX?: number; gridSizeZ?: number },
 ): THREE.Mesh {
-  const span = (blueprint.gridSize - 1) * blueprint.pitch;
-  const geo = new THREE.PlaneGeometry(span, span, blueprint.gridSize - 1, blueprint.gridSize - 1);
+  const gx = blueprint.gridSizeX ?? blueprint.gridSize;
+  const gz = blueprint.gridSizeZ ?? blueprint.gridSize;
+  const spanX = (gx - 1) * blueprint.pitch;
+  const spanZ = (gz - 1) * blueprint.pitch;
+  const geo = new THREE.PlaneGeometry(spanX, spanZ, gx - 1, gz - 1);
   geo.rotateX(-Math.PI / 2);
 
   const pos = geo.attributes.position as THREE.BufferAttribute;
   const terrainUv = (geo.attributes.uv as THREE.BufferAttribute).array as Float32Array;
   const tints = new Float32Array(pos.count * 3);
-  const weightsA = new Float32Array(pos.count * 3);
-  const weightsB = new Float32Array(pos.count * 3);
+  const weightsA = new Float32Array(pos.count * 4);
+  const weightsB = new Float32Array(pos.count * 4);
+  const weightsC = new Float32Array(pos.count);
   const roads = blueprint.roads ?? [];
   const groundTint = blueprint.colorGrading.groundTint;
 
@@ -410,27 +617,35 @@ export function buildRegionBlueprintTerrain(
     const y = sampleRegionHeight(blueprint, x, z);
     pos.setY(i, y);
 
-    terrainUv[i * 2] = (x + span / 2) / span;
-    terrainUv[i * 2 + 1] = (z + span / 2) / span;
+    terrainUv[i * 2] = (x + spanX / 2) / Math.max(1, spanX);
+    terrainUv[i * 2 + 1] = (z + spanZ / 2) / Math.max(1, spanZ);
 
     const slope = regionSlopeAt(blueprint, x, z);
     const roadBlend = regionRoadBlendAt(roads, x, z);
     const customTex = sampleRegionCustomTexture(blueprint, x, z);
-    const w = regionGroundWeights(blueprint.biome, y, slope, roadBlend, groundTint, customTex);
-    weightsA[i * 3] = w.wGrass;
-    weightsA[i * 3 + 1] = w.wRock;
-    weightsA[i * 3 + 2] = w.wSand;
-    weightsB[i * 3] = w.wSnow;
-    weightsB[i * 3 + 1] = w.wDirt;
-    weightsB[i * 3 + 2] = w.wCobble;
+    const waterDepth = sampleRegionWaterDepth(blueprint, x, z);
+    const distX = spanX / 2 - Math.abs(x);
+    const distZ = spanZ / 2 - Math.abs(z);
+    const edgeDist = Math.min(distX, distZ);
+    const w = regionGroundWeights(blueprint.biome, y, slope, roadBlend, groundTint, customTex, waterDepth, edgeDist);
+    weightsA[i * 4 + 0] = w.wGrass;
+    weightsA[i * 4 + 1] = w.wRock;
+    weightsA[i * 4 + 2] = w.wSand;
+    weightsA[i * 4 + 3] = w.wSnow;
+    weightsB[i * 4 + 0] = w.wDirt;
+    weightsB[i * 4 + 1] = w.wCobble;
+    weightsB[i * 4 + 2] = w.wMud;
+    weightsB[i * 4 + 3] = w.wLava;
+    weightsC[i] = w.wGravel;
     tints[i * 3] = w.tint.r;
     tints[i * 3 + 1] = w.tint.g;
     tints[i * 3 + 2] = w.tint.b;
   }
 
   geo.setAttribute("color", new THREE.BufferAttribute(tints, 3));
-  geo.setAttribute("weightsA", new THREE.BufferAttribute(weightsA, 3));
-  geo.setAttribute("weightsB", new THREE.BufferAttribute(weightsB, 3));
+  geo.setAttribute("weightsA", new THREE.BufferAttribute(weightsA, 4));
+  geo.setAttribute("weightsB", new THREE.BufferAttribute(weightsB, 4));
+  geo.setAttribute("weightsC", new THREE.BufferAttribute(weightsC, 1));
   geo.setAttribute("terrainUv", new THREE.BufferAttribute(terrainUv, 2));
   geo.computeVertexNormals();
 
@@ -486,8 +701,9 @@ export function buildRegionAdtTile(
   const pos = geo.attributes.position as THREE.BufferAttribute;
   const terrainUv = (geo.attributes.uv as THREE.BufferAttribute).array as Float32Array;
   const tints = new Float32Array(pos.count * 3);
-  const weightsA = new Float32Array(pos.count * 3);
-  const weightsB = new Float32Array(pos.count * 3);
+  const weightsA = new Float32Array(pos.count * 4);
+  const weightsB = new Float32Array(pos.count * 4);
+  const weightsC = new Float32Array(pos.count);
   const normals = new Float32Array(pos.count * 3);
   const roads = blueprint.roads ?? [];
   const groundTint = blueprint.colorGrading.groundTint;
@@ -531,13 +747,20 @@ export function buildRegionAdtTile(
       const slope = Math.hypot(dHx, dHz);
       const roadBlend = regionRoadBlendAt(roads, x, z);
       const customTex = sampleRegionCustomTexture(blueprint, x, z);
-      const w = regionGroundWeights(blueprint.biome, y, slope, roadBlend, groundTint, customTex);
-      weightsA[i * 3] = w.wGrass;
-      weightsA[i * 3 + 1] = w.wRock;
-      weightsA[i * 3 + 2] = w.wSand;
-      weightsB[i * 3] = w.wSnow;
-      weightsB[i * 3 + 1] = w.wDirt;
-      weightsB[i * 3 + 2] = w.wCobble;
+      const waterDepth = sampleRegionWaterDepth(blueprint, x, z);
+      const distX = span / 2 - Math.abs(x);
+      const distZ = span / 2 - Math.abs(z);
+      const edgeDist = Math.min(distX, distZ);
+      const w = regionGroundWeights(blueprint.biome, y, slope, roadBlend, groundTint, customTex, waterDepth, edgeDist);
+      weightsA[i * 4 + 0] = w.wGrass;
+      weightsA[i * 4 + 1] = w.wRock;
+      weightsA[i * 4 + 2] = w.wSand;
+      weightsA[i * 4 + 3] = w.wSnow;
+      weightsB[i * 4 + 0] = w.wDirt;
+      weightsB[i * 4 + 1] = w.wCobble;
+      weightsB[i * 4 + 2] = w.wMud;
+      weightsB[i * 4 + 3] = w.wLava;
+      weightsC[i] = w.wGravel;
       tints[i * 3] = w.tint.r;
       tints[i * 3 + 1] = w.tint.g;
       tints[i * 3 + 2] = w.tint.b;
@@ -545,8 +768,9 @@ export function buildRegionAdtTile(
   }
 
   geo.setAttribute("color", new THREE.BufferAttribute(tints, 3));
-  geo.setAttribute("weightsA", new THREE.BufferAttribute(weightsA, 3));
-  geo.setAttribute("weightsB", new THREE.BufferAttribute(weightsB, 3));
+  geo.setAttribute("weightsA", new THREE.BufferAttribute(weightsA, 4));
+  geo.setAttribute("weightsB", new THREE.BufferAttribute(weightsB, 4));
+  geo.setAttribute("weightsC", new THREE.BufferAttribute(weightsC, 1));
   geo.setAttribute("terrainUv", new THREE.BufferAttribute(terrainUv, 2));
   geo.setAttribute("normal", new THREE.BufferAttribute(normals, 3));
 
@@ -566,10 +790,12 @@ export function buildRegionAdtTile(
 
 /** Extract the minimal, worker-transferable slice of a region blueprint. */
 export function toAdtLiteBlueprint(
-  bp: Pick<RegionBlueprint, "gridSize" | "pitch" | "heights" | "biome" | "roads" | "colorGrading" | "customTextures">,
+  bp: Pick<RegionBlueprint, "gridSize" | "pitch" | "heights" | "biome" | "roads" | "colorGrading" | "customTextures" | "waterHeights"> & { gridSizeX?: number; gridSizeZ?: number },
 ): AdtLiteBlueprint {
   return {
     gridSize: bp.gridSize,
+    gridSizeX: bp.gridSizeX,
+    gridSizeZ: bp.gridSizeZ,
     pitch: bp.pitch,
     // Float32Array copy so it clones cheaply into workers.
     heights: bp.heights instanceof Float32Array ? bp.heights : Float32Array.from(bp.heights as number[]),
@@ -577,6 +803,7 @@ export function toAdtLiteBlueprint(
     roads: bp.roads ?? [],
     groundTint: bp.colorGrading?.groundTint,
     customTextures: bp.customTextures ? Float32Array.from(bp.customTextures) : undefined,
+    waterHeights: bp.waterHeights ? Float32Array.from(bp.waterHeights) : undefined,
   };
 }
 
@@ -584,12 +811,12 @@ export function toAdtLiteBlueprint(
  *  index only; y is 0). Cheap — no sampling. Returns null for empty tiles.
  *  When a pool is supplied the skeleton is recycled instead of allocated. */
 export function buildAdtTileSkeleton(
-  bp: Pick<RegionBlueprint, "gridSize" | "pitch">,
+  bp: Pick<RegionBlueprint, "gridSize" | "pitch"> & { gridSizeX?: number; gridSizeZ?: number },
   ix: number,
   iz: number,
   pool?: AdtGeometryPool,
 ): { geo: THREE.PlaneGeometry; span: AdtTileSpan } | null {
-  const span = adtTileSpan(bp.gridSize, bp.pitch, ix, iz);
+  const span = adtTileSpan(bp.gridSize, bp.pitch, ix, iz, bp.gridSizeX, bp.gridSizeZ);
   if (!span) return null;
   if (pool) return { geo: pool.acquire(span), span };
   const geo = new THREE.PlaneGeometry(span.sizeX, span.sizeZ, span.segsX, span.segsZ);
@@ -634,8 +861,9 @@ export function assembleAdtTileMesh(
   for (let i = 0; i < ys.length; i++) posArr[i * 3 + 1] = ys[i]!;
   posAttr.needsUpdate = true;
   writeGeoAttribute(geo, "color", data.colors, 3);
-  writeGeoAttribute(geo, "weightsA", data.weightsA, 3);
-  writeGeoAttribute(geo, "weightsB", data.weightsB, 3);
+  writeGeoAttribute(geo, "weightsA", data.weightsA, 4);
+  writeGeoAttribute(geo, "weightsB", data.weightsB, 4);
+  writeGeoAttribute(geo, "weightsC", data.weightsC, 1);
   writeGeoAttribute(geo, "terrainUv", data.terrainUv, 2);
   writeGeoAttribute(geo, "normal", data.normals, 3);
   geo.computeBoundingSphere();
@@ -692,7 +920,7 @@ export function applyWaterClarityShader(_mat: THREE.MeshLambertMaterial): void {
 export function buildWater(): WaterField {
   const geo = new THREE.PlaneGeometry(ZONE_SIZE * 1.4, ZONE_SIZE * 1.4);
   geo.rotateX(-Math.PI / 2);
-  const normalMap = tiledTexture("/assets/textures/water/water_normal.jpg");
+  const normalMap = tiledDataTexture("/assets/textures/water/waternormals.jpg");
   normalMap.repeat.set(80, 80);
   // A second copy of the same map, scrolling at a different speed/angle —
   // MeshLambertMaterial only samples one normal map, so instead of a real
@@ -720,7 +948,7 @@ export function buildWater(): WaterField {
 
 export interface RegionWaterMeshField {
   mesh: THREE.Mesh;
-  updateGeometry(heights: ArrayLike<number>, waterHeights: ArrayLike<number>, gridSize: number, pitch: number): void;
+  updateGeometry(heights: ArrayLike<number>, waterHeights: ArrayLike<number>, gridSize: number, pitch: number, gridSizeZ?: number): void;
   update(dt: number): void;
 }
 
@@ -729,16 +957,20 @@ export function buildRegionWaterMesh(
   pitch: number,
   heights: ArrayLike<number>,
   waterHeights: ArrayLike<number>,
+  gridSizeZ?: number,
 ): RegionWaterMeshField {
-  const span = (gridSize - 1) * pitch;
-  const geo = new THREE.PlaneGeometry(span, span, gridSize - 1, gridSize - 1);
+  const gSizeX = gridSize;
+  const gSizeZ = gridSizeZ ?? gridSize;
+  const spanX = (gSizeX - 1) * pitch;
+  const spanZ = (gSizeZ - 1) * pitch;
+  const geo = new THREE.PlaneGeometry(spanX, spanZ, gSizeX - 1, gSizeZ - 1);
   geo.rotateX(-Math.PI / 2);
 
   const count = (geo.attributes.position as THREE.BufferAttribute).count;
   geo.setAttribute("color", new THREE.BufferAttribute(new Float32Array(count * 3), 3));
   geo.setAttribute("waterDepth", new THREE.BufferAttribute(new Float32Array(count), 1));
 
-  const normalMap = tiledTexture("/assets/textures/water/water_normal.jpg");
+  const normalMap = tiledDataTexture("/assets/textures/water/waternormals.jpg");
   normalMap.repeat.set(16, 16);
 
   const mat = new THREE.MeshLambertMaterial({
@@ -755,19 +987,23 @@ export function buildRegionWaterMesh(
   mesh.name = "region-water";
   mesh.receiveShadow = true;
 
-  function updateGeometry(hArr: ArrayLike<number>, wArr: ArrayLike<number>, gSize: number, pPitch: number): void {
+  function updateGeometry(hArr: ArrayLike<number>, wArr: ArrayLike<number>, gSize: number, pPitch: number, pGSizeZ?: number): void {
+    const sizeX = gSize;
+    const sizeZ = pGSizeZ ?? gSize;
     const pos = geo.attributes.position as THREE.BufferAttribute;
     const colorAttr = geo.attributes.color as THREE.BufferAttribute;
     const depthAttr = geo.attributes.waterDepth as THREE.BufferAttribute;
     const shallowR = 0.62, shallowG = 0.95, shallowB = 1.0;
     const deepR = 0.03, deepG = 0.12, deepB = 0.24;
 
-    for (let gz = 0; gz < gSize; gz++) {
-      for (let gx = 0; gx < gSize; gx++) {
-        const idx = gz * gSize + gx;
-        const h = hArr[idx] ?? 0;
-        const w = wArr[idx] ?? 0;
-        const vIdx = gz * gSize + gx;
+    for (let gz = 0; gz < sizeZ; gz++) {
+      for (let gx = 0; gx < sizeX; gx++) {
+        const idx = gz * sizeX + gx;
+        const rawH = hArr[idx];
+        const rawW = wArr[idx];
+        const h = Number.isFinite(rawH) ? (rawH as number) : 0;
+        const w = Number.isFinite(rawW) ? (rawW as number) : 0;
+        const vIdx = gz * sizeX + gx;
 
         const realDepth = h <= 0 ? Math.max(0.0, -h) : w;
         depthAttr.setX(vIdx, realDepth);
@@ -787,27 +1023,27 @@ export function buildRegionWaterMesh(
 
           // Wall-clinging meniscus effect:
           let maxWallH = h;
-          if (gx > 0) maxWallH = Math.max(maxWallH, hArr[idx - 1] ?? 0);
-          if (gx < gSize - 1) maxWallH = Math.max(maxWallH, hArr[idx + 1] ?? 0);
-          if (gz > 0) maxWallH = Math.max(maxWallH, hArr[idx - gSize] ?? 0);
-          if (gz < gSize - 1) maxWallH = Math.max(maxWallH, hArr[idx + gSize] ?? 0);
+          if (gx > 0) { const nh = hArr[idx - 1]; if (Number.isFinite(nh)) maxWallH = Math.max(maxWallH, nh as number); }
+          if (gx < sizeX - 1) { const nh = hArr[idx + 1]; if (Number.isFinite(nh)) maxWallH = Math.max(maxWallH, nh as number); }
+          if (gz > 0) { const nh = hArr[idx - sizeX]; if (Number.isFinite(nh)) maxWallH = Math.max(maxWallH, nh as number); }
+          if (gz < sizeZ - 1) { const nh = hArr[idx + sizeX]; if (Number.isFinite(nh)) maxWallH = Math.max(maxWallH, nh as number); }
 
           if (maxWallH > waterY) {
             const clingLift = Math.min(0.25, (maxWallH - waterY) * 0.22);
             waterY += clingLift;
           }
 
-          pos.setY(vIdx, waterY);
+          pos.setY(vIdx, Number.isFinite(waterY) ? waterY : 0);
         } else {
           let hasWetNeighbor = false;
           let neighborWaterY = h;
-          if (gx > 0 && (wArr[idx - 1] ?? 0) > 0.005) { hasWetNeighbor = true; neighborWaterY = (hArr[idx - 1] ?? 0) + (wArr[idx - 1] ?? 0); }
-          if (gx < gSize - 1 && (wArr[idx + 1] ?? 0) > 0.005) { hasWetNeighbor = true; neighborWaterY = (hArr[idx + 1] ?? 0) + (wArr[idx + 1] ?? 0); }
-          if (gz > 0 && (wArr[idx - gSize] ?? 0) > 0.005) { hasWetNeighbor = true; neighborWaterY = (hArr[idx - gSize] ?? 0) + (wArr[idx - gSize] ?? 0); }
-          if (gz < gSize - 1 && (wArr[idx + gSize] ?? 0) > 0.005) { hasWetNeighbor = true; neighborWaterY = (hArr[idx + gSize] ?? 0) + (wArr[idx + gSize] ?? 0); }
+          if (gx > 0 && ((wArr[idx - 1] as number) ?? 0) > 0.005) { hasWetNeighbor = true; neighborWaterY = ((hArr[idx - 1] as number) ?? 0) + ((wArr[idx - 1] as number) ?? 0); }
+          if (gx < sizeX - 1 && ((wArr[idx + 1] as number) ?? 0) > 0.005) { hasWetNeighbor = true; neighborWaterY = ((hArr[idx + 1] as number) ?? 0) + ((wArr[idx + 1] as number) ?? 0); }
+          if (gz > 0 && ((wArr[idx - sizeX] as number) ?? 0) > 0.005) { hasWetNeighbor = true; neighborWaterY = ((hArr[idx - sizeX] as number) ?? 0) + ((wArr[idx - sizeX] as number) ?? 0); }
+          if (gz < sizeZ - 1 && ((wArr[idx + sizeX] as number) ?? 0) > 0.005) { hasWetNeighbor = true; neighborWaterY = ((hArr[idx + sizeX] as number) ?? 0) + ((wArr[idx + sizeX] as number) ?? 0); }
 
           if (hasWetNeighbor) {
-            pos.setY(vIdx, Math.min(h, neighborWaterY));
+            pos.setY(vIdx, Number.isFinite(neighborWaterY) ? Math.min(h, neighborWaterY) : h);
           } else {
             pos.setY(vIdx, h - 2);
           }
@@ -818,9 +1054,10 @@ export function buildRegionWaterMesh(
     colorAttr.needsUpdate = true;
     depthAttr.needsUpdate = true;
     geo.computeVertexNormals();
+    geo.computeBoundingSphere();
   }
 
-  updateGeometry(heights, waterHeights, gridSize, pitch);
+  updateGeometry(heights, waterHeights, gSizeX, pitch, gSizeZ);
 
   let t = 0;
   function update(dt: number): void {
@@ -840,7 +1077,7 @@ export function buildRegionWaterMesh(
 
 /** Shared water material for region ADT water tiles. */
 export function createRegionWaterMaterial(): THREE.MeshLambertMaterial {
-  const normalMap = tiledTexture("/assets/textures/water/water_normal.jpg");
+  const normalMap = tiledDataTexture("/assets/textures/water/waternormals.jpg");
   normalMap.repeat.set(16, 16);
   const mat = new THREE.MeshLambertMaterial({
     vertexColors: true,

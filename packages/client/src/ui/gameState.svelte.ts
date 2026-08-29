@@ -74,7 +74,7 @@ export interface QuestMarker {
   name: string;
   x: number;
   z: number;
-  marker: "available" | "complete" | "active" | "escort";
+  marker: "available" | "complete" | "active" | "escort" | "kill";
 }
 
 let toastId = 0;
@@ -169,6 +169,13 @@ class GameState {
   vendorWares = $state<{ npcId: string; vendorName: string; title: string; items: { itemId: string; price: number }[] } | null>(null);
   questLog = $state<QuestLogEntry[]>([]);
   achievements = $state<AchievementSnap[]>([]);
+  /** Permanently-discovered RegionPoi ids for the current character --
+   *  drives fog-of-war reveal on the minimap/world map. */
+  discoveredPoiIds = $state<Set<string>>(new Set());
+  /** Current POI-discovery reward modal (see DiscoveryModal.svelte), or null
+   *  when none is showing. Single-current-item like levelUpBanner -- POI
+   *  discovery is a one-off event, not a claimable/stackable queue. */
+  discoveryReward = $state<{ id: string; name: string; description?: string; xp: number } | null>(null);
   untrackedQuests = $state<Set<string>>(new Set(typeof localStorage !== "undefined" ? JSON.parse(localStorage.getItem("rc:untracked-quests") ?? "[]") : []));
 
   toggleQuestTrack(questId: string): void {
@@ -417,6 +424,8 @@ class GameState {
     this.questOffer = null;
     this.questLog = [];
     this.achievements = [];
+    this.discoveredPoiIds = new Set();
+    this.discoveryReward = null;
     this.currentZoneId = null;
     this.zoneBanner = null;
     this.questMarkers = [];

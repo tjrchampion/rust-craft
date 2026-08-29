@@ -12,6 +12,7 @@ import {
   type FootSurface,
   type SfxMapKey,
 } from "./sfxMap";
+import { runCooperatively } from "../render/idleScheduler";
 
 /** Stable cue names used by Game / entities (map to SFX_MAP keys). */
 export type SfxName =
@@ -164,7 +165,11 @@ class SoundManager {
 
   private async preloadAll(): Promise<void> {
     if (!this.ctx) return;
-    await Promise.all(allSfxUrls().map((url) => this.loadUrl(url)));
+    // Bounded concurrency: firing all ~50 fetch+decodeAudioData calls at once
+    // (the old Promise.all) floods the browser's audio decode thread pool
+    // right on the user's first click, reading as a brief freeze. Synth
+    // fallback in playSynth() already covers any cue not decoded yet.
+    await runCooperatively(allSfxUrls(), (url) => this.loadUrl(url), { concurrency: 4 });
   }
 
   private async loadUrl(url: string): Promise<void> {

@@ -37,7 +37,7 @@ export interface QuickGrassSettings {
 export const DEFAULT_QUICK_GRASS_SETTINGS: QuickGrassSettings = {
   bladesPerPatch: 1536,
   patchSize: 10,
-  drawDistance: 80,
+  drawDistance: 50,
   detailDistance: 18,
   segments: 3,
   bladeWidth: 0.1,

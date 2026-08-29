@@ -36,6 +36,9 @@ import {
 
 /** Max height the player can step onto (rocks, bridge decks, curbs). */
 const STEP_UP = 1.15;
+/** Max height jump allowed when crossing a region seam before it's blocked
+ *  like an ordinary cliff (see the seam-crossing check in stepMovement). */
+const SEAM_HEIGHT_TOLERANCE = 10;
 
 export type MountKind = "horse" | "raft" | null;
 
@@ -254,7 +257,20 @@ export function stepMovement(state: MoveState, input: MoveInput, dt: number): Mo
     const oldHeight = walkHeightAt(state.x, state.z, input.groundAt(state.x, state.z));
     const newHeight = walkHeightAt(nextX, nextZ, input.groundAt(nextX, nextZ));
     const crossesSeam = input.crossesRegionSeam?.(state.x, state.z, nextX, nextZ) ?? false;
-    if (!crossesSeam && Math.abs(newHeight - oldHeight) > 2.5) {
+    // At a region border the two sides were independently sculpted and can
+    // legitimately differ by a few meters, so the seam crossing still gets a
+    // bigger allowance than the normal cliff threshold (SEAM_HEIGHT_TOLERANCE
+    // vs. 2.5) rather than none at all -- but it must stay bounded. Fully
+    // lifting the guard here (as this used to) let a badly-mismatched/
+    // unstitched seam (independently-generated regions snapped together
+    // without matching heights) become an invisible wall the player's body
+    // snapped straight through vertically -- reported as "walking through
+    // the terrain" on the regions the new multi-region continent generator
+    // produced. A mismatch this large past SEAM_HEIGHT_TOLERANCE means the
+    // seam genuinely wasn't stitched (see the editor's "Stitch Border Seams"
+    // tool) and should still block like any other cliff.
+    const heightGap = Math.abs(newHeight - oldHeight);
+    if ((!crossesSeam && heightGap > 2.5) || (crossesSeam && heightGap > SEAM_HEIGHT_TOLERANCE)) {
       nextX = state.x;
       nextZ = state.z;
     }

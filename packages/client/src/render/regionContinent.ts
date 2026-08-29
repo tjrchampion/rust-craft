@@ -12,6 +12,9 @@ import {
   regionBarrierColliders,
   regionAllAssets,
   REGION_STREAM_RADIUS_METERS,
+  REGION_UNLOAD_RADIUS_METERS,
+  MAX_ACTIVE_REGIONS,
+  MAX_KEPT_REGIONS,
   ADT_RING,
   PLAYER_BODY_RADIUS,
   type RegionAssetCollider,
@@ -27,6 +30,7 @@ import { preloadCollisionIndex, hasCollisionEntry, collisionModelKey } from "./c
 import { RegionInteriorRenderer, preloadRegionAssets } from "./regionInterior";
 import { getRegionCollisionWorker } from "./regionCollisionWorker";
 import { StreamBudget, REGION_STREAM_BUDGET_MS, REGION_STREAM_MAX_BUILDS } from "./streamBudget";
+import { perfTime } from "./perfBus";
 
 const CAPSULE_HEIGHT = 1.7;
 
@@ -132,8 +136,8 @@ export class RegionContinent {
       const h = sampleRegionHeightWorld(bp, wx, wz);
       if (h !== null) return h;
     }
-    // Outside all regions — flat fallback (should not walk here often).
-    return 0;
+    // Outside all regions — deep ocean seabed floor.
+    return -16;
   }
 
   waterDepthAt(wx: number, wz: number, catalog: Iterable<RegionBlueprint>): number {
@@ -146,7 +150,8 @@ export class RegionContinent {
       if (sampleRegionHeightWorld(bp, wx, wz) === null) continue;
       return sampleRegionWaterDepthWorld(bp, wx, wz);
     }
-    return 0;
+    // Outside all regions — open ocean water depth (surface is at sea level 0).
+    return 16;
   }
 
   /** Collision shapes for every mounted region, in world space. Solids whose
@@ -268,20 +273,39 @@ export class RegionContinent {
   /**
    * Ensure regions near the player are mounted. `catalog` is the full set of
    * known blueprints (with world origins). Returns when the region underfoot
-   * (if any) is ready to walk on.
+   * (if any) is ready to walk on. `newLayerIds` lets the caller GPU-precompile
+   * just the newly mounted layers (see Game.ts's ambient syncAround call) --
+   * scoped to those groups, not a full-scene compile (measured up to ~935ms
+   * once many regions are resident -- see that call site's comment).
    */
   async syncAround(
     wx: number,
     wz: number,
     catalog: RegionBlueprint[],
     opts?: { urgentId?: string },
-  ): Promise<boolean> {
-    const near = regionsNearWorld(catalog, wx, wz, REGION_STREAM_RADIUS_METERS);
+  ): Promise<{ mountedNew: boolean; newLayerIds: string[] }> {
+    // Nearest-K cap on top of the meter radius -- see MAX_ACTIVE_REGIONS'
+    // doc comment. A dense grid of small authored regions can otherwise put
+    // a dozen-plus layers inside REGION_STREAM_RADIUS_METERS at once.
+    const near = regionsNearWorld(catalog, wx, wz, REGION_STREAM_RADIUS_METERS, MAX_ACTIVE_REGIONS, opts?.urgentId);
     const want = new Set(near.map((b) => b.id));
     if (opts?.urgentId) want.add(opts.urgentId);
 
+    // Wider than `want` on purpose -- a region already mounted stays resident
+    // until the player is well past the mount radius (REGION_UNLOAD_RADIUS_
+    // METERS), not the instant they cross it. Without this margin, standing
+    // near a boundary flip-flops a region in and out on ordinary movement,
+    // and each remount fully rebuilds + recompiles its foliage/props/terrain
+    // -- a real multi-second frame-time cost, not just bookkeeping churn.
+    const keep = new Set(
+      regionsNearWorld(catalog, wx, wz, REGION_UNLOAD_RADIUS_METERS, MAX_KEPT_REGIONS, opts?.urgentId).map(
+        (b) => b.id,
+      ),
+    );
+    if (opts?.urgentId) keep.add(opts.urgentId);
+
     for (const id of [...this.layers.keys()]) {
-      if (!want.has(id)) this.unload(id);
+      if (!keep.has(id)) this.unload(id);
     }
 
     // Ids resident before this pass -- so the caller can tell whether anything
@@ -297,7 +321,8 @@ export class RegionContinent {
       if (urgent) mounts.push(this.ensureMounted(urgent));
     }
     await Promise.all(mounts);
-    const mountedNew = [...want].some((id) => this.layers.has(id) && !before.has(id));
+    const newLayerIds = [...want].filter((id) => this.layers.has(id) && !before.has(id));
+    const mountedNew = newLayerIds.length > 0;
 
     // Warm terrain/grass only for newly mounted layers around the viewer
     if (mountedNew) {
@@ -319,14 +344,21 @@ export class RegionContinent {
         ]).catch(() => {});
       }
     }
-    return mountedNew;
+    return { mountedNew, newLayerIds };
   }
 
   private async ensureMounted(bp: RegionBlueprint): Promise<void> {
     if (this.layers.has(bp.id)) {
       const existing = this.layers.get(bp.id)!;
-      // Catalog/cache may have newer authored data (barriers etc.) after a save.
-      if (bp.heights?.length) this.updateLayerBlueprint(bp);
+      // Catalog/cache may have newer authored data (barriers etc.) after a save --
+      // but only when it's actually a *different* object than what's mounted.
+      // syncAround's ambient re-sync (every ~1.5s / 24m moved) calls this with the
+      // same cached blueprint reference on every steady-state tick; without the
+      // identity check this bumped `revision` constantly, which made
+      // syncAuthoredRegionNodes() (Game.ts) tear down and rebuild every resource
+      // node in the region on a ~1.5s loop -- they'd pop out and slowly pop back
+      // in via the windowing build budget, forever, even standing still.
+      if (bp.heights?.length && bp !== existing.blueprint) this.updateLayerBlueprint(bp);
       return Promise.race([
         existing.ready,
         new Promise<void>((r) => setTimeout(r, 8000)),
@@ -403,6 +435,12 @@ export class RegionContinent {
     wx: number,
     wz: number,
     camera?: THREE.Camera,
+    sky?: { horizon: THREE.Color; zenith: THREE.Color; fog: THREE.Color; ground?: THREE.Color },
+    /** Precompiles each region's terrain/water shader against its first
+     *  streamed-in tile -- see RegionInteriorRenderer.update()'s doc comment.
+     *  this.scene (not layer.group) is passed as compile()'s targetScene so
+     *  the real lights get gathered for a correctly-variant-matched compile. */
+    renderer?: THREE.WebGLRenderer,
   ): void {
     // ONE budget shared across every mounted region -- terrain/water streaming
     // is capped per streaming tick regardless of how many neighbors are resident
@@ -421,9 +459,21 @@ export class RegionContinent {
     const ordered = [...this.layers.values()].sort((a, b) =>
       a.id === underId ? -1 : b.id === underId ? 1 : 0,
     );
+    // Per-layer cost, not just per-layer *builds* -- grass wind, prop/NPC
+    // distance culling, water animation etc. all run every frame for every
+    // mounted layer regardless of whether anything is actively streaming.
+    // Marked per layer (not just once for the whole loop) so a capture can
+    // show whether this steady-state cost -- not a one-off compile/build --
+    // is what's now scaling with how many regions stay resident (see the
+    // REGION_UNLOAD_RADIUS_METERS hysteresis change in regionWorld.ts).
     for (const layer of ordered) {
       const local = worldToRegionLocal(layer.blueprint, wx, wz);
-      layer.renderer.update(dt, sun, local.x, local.z, camera, budget);
+      const isUnderfoot = layer.id === underId;
+      perfTime(
+        "regionContinent:layerUpdate",
+        () => layer.renderer.update(dt, sun, local.x, local.z, camera, budget, sky, renderer, this.scene, isUnderfoot),
+        layer.id,
+      );
     }
   }
 

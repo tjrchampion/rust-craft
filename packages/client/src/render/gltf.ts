@@ -21,6 +21,7 @@ import {
 } from "./sharedGltf";
 import { getAssetBuffer } from "./assetPack";
 import { runCooperatively, nextIdle } from "./idleScheduler";
+import { perfMark } from "./perfBus";
 
 const loader = createSharedGltfLoader();
 const cache = new Map<string, Promise<GLTF>>();
@@ -102,8 +103,13 @@ export function applyMasterTextures(root: THREE.Object3D): void {
     if (mesh.isMesh) {
       mesh.castShadow = true;
       mesh.receiveShadow = true;
-      if (mesh.geometry) {
-        if (!mesh.geometry.boundingSphere) mesh.geometry.computeBoundingSphere();
+      if (mesh.geometry && !mesh.geometry.boundingSphere) {
+        const pos = mesh.geometry.attributes?.position;
+        if (pos && pos.count > 0 && Number.isFinite(pos.getX(0))) {
+          mesh.geometry.computeBoundingSphere();
+        } else {
+          mesh.geometry.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 1);
+        }
       }
       if (mesh.material) {
         const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
@@ -270,8 +276,9 @@ export function load(url: string): Promise<GLTF> {
       // 1. Check if model exists inside the packed assets container (.rcpack)
       const buffer = await getAssetBuffer(url);
       if (buffer) {
+        const basePath = THREE.LoaderUtils.extractUrlBase(url);
         gltf = await new Promise<GLTF>((resolve, reject) => {
-          loader.parse(buffer, url, resolve, reject);
+          loader.parse(buffer, basePath, resolve, reject);
         });
       } else {
         // 2. Fallback to direct network GET request
@@ -1089,7 +1096,14 @@ export class AnimatedModel {
       // different item (or unequipping) always recomputes from the true
       // original instead of compounding tints on top of each other.
       const working = std.gearTintBase ? std : (std.clone() as typeof std);
-      if (!working.gearTintBase) working.gearTintBase = std.color.clone();
+      if (!working.gearTintBase) {
+        working.gearTintBase = std.color.clone();
+        // A freshly-cloned material has no compiled program of its own yet
+        // (it doesn't share the GLTF-cached original's WebGLProgram unless
+        // Three's cache key happens to match) -- mark it so PerfOverlay can
+        // flag the shader-link stall this triggers on the next render.
+        perfMark("material:tintClone", 0, mesh.name);
+      }
       working.color.copy(working.gearTintBase);
       if (color !== null) working.color.multiply(new THREE.Color(color));
       return working;
@@ -1214,7 +1228,12 @@ export class AnimatedModel {
         if ((mesh as THREE.SkinnedMesh).isSkinnedMesh) {
           mesh.frustumCulled = false;
         } else if (mesh.geometry && !mesh.geometry.boundingSphere) {
-          mesh.geometry.computeBoundingSphere();
+          const pos = mesh.geometry.attributes?.position;
+          if (pos && pos.count > 0 && Number.isFinite(pos.getX(0))) {
+            mesh.geometry.computeBoundingSphere();
+          } else {
+            mesh.geometry.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 1);
+          }
         }
         if (tintColor) {
           // Clone materials so the tint doesn't leak to other instances.

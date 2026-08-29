@@ -5,7 +5,11 @@
  * minimap updates never freeze gameplay frames.
  */
 import type { ThumbnailSource, ThumbnailOptions } from "../ui/worldMapThumbnail";
-import { renderRegionThumbnail as renderRegionThumbnailSync, renderRegionLandMask as renderRegionLandMaskSync } from "../ui/worldMapThumbnail";
+import {
+  renderRegionThumbnail as renderRegionThumbnailSync,
+  renderRegionLandMask as renderRegionLandMaskSync,
+  renderRegionArtistMap as renderRegionArtistMapSync,
+} from "../ui/worldMapThumbnail";
 
 interface OutMsg {
   reqId: number;
@@ -90,6 +94,19 @@ class WorldMapThumbnailWorkerPool {
     });
   }
 
+  requestArtistMap(src: ThumbnailSource, opts?: ThumbnailOptions): Promise<string | null> {
+    if (!this.available) {
+      return Promise.resolve(renderRegionArtistMapSync(src, opts));
+    }
+    const reqId = this.reqId++;
+    const w = this.workers[this.next]!;
+    this.next = (this.next + 1) % this.workers.length;
+    return new Promise((resolve) => {
+      this.pending.set(reqId, resolve);
+      w.postMessage({ reqId, kind: "artist", src, opts });
+    });
+  }
+
   dispose(): void {
     for (const w of this.workers) w.terminate();
     this.workers = [];
@@ -111,4 +128,8 @@ export function requestRegionThumbnailAsync(src: ThumbnailSource, opts?: Thumbna
 
 export function requestRegionLandMaskAsync(src: ThumbnailSource, opts?: ThumbnailOptions): Promise<string | null> {
   return getWorldMapThumbnailPool().requestLandMask(src, opts);
+}
+
+export function requestRegionArtistMapAsync(src: ThumbnailSource, opts?: ThumbnailOptions): Promise<string | null> {
+  return getWorldMapThumbnailPool().requestArtistMap(src, opts);
 }

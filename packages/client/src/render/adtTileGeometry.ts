@@ -25,6 +25,8 @@ import {
  *  Float32Array so it can be copied cheaply to workers. */
 export interface AdtLiteBlueprint {
   gridSize: number;
+  gridSizeX?: number;
+  gridSizeZ?: number;
   pitch: number;
   heights: ArrayLike<number>;
   biome: RegionBiome;
@@ -32,6 +34,7 @@ export interface AdtLiteBlueprint {
   /** RegionColorGrading.groundTint hex, e.g. "#8aa04f". */
   groundTint?: string;
   customTextures?: ArrayLike<number>;
+  waterHeights?: ArrayLike<number>;
 }
 
 /** Result of computing one ADT tile — all typed arrays are transferable. */
@@ -51,6 +54,7 @@ export interface AdtTileGeometryData {
   colors: Float32Array;
   weightsA: Float32Array;
   weightsB: Float32Array;
+  weightsC: Float32Array;
 }
 
 /** Grid span params for one tile — shared between the skeleton builder (main
@@ -66,7 +70,11 @@ export interface AdtTileSpan {
   sizeZ: number;
   centerX: number;
   centerZ: number;
+  halfX?: number;
+  halfZ?: number;
   half: number;
+  spanX?: number;
+  spanZ?: number;
   span: number;
 }
 
@@ -97,18 +105,24 @@ export function adtTileSpan(
   pitch: number,
   ix: number,
   iz: number,
+  gridSizeX?: number,
+  gridSizeZ?: number,
 ): AdtTileSpan | null {
-  const half = ((gridSize - 1) * pitch) / 2;
-  const span = half * 2;
+  const gx = gridSizeX ?? gridSize;
+  const gz = gridSizeZ ?? gridSize;
+  const halfX = ((gx - 1) * pitch) / 2;
+  const halfZ = ((gz - 1) * pitch) / 2;
+  const spanXTotal = halfX * 2;
+  const spanZTotal = halfZ * 2;
   const tile = adtWorldBounds(ix, iz);
-  const minX = Math.max(tile.minX, -half);
-  const maxX = Math.min(tile.maxX, half);
-  const minZ = Math.max(tile.minZ, -half);
-  const maxZ = Math.min(tile.maxZ, half);
+  const minX = Math.max(tile.minX, -halfX);
+  const maxX = Math.min(tile.maxX, halfX);
+  const minZ = Math.max(tile.minZ, -halfZ);
+  const maxZ = Math.min(tile.maxZ, halfZ);
   if (minX >= maxX - 1e-6 || minZ >= maxZ - 1e-6) return null;
 
-  const spanX = adtGridSpan(minX, maxX, half, pitch, gridSize);
-  const spanZ = adtGridSpan(minZ, maxZ, half, pitch, gridSize);
+  const spanX = adtGridSpan(minX, maxX, halfX, pitch, gx);
+  const spanZ = adtGridSpan(minZ, maxZ, halfZ, pitch, gz);
   if (!spanX || !spanZ) return null;
   const segsX = spanX.g1 - spanX.g0;
   const segsZ = spanZ.g1 - spanZ.g0;
@@ -116,9 +130,26 @@ export function adtTileSpan(
 
   const sizeX = segsX * pitch;
   const sizeZ = segsZ * pitch;
-  const centerX = -half + spanX.g0 * pitch + sizeX / 2;
-  const centerZ = -half + spanZ.g0 * pitch + sizeZ / 2;
-  return { ix, iz, gx0: spanX.g0, gz0: spanZ.g0, segsX, segsZ, sizeX, sizeZ, centerX, centerZ, half, span };
+  const centerX = -halfX + spanX.g0 * pitch + sizeX / 2;
+  const centerZ = -halfZ + spanZ.g0 * pitch + sizeZ / 2;
+  return {
+    ix,
+    iz,
+    gx0: spanX.g0,
+    gz0: spanZ.g0,
+    segsX,
+    segsZ,
+    sizeX,
+    sizeZ,
+    centerX,
+    centerZ,
+    halfX,
+    halfZ,
+    half: Math.max(halfX, halfZ),
+    spanX: spanXTotal,
+    spanZ: spanZTotal,
+    span: Math.max(spanXTotal, spanZTotal),
+  };
 }
 
 // ---- Ground tint / weight math (THREE.Color-free) ---------------------------
@@ -199,8 +230,13 @@ export function computeAdtTileAttributes(
   positions: Float32Array,
 ): AdtTileGeometryData {
   const { pitch, biome } = bp;
-  const { segsX, segsZ, half } = span;
-  const worldSpan = span.span;
+  const { segsX, segsZ } = span;
+  const halfX = span.halfX ?? span.half;
+  const halfZ = span.halfZ ?? span.half;
+  const spanXTotal = span.spanX ?? span.span;
+  const spanZTotal = span.spanZ ?? span.span;
+  const gxTotal = bp.gridSizeX ?? bp.gridSize;
+  const gzTotal = bp.gridSizeZ ?? bp.gridSize;
   const cols = segsX + 1;
   const rows = segsZ + 1;
   const count = cols * rows;
@@ -209,8 +245,9 @@ export function computeAdtTileAttributes(
   const normals = new Float32Array(count * 3);
   const terrainUv = new Float32Array(count * 2);
   const colors = new Float32Array(count * 3);
-  const weightsA = new Float32Array(count * 3);
-  const weightsB = new Float32Array(count * 3);
+  const weightsA = new Float32Array(count * 4);
+  const weightsB = new Float32Array(count * 4);
+  const weightsC = new Float32Array(count);
 
   const groundTintRgb = bp.groundTint
     ? hexToRgb(parseHexColor(bp.groundTint))
@@ -221,17 +258,22 @@ export function computeAdtTileAttributes(
   const reach = Math.max(span.sizeX, span.sizeZ);
   const roads = bp.roads.length ? bp.roads.filter((r) => roadNearTile(r, span.centerX, span.centerZ, reach)) : bp.roads;
 
-  const heightBp = { gridSize: bp.gridSize, pitch, heights: bp.heights as number[] };
+  const heightBp = {
+    gridSize: bp.gridSize,
+    gridSizeX: bp.gridSizeX,
+    gridSizeZ: bp.gridSizeZ,
+    pitch,
+    heights: bp.heights as number[],
+  };
   const customTextures = bp.customTextures;
-  const gridSize = bp.gridSize;
 
   // Pass 1 — heights + UVs (x/z read straight from the skeleton positions).
   for (let i = 0; i < count; i++) {
     const x = positions[i * 3]!;
     const z = positions[i * 3 + 2]!;
     ys[i] = sampleRegionHeight(heightBp, x, z);
-    terrainUv[i * 2] = (x + half) / worldSpan;
-    terrainUv[i * 2 + 1] = (z + half) / worldSpan;
+    terrainUv[i * 2] = (x + halfX) / spanXTotal;
+    terrainUv[i * 2 + 1] = (z + halfZ) / spanZTotal;
   }
 
   // Pass 2 — normals/slope from neighbouring grid Y + ground weights.
@@ -264,10 +306,30 @@ export function computeAdtTileAttributes(
       const roadBlend = roads.length ? roadBlendAt(roads, x, z) : 0;
       let customTex = 0;
       if (customTextures && customTextures.length) {
-        const gcx = clampNum(Math.round((x + half) / pitch), 0, gridSize - 1);
-        const gcz = clampNum(Math.round((z + half) / pitch), 0, gridSize - 1);
-        customTex = customTextures[gcz * gridSize + gcx] ?? 0;
+        const gcx = clampNum(Math.round((x + halfX) / pitch), 0, gxTotal - 1);
+        const gcz = clampNum(Math.round((z + halfZ) / pitch), 0, gzTotal - 1);
+        customTex = customTextures[gcz * gxTotal + gcx] ?? 0;
       }
+      let waterDepth = y <= 0 ? Math.max(0, -y) : 0;
+      if (bp.waterHeights && bp.waterHeights.length) {
+        const gx = clampNum((x + halfX) / pitch, 0, gxTotal - 1);
+        const gz = clampNum((z + halfZ) / pitch, 0, gzTotal - 1);
+        const gx0 = Math.floor(gx);
+        const gz0 = Math.floor(gz);
+        const gx1 = Math.min(gxTotal - 1, gx0 + 1);
+        const gz1 = Math.min(gzTotal - 1, gz0 + 1);
+        const tx = gx - gx0;
+        const tz = gz - gz0;
+        const w00 = bp.waterHeights[gz0 * gxTotal + gx0] ?? 0;
+        const w10 = bp.waterHeights[gz0 * gxTotal + gx1] ?? 0;
+        const w01 = bp.waterHeights[gz1 * gxTotal + gx0] ?? 0;
+        const w11 = bp.waterHeights[gz1 * gxTotal + gx1] ?? 0;
+        const sampledW = (w00 * (1 - tx) + w10 * tx) * (1 - tz) + (w01 * (1 - tx) + w11 * tx) * tz;
+        if (sampledW > waterDepth) waterDepth = sampledW;
+      }
+      const distX = halfX - Math.abs(x);
+      const distZ = halfZ - Math.abs(z);
+      const edgeDist = Math.min(distX, distZ);
       writeGroundWeights(
         biome,
         y,
@@ -278,7 +340,10 @@ export function computeAdtTileAttributes(
         i,
         weightsA,
         weightsB,
+        weightsC,
         colors,
+        waterDepth,
+        edgeDist,
       );
     }
   }
@@ -298,6 +363,7 @@ export function computeAdtTileAttributes(
     colors,
     weightsA,
     weightsB,
+    weightsC,
   };
 }
 
@@ -313,7 +379,11 @@ function writeGroundWeights(
   i: number,
   weightsA: Float32Array,
   weightsB: Float32Array,
+  weightsC: Float32Array,
   colors: Float32Array,
+  waterDepth = 0,
+  edgeDist = Infinity,
+  neighborTint?: [number, number, number],
 ): void {
   let wGrass = 0;
   let wRock = 0;
@@ -321,9 +391,25 @@ function writeGroundWeights(
   let wSnow = 0;
   let wDirt = 0;
   let wCobble = 0;
+  let wMud = 0;
+  let wLava = 0;
+  let wGravel = 0;
   let tr = baseTint[0];
   let tg = baseTint[1];
   let tb = baseTint[2];
+
+  // Smooth seamless border blending across neighbouring regions
+  if (neighborTint) {
+    const edgeBlendDist = 32.0;
+    const edgeFactor = clampNum(edgeDist / edgeBlendDist, 0, 1);
+    const smoothEdge = edgeFactor * edgeFactor * (3 - 2 * edgeFactor);
+
+    if (smoothEdge < 1.0) {
+      tr = tr * smoothEdge + neighborTint[0] * (1 - smoothEdge);
+      tg = tg * smoothEdge + neighborTint[1] * (1 - smoothEdge);
+      tb = tb * smoothEdge + neighborTint[2] * (1 - smoothEdge);
+    }
+  }
 
   if (customTex === 1) wGrass = 1;
   else if (customTex === 2) wDirt = 1;
@@ -331,21 +417,69 @@ function writeGroundWeights(
   else if (customTex === 4) wSnow = 1;
   else if (customTex === 5) wRock = 1;
   else if (customTex === 6) wSand = 1;
+  else if (customTex === 7) wMud = 1;
+  else if (customTex === 8) wLava = 1;
+  else if (customTex === 9) wGravel = 1;
   else {
+    // Water & Shoreline calculation:
+    // Sand is only for actual waterbeds (waterDepth > 0.02), submerged ground (y <= 0), or the immediate tidal wash at sea level (y < 0.8m).
+    let sandShore = 0;
+    if (waterDepth > 0.02) {
+      sandShore = clampNum(waterDepth * 2.0, 0.4, 1.0);
+    } else if (y <= 0.0) {
+      sandShore = 1.0;
+    } else if (y < 0.8) {
+      sandShore = clampNum((0.8 - y) / 0.8, 0, 1);
+    }
+
     if (biome === "desert") {
       wSand = 1;
+      if (slope > 0.75) wRock = 0.6;
     } else if (biome === "swamp") {
-      wDirt = clampNum(0.35 + Math.max(0, -y) * 0.08, 0, 1);
-      wGrass = 1 - wDirt;
-    } else if (slope > 0.8 || y > 22) {
-      if (y > 26 || biome === "arctic") wSnow = 1;
-      else wRock = 1;
-    } else {
-      wGrass = 1;
-      if (slope > 0.45) {
-        wRock = 0.5;
-        wGrass = 0.5;
+      wMud = clampNum(0.45 + Math.max(0, -y) * 0.08, 0, 1);
+      wDirt = (1 - wMud) * 0.4;
+      wGrass = (1 - wMud) * 0.6;
+      if (sandShore > 0) {
+        wSand = sandShore * 0.85;
+        wMud *= (1 - sandShore * 0.5);
+        wGrass *= (1 - sandShore);
       }
+      if (slope > 0.7) wRock = 0.5;
+    } else if (biome === "arctic") {
+      if (sandShore > 0) {
+        wSand = sandShore;
+        wSnow = 1 - sandShore;
+      } else {
+        wSnow = 1;
+      }
+      if (slope > 0.75) wRock = 0.7;
+    } else if (biome === "volcanic") {
+      wLava = 0.5 * (1 - sandShore * 0.5);
+      wSand = sandShore * 0.7;
+      wRock = 0.5;
+      if (slope > 0.6) wRock = 0.8;
+    } else if (biome === "underground") {
+      wRock = 0.7 * (1 - sandShore * 0.6);
+      wDirt = 0.3 * (1 - sandShore * 0.6);
+      wSand = sandShore;
+    } else {
+      // Grassland, Forest, Jungle, Alien, Cosmic (Temperate & Grassy Biomes)
+      // Pure lush green hills with rock only on steep cliff faces or high alpine altitudes:
+      const rockSlope = clampNum((slope - 0.72) / 0.38, 0, 1);
+      const alpineRock = clampNum((y - 55) / 20, 0, 1);
+      const alpineSnow = clampNum((y - 75) / 15, 0, 1);
+
+      const effectiveRock = Math.max(rockSlope * 0.85, alpineRock);
+
+      if (alpineSnow > 0) {
+        wSnow = alpineSnow;
+        wRock = (1 - alpineSnow) * effectiveRock;
+        wGrass = (1 - alpineSnow) * (1 - effectiveRock) * (1 - sandShore);
+      } else {
+        wRock = effectiveRock;
+        wGrass = (1 - effectiveRock) * (1 - sandShore);
+      }
+      wSand = (1 - effectiveRock) * sandShore;
     }
     if (roadBlend > 0) {
       const keep = 1 - roadBlend;
@@ -353,22 +487,26 @@ function writeGroundWeights(
       wRock *= keep;
       wSand *= keep;
       wSnow *= keep;
+      wMud *= keep;
+      wLava *= keep;
       wDirt = wDirt * keep + roadBlend;
-      // tint.lerp(WHITE, roadBlend)
       tr += (1 - tr) * roadBlend;
       tg += (1 - tg) * roadBlend;
       tb += (1 - tb) * roadBlend;
     }
   }
 
-  const sum = wGrass + wRock + wSand + wSnow + wDirt + wCobble || 1;
-  weightsA[i * 3] = wGrass / sum;
-  weightsA[i * 3 + 1] = wRock / sum;
-  weightsA[i * 3 + 2] = wSand / sum;
-  weightsB[i * 3] = wSnow / sum;
-  weightsB[i * 3 + 1] = wDirt / sum;
-  weightsB[i * 3 + 2] = wCobble / sum;
-  colors[i * 3] = tr;
+  const sum = wGrass + wRock + wSand + wSnow + wDirt + wCobble + wMud + wLava + wGravel || 1;
+  weightsA[i * 4 + 0] = wGrass / sum;
+  weightsA[i * 4 + 1] = wRock / sum;
+  weightsA[i * 4 + 2] = wSand / sum;
+  weightsA[i * 4 + 3] = wSnow / sum;
+  weightsB[i * 4 + 0] = wDirt / sum;
+  weightsB[i * 4 + 1] = wCobble / sum;
+  weightsB[i * 4 + 2] = wMud / sum;
+  weightsB[i * 4 + 3] = wLava / sum;
+  weightsC[i] = wGravel / sum;
+  colors[i * 3 + 0] = tr;
   colors[i * 3 + 1] = tg;
   colors[i * 3 + 2] = tb;
 }

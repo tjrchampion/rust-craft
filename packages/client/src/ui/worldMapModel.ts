@@ -16,6 +16,7 @@ export interface MapFilters {
   portals: boolean;
   npcs: boolean;
   mobs: boolean;
+  pois: boolean;
 }
 
 export const DEFAULT_MAP_FILTERS: MapFilters = {
@@ -25,6 +26,7 @@ export const DEFAULT_MAP_FILTERS: MapFilters = {
   portals: true,
   npcs: true,
   mobs: true,
+  pois: true,
 };
 
 export const BIOME_FILL: Record<RegionBiome, string> = {
@@ -80,16 +82,18 @@ function strHash(str: string): number {
 
 export function getRegionZoneMeta(region: RegionMapEntry): RegionZoneMeta {
   const meta = REGION_ZONE_META[region.id];
-  if (meta) return meta;
-  const index = strHash(region.id) % 6;
-  const minLvl = 1 + index * 5;
-  const maxLvl = minLvl + 9;
+  const hasAuthoredLevel = typeof region.minLevel === "number" || typeof region.maxLevel === "number";
+  const minLvl = region.minLevel ?? meta?.minLevel ?? ((strHash(region.id) % 6) * 3 + 1);
+  const maxLvl = region.maxLevel ?? meta?.maxLevel ?? (region.minLevel ? region.minLevel + 3 : minLvl + 4);
+  const levelRange = minLvl === maxLvl ? `Level ${minLvl}` : `Levels ${minLvl} to ${maxLvl}`;
   return {
-    title: region.name || "Uncharted Domain",
-    levelRange: `Levels ${minLvl} to ${maxLvl}`,
+    title: region.name || meta?.title || "Uncharted Domain",
+    levelRange,
     minLevel: minLvl,
     maxLevel: maxLvl,
-    description: "An uncharted fantasy region filled with dangerous wildlife, ancient ruins, and valuable resources.",
+    description: meta?.description ?? (hasAuthoredLevel
+      ? `A level ${minLvl}–${maxLvl} region filled with dangerous wildlife, ancient ruins, and valuable resources.`
+      : "An uncharted fantasy region filled with dangerous wildlife, ancient ruins, and valuable resources."),
   };
 }
 
@@ -226,13 +230,13 @@ export function hitTestRegion(
 
 export interface MapMarker {
   id: string;
-  kind: "village" | "quest" | "questNpc" | "event" | "portal" | "npc" | "entry" | "player" | "party" | "mobSpawn";
+  kind: "village" | "quest" | "questNpc" | "event" | "portal" | "npc" | "entry" | "player" | "party" | "mobSpawn" | "poi";
   x: number;
   z: number;
   label: string;
   sub?: string;
   /** Quest marker style when kind is quest. */
-  questMarker?: "available" | "complete" | "active" | "escort";
+  questMarker?: "available" | "complete" | "active" | "escort" | "kill";
   eventPhase?: "cooldown" | "active" | "success" | "failed";
   radius?: number;
   regionId?: string;
@@ -242,10 +246,27 @@ export function buildStaticMarkers(
   regions: RegionMapEntry[],
   filters: MapFilters,
   focusRegionId: string | null,
+  discoveredPoiIds?: ReadonlySet<string>,
 ): MapMarker[] {
   const out: MapMarker[] = [];
   for (const r of regions) {
     if (focusRegionId && r.id !== focusRegionId) continue;
+
+    if (filters.pois) {
+      for (const p of r.pois ?? []) {
+        if (discoveredPoiIds && !discoveredPoiIds.has(p.id)) continue;
+        const w = regionLocalToWorld(r, p.localX, p.localZ);
+        out.push({
+          id: `poi:${r.id}:${p.id}`,
+          kind: "poi",
+          x: w.x,
+          z: w.z,
+          label: p.name,
+          sub: "Landmark",
+          regionId: r.id,
+        });
+      }
+    }
 
     if (filters.villages) {
       for (const v of r.villages ?? []) {

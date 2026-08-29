@@ -135,6 +135,7 @@ import {
   type PoiSpec,
   type DungeonLayoutSpec,
   type RegionBlueprint,
+  type RegionPoi,
   levelUpRewards,
   sampleRegionHeight,
   regionAssetColliders,
@@ -152,6 +153,7 @@ import {
   sampleRegionHeightWorld,
   sampleRegionWaterDepthWorld,
   REGION_STREAM_RADIUS_METERS,
+  MAX_ACTIVE_REGIONS,
   worldNodesFromRegion,
   PLAYER_BODY_RADIUS,
   ClientMsg as ClientMsgSchema,
@@ -335,6 +337,9 @@ interface PlayerState {
   questProgress: Map<string, { status: "active" | "completed"; progress: number }>;
   /** Lifetime achievement counters + unlock timestamps. */
   achievements: Map<string, { progress: number; unlockedAt: number | null }>;
+  /** Permanently-discovered POI ids -> discoveredAt (epoch ms). Binary/
+   *  permanent, no progress dimension -- see RegionPoi. */
+  discoveredPois: Map<string, number>;
   activeAuras: ActiveAura[];
   /** Unclaimed level-up care packages — claimed via claimLevelReward, auto-granted on logout. */
   pendingLevelRewards: LevelRewardChest[];
@@ -757,6 +762,7 @@ export class GameServer {
           { progress: a.progress, unlockedAt: a.unlockedAt },
         ]),
       ),
+      discoveredPois: new Map((persisted.discoveredPois ?? []).map((d) => [d.poiId, d.discoveredAt])),
       activeAuras: [],
       pendingLevelRewards: [],
       currentTargetId: null,
@@ -864,6 +870,7 @@ export class GameServer {
       npcs: this.npcs.map((n) => this.npcSnapFor(n, player)),
       questLog: this.questLogFor(player),
       achievements: this.achievementsFor(player),
+      discoveredPoiIds: [...player.discoveredPois.keys()],
       levelRewards: player.pendingLevelRewards,
       serverTime: Date.now(),
       dayLengthS: DAY_LENGTH_S,
@@ -992,6 +999,7 @@ export class GameServer {
         else if (parsed.nodeId.startsWith("poi_dungeon")) this.handleDungeonPortal(player, parsed.nodeId);
         else if (parsed.nodeId.startsWith("poi_region_link_")) this.handleRegionPortal(player, "", parsed.nodeId.slice("poi_region_link_".length));
         else if (parsed.nodeId.startsWith("poi_region_")) this.handleRegionPortal(player, parsed.nodeId.slice("poi_region_".length));
+        else if (parsed.nodeId.startsWith("poi_marker_")) this.handlePoiMarkerInteract(player, parsed.nodeId.slice("poi_marker_".length));
         else if (parsed.nodeId.startsWith("npc_") || parsed.nodeId.startsWith("rnpc_")) this.handleQuestGiverInteract(player, parsed.nodeId);
         else this.handleGather(player, parsed.nodeId);
         break;
@@ -1566,7 +1574,8 @@ export class GameServer {
       const bp = this.regionBlueprints.get(regionId);
       if (bp?.npcs) {
         for (const rNpc of bp.npcs) {
-          if (dist2D(player.move.x, player.move.z, rNpc.localX, rNpc.localZ) <= 8) {
+          const npcW = regionLocalToWorld(bp, rNpc.localX, rNpc.localZ);
+          if (dist2D(player.move.x, player.move.z, npcW.x, npcW.z) <= 8) {
             nearNpc = true;
             break;
           }
@@ -1618,16 +1627,17 @@ export class GameServer {
             const hasQuest = rNpc.quests?.some((q) => q.id === quest.id);
             if (hasQuest) {
               const waypoints = (quest as any).waypoints;
+              const npcW = regionLocalToWorld(bp, rNpc.localX, rNpc.localZ);
               this.activeRegionNpcs.set(rNpc.id, {
                 id: rNpc.id,
                 name: rNpc.name,
                 regionId,
                 instanceId: player.instanceId ?? "",
-                x: rNpc.localX,
+                x: npcW.x,
                 y: 0,
-                z: rNpc.localZ,
-                startX: rNpc.localX,
-                startZ: rNpc.localZ,
+                z: npcW.z,
+                startX: npcW.x,
+                startZ: npcW.z,
                 hp: 100,
                 maxHp: 100,
                 waypoints,
@@ -1949,6 +1959,52 @@ export class GameServer {
       spellId: "shrine",
     });
     this.sendSelf(player);
+  }
+
+  /** Marks a POI as permanently discovered for this character and pushes a
+   *  targeted live-unlock message -- same shape as unlockAchievement, but
+   *  binary (no progress/target) and idempotent (no-op if already known),
+   *  which is what makes it safe for the client to trigger its discovery
+   *  cinematic straight off this ack rather than the raw interact keypress:
+   *  a spam-click or an out-of-range interact never reaches here twice. */
+  private discoverPoi(
+    player: PlayerState,
+    poi: RegionPoi,
+    regionId: string,
+    world: { x: number; y: number; z: number },
+    worldShape: { x: number; z: number }[],
+  ): void {
+    if (player.discoveredPois.has(poi.id)) return;
+    player.discoveredPois.set(poi.id, Date.now());
+    player.dirty = true;
+    const xp = poi.rewardXp ?? 25;
+    this.grantXp(player, xp);
+    this.sendTo(player.peer, {
+      t: "poiDiscovered",
+      poiId: poi.id,
+      regionId,
+      name: poi.name,
+      description: poi.description,
+      x: world.x,
+      y: world.y,
+      z: world.z,
+      revealShape: worldShape,
+      xp,
+    });
+  }
+
+  private handlePoiMarkerInteract(player: PlayerState, poiId: string): void {
+    if (player.dead) return;
+    const regionId = this.regionIdFromInstance(player.instanceId) ?? player.lastRegionId;
+    if (!regionId) return;
+    const bp = this.regionBlueprints.get(regionId);
+    const poi = bp?.pois?.find((p) => p.id === poiId);
+    if (!bp || !poi) return;
+    const world = regionLocalToWorld(bp, poi.localX, poi.localZ);
+    if (dist2D(player.move.x, player.move.z, world.x, world.z) > (poi.interactRadius ?? 6)) return;
+    const y = sampleRegionHeight(bp, poi.localX, poi.localZ);
+    const worldShape = (poi.revealShape ?? []).map((p) => regionLocalToWorld(bp, p.x, p.z));
+    this.discoverPoi(player, poi, regionId, { x: world.x, y, z: world.z }, worldShape);
   }
 
   // ============================ parties ============================
@@ -2320,6 +2376,72 @@ export class GameServer {
     const ra = this.regionIdFromInstance(a.instanceId);
     const rb = this.regionIdFromInstance(b.instanceId);
     return ra !== null && rb !== null;
+  }
+
+  /** Grid cell size for the sendSnapshots() proximity grid below -- equal to
+   *  INTEREST_RADIUS so a 120m query always needs exactly a 3x3 neighborhood
+   *  (ceil(INTEREST_RADIUS / GRID_CELL) = 1 cell in each direction). */
+  private static readonly GRID_CELL = INTEREST_RADIUS;
+
+  /** Which spatial partition an instanceId belongs to, for the proximity
+   *  grid -- mirrors sameInstance()'s truth table exactly (this must stay in
+   *  sync with that function, not reimplement its own notion of "same
+   *  place"): any "region_*" instance collapses into one shared "region"
+   *  bucket (regions occupy non-overlapping world-space origins, so a plain
+   *  distance check across them is valid); every other instanceId (dungeon
+   *  runs, and the literal `null` overworld state that no connected player
+   *  is ever actually in) is isolated by its own exact value, since dungeon
+   *  runs through the same portal reuse identical local coordinates and must
+   *  never be spatially compared against each other. */
+  private partitionKey(instanceId: string | null): string {
+    return instanceId !== null && this.regionIdFromInstance(instanceId) !== null ? "region" : (instanceId ?? "__null__");
+  }
+
+  private gridCellKey(partition: string, x: number, z: number): string {
+    const cx = Math.floor(x / GameServer.GRID_CELL);
+    const cz = Math.floor(z / GameServer.GRID_CELL);
+    return `${partition}:${cx}:${cz}`;
+  }
+
+  /** Buckets `items` into a partition+cell keyed grid for sendSnapshots()'s
+   *  interest-radius queries -- rebuilt fresh once per snapshot tick (not
+   *  incrementally maintained; every entity can move every tick anyway, and
+   *  a full rebuild is exactly the O(entities) cost that used to be paid
+   *  once per VIEWER instead of once total). */
+  private buildProximityGrid<T>(
+    items: readonly T[],
+    getInstanceId: (item: T) => string | null,
+    getPos: (item: T) => { x: number; z: number },
+  ): Map<string, T[]> {
+    const grid = new Map<string, T[]>();
+    for (const item of items) {
+      const partition = this.partitionKey(getInstanceId(item));
+      const { x, z } = getPos(item);
+      const key = this.gridCellKey(partition, x, z);
+      const bucket = grid.get(key);
+      if (bucket) bucket.push(item);
+      else grid.set(key, [item]);
+    }
+    return grid;
+  }
+
+  /** 3x3-neighborhood candidates around (x,z) in `grid`'s partition for
+   *  `instanceId` -- a superset of what's actually within INTEREST_RADIUS;
+   *  callers still run the exact dist2D + sameInstance checks on the result,
+   *  same as before this grid existed. This only shrinks the candidate set,
+   *  it never changes which entities end up in a snapshot. */
+  private gridCandidates<T>(grid: Map<string, T[]>, instanceId: string | null, x: number, z: number): T[] {
+    const partition = this.partitionKey(instanceId);
+    const cx = Math.floor(x / GameServer.GRID_CELL);
+    const cz = Math.floor(z / GameServer.GRID_CELL);
+    const out: T[] = [];
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dz = -1; dz <= 1; dz++) {
+        const bucket = grid.get(`${partition}:${cx + dx}:${cz + dz}`);
+        if (bucket) out.push(...bucket);
+      }
+    }
+    return out;
   }
 
   /** All party members (including the player themselves) currently online,
@@ -2751,6 +2873,10 @@ export class GameServer {
       if (this.worldEvents.has(key)) continue;
       this.worldEvents.set(key, createWorldEventRuntime(ev, region.id, now));
     }
+
+    // region.pois deliberately has no runtime seeding here -- discovery is
+    // binary/permanent with no cooldown/phase state, so handlePoiMarkerInteract
+    // resolves POIs straight from the blueprint on interact instead.
   }
 
   /** Replace gather nodes authored on a region (safe to call on editor re-save). */
@@ -3028,7 +3154,8 @@ export class GameServer {
       const h = sampleRegionHeightWorld(bp, wx, wz);
       if (h !== null) return h;
     }
-    return 0;
+    // Outside all regions — deep ocean floor.
+    return -16;
   }
 
   private continentWaterDepthAt(wx: number, wz: number): number {
@@ -3036,11 +3163,23 @@ export class GameServer {
       if (sampleRegionHeightWorld(bp, wx, wz) === null) continue;
       return sampleRegionWaterDepthWorld(bp, wx, wz);
     }
-    return 0;
+    // Outside all regions — ocean water depth (surface is at sea level 0).
+    return 16;
   }
 
   private continentCollidersNear(wx: number, wz: number): ReturnType<typeof regionAssetColliders> {
-    const near = regionsNearWorld(this.regionBlueprints.values(), wx, wz, REGION_STREAM_RADIUS_METERS);
+    // Capped the same way as the client's RegionContinent.syncAround -- this
+    // rebuilds every near region's collider array from scratch on every call
+    // (this method runs once per player per tick), so an uncapped region
+    // count under a dense multi-region continent is a real per-tick cost that
+    // scales with how many regions happen to be packed within the radius.
+    const near = regionsNearWorld(
+      this.regionBlueprints.values(),
+      wx,
+      wz,
+      REGION_STREAM_RADIUS_METERS,
+      MAX_ACTIVE_REGIONS,
+    );
     const out: ReturnType<typeof regionAssetColliders> = [];
     for (const bp of near) {
       const o = regionWorldOrigin(bp);
@@ -3430,14 +3569,24 @@ export class GameServer {
 
     const type = nodeTypeDef(node.type);
     const held = this.heldItem(player);
-    let power = UNARMED_GATHER_POWER;
-    if (type.nodeClass !== "pick" && held) {
-      const def = itemDef(held.itemId);
-      power = def.gatherPower?.[type.nodeClass] ?? UNARMED_GATHER_POWER;
+    let power: number;
+    if (type.nodeClass === "pick") {
+      power = UNARMED_GATHER_POWER;
+    } else {
+      const heldPower = held ? itemDef(held.itemId).gatherPower?.[type.nodeClass] : undefined;
+      // Hard-gated nodes (ore veins) require an actual matching tool -- bare
+      // hands don't count, unlike wood/stone which can still be gathered
+      // (slowly) unarmed. Without this, UNARMED_GATHER_POWER matching a
+      // starter pickaxe's power let ore be mined with no tool at all.
+      power = heldPower ?? (type.minPower !== undefined ? 0 : UNARMED_GATHER_POWER);
     }
 
     if (type.minPower !== undefined && power < type.minPower) {
-      this.sendEvent(player, { t: "event", kind: "error", message: "Requires a better pickaxe" });
+      this.sendEvent(player, {
+        t: "event",
+        kind: "error",
+        message: power === 0 ? "Requires a pickaxe" : "Requires a better pickaxe",
+      });
       return;
     }
 
@@ -4373,7 +4522,7 @@ export class GameServer {
       ? (x0: number, z0: number, x1: number, z1: number) => {
           const a = findRegionAtWorld(this.regionBlueprints.values(), x0, z0);
           const b = findRegionAtWorld(this.regionBlueprints.values(), x1, z1);
-          return a !== null && b !== null && a.id !== b.id;
+          return a !== b;
         }
       : undefined;
     const moveOpts = {
@@ -5734,6 +5883,15 @@ export class GameServer {
   private sendSnapshots(): void {
     const now = Date.now();
     const allPlayers = [...this.players.values()];
+    // Proximity grids, rebuilt fresh once per tick (not per viewer) -- see
+    // buildProximityGrid()'s doc comment. Each viewer's candidate lists below
+    // are still run through the exact sameInstance + dist2D checks that were
+    // already here; the grid only shrinks what gets checked, it never
+    // changes which entities end up in a snapshot.
+    const playerGrid = this.buildProximityGrid(allPlayers, (p) => p.instanceId, (p) => ({ x: p.move.x, z: p.move.z }));
+    const mobGrid = this.buildProximityGrid([...this.mobs.values()], (m) => m.instanceId, (m) => ({ x: m.x, z: m.z }));
+    const petGrid = this.buildProximityGrid([...this.pets.values()], (p) => p.instanceId, (p) => ({ x: p.x, z: p.z }));
+    const projectileGrid = this.buildProximityGrid([...this.projectiles.values()], (p) => p.instanceId, (p) => ({ x: p.x, z: p.z }));
     for (const viewer of allPlayers) {
       const px = viewer.move.x;
       const pz = viewer.move.z;
@@ -5757,7 +5915,7 @@ export class GameServer {
       const prevCosmetics = this.lastSentPlayerCosmetics.get(viewer.id);
       const nextCosmetics = new Map<string, number>();
       this.lastSentPlayerCosmetics.set(viewer.id, nextCosmetics);
-      for (const other of allPlayers) {
+      for (const other of this.gridCandidates(playerGrid, viewer.instanceId, px, pz)) {
         if (!this.sameInstance(viewer, other)) continue;
         if (dist2D(px, pz, other.move.x, other.move.z) > INTEREST_RADIUS) continue;
         const gear = this.playerGearSnap(other);
@@ -5804,7 +5962,7 @@ export class GameServer {
       }
 
       const mobs: MobSnap[] = [];
-      for (const mob of this.mobs.values()) {
+      for (const mob of this.gridCandidates(mobGrid, viewer.instanceId, px, pz)) {
         if (!this.sameInstance(viewer, mob)) continue;
         if (dist2D(px, pz, mob.x, mob.z) > INTEREST_RADIUS) continue;
         const def = mobDef(mob.type);
@@ -5829,7 +5987,7 @@ export class GameServer {
       }
 
       const pets: PetSnap[] = [];
-      for (const pet of this.pets.values()) {
+      for (const pet of this.gridCandidates(petGrid, viewer.instanceId, px, pz)) {
         if (!this.sameInstance(viewer, pet)) continue;
         if (dist2D(px, pz, pet.x, pet.z) > INTEREST_RADIUS) continue;
         const owner = this.players.get(pet.ownerId);
@@ -5849,13 +6007,17 @@ export class GameServer {
       }
 
       const projectiles: ProjectileSnap[] = [];
-      for (const proj of this.projectiles.values()) {
+      for (const proj of this.gridCandidates(projectileGrid, viewer.instanceId, px, pz)) {
         if (!this.sameInstance(viewer, proj)) continue;
         if (dist2D(px, pz, proj.x, proj.z) > INTEREST_RADIUS) continue;
         projectiles.push({ id: proj.id, spellId: proj.spellId, x: proj.x, y: proj.y, z: proj.z });
       }
 
-      // NPCs (village quest givers) only ever exist in the open world.
+      // NPCs (village quest givers) only ever exist in the open world. Left
+      // exactly as-is (not routed through the grid) -- see partitionKey()'s
+      // doc comment: no connected player is ever actually instanceId===null,
+      // so this condition never fires in practice today, which is a
+      // pre-existing oddity out of scope for this change.
       const npcs: NpcSnap[] = [];
       if (!viewer.instanceId) {
         for (const npc of this.npcs) {
@@ -5985,6 +6147,10 @@ export class GameServer {
         achievementId,
         progress: e.progress,
         unlockedAt: e.unlockedAt,
+      })),
+      discoveredPois: [...player.discoveredPois.entries()].map(([poiId, discoveredAt]) => ({
+        poiId,
+        discoveredAt,
       })),
     };
   }

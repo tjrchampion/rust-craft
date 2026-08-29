@@ -15,6 +15,12 @@ export interface AchievementProgressEntry {
   unlockedAt: number | null;
 }
 
+export interface PoiDiscoveryEntry {
+  poiId: string;
+  /** Epoch ms. */
+  discoveredAt: number;
+}
+
 export interface PersistedPlayer {
   id: string;
   accountId: string;
@@ -42,6 +48,7 @@ export interface PersistedPlayer {
   inventory: InvItem[];
   questProgress: QuestProgressEntry[];
   achievements: AchievementProgressEntry[];
+  discoveredPois: PoiDiscoveryEntry[];
 }
 
 export async function loadPlayer(characterId: string): Promise<PersistedPlayer | null> {
@@ -57,6 +64,9 @@ export async function loadPlayer(characterId: string): Promise<PersistedPlayer |
   });
   const achievements = await db.query.characterAchievements.findMany({
     where: eq(schema.characterAchievements.characterId, characterId),
+  });
+  const poiDiscoveries = await db.query.characterPoiDiscoveries.findMany({
+    where: eq(schema.characterPoiDiscoveries.characterId, characterId),
   });
   return {
     id: character.id,
@@ -98,6 +108,10 @@ export async function loadPlayer(characterId: string): Promise<PersistedPlayer |
       achievementId: a.achievementId,
       progress: a.progress,
       unlockedAt: a.unlockedAt ? a.unlockedAt.getTime() : null,
+    })),
+    discoveredPois: poiDiscoveries.map((d) => ({
+      poiId: d.poiId,
+      discoveredAt: d.discoveredAt.getTime(),
     })),
   };
 }
@@ -155,6 +169,16 @@ export async function savePlayer(p: PersistedPlayer): Promise<void> {
           achievementId: a.achievementId,
           progress: a.progress,
           unlockedAt: a.unlockedAt != null ? new Date(a.unlockedAt) : null,
+        })),
+      );
+    }
+    await tx.delete(schema.characterPoiDiscoveries).where(eq(schema.characterPoiDiscoveries.characterId, p.id));
+    if (p.discoveredPois.length > 0) {
+      await tx.insert(schema.characterPoiDiscoveries).values(
+        p.discoveredPois.map((d) => ({
+          characterId: p.id,
+          poiId: d.poiId,
+          discoveredAt: new Date(d.discoveredAt),
         })),
       );
     }

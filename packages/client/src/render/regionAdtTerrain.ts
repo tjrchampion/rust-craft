@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import {
   ADT_KEEP_EXTRA,
+  ADT_LOAD_LEAD,
   ADT_RING,
   adtIndex,
   adtKey,
@@ -20,6 +21,7 @@ import type { AdtLiteBlueprint, AdtTileGeometryData } from "./adtTileGeometry";
 import { getAdtWorkerPool, type AdtWorkerPool } from "./adtWorkerPool";
 import { AdtGeometryPool } from "./adtGeometryPool";
 import type { StreamBudget } from "./streamBudget";
+import { perfMark, perfTime } from "./perfBus";
 
 /** Defer GPU dispose so unloading a ring row doesn't hitch. */
 const DISPOSES_PER_FRAME = 1;
@@ -28,11 +30,15 @@ const MAX_ATTEMPTS = 12;
 /** Max tiles in worker flight at once (bounds latency + transient memory). */
 const MAX_INFLIGHT = 6;
 /** Finished tiles wrapped into meshes per frame — assembly is cheap array
- *  copies, so a few per frame stays well under a frame budget. */
-const ASSEMBLE_PER_FRAME = 3;
+ *  copies, so a few per frame stays well under a frame budget. Was 1: a
+ *  burst of tiles finishing at once (fast travel, a mount dash, turning to
+ *  reveal a new arc) drained one-per-frame regardless of how many workers
+ *  had already finished, which read as visible terrain "loading in" over
+ *  many frames even with the ADT_LOAD_LEAD buffer above. */
+const ASSEMBLE_PER_FRAME = 4;
 /** Chebyshev radius built synchronously on region entry so the player never
  *  spawns on void; everything past this streams in off-thread. */
-const WARM_SYNC_RING = 1;
+const WARM_SYNC_RING = 0;
 
 /**
  * Streams 64 m ADT tiles of an editor region's heightmap around the player.
@@ -73,18 +79,22 @@ export class RegionAdtTerrainStreamer {
     parent: THREE.Object3D,
     private blueprint: Pick<
       RegionBlueprint,
-      "gridSize" | "pitch" | "heights" | "biome" | "roads" | "colorGrading" | "customTextures"
-    >,
+      "gridSize" | "pitch" | "heights" | "biome" | "roads" | "colorGrading" | "customTextures" | "waterHeights"
+    > & { gridSizeX?: number; gridSizeZ?: number },
     private ring = ADT_RING,
   ) {
     this.group.name = "region-adt-terrain";
     this.keepRing = ring + ADT_KEEP_EXTRA;
-    this.half = ((blueprint.gridSize - 1) * blueprint.pitch) / 2;
+    const gx = blueprint.gridSizeX ?? blueprint.gridSize;
+    const gz = blueprint.gridSizeZ ?? blueprint.gridSize;
+    const halfX = ((gx - 1) * blueprint.pitch) / 2;
+    const halfZ = ((gz - 1) * blueprint.pitch) / 2;
+    this.half = Math.max(halfX, halfZ);
     this.bounds = {
-      minX: -this.half,
-      maxX: this.half,
-      minZ: -this.half,
-      maxZ: this.half,
+      minX: -halfX,
+      maxX: halfX,
+      minZ: -halfZ,
+      maxZ: halfZ,
     };
     this.material = createAdtTerrainMaterial();
     this.lite = toAdtLiteBlueprint(blueprint);
@@ -106,8 +116,12 @@ export class RegionAdtTerrainStreamer {
     return this.ring;
   }
 
+  // Build (and render -- there's no separate hidden state) one extra ring
+  // beyond the nominal stream ring, so tiles finish while still comfortably
+  // inside the fogged-out zone instead of starting construction only once
+  // already expected to be in clear view.
   private loadKeys(x: number, z: number): string[] {
-    return adtRingKeysInBounds(x, z, this.ring, this.bounds);
+    return adtRingKeysInBounds(x, z, this.ring + ADT_LOAD_LEAD, this.bounds);
   }
 
   private keepKeys(x: number, z: number): string[] {
@@ -137,12 +151,13 @@ export class RegionAdtTerrainStreamer {
   private addMesh(key: string, mesh: THREE.Mesh): void {
     this.group.add(mesh);
     this.tiles.set(key, mesh);
+    perfMark("adtTerrain:tileAdded", 0, key);
   }
 
   /** Synchronous main-thread build (no workers, or underfoot-urgent). */
   private buildSync(key: string): void {
     const { ix, iz } = parseAdtKey(key);
-    const mesh = buildRegionAdtTileSync(this.lite, ix, iz, this.material, this.geoPool);
+    const mesh = perfTime("adtTerrain:buildSync", () => buildRegionAdtTileSync(this.lite, ix, iz, this.material, this.geoPool), key);
     if (mesh) this.addMesh(key, mesh);
   }
 
@@ -174,17 +189,28 @@ export class RegionAdtTerrainStreamer {
     });
   }
 
-  /** Wrap up to ASSEMBLE_PER_FRAME finished worker results into meshes. */
-  private drainResults(keepSet: Set<string>): void {
+  /** Wrap up to ASSEMBLE_PER_FRAME finished worker results into meshes.
+   *  ASSEMBLE_PER_FRAME is a per-layer cap -- with several regions resident
+   *  at once (normal near a seam, and more so since streaming got hysteresis
+   *  to avoid mount/unmount thrash) each layer hitting its own cap the same
+   *  frame stacks into a real multi-tile assemble spike. `budget` is shared
+   *  across every mounted layer's update() this tick (see RegionContinent.
+   *  update), so gating the actual heavy assembleAdtTileMesh call on it --
+   *  not just the cheap discard path -- keeps the total assemble cost per
+   *  frame bounded regardless of how many layers are resident. */
+  private drainResults(keepSet: Set<string>, budget?: StreamBudget): void {
     let n = 0;
     while (n < ASSEMBLE_PER_FRAME && this.results.length > 0) {
-      const r = this.results.shift()!;
-      n++;
+      const r = this.results[0]!;
       if (this.tiles.has(r.key) || !keepSet.has(r.key)) {
+        this.results.shift();
         this.geoPool.release(r.geo);
         continue;
       }
-      this.addMesh(r.key, assembleAdtTileMesh(r.geo, r.data, this.material));
+      if (budget && !budget.takeBuild()) break;
+      this.results.shift();
+      n++;
+      this.addMesh(r.key, perfTime("adtTerrain:assemble", () => assembleAdtTileMesh(r.geo, r.data, this.material), r.key));
     }
   }
 
@@ -211,14 +237,19 @@ export class RegionAdtTerrainStreamer {
     }
     this.flushDisposes(budget);
 
-    this.drainResults(keepSet);
+    this.drainResults(keepSet, budget);
 
     // Underfoot safety: never let the player stand on void while a far tile is
-    // still in worker flight — build the tile under them synchronously now.
+    // still in worker flight — build the tile under them synchronously now,
+    // regardless of budget (falling through the world beats a frame hitch).
+    // Still record its cost against the shared budget (mirrors regionAdtWater
+    // .ts's own urgent-tile handling) so other layers' drainResults this same
+    // frame correctly see less of the shared allowance left.
     const underKey = adtKey(adtIndex(x), adtIndex(z));
     if (!this.tiles.has(underKey) && !this.building.has(underKey) && desiredSet.has(underKey)) {
       const pi = this.pending.indexOf(underKey);
       if (pi >= 0) this.pending.splice(pi, 1);
+      budget?.takeBuild();
       this.buildSync(underKey);
     }
 
@@ -256,6 +287,15 @@ export class RegionAdtTerrainStreamer {
   /** True if the ADT tile under local (x,z) is already meshed. */
   hasTileAt(x: number, z: number): boolean {
     return this.tiles.has(adtKey(adtIndex(x), adtIndex(z)));
+  }
+
+  /** Any one resident tile mesh, or null if none built yet -- every tile
+   *  shares this.material, so precompiling against any single one (see
+   *  RegionInteriorRenderer.update()'s renderer.compile call) warms the
+   *  whole streamer's shader once, cheaply, regardless of which tile
+   *  happens to exist first. */
+  get anyTileMesh(): THREE.Mesh | null {
+    return this.tiles.values().next().value ?? null;
   }
 
   /** True when every tile in the load ring at (x,z) is built and nothing is

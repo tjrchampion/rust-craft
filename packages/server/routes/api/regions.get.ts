@@ -23,6 +23,8 @@ export default defineEventHandler(() => {
     worldOriginX: r.worldOriginX ?? 0,
     worldOriginZ: r.worldOriginZ ?? 0,
     isStartingRegion: r.isStartingRegion,
+    minLevel: r.minLevel,
+    maxLevel: r.maxLevel,
     entryLocal: r.entryLocal ?? { x: 0, z: 0 },
     // Lightweight atmosphere so the client can cross-fade hues at seams
     // before the full heightmap / mesh is mounted.
@@ -68,6 +70,13 @@ export default defineEventHandler(() => {
       mobTypeId: m.type,
       localX: m.localX,
       localZ: m.localZ,
+    })),
+    pois: (r.pois ?? []).map((p) => ({
+      id: p.id,
+      name: p.name,
+      localX: p.localX,
+      localZ: p.localZ,
+      revealShape: p.revealShape ?? [],
     })),
   }));
   return { regions };

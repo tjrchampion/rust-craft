@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import {
   ADT_KEEP_EXTRA,
+  ADT_LOAD_LEAD,
   ADT_RING,
   adtKeyChebyshevDist,
   adtRingKeysInBounds,
@@ -10,7 +11,11 @@ import {
 import { buildRegionAdtWaterTile, createRegionWaterMaterial, applyWaterEnvironment } from "./terrain";
 import type { StreamBudget } from "./streamBudget";
 
-const BUILDS_PER_FRAME = 1;
+// Already time-budgeted below (StreamBudget.ok/takeBuild), so this count cap
+// mostly just spreads slow frames -- bumped alongside terrain's own
+// ASSEMBLE_PER_FRAME increase (see regionAdtTerrain.ts) for the same reason:
+// a burst of newly-needed tiles otherwise drains visibly slowly.
+const BUILDS_PER_FRAME = 2;
 const MAX_ATTEMPTS = 8;
 const DISPOSES_PER_FRAME = 1;
 
@@ -58,8 +63,10 @@ export class RegionAdtWaterStreamer {
     this.lastAnchorKey = "";
   }
 
+  // Same load-lead buffer as terrain (regionAdtTerrain.ts) -- builds one
+  // extra ring out so tiles finish while still inside the fogged-out zone.
   private loadKeys(x: number, z: number): string[] {
-    return adtRingKeysInBounds(x, z, this.ring, this.bounds);
+    return adtRingKeysInBounds(x, z, this.ring + ADT_LOAD_LEAD, this.bounds);
   }
 
   private keepKeys(x: number, z: number): string[] {
@@ -143,6 +150,14 @@ export class RegionAdtWaterStreamer {
       this.tiles.set(key, mesh);
       built++;
     }
+  }
+
+  /** Any one resident tile mesh, or null if none built yet (or the region
+   *  has no water at all) -- every tile shares this.material, so
+   *  precompiling against any single one warms the whole streamer's shader
+   *  once. See regionAdtTerrain.ts's identical getter. */
+  get anyTileMesh(): THREE.Mesh | null {
+    return this.tiles.values().next().value ?? null;
   }
 
   /** Sync-build the full water ring (loading screen). */

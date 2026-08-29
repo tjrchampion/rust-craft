@@ -2,18 +2,23 @@ import * as THREE from "three";
 import type { SkyCloudSheet } from "@rustcraft/shared";
 import type { AtmosphereSample, SkyLayerState } from "./regionAtmosphere";
 
-/** Well inside typical camera.far (game 900 / editor 800). */
-const DOME_RADIUS = 520;
-const CLOUD_RADIUS = 500;
-const STAR_RADIUS = 510;
-const SKIRT_RADIUS = 515;
+/**
+ * Fixed local radius for the skydome sphere. The vertex shaders project
+ * `gl_Position = p.xyww` so all sky fragments are placed at the maximum depth
+ * (z/w = 1.0, behind all terrain/objects) without being clipped by camera.far.
+ */
+const DOME_RADIUS = 300;
+const CLOUD_RADIUS = 280;
+const STAR_RADIUS = 290;
+const SKIRT_RADIUS = 295;
 
 const GRADIENT_VS = /* glsl */ `
 varying vec3 vWorldDir;
 void main() {
   vec4 world = modelMatrix * vec4(position, 1.0);
   vWorldDir = normalize(world.xyz - cameraPosition);
-  gl_Position = projectionMatrix * viewMatrix * world;
+  vec4 p = projectionMatrix * viewMatrix * world;
+  gl_Position = p.xyww;
 }
 `;
 
@@ -32,57 +37,70 @@ void main() {
 }
 `;
 
-/** Direction → equirect UV. Continuous across the sphere (no mesh UV seam). */
-const DIR_UV = /* glsl */ `
-#define PI 3.14159265359
-vec2 dirToUv(vec3 d) {
-  float u = atan(d.z, d.x) / (2.0 * PI) + 0.5;
-  float v = asin(clamp(d.y, -1.0, 1.0)) / PI + 0.5;
-  return vec2(u, v);
-}
-`;
-
 const LAYER_VS = /* glsl */ `
 varying vec3 vWorldDir;
 void main() {
   vec4 world = modelMatrix * vec4(position, 1.0);
   vWorldDir = normalize(world.xyz - cameraPosition);
-  gl_Position = projectionMatrix * viewMatrix * world;
+  vec4 p = projectionMatrix * viewMatrix * world;
+  gl_Position = p.xyww;
 }
 `;
 
 const CLOUD_FS = /* glsl */ `
-` + DIR_UV + /* glsl */ `
 uniform sampler2D uMap;
 uniform vec3 uTint;
 uniform float uOpacity;
 uniform vec2 uOffset;
 uniform float uScale;
 varying vec3 vWorldDir;
+
 void main() {
-  float above = smoothstep(-0.02, 0.12, vWorldDir.y);
-  if (above < 0.01) discard;
-  vec2 uv = dirToUv(normalize(vWorldDir)) * uScale + uOffset;
-  vec4 tex = texture2D(uMap, uv);
-  float a = tex.a * mix(tex.r, 1.0, 0.35) * uOpacity * above;
-  if (a < 0.02) discard;
-  gl_FragColor = vec4(uTint * tex.rgb, a);
+  float above = smoothstep(-0.02, 0.16, vWorldDir.y);
+  if (above < 0.01 || uOpacity < 0.01) discard;
+
+  // Seamless dome planar projection (no atan/wrap seams across 360 degrees)
+  float domeDist = max(0.12, vWorldDir.y + 0.26);
+  vec2 baseUv = (vWorldDir.xz / domeDist) * uScale;
+
+  // Primary cloud drift
+  vec2 uv1 = baseUv * 0.45 + uOffset;
+  vec4 tex1 = texture2D(uMap, uv1);
+
+  // Secondary slower drift for organic volumetric billow
+  vec2 uv2 = baseUv * 0.30 + vec2(-uOffset.y * 0.6, uOffset.x * 0.6);
+  vec4 tex2 = texture2D(uMap, uv2);
+
+  float cloudA = tex1.a * mix(tex1.r, 1.0, 0.35);
+  float cloudB = tex2.a * mix(tex2.r, 1.0, 0.35);
+  float combined = mix(cloudA, cloudB, 0.35);
+
+  float a = combined * uOpacity * above;
+  if (a < 0.01) discard;
+
+  vec3 col = uTint * mix(tex1.rgb, tex2.rgb, 0.25);
+  gl_FragColor = vec4(col, a);
 }
 `;
 
 const STAR_FS = /* glsl */ `
-` + DIR_UV + /* glsl */ `
 uniform sampler2D uMap;
 uniform float uOpacity;
 uniform vec2 uOffset;
 varying vec3 vWorldDir;
+
 void main() {
-  float above = smoothstep(0.05, 0.35, vWorldDir.y);
+  float above = smoothstep(0.04, 0.32, vWorldDir.y);
   if (above < 0.01 || uOpacity < 0.01) discard;
-  vec2 uv = dirToUv(normalize(vWorldDir)) * 2.2 + uOffset;
-  vec4 tex = texture2D(uMap, uv);
+
+  // Seamless dome planar projection for starry night sky
+  float domeDist = max(0.15, vWorldDir.y + 0.32);
+  vec2 starUv = (vWorldDir.xz / domeDist) * 0.85 + uOffset;
+
+  vec4 tex = texture2D(uMap, starUv);
   float a = max(tex.r, max(tex.g, tex.b)) * uOpacity * above;
-  if (a < 0.02) discard;
+  if (a < 0.01) discard;
+
   gl_FragColor = vec4(tex.rgb, a);
 }
 `;
@@ -93,7 +111,8 @@ void main() {
   vec4 world = modelMatrix * vec4(position, 1.0);
   vec3 dir = normalize(world.xyz - cameraPosition);
   vElev = dir.y;
-  gl_Position = projectionMatrix * viewMatrix * world;
+  vec4 p = projectionMatrix * viewMatrix * world;
+  gl_Position = p.xyww;
 }
 `;
 
@@ -124,9 +143,8 @@ function loadSkyTexture(url: string): THREE.Texture {
   const tex = loader.load(url);
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
   tex.colorSpace = THREE.SRGBColorSpace;
-  // Mipmaps across equirect poles can streak; keep linear for sky sheets.
-  tex.generateMipmaps = false;
-  tex.minFilter = THREE.LinearFilter;
+  tex.generateMipmaps = true;
+  tex.minFilter = THREE.LinearMipmapLinearFilter;
   tex.magFilter = THREE.LinearFilter;
   return tex;
 }
@@ -138,6 +156,7 @@ function skyMaterialBase(transparent: boolean): Partial<THREE.ShaderMaterialPara
     // (the old depthTest:false path drew cloud seams through every asset).
     depthWrite: false,
     depthTest: true,
+    depthFunc: THREE.LessEqualDepth,
     fog: false,
     toneMapped: false,
     transparent,

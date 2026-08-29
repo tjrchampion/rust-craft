@@ -109,6 +109,26 @@ uniform vec3 uGroundColour;
 uniform float uSunIntensity;
 uniform float uHaze;
 uniform float uExposure;
+// Blade draw distance (meters) -- extinction is derived from this instead of
+// a fixed per-meter constant, so grass patches actually fade into fogSky
+// well before they geometrically pop out at uGrassDraw.y (see updatePatches'
+// LOD bands in field.ts), whatever that distance happens to be for the
+// active graphics preset/region. A fixed-scale fog here (independent of
+// draw distance) was calibrated for a much larger reference scale than this
+// game's ~65-300m view distances -- at those distances it was so weak
+// (~90%+ still visible even at the edge) it did essentially nothing, so
+// grass patches popped in/out starkly against the correctly-fogged terrain
+// and props around them.
+uniform float uFogDist;
+// The actual ground-level atmospheric fog colour (scene.fog.color / the sky
+// dome's horizon "skirt" -- see AtmosphereSample.fogColor), NOT uSkyHorizon
+// (the sky dome's own gradient band -- a different, cooler colour used only
+// for the dome's upper sky and this shader's ambient term). applyFog used to
+// blend toward skyColour(-viewDir), which resolves to uSkyHorizon at
+// near-ground view angles -- fading grass toward a colour that didn't match
+// what the terrain/props around it were actually fading toward, so even a
+// correctly-intensified fog still looked like grass wasn't blending in.
+uniform vec3 uFogColour;
 
 vec3 skyColour(vec3 viewDir){
   float t = linearstep(-0.05, 1.0, viewDir.y);
@@ -119,11 +139,13 @@ vec3 skyColour(vec3 viewDir){
   return c;
 }
 vec3 applyFog(vec3 base, vec3 viewDir, float depth){
-  vec3 fogSky = skyColour(-viewDir);
   float d = depth * depth;
-  float ext = 0.003 * uHaze;
+  // 1.377 makes transmittance ~15% at depth == uFogDist (matches
+  // REGION_FOG_DENSITY_MIN's calibration in adt.ts, so grass fades at
+  // roughly the same rate as the terrain/props around it).
+  float ext = (1.377 / max(uFogDist, 1.0)) * uHaze;
   float sca = ext * 0.17;
-  return base * exp(-ext*ext*d) + fogSky * (1.0 - exp(-sca*sca*d));
+  return base * exp(-ext*ext*d) + uFogColour * (1.0 - exp(-sca*sca*d));
 }
 vec3 tonemap(vec3 c){
   c *= uExposure;

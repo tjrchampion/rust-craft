@@ -9,8 +9,10 @@ import {
   regionAssetScale,
   hashString,
   isRockLikeAssetModel,
+  isLowShadowValueFoliageModel,
   mergeQuickGrassSettings,
   grassDetailDistance,
+  INTEREST_RADIUS,
   type RegionBlueprint,
   type RegionAsset,
   type RegionFogVolume,
@@ -20,6 +22,7 @@ import { load, AnimatedModel, PLAYER_ANIMS, resolveNpcModelUrl } from "./gltf";
 import type { GLTF } from "three/examples/jsm/loaders/GLTFLoader.js";
 import * as SkeletonUtils from "three/examples/jsm/utils/SkeletonUtils.js";
 import { buildShrine, buildNameplate, buildHealthNameplate } from "./models";
+import { resolvePoiModelUrl } from "./regionPropPalette";
 import { RegionAdtTerrainStreamer } from "./regionAdtTerrain";
 import { RegionAdtWaterStreamer } from "./regionAdtWater";
 import { createQuickGrassField, type QuickGrassField } from "./quickGrass/field";
@@ -32,6 +35,7 @@ import { StreamBudget, REGION_STREAM_BUDGET_MS } from "./streamBudget";
 import { nextFrame, runCooperatively } from "./idleScheduler";
 import { game } from "../ui/gameState.svelte";
 import { getGame } from "../game/instance";
+import { perfTime, perfTimeAsync } from "./perfBus";
 
 /** Base tree canopy sway amplitude (meters) at RegionWind strength 1 --
  *  chosen smaller than grass's own base since tree branches are much larger
@@ -76,7 +80,11 @@ const ASSET_DIR: Record<"building" | "foliage" | "prop", string> = {
  *  still exists if a lower-detail pass is ever needed again. */
 function regionAssetUrls(blueprint: RegionBlueprint): string[] {
   const urls = new Set<string>();
-  for (const a of blueprint.assets) {
+  // regionAllAssets(), not blueprint.assets directly -- procedural house-kit
+  // pieces (expandHousesToAssets) are what buildPropsAndBuildings() actually
+  // instances, so skipping them here just meant their first load() landed
+  // inline during instancing instead of a step ahead of it.
+  for (const a of regionAllAssets(blueprint)) {
     if (a.model && (a.model.endsWith(".glb") || a.model.endsWith(".gltf"))) {
       urls.add(`/assets/models/${ASSET_DIR[a.category]}/${a.model}`);
     }
@@ -84,6 +92,13 @@ function regionAssetUrls(blueprint: RegionBlueprint): string[] {
   if (blueprint.npcs) {
     for (const npc of blueprint.npcs) {
       urls.add(resolveNpcModelUrl(npc.model));
+    }
+  }
+  if (blueprint.pois) {
+    for (const poi of blueprint.pois) {
+      if (poi.model) {
+        urls.add(resolvePoiModelUrl(poi.model, poi.category));
+      }
     }
   }
   return [...urls];
@@ -139,16 +154,34 @@ export class RegionInteriorRenderer {
   blueprint: RegionBlueprint;
   private adtTerrain: RegionAdtTerrainStreamer;
   private adtWater: RegionAdtWaterStreamer | null = null;
+  /** Set once update()'s renderer.compile precompile has warmed each shared
+   *  streamer material -- see update()'s renderer/topScene params. */
+  private terrainMaterialWarmed = false;
+  private waterMaterialWarmed = false;
   private npcModels: AnimatedModel[] = [];
   private npcInstances: RegionNpcInstance[] = [];
+  private poiGroups: THREE.Object3D[] = [];
   /** Every InstancedMesh built by instanceModel (foliage + props/buildings),
    *  tracked flat for destroy() cleanup. */
   private instancedGroups: THREE.InstancedMesh[] = [];
   /** Set in destroy() so a time-sliced instance build bails instead of adding
    *  meshes into a torn-down region group. */
   private destroyed = false;
-  /** Instanced asset chunks (foliage/props/buildings) for distance culling. */
-  private assetChunks: { x: number; z: number; meshes: THREE.InstancedMesh[] }[] = [];
+  /** Instanced asset chunks (foliage/props/buildings) for distance culling.
+   *  Deliberately just full-detail meshes shown/hidden per the ADT stream
+   *  ring -- an earlier LOD-tier/billboard-impostor/crossfade-dither system
+   *  lived here and was removed. It didn't move the needle on performance
+   *  (the real cost was multiple whole regions mounted simultaneously at a
+   *  seam, fixed via REGION_UNLOAD_RADIUS_METERS, not per-region triangle
+   *  count) and the extra tiers/pop/dither made foliage visibly worse than
+   *  the editor's plain full-detail rendering of the same content. Keeping
+   *  this simple on purpose. */
+  private assetChunks: {
+    x: number;
+    z: number;
+    model: string;
+    meshes: THREE.InstancedMesh[];
+  }[] = [];
   /** Painted grass via Quick Grass (see quickGrass/). Null if none. */
   private grassField: QuickGrassField | null = null;
   /** Scratch camera used when callers don't pass one (distance-only stream). */
@@ -210,7 +243,7 @@ export class RegionInteriorRenderer {
 
     this.buildGrassPatches();
     this.buildTerrainVolumes();
-    this.ready = Promise.all([this.buildFoliage(), this.buildPropsAndBuildings()]).then(() => {});
+    this.ready = Promise.all([this.buildFoliage(), this.buildPropsAndBuildings(), this.buildPois()]).then(() => {});
 
     for (const village of blueprint.villages) {
       const plate = buildNameplate(village.name, "#ffe9a8");
@@ -539,12 +572,23 @@ export class RegionInteriorRenderer {
         }
         // Rocks are foliage for placement, but must stay rigid — tree wind
         // sway looks wrong on stone and fought the solid collision silhouette.
-        await this.instanceModel(gltf, indices, {
-          castShadow: true,
-          receiveShadow: false,
-          applyWind: !isRockLikeAssetModel(model),
-          distanceCull: true,
-        });
+        await perfTimeAsync(
+          "regionInterior:instanceModel:foliage",
+          () =>
+            this.instanceModel(gltf, indices, {
+              // Small/ground-cover foliage (grass, flowers, ferns, mushrooms,
+              // bushes, rocks) skips shadow casting -- its shadow blob is
+              // imperceptible but still costs a full alpha-tested depth pass
+              // per instance, which adds up fast in dense areas. Trees keep it.
+              castShadow: !isLowShadowValueFoliageModel(model),
+              receiveShadow: false,
+              applyWind: !isRockLikeAssetModel(model),
+              distanceCull: true,
+              model,
+              chunkSize: RegionInteriorRenderer.FOLIAGE_CHUNK_SIZE,
+            }),
+          model,
+        );
       }),
     );
   }
@@ -575,7 +619,53 @@ export class RegionInteriorRenderer {
         // Mirrors the old per-object placement rule: floor-type props never
         // cast (they'd shadow themselves against the ground right beneath them).
         const castShadow = category !== "prop" || !model.startsWith("floor");
-        await this.instanceModel(gltf, indices, { castShadow, receiveShadow: true, distanceCull: true });
+        await perfTimeAsync(
+          "regionInterior:instanceModel:prop",
+          () => this.instanceModel(gltf, indices, { castShadow, receiveShadow: true, distanceCull: true, model }),
+          model,
+        );
+      }),
+    );
+  }
+
+  /** Instantiate authored 3D landmark models placed at POIs. */
+  private async buildPois(): Promise<void> {
+    const pois = this.blueprint.pois ?? [];
+    if (pois.length === 0) return;
+
+    await Promise.all(
+      pois.map(async (poi) => {
+        if (!poi.model) return;
+        const url = resolvePoiModelUrl(poi.model, poi.category);
+        if (!url) return;
+
+        let gltf: GLTF;
+        try {
+          gltf = await load(url);
+        } catch {
+          console.warn(`[regionInterior] failed to load POI model '${poi.model}' at '${url}'`);
+          return;
+        }
+
+        if (this.destroyed) return;
+
+        const pY = sampleRegionHeight(this.blueprint, poi.localX, poi.localZ);
+        const group = new THREE.Group();
+        group.position.set(poi.localX, pY, poi.localZ);
+        if (poi.yaw !== undefined) group.rotation.y = poi.yaw;
+        if (poi.scale !== undefined) group.scale.setScalar(poi.scale);
+
+        const cloned = SkeletonUtils.clone(gltf.scene) as THREE.Group;
+        cloned.traverse((child) => {
+          if (child instanceof THREE.Mesh) {
+            child.castShadow = true;
+            child.receiveShadow = true;
+          }
+        });
+        group.add(cloned);
+
+        this.poiGroups.push(group);
+        this.group.add(group);
       }),
     );
   }
@@ -587,6 +677,14 @@ export class RegionInteriorRenderer {
    *  cells this size gives that same free culling a tight-enough bounding
    *  sphere per batch to actually skip whole off-screen cells. */
   private static readonly CHUNK_SIZE = 80;
+  /** Foliage-specific override, passed via instanceModel's opts.chunkSize.
+   *  Foliage is by far the most numerous category (hundreds-thousands of
+   *  instances vs. tens for props/buildings), so it benefits the most from
+   *  tighter per-chunk bounding spheres -- a chunk near the edge of the
+   *  frustum wastes fewer off-screen instances bundled in with visible ones.
+   *  Props/buildings keep the wider default; they don't have enough volume
+   *  for this to matter and a 4x cell-count increase isn't worth it there. */
+  private static readonly FOLIAGE_CHUNK_SIZE = 40;
 
   /** Shared instancing helper: one InstancedMesh per submesh/material per
    *  spatial cell (see CHUNK_SIZE), covering every asset index passed in at
@@ -596,20 +694,22 @@ export class RegionInteriorRenderer {
   /** Wall-clock slice for instance-matrix building before yielding a frame, so
    *  a species with thousands of placements streams in instead of freezing the
    *  main thread in one synchronous burst. */
-  private static readonly INSTANCE_BUILD_SLICE_MS = 4;
+  private static readonly INSTANCE_BUILD_SLICE_MS = 1.5;
 
-  private async instanceModel(
+  /** Extracts mesh templates from a loaded GLTF, patches fog/wind the same
+   *  way for both the full-detail and LOD variant (see instanceModel), and
+   *  returns the world matrices needed to place instances. Shared so the two
+   *  tiers stay visually consistent (same fog toggle, same wind-sway rule). */
+  private prepareInstanceTemplate(
     gltf: GLTF,
-    indices: number[],
-    opts: { castShadow: boolean; receiveShadow: boolean; applyWind?: boolean; distanceCull?: boolean },
-  ): Promise<void> {
+    opts: { applyWind?: boolean },
+  ): { meshTemplates: THREE.Mesh[]; localMatrices: THREE.Matrix4[] } {
     const template = SkeletonUtils.clone(gltf.scene);
     template.updateMatrixWorld(true);
     const meshTemplates: THREE.Mesh[] = [];
     template.traverse((o) => {
       if ((o as THREE.Mesh).isMesh) meshTemplates.push(o as THREE.Mesh);
     });
-    if (meshTemplates.length === 0) return;
 
     // GLTF materials often ship with fog disabled — turn it on so trees fade
     // into the horizon fog instead of hard silhouettes.
@@ -634,13 +734,31 @@ export class RegionInteriorRenderer {
       }
     }
 
-    const localMatrices = meshTemplates.map((m) => m.matrixWorld.clone());
+    return { meshTemplates, localMatrices: meshTemplates.map((m) => m.matrixWorld.clone()) };
+  }
 
+  private async instanceModel(
+    gltf: GLTF,
+    indices: number[],
+    opts: {
+      castShadow: boolean;
+      receiveShadow: boolean;
+      applyWind?: boolean;
+      distanceCull?: boolean;
+      model?: string;
+      /** Overrides CHUNK_SIZE for this call (see FOLIAGE_CHUNK_SIZE). */
+      chunkSize?: number;
+    },
+  ): Promise<void> {
+    const { meshTemplates, localMatrices } = this.prepareInstanceTemplate(gltf, opts);
+    if (meshTemplates.length === 0) return;
+
+    const chunkSize = opts.chunkSize ?? RegionInteriorRenderer.CHUNK_SIZE;
     const cells = new Map<string, number[]>();
     for (const i of indices) {
       const asset = this.allAssets[i]!;
-      const cx = Math.floor(asset.localX / RegionInteriorRenderer.CHUNK_SIZE);
-      const cz = Math.floor(asset.localZ / RegionInteriorRenderer.CHUNK_SIZE);
+      const cx = Math.floor(asset.localX / chunkSize);
+      const cz = Math.floor(asset.localZ / chunkSize);
       const key = `${cx},${cz}`;
       const list = cells.get(key);
       if (list) list.push(i);
@@ -655,16 +773,20 @@ export class RegionInteriorRenderer {
     const scratch = new THREE.Matrix4();
     let sliceStart = performance.now();
 
-    for (const [cellKey, cellIndices] of cells) {
-      if (this.destroyed) return;
-      const [cellCx, cellCz] = cellKey.split(",").map(Number) as [number, number];
-      const instancedMeshes = meshTemplates.map((m) => {
+    /** Builds one InstancedMesh per template for this cell's placements,
+     *  registers it for cleanup, and returns the set. */
+    const buildTier = (
+      templates: THREE.Mesh[],
+      matrices: THREE.Matrix4[],
+      cellIndices: number[],
+    ): THREE.InstancedMesh[] => {
+      const instancedMeshes = templates.map((m) => {
         const im = new THREE.InstancedMesh(m.geometry, m.material, cellIndices.length);
         im.castShadow = opts.castShadow;
         im.receiveShadow = opts.receiveShadow;
+        im.visible = true;
         return im;
       });
-
       for (let k = 0; k < cellIndices.length; k++) {
         const asset = this.allAssets[cellIndices[k]!]!;
         const axes = regionAssetScale(asset);
@@ -675,7 +797,7 @@ export class RegionInteriorRenderer {
         dummy.scale.set(axes.x, axes.y, axes.z);
         dummy.updateMatrix();
         for (let mi = 0; mi < instancedMeshes.length; mi++) {
-          scratch.multiplyMatrices(dummy.matrix, localMatrices[mi]!);
+          scratch.multiplyMatrices(dummy.matrix, matrices[mi]!);
           instancedMeshes[mi]!.setMatrixAt(k, scratch);
         }
       }
@@ -684,10 +806,19 @@ export class RegionInteriorRenderer {
         this.group.add(im);
         this.instancedGroups.push(im);
       }
+      return instancedMeshes;
+    };
+
+    for (const [cellKey, cellIndices] of cells) {
+      if (this.destroyed) return;
+      const [cellCx, cellCz] = cellKey.split(",").map(Number) as [number, number];
+      const instancedMeshes = buildTier(meshTemplates, localMatrices, cellIndices);
+
       if (opts.distanceCull) {
         this.assetChunks.push({
-          x: (cellCx + 0.5) * RegionInteriorRenderer.CHUNK_SIZE,
-          z: (cellCz + 0.5) * RegionInteriorRenderer.CHUNK_SIZE,
+          x: (cellCx + 0.5) * chunkSize,
+          z: (cellCz + 0.5) * chunkSize,
+          model: opts.model ?? "",
           meshes: instancedMeshes,
         });
       }
@@ -728,20 +859,61 @@ export class RegionInteriorRenderer {
     /** Shared per-tick streaming slice (see RegionContinent.update). When
      *  omitted (standalone callers) a private one-region budget is used. */
     budget: StreamBudget = new StreamBudget(REGION_STREAM_BUDGET_MS, 2),
+    /** Real sky colors (Game.ts's atmosphereDisplay) so grass's own fog/rim
+     *  lighting matches the actual sky instead of a fixed default -- see
+     *  QuickGrassField.setSky. Omitted for standalone callers (editor/prewarm
+     *  passes) that don't track a live atmosphere sample. */
+    sky?: { horizon: THREE.Color; zenith: THREE.Color; fog: THREE.Color; ground?: THREE.Color },
+    /** Precompiles the terrain/water shader against the first tile that
+     *  streams in (see below) -- terrain/water tiles build progressively
+     *  over many frames AFTER region mount (not caught by Game.ts's
+     *  one-time compileNewLayer snapshot right after mount), so without
+     *  this the very first tile ever drawn for a region pays the full
+     *  first-use shader-link stall during a real render frame instead of
+     *  off to the side. `renderer`/`topScene` omitted for standalone callers
+     *  (editor/prewarm passes) that don't have those handy -- `topScene` is
+     *  the real top-level THREE.Scene (this.group's parent, holding the
+     *  actual sun/ambient lights), passed as compile()'s targetScene so the
+     *  light count baked into the compiled shader variant matches what the
+     *  real render will actually use -- compiling against just `tile` alone
+     *  (zero lights, since terrain tiles have none as children) would
+     *  prepare the wrong variant and waste the precompile entirely. */
+    renderer?: THREE.WebGLRenderer,
+    topScene?: THREE.Scene,
+    isUnderfoot: boolean = true,
   ): void {
     this.adtTerrain.update(viewerX, viewerZ, budget);
     this.adtWater?.update(viewerX, viewerZ, delta, budget);
 
+    if (renderer && camera && topScene) {
+      if (!this.terrainMaterialWarmed) {
+        const tile = this.adtTerrain.anyTileMesh;
+        if (tile) {
+          perfTime("regionInterior:compile:terrain", () => renderer.compile(tile, camera, topScene));
+          this.terrainMaterialWarmed = true;
+        }
+      }
+      if (!this.waterMaterialWarmed) {
+        const tile = this.adtWater?.anyTileMesh;
+        if (tile) {
+          perfTime("regionInterior:compile:water", () => renderer.compile(tile, camera, topScene));
+          this.waterMaterialWarmed = true;
+        }
+      }
+    }
+
     // Keep foliage/props inside the same Chebyshev ADT ring as streamed
     // terrain, and only show a chunk once its ground tile exists — otherwise
     // trees draw past / ahead of the heightmap mesh and look like they float.
+    // Deliberately just a hard in/out toggle -- see assetChunks' doc comment
+    // for why this used to be a multi-tier LOD/billboard/dither system.
     const ix0 = adtIndex(viewerX);
     const iz0 = adtIndex(viewerZ);
     if (this.assetChunks.length > 0) {
       for (const chunk of this.assetChunks) {
         const d = Math.max(Math.abs(adtIndex(chunk.x) - ix0), Math.abs(adtIndex(chunk.z) - iz0));
-        const visible = d <= this.streamRing && this.adtTerrain.hasTileAt(chunk.x, chunk.z);
-        for (const mesh of chunk.meshes) mesh.visible = visible;
+        const inRange = d <= this.streamRing && this.adtTerrain.hasTileAt(chunk.x, chunk.z);
+        for (const mesh of chunk.meshes) mesh.visible = inRange;
       }
     }
     for (const mesh of this.volumeMeshes) {
@@ -765,7 +937,8 @@ export class RegionInteriorRenderer {
       const half =
         ((this.blueprint.gridSize - 1) * this.blueprint.pitch) / 2 +
         adtRingRadiusMeters(Math.max(1, this.streamRing - 1));
-      const inFootprint = Math.abs(viewerX) <= half && Math.abs(viewerZ) <= half;
+      const inFootprint = isUnderfoot && Math.abs(viewerX) <= half && Math.abs(viewerZ) <= half;
+      this.grassField.group.visible = inFootprint;
       if (inFootprint) {
         // Blade push samples world XZ (modelMatrix); convert local viewer → world.
         this.group.getWorldPosition(this.grassWorldScratch);
@@ -780,6 +953,9 @@ export class RegionInteriorRenderer {
             .sub(sun.target.position)
             .normalize();
           this.grassField.setSunFromLight(dir, sun.color, sun.intensity);
+        }
+        if (sky) {
+          this.grassField.setSky(sky.horizon, sky.zenith, sky.fog, sky.ground);
         }
         if (camera) {
           this.grassField.update(camera, delta);
@@ -806,7 +982,7 @@ export class RegionInteriorRenderer {
     // "active" in the first place by talking to its giver, which requires
     // being near it, so gating the escort-start check behind this same
     // distance cull doesn't change when escorts actually begin.
-    const npcAnimReach2 = 70 * 70;
+    const npcAnimReach2 = INTEREST_RADIUS * INTEREST_RADIUS;
     for (const inst of this.npcInstances) {
       if (!inst.loaded) {
         if (!inst.loading) {
@@ -815,13 +991,27 @@ export class RegionInteriorRenderer {
           if (dx * dx + dz * dz <= npcAnimReach2) {
             inst.loading = true;
             const modelUrl = resolveNpcModelUrl(inst.data.model);
-            void inst.animModel
-              .loadFrom(modelUrl, 1.75)
+            // A cluster of NPCs crossing the 70m threshold together (e.g.
+            // approaching a village) used to fire several loadFrom() calls
+            // in close succession with no shader precompile -- each one's
+            // first real render then paid a GPU shader-link stall on the
+            // hot render frame. renderer.compile() right after attach (same
+            // pattern entities.ts's mob queue already uses) moves that cost
+            // off to the side instead.
+            void perfTimeAsync("regionInterior:npc:loadFrom", () => inst.animModel.loadFrom(modelUrl, 1.75), inst.data.model)
               .then(() => {
                 inst.loaded = true;
                 if (inst.placeholder) inst.placeholder.visible = false;
                 inst.animModel.play("idle");
                 inst.group.add(inst.animModel.group);
+                if (renderer && camera && topScene) {
+                  // topScene (not inst.group's own subtree, which has no
+                  // lights) so the compiled variant's baked-in light count
+                  // matches what the real render will use -- see this
+                  // update() signature's own doc comment on the terrain/
+                  // water warm-up above for why that matters.
+                  perfTime("regionInterior:npc:compile", () => renderer.compile(inst.animModel.group, camera, topScene), inst.data.model);
+                }
               })
               .catch((err) => {
                 console.warn(`Failed to load region NPC model ${modelUrl}:`, err);
@@ -1014,5 +1204,20 @@ export class RegionInteriorRenderer {
     }
     this.npcModels = [];
     this.npcInstances = [];
+    for (const g of this.poiGroups) {
+      this.group.remove(g);
+      g.traverse((o) => {
+        const mesh = o as THREE.Mesh;
+        if (mesh.isMesh) {
+          mesh.geometry?.dispose();
+          if (Array.isArray(mesh.material)) {
+            mesh.material.forEach((m) => m.dispose());
+          } else if (mesh.material) {
+            mesh.material.dispose();
+          }
+        }
+      });
+    }
+    this.poiGroups = [];
   }
 }

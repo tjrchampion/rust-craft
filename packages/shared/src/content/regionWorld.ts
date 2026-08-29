@@ -206,23 +206,39 @@ export function findRegionAtWorld(
   return best;
 }
 
-/** Regions whose bounds fall within a world-space radius of (wx,wz). */
+/** Squared distance from a world point to a region's AABB (0 if inside). */
+function regionDistance2(bp: RegionBlueprint, wx: number, wz: number): number {
+  const b = regionWorldBounds(bp);
+  const dx = wx < b.minX ? b.minX - wx : wx > b.maxX ? wx - b.maxX : 0;
+  const dz = wz < b.minZ ? b.minZ - wz : wz > b.maxZ ? wz - b.maxZ : 0;
+  return dx * dx + dz * dz;
+}
+
+/** Regions whose bounds fall within a world-space radius of (wx,wz), nearest
+ *  first when capped. `maxCount` bounds the result regardless of how many
+ *  regions the radius alone would match (see MAX_ACTIVE_REGIONS) -- pass
+ *  `mustIncludeId` to force one region (e.g. the one underfoot) into the
+ *  result even if it would otherwise be trimmed. */
 export function regionsNearWorld(
   regions: Iterable<RegionBlueprint>,
   wx: number,
   wz: number,
   radius: number,
+  maxCount?: number,
+  mustIncludeId?: string,
 ): RegionBlueprint[] {
   const out: RegionBlueprint[] = [];
   const r2 = radius * radius;
   for (const bp of regions) {
-    const b = regionWorldBounds(bp);
-    // Distance from point to AABB (0 if inside).
-    const dx = wx < b.minX ? b.minX - wx : wx > b.maxX ? wx - b.maxX : 0;
-    const dz = wz < b.minZ ? b.minZ - wz : wz > b.maxZ ? wz - b.maxZ : 0;
-    if (dx * dx + dz * dz <= r2) out.push(bp);
+    if (regionDistance2(bp, wx, wz) <= r2) out.push(bp);
   }
-  return out;
+  if (maxCount === undefined || out.length <= maxCount) return out;
+  const sorted = out.sort((a, b) => regionDistance2(a, wx, wz) - regionDistance2(b, wx, wz));
+  if (!mustIncludeId || sorted.slice(0, maxCount).some((r) => r.id === mustIncludeId)) {
+    return sorted.slice(0, maxCount);
+  }
+  const forced = sorted.find((r) => r.id === mustIncludeId)!;
+  return [forced, ...sorted.filter((r) => r.id !== mustIncludeId).slice(0, maxCount - 1)];
 }
 
 /**
@@ -294,5 +310,25 @@ export function regionsAdjacentTo(
 
 /** How close to a region edge (world meters) before we prefetch neighbors. */
 export const REGION_SEAM_PREFETCH_METERS = 160;
-/** Keep neighbor region meshes resident within this world radius. */
-export const REGION_STREAM_RADIUS_METERS = 500;
+/** Mount a neighbor region once the player is within this world radius
+ *  (also the radius the server keeps regions loaded/simulated at). */
+export const REGION_STREAM_RADIUS_METERS = 1400;
+/** Don't unload a mounted neighbor until they're this far out -- meaningfully
+ *  wider than REGION_STREAM_RADIUS_METERS to avoid mount/unmount thrash. */
+export const REGION_UNLOAD_RADIUS_METERS = REGION_STREAM_RADIUS_METERS + 400; // 1800m
+
+/** Hard cap on simultaneously-active regions, independent of the meter
+ *  radii above. Those were tuned for the original hand-authored continent
+ *  (2-3 large regions); an authored grid of many SMALL regions packed
+ *  edge-to-edge can put a dozen-plus of them inside the same fixed-meter
+ *  radius at once. Every active region pays a real per-tick/per-frame cost on
+ *  both sides (client: terrain/water streaming, grass, prop/NPC distance
+ *  culling; server: rebuilding that region's collider set every tick per
+ *  player in continentCollidersNear), so an unbounded count under dense
+ *  layouts is a real perf cliff, not just bookkeeping churn. Nearest-K keeps
+ *  the worst case bounded regardless of how densely a continent is authored. */
+export const MAX_ACTIVE_REGIONS = 8;
+/** Client mount-retention gets a little slack over MAX_ACTIVE_REGIONS (like
+ *  the meter-radius hysteresis above) so a region doesn't unmount the instant
+ *  it drops out of the strict top-K on ordinary movement. */
+export const MAX_KEPT_REGIONS = MAX_ACTIVE_REGIONS + 3;

@@ -156,9 +156,23 @@ export function atmosphereFromGrading(
   const presetZenith = parseColor(timeline.zenithColor, skyFallback);
   const presetMid = parseColor(timeline.skyMidColor, skyFallback);
   const presetHorizon = parseColor(timeline.horizonSkyColor, fogFallback);
+  const presetFog = parseColor(timeline.fogColor, fogFallback);
+
+  // Needed early: fogColor below gets its own night-darkening multiply
+  // (rather than relying solely on presetFog's per-keyframe variation), same
+  // dayness curve sun/ambient intensity already use.
+  const elev = timeline.sunElevation;
+  const dayness = Math.min(1, Math.max(0.28, (elev + 12) / 55));
 
   // Overrides tint the preset (don't replace it) so a saved zenithColor can't
-  // fully hide the chosen skyPreset in-game.
+  // fully hide the chosen skyPreset in-game. horizonSkyColor is the one
+  // exception -- its whole job is blending into the fog skirt (see
+  // AtmosphereSample's "near horizon (before fog skirt)" doc comment), which
+  // is already 100% cg.fogColor with no dilution, so keeping it mostly
+  // preset-locked made a clean sky/fog match structurally impossible to
+  // author. Weighted much closer to the chosen color instead -- zenith/mid
+  // stay lightly tinted since preset identity still matters higher in the
+  // sky, away from the ground-level fog seam.
   const zenith = cg.zenithColor
     ? presetZenith.clone().lerp(parseColor(cg.zenithColor, skyFallback), 0.45)
     : presetZenith.clone().lerp(parseColor(cg.skyColor, skyFallback), 0.15);
@@ -166,17 +180,32 @@ export function atmosphereFromGrading(
     ? presetMid.clone().lerp(parseColor(cg.skyMidColor, skyFallback), 0.45)
     : presetMid.clone().lerp(parseColor(cg.skyColor, skyFallback), 0.2);
   const horizon = cg.horizonSkyColor
-    ? presetHorizon.clone().lerp(parseColor(cg.horizonSkyColor, fogFallback), 0.45)
-    : presetHorizon.clone().lerp(parseColor(cg.fogColor ?? cg.skyColor, fogFallback), 0.25);
+    ? presetHorizon.clone().lerp(parseColor(cg.horizonSkyColor, fogFallback), 0.85)
+    : presetHorizon.clone().lerp(parseColor(cg.fogColor ?? cg.skyColor, fogFallback), 0.6);
+  // fogColor used to be a 100% raw override with no time-of-day blending at
+  // all (unlike every other color here) -- an authored fogColor stayed fixed
+  // through sunrise/day/sunset/night while the sky/ambient/sun around it kept
+  // shifting with the timeline, so fog visibly stopped tracking the night
+  // cycle. Same dominant-but-not-absolute weight as horizonSkyColor above so
+  // the region's authored intent still wins, but the timeline can still
+  // darken/shift it appropriately at night.
+  const fogColor = cg.fogColor
+    ? presetFog.clone().lerp(parseColor(cg.fogColor, fogFallback), 0.85)
+    : presetFog;
+  // Night-darken regardless of authored hue: an author's fogColor is tuned
+  // to match the sky dome in daylight (see the horizon-blend fix above), so
+  // the 85%-author-weighted blend above still stayed noticeably bright after
+  // dark -- presetFog's own per-keyframe variation alone wasn't pulling it
+  // down enough. Stronger falloff than sun/ambient's (0.35/0.55 floors)
+  // since fog specifically reading as "too bright at night" was the report.
+  fogColor.multiplyScalar(0.2 + 0.8 * dayness);
 
-  const elev = timeline.sunElevation;
-  const dayness = Math.min(1, Math.max(0.28, (elev + 12) / 55));
   const sunIntensity = (cg.sunIntensity ?? 1) * (0.35 + 0.65 * dayness);
   const ambientIntensity = (cg.ambientIntensity ?? 0.85) * (0.55 + 0.45 * dayness);
 
   return {
     skyColor: mid.clone(),
-    fogColor: parseColor(cg.fogColor, fogFallback),
+    fogColor,
     fogDensity: cg.fogDensity,
     ambientColor: parseColor(cg.ambientColor, "#ffffff"),
     ambientIntensity,

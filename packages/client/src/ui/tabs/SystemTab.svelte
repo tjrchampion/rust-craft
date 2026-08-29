@@ -329,7 +329,7 @@
             <input
               type="range"
               min="2"
-              max="5"
+              max="6"
               step="1"
               value={game.graphics.streamRing}
               oninput={(e) => game.patchGraphics({ streamRing: Number(e.currentTarget.value) })}
@@ -343,7 +343,7 @@
             <input
               type="range"
               min="40"
-              max="160"
+              max="220"
               step="5"
               value={game.graphics.grassDrawDistance}
               oninput={(e) =>
@@ -357,7 +357,7 @@
             </span>
             <input
               type="range"
-              min="50"
+              min="30"
               max="150"
               step="5"
               value={Math.round(game.graphics.fogScale * 100)}

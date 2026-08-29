@@ -182,6 +182,11 @@ export class TitleScene {
     this.titleCamConfig = titleCamera;
     void this.loadRegionTitleCamera();
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+    // See Game.ts's identical setting: avoids a synchronous GPU-process
+    // round-trip on every new material's first use (profiled at 51ms/program)
+    // -- relevant here since the title screen streams in a fresh village of
+    // materials right as the player is first looking at the game.
+    this.renderer.debug.checkShaderErrors = false;
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.setSize(window.innerWidth, window.innerHeight);
     this.renderer.shadowMap.enabled = true;

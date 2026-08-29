@@ -53,24 +53,24 @@ export const GRAPHICS_PRESET_LABELS: Record<GraphicsPresetId, string> = {
 // recovered a large chunk of frame time on a mid-range laptop GPU.
 const PRESET_BODY: Record<GraphicsPresetId, Omit<GraphicsSettings, "preset">> = {
   low: {
-    resolutionScale: 0.65,
+    resolutionScale: 0.75,
     maxPixelRatio: 1,
     antialias: false,
     shadowsEnabled: false,
     shadowMapSize: 512,
-    streamRing: 2,
-    grassDrawDistance: 45,
-    fogScale: 1.15,
+    streamRing: 3,
+    grassDrawDistance: 80,
+    fogScale: 1.0,
   },
   medium: {
-    resolutionScale: 0.85,
+    resolutionScale: 0.9,
     maxPixelRatio: 1.25,
     antialias: true,
     shadowsEnabled: true,
-    shadowMapSize: 512,
-    streamRing: 3,
-    grassDrawDistance: 65,
-    fogScale: 1.05,
+    shadowMapSize: 1024,
+    streamRing: 4,
+    grassDrawDistance: 120,
+    fogScale: 0.95,
   },
   high: {
     resolutionScale: 1,
@@ -78,9 +78,9 @@ const PRESET_BODY: Record<GraphicsPresetId, Omit<GraphicsSettings, "preset">> = 
     antialias: true,
     shadowsEnabled: true,
     shadowMapSize: 1024,
-    streamRing: ADT_RING,
-    grassDrawDistance: 90,
-    fogScale: 1,
+    streamRing: 5,
+    grassDrawDistance: 160,
+    fogScale: 0.85,
   },
   ultra: {
     resolutionScale: 1,
@@ -88,9 +88,9 @@ const PRESET_BODY: Record<GraphicsPresetId, Omit<GraphicsSettings, "preset">> = 
     antialias: true,
     shadowsEnabled: true,
     shadowMapSize: 2048,
-    streamRing: 4,
-    grassDrawDistance: 120,
-    fogScale: 0.9,
+    streamRing: 6,
+    grassDrawDistance: 200,
+    fogScale: 0.75,
   },
 };
 
@@ -217,10 +217,10 @@ export function effectivePixelRatio(settings: GraphicsSettings, devicePixelRatio
   return Math.min(dpr * settings.resolutionScale, settings.maxPixelRatio);
 }
 
-/** Perspective camera far plane scaled with stream ring (ring 3 → ~900). */
+/** Perspective camera far plane scaled with stream ring (2400m - 4800m). */
 export function cameraFarForStreamRing(ring: number): number {
-  const r = Math.max(2, Math.min(5, ring));
-  return Math.max(500, adtRingRadiusMeters(r) * (900 / adtRingRadiusMeters(ADT_RING)));
+  const r = Math.max(2, Math.min(6, ring));
+  return Math.max(2000, 1200 + r * 600);
 }
 
 /** Approximate world meters covered by a Chebyshev stream ring (for UI labels). */
@@ -230,15 +230,15 @@ export function streamRingMeters(ring: number): number {
 
 /** Detail LOD distance derived from grass draw distance. */
 export function grassDetailDistance(drawDistance: number): number {
-  return Math.max(12, Math.min(28, drawDistance * 0.2));
+  return Math.max(12, Math.min(32, drawDistance * 0.22));
 }
 
 /** Linear fog distances for the non-region overworld path, scaled by ring. */
 export function overworldFogForRing(ring: number): { near: number; far: number } {
-  const r = Math.max(2, Math.min(5, ring));
+  const r = Math.max(2, Math.min(6, ring));
   return {
-    near: adtRingRadiusMeters(r) * 0.55,
-    far: (r + 0.5) * ADT_SIZE * 1.4,
+    near: 300,
+    far: 2400 + r * 350,
   };
 }
 

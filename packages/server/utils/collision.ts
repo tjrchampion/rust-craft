@@ -15,11 +15,12 @@ import type { RegionAssetCategory } from "@rustcraft/shared";
 interface CollisionIndexEntry { file: string; tris: number; verts: number }
 interface CollisionIndex { models: Record<string, CollisionIndexEntry> }
 
-const DIR: Record<RegionAssetCategory, string> = {
+export const CATEGORY_ASSET_DIR: Record<RegionAssetCategory, string> = {
   building: "buildings",
   foliage: "foliage",
   prop: "props",
 };
+const DIR = CATEGORY_ASSET_DIR;
 
 function getCollisionDir(): string | null {
   const cwd = process.cwd();
@@ -88,4 +89,11 @@ export function getServerCollisionMesh(key: string): CollisionMeshData | undefin
 /** True once the index is loaded and the key is known to have data. */
 export function hasServerCollisionMesh(key: string): boolean {
   return getServerCollisionMesh(key) != null;
+}
+
+/** Drop the cached index/meshes so a freshly written index.json (e.g. from
+ *  the asset importer) is picked up without restarting the server. */
+export function invalidateCollisionCache(): void {
+  indexCache = undefined;
+  meshCache.clear();
 }

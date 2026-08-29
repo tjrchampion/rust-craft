@@ -22,7 +22,11 @@
     type MapViewMode,
   } from "./worldMapModel";
   import { OVERVIEW_EDGE, DETAIL_EDGE } from "./worldMapThumbnail";
-  import { requestRegionThumbnailAsync, requestRegionLandMaskAsync } from "../render/worldMapThumbnailWorker";
+  import {
+    requestRegionThumbnailAsync,
+    requestRegionLandMaskAsync,
+    requestRegionArtistMapAsync,
+  } from "../render/worldMapThumbnailWorker";
 
   let regions = $state<RegionMapEntry[]>([]);
   let loadError = $state<string | null>(null);
@@ -31,6 +35,8 @@
   let thumbById = $state<Record<string, string>>({});
   /** Transparent land-only mask thumbnails for coastline-conforming hover glows. */
   let landMaskById = $state<Record<string, string>>({});
+  /** Hand-painted paintbrush artist map thumbnails for region-specific fog of war. */
+  let artistMapById = $state<Record<string, string>>({});
   /** High-detail thumbnails, rendered on demand for the region you zoom into. */
   let detailById = $state<Record<string, string>>({});
 
@@ -45,16 +51,21 @@
   let cam = new MapCamera();
 
 
-  // Match Minimap's negated X-projection for all vector markers & clicks
+  // Match MiniMap's projection convention exactly: screen-right = world -X,
+  // screen-up = world +Z (north). MapCamera's raw worldToScreen is a plain
+  // (x,z)->(x,y) mapping with no mirroring, so both axes get flipped here
+  // about the viewport center -- mirroring only X (as this used to) leaves Z
+  // inverted, which is what made the world map's own "N" compass rose point
+  // the wrong way relative to the terrain/markers it draws.
   const rawWorldToScreen = cam.worldToScreen.bind(cam);
   cam.worldToScreen = function (x: number, z: number) {
     const p = rawWorldToScreen(x, z);
-    return { x: cam.width - p.x, y: p.y };
+    return { x: cam.width - p.x, y: cam.height - p.y };
   };
 
   const rawScreenToWorld = cam.screenToWorld.bind(cam);
   cam.screenToWorld = function (sx: number, sy: number) {
-    return rawScreenToWorld(cam.width - sx, sy);
+    return rawScreenToWorld(cam.width - sx, cam.height - sy);
   };
 
 
@@ -71,7 +82,7 @@
   const currentRegionId = $derived(game.regionState?.regionId ?? null);
 
   const staticMarkers = $derived(
-    buildStaticMarkers(regions, filters, mode === "region" ? focusRegionId : null),
+    buildStaticMarkers(regions, filters, mode === "region" ? focusRegionId : null, game.discoveredPoiIds),
   );
 
   const liveQuestMarkers = $derived.by((): MapMarker[] => {
@@ -108,6 +119,26 @@
           eventPhase: e.phase,
         };
       });
+  });
+
+  // Fog-of-war reveal shapes -- one hand-drawn polygon per discovered POI
+  // across every known region (not just the focused one), projected via the
+  // same cam transform every other marker uses so they always agree with the
+  // rendered tiles.
+  const poiFogPoints = $derived.by(() => {
+    void camTick;
+    const out: { id: string; points: string }[] = [];
+    for (const r of regions) {
+      for (const poi of r.pois ?? []) {
+        if (!game.discoveredPoiIds.has(poi.id) || poi.revealShape.length < 3) continue;
+        const screenPts = poi.revealShape.map((v) => {
+          const w = regionLocalToWorld(r, v.x, v.z);
+          return cam.worldToScreen(w.x, w.z);
+        });
+        out.push({ id: poi.id, points: screenPts.map((p) => `${p.x},${p.y}`).join(" ") });
+      }
+    }
+    return out;
   });
 
   const partyMarkers = $derived.by((): MapMarker[] => {
@@ -218,6 +249,29 @@
     });
   });
 
+  const continentBounds = $derived.by(() => {
+    void camTick;
+    const list = mode === "region" && focusRegionId
+      ? regions.filter((r) => r.id === focusRegionId)
+      : regions;
+    if (list.length === 0) return null;
+    let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+    for (const r of list) {
+      const b = regionWorldBounds(r);
+      if (b.minX < minX) minX = b.minX;
+      if (b.maxX > maxX) maxX = b.maxX;
+      if (b.minZ < minZ) minZ = b.minZ;
+      if (b.maxZ > maxZ) maxZ = b.maxZ;
+    }
+    const nw = cam.worldToScreen(minX, maxZ);
+    const se = cam.worldToScreen(maxX, minZ);
+    const imgX = Math.min(nw.x, se.x);
+    const imgY = Math.min(nw.y, se.y);
+    const imgW = Math.abs(se.x - nw.x);
+    const imgH = Math.abs(se.y - nw.y);
+    return { minX, maxX, minZ, maxZ, imgX, imgY, imgW, imgH };
+  });
+
   const projectedMarkers = $derived.by(() => {
     void camTick;
     return allMarkers.map((m) => {
@@ -252,12 +306,16 @@
       portalWorldX: raw.portalWorldX ?? 0,
       portalWorldZ: raw.portalWorldZ ?? 0,
       isStartingRegion: raw.isStartingRegion,
+      minLevel: raw.minLevel,
+      maxLevel: raw.maxLevel,
       entryLocal: raw.entryLocal ?? { x: 0, z: 0 },
       colorGrading: raw.colorGrading,
       villages: raw.villages ?? [],
       portals: raw.portals ?? [],
       worldEvents: raw.worldEvents ?? [],
       npcs: raw.npcs ?? [],
+      mobSpawns: raw.mobSpawns ?? [],
+      pois: raw.pois ?? [],
     };
   }
 
@@ -284,7 +342,16 @@
       for (const r of fromGame) byId.set(r.id, normalizeRegion(r));
       for (const r of fromApi) {
         const prev = byId.get(r.id);
-        byId.set(r.id, prev ? { ...prev, ...r, villages: r.villages, portals: r.portals, worldEvents: r.worldEvents, npcs: r.npcs } : r);
+        byId.set(r.id, prev ? {
+          ...prev,
+          ...r,
+          villages: r.villages,
+          portals: r.portals,
+          worldEvents: r.worldEvents,
+          npcs: r.npcs,
+          pois: r.pois ?? prev.pois ?? [],
+          mobSpawns: r.mobSpawns ?? prev.mobSpawns ?? [],
+        } : r);
       }
       regions = [...byId.values()];
 
@@ -342,7 +409,7 @@
 
     await Promise.all(
       regions.map(async (r) => {
-        if (thumbById[r.id] && landMaskById[r.id]) return;
+        if (thumbById[r.id] && landMaskById[r.id] && artistMapById[r.id]) return;
         let bp = g ? await g.ensureRegionBlueprint(r.id) : null;
         const src = bp ?? {
           gridSize: r.gridSize ?? 32,
@@ -356,9 +423,13 @@
         const maskPromise = landMaskById[r.id]
           ? Promise.resolve(landMaskById[r.id])
           : requestRegionLandMaskAsync(src, { edge: OVERVIEW_EDGE });
-        const [url, maskUrl] = await Promise.all([urlPromise, maskPromise]);
+        const artistPromise = artistMapById[r.id]
+          ? Promise.resolve(artistMapById[r.id])
+          : requestRegionArtistMapAsync(src, { edge: OVERVIEW_EDGE });
+        const [url, maskUrl, artistUrl] = await Promise.all([urlPromise, maskPromise, artistPromise]);
         if (url && !thumbById[r.id]) thumbById = { ...thumbById, [r.id]: url };
         if (maskUrl && !landMaskById[r.id]) landMaskById = { ...landMaskById, [r.id]: maskUrl };
+        if (artistUrl && !artistMapById[r.id]) artistMapById = { ...artistMapById, [r.id]: artistUrl };
       }),
     );
   }
@@ -429,8 +500,8 @@
     const sy = e.clientY - rect.top;
 
     if (drag) {
-      cam.panX = drag.panX + (e.clientX - drag.sx);
-      cam.panY = drag.panY + (e.clientY - drag.sy);
+      cam.panX = drag.panX - (e.clientX - drag.sx);
+      cam.panY = drag.panY - (e.clientY - drag.sy);
       bumpCam();
       return;
     }
@@ -543,6 +614,7 @@
     complete: "?",
     active: "•",
     escort: "S",
+    kill: "⚔",
   };
 </script>
 
@@ -630,6 +702,7 @@
       <div class="side-section legend">
         <div class="side-label">Legend</div>
         <div class="legend-row"><span class="lg village"></span>Village</div>
+        <div class="legend-row"><span class="lg poi"></span>Landmark (POI)</div>
         <div class="legend-row"><span class="lg quest">!</span>Quest</div>
         <div class="legend-row"><span class="lg event"></span>World Event</div>
         <div class="legend-row"><span class="lg portal"></span>Portal</div>
@@ -673,6 +746,38 @@
               <stop offset="0%" stop-color="rgba(0,0,0,0)" />
               <stop offset="100%" stop-color="rgba(4,12,20,0.6)" />
             </radialGradient>
+            <!-- ===================== Cloud Fog of War ===================== -->
+            <!-- 1. Soft feathering for cloud footprint over regions -->
+            <filter id="wm-cloud-feather" x="-20%" y="-20%" width="140%" height="140%">
+              <feGaussianBlur stdDeviation="7" />
+            </filter>
+
+            <!-- 2. Organic cloud-edge displacement for the POI reveal cutout -->
+            <filter id="wm-fog-cloud-edge" x="-40%" y="-40%" width="180%" height="180%">
+              <feTurbulence type="fractalNoise" baseFrequency="0.02" numOctaves="3" seed="11" result="noise" />
+              <feDisplacementMap in="SourceGraphic" in2="noise" scale="22" xChannelSelector="R" yChannelSelector="G" result="displaced" />
+              <feGaussianBlur in="displaced" stdDeviation="6" />
+            </filter>
+
+            <!-- 3. Cloud reveal mask: ONLY covers region landmasses; ocean is black (clear) -->
+            <mask id="wm-fog-mask" maskUnits="userSpaceOnUse" x="0" y="0" width={cam.width || 2000} height={cam.height || 2000}>
+              <!-- Default: black (transparent/no clouds over ocean) -->
+              <rect x="0" y="0" width={cam.width || 2000} height={cam.height || 2000} fill="black" />
+              
+              <!-- Draw white over every region landmass (soft feathered clouds) -->
+              <g filter="url(#wm-cloud-feather)">
+                {#each regionTiles as tile (tile.region.id)}
+                  <path d={tile.path} fill="white" />
+                {/each}
+              </g>
+
+              <!-- Punch away clouds for discovered POIs -->
+              <g filter="url(#wm-fog-cloud-edge)">
+                {#each poiFogPoints as f (f.id)}
+                  <polygon points={f.points} fill="black" />
+                {/each}
+              </g>
+            </mask>
           </defs>
 
           <rect width="100%" height="100%" fill="url(#wm-ocean)" />
@@ -766,7 +871,8 @@
             </g>
           {/each}
 
-          {#each projectedMarkers as m (m.id)}
+          <!-- Static and world markers (under cloud veil) -->
+          {#each projectedMarkers.filter((m) => m.kind !== "player" && m.kind !== "party") as m (m.id)}
             {#if m.kind === "event" && m.rPx > 4}
               <circle cx={m.sx} cy={m.sy} r={m.rPx} class="event-radius" class:active={m.eventPhase === "active"} />
             {/if}
@@ -780,7 +886,7 @@
             <circle cx={mob.sx} cy={mob.sy} r="3.5" class="mob-dot" />
           {/each}
 
-          {#each projectedMarkers as m (m.id)}
+          {#each projectedMarkers.filter((m) => m.kind !== "player" && m.kind !== "party") as m (m.id)}
             <g
               class="marker"
               class:selected={selectedMarkerId === m.id}
@@ -799,6 +905,12 @@
                 <circle r="6" class="mk village" />
                 {#if mode === "region"}
                   <text y="-12" class="mk-label">{m.label}</text>
+                {/if}
+              {:else if m.kind === "poi"}
+                <polygon points="0,-7 6,0 0,7 -6,0" class="mk poi" />
+                <text y="3" font-size="9" text-anchor="middle" fill="#2de8c6" font-weight="bold" pointer-events="none">✦</text>
+                {#if mode === "region"}
+                  <text y="-12" class="mk-label poi">{m.label}</text>
                 {/if}
               {:else if m.kind === "quest" || m.kind === "questNpc"}
                 <circle r="8" class="mk quest mk-{m.questMarker ?? 'available'}" />
@@ -827,7 +939,47 @@
               {:else if m.kind === "entry"}
                 <circle r="5" class="mk entry" />
                 <text y="-12" class="mk-label">Entry</text>
-              {:else if m.kind === "party"}
+              {/if}
+            </g>
+          {/each}
+
+          <!-- ==================== Procedural Impressionist Artist Map Fog Cover Blanket ==================== -->
+          <!-- Procedural impressionist brushwork generated from the actual map terrain, seamlessly unified under the continent fog mask -->
+          <g class="wm-cloud-veil-group" mask="url(#wm-fog-mask)" pointer-events="none">
+            {#each regionTiles as tile (tile.region.id)}
+              {#if tile.imgW > 0 && tile.imgH > 0}
+                <g transform="translate({tile.imgX + tile.imgW + 0.5}, {tile.imgY - 0.5}) scale(-1, 1)">
+                  <image
+                    class="wm-region-cloud"
+                    href={artistMapById[tile.region.id] ?? tile.thumb}
+                    x="0"
+                    y="0"
+                    width={tile.imgW + 1}
+                    height={tile.imgH + 1}
+                    preserveAspectRatio="none"
+                  />
+                </g>
+              {/if}
+            {/each}
+          </g>
+
+          <!-- Top Interactive Markers: Player and Party members always visible above clouds -->
+          {#each projectedMarkers.filter((m) => m.kind === "player" || m.kind === "party") as m (m.id)}
+            <g
+              class="marker"
+              class:selected={selectedMarkerId === m.id}
+              transform="translate({m.sx} {m.sy})"
+              role="button"
+              tabindex="0"
+              onclick={(e) => {
+                e.stopPropagation();
+                selectedMarkerId = m.id;
+              }}
+              onkeydown={(e) => {
+                if (e.key === "Enter" || e.key === " ") selectedMarkerId = m.id;
+              }}
+            >
+              {#if m.kind === "party"}
                 <circle r="7" class="mk party" />
                 <text y="-13" class="mk-label party">{m.label}</text>
               {:else if m.kind === "player"}
@@ -1089,6 +1241,7 @@
     font-weight: 900;
   }
   .lg.village { background: #efe6d4; }
+  .lg.poi { background: #2de8c6; border-radius: 2px; transform: rotate(45deg); }
   .lg.quest { background: #ffd400; color: #1a1408; border-radius: 50%; }
   .lg.event { background: #ff8800; }
   .lg.portal { background: #c583ff; border-radius: 1px; transform: rotate(45deg); }
@@ -1143,15 +1296,6 @@
     color: #ff8a80;
   }
 
-  .tile-thumb {
-    image-rendering: high-quality;
-    image-rendering: -webkit-optimize-contrast;
-    transition: opacity 0.2s ease;
-  }
-  .tile-thumb.dim {
-    opacity: 0.25;
-  }
-
   .tile-group {
     cursor: pointer;
   }
@@ -1177,9 +1321,14 @@
   }
   .tile-thumb {
     pointer-events: auto;
-    opacity: 0.94;
+    opacity: 0.96;
+    image-rendering: high-quality;
+    image-rendering: -webkit-optimize-contrast;
     filter: brightness(1) contrast(1);
     transition: filter 0.22s ease-out, opacity 0.22s ease-out;
+  }
+  .tile-thumb.dim {
+    opacity: 0.25;
   }
   .tile-group:hover .tile-thumb,
   .tile-thumb.hovered {
@@ -1199,6 +1348,13 @@
   }
   .tile-thumb.dim {
     opacity: 0.28;
+  }
+  .wm-cloud-veil-group {
+    pointer-events: none;
+    filter: drop-shadow(0 6px 18px rgba(4, 16, 32, 0.45));
+  }
+  .wm-region-cloud {
+    pointer-events: none;
   }
   .art-map-banner {
     transition: fill 0.2s ease, filter 0.2s ease;
@@ -1261,9 +1417,11 @@
     stroke-width: 1;
   }
   .mk.village { fill: #efe6d4; }
+  .mk.poi { fill: #0d2828; stroke: #2de8c6; stroke-width: 1.5; }
   .mk.quest { fill: #ffd400; }
   .mk.quest.mk-active { fill: #b0b0b0; }
   .mk.quest.mk-complete { fill: #ffd400; }
+  .mk.quest.mk-kill { fill: #e0402e; }
   .mk.event { fill: #ff8800; }
   .mk.event.active { fill: #ffb060; }
   .mk.portal { fill: #c583ff; stroke-width: 0.8; }
@@ -1295,6 +1453,7 @@
     stroke: rgba(0, 0, 0, 0.8);
     stroke-width: 2.5px;
   }
+  .mk-label.poi { fill: #2de8c6; }
   .mk-label.event { fill: #ffb060; }
   .mk-label.mob-spawn { fill: #ff8a80; }
   .mk-label.party { fill: #93c5fd; }

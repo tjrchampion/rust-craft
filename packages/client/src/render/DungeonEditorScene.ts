@@ -126,6 +126,9 @@ export class DungeonEditorScene {
 
     this.onMarqueeUpdate = onMarquee;
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+    // See Game.ts's identical setting: avoids a synchronous GPU-process
+    // round-trip on every new material's first use (profiled at 51ms/program).
+    this.renderer.debug.checkShaderErrors = false;
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 
     this.camera = new THREE.PerspectiveCamera(55, 1, 0.1, 500);

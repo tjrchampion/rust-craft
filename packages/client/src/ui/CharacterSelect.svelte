@@ -21,9 +21,7 @@
     type CharacterAppearance,
   } from "@rustcraft/shared";
   import { ClassPreviewScene } from "../render/ClassPreviewScene";
-  import { CLASS_ICONS } from "../render/classModels";
-  import { preloadCharacterAssets } from "../render/gltf";
-  import CharacterThumbnail from "./CharacterThumbnail.svelte";
+  import { CLASS_ICONS, CLASS_GRAPHICS, CLASS_PREVIEW_ARMOR } from "../render/classModels";
   import { parseMarkdown } from "./markdownParser";
   import { fallbackUpdatesMarkdown } from "./updates";
 
@@ -92,7 +90,7 @@
   let draftHairColor = $state(0x2b1a12);
   let draftEyeColor = $state(0x6b4423);
   let draftOutfitHue = $state(0xffffff);
-  let previewGear = $state(false);
+  let previewGear = $state(true);
 
   let rawUpdatesMd = $state(fallbackUpdatesMarkdown);
   const updatesHtml = $derived(parseMarkdown(rawUpdatesMd));
@@ -104,16 +102,12 @@
       ? ((activeCharacter?.classId as ClassId) ?? CLASS_IDS[0]!)
       : (hoveredClassId ?? selectedClassId ?? CLASS_IDS[0]!),
   );
-  // Roster characters show real equip. Create mode shows starting weapon
-  // (previewGear on) or bare body (off).
+  // Full class thematic armor is equipped on stage so every class looks epic and fully armored!
   const stageEquip = $derived.by(() => {
-    if (mode === "select") return activeCharacter?.equip ?? null;
-    if (!previewGear) return null;
-    const equip: Partial<Record<string, string>> = {};
-    for (const g of CLASSES[stageClassId].startingGear) {
-      equip[g.slot] = g.itemId;
+    if (mode === "select" && activeCharacter?.equip && Object.keys(activeCharacter.equip).length > 0) {
+      return activeCharacter.equip;
     }
-    return equip;
+    return CLASS_PREVIEW_ARMOR[stageClassId] ?? null;
   });
   const stageAccent = $derived(CLASS_ACCENT[stageClassId] ?? "var(--rc-gold)");
   // A roster character's saved appearance in select mode, or the live draft
@@ -198,32 +192,21 @@
 
   let canvas: HTMLCanvasElement;
   let scene: ClassPreviewScene | null = null;
-  // Drives the loading overlay over the stage -- without this the canvas
-  // just sits blank/frozen for however long preloadAll() takes (every
-  // class's base rig + textures), which reads as the screen being laggy or
-  // broken rather than working as intended.
-  let previewLoading = $state(true);
+  let previewLoading = $state(false);
 
   onMount(() => {
     scene = new ClassPreviewScene(canvas, { pedestal: false });
-    app.assetsLoading = true;
     void scene
       .preloadAll()
       .then(() => scene?.setClass(stageClassId, stageAppearance.gender, stageAppearance, stageEquip))
       .finally(() => {
         previewLoading = false;
-        app.assetsLoading = false;
       });
-    // Fire-and-forget: warm base rigs / anim libs / hair while the player
-    // browses character select. Modular outfit parts load on equip instead
-    // of preloading every gender×slot GLTF (that path used to balloon VRAM).
-    void preloadCharacterAssets();
     const onResize = () => scene?.resize();
     window.addEventListener("resize", onResize);
     return () => {
       window.removeEventListener("resize", onResize);
       scene?.dispose();
-      app.assetsLoading = false;
     };
   });
 
@@ -348,7 +331,7 @@
     <button class="linkish" onclick={() => void app.logout()}>sign out</button>
   </div>
 
-  {#if mode === "select" && !previewLoading}
+  {#if mode === "select"}
     <div class="news-updates-panel rc-frame">
       <div class="news-panel-header">
         <span class="news-panel-title">📜 REALM NEWS & UPDATES</span>
@@ -359,15 +342,8 @@
     </div>
   {/if}
 
-
-
-  <!-- Character preview canvas — absolutely positioned over the stone
-       platform in the background image. The platform centre sits at
-       ~52% X / 64% Y in the 16:9 art. translateX(-50%) centres the
-       canvas on that X and translateY(-100%) moves the bottom of the
-       canvas (feet) to that Y, so the character stands on the stone. -->
+  <!-- Character 3D preview model anchored to the platform in the background -->
   <div class="stage-anchor" class:create-mode={mode === "create"}>
-
     <!-- Shadow pool beneath character feet -->
     <div class="stage-shadow"></div>
 
@@ -390,16 +366,9 @@
     </div>
 
     <canvas bind:this={canvas} class="stage-canvas" class:loading={previewLoading}></canvas>
-
-    {#if previewLoading}
-      <div class="stage-loading">
-        <div class="stage-spinner"></div>
-        <div class="stage-loading-text">Summoning champions…</div>
-      </div>
-    {/if}
   </div>
 
-  {#if mode === "create" && !previewLoading}
+  {#if mode === "create"}
     <div class="name-input-wrapper">
       <input
         class="name-input"
@@ -414,7 +383,7 @@
   {/if}
 
   {#if mode === "create"}
-    <div class="customize-panel rc-frame" style:--accent={stageAccent} class:hidden={previewLoading}>
+    <div class="customize-panel rc-frame" style:--accent={stageAccent}>
       <div class="info-section-title">Appearance</div>
 
       <div class="custom-row">
@@ -523,7 +492,7 @@
     </div>
   {/if}
 
-  <div class="info-panel rc-frame" style:--accent={stageAccent} class:hidden={previewLoading}>
+  <div class="info-panel rc-frame" style:--accent={stageAccent}>
     <div class="info-scroll">
       {#if mode === "select" && activeCharacter}
         <div class="info-name">{activeCharacter.name}</div>
@@ -589,77 +558,67 @@
     </div>
   </div>
 
-  {#if !previewLoading}
-    <div class="roster-strip" class:create-mode={mode === "create"}>
-      {#if mode === "select"}
-        {#each characters as character (character.id)}
-          {@const accent = CLASS_ACCENT[character.classId as ClassId] ?? "var(--rc-gold)"}
-          <button
-            type="button"
-            class="strip-item"
-            class:active={character.id === selectedCharacterId}
-            style:--accent={accent}
-            onclick={() => selectCharacter(character)}
-          >
-            <span class="strip-badge">
-              <CharacterThumbnail
-                classId={character.classId as ClassId}
-                gender={character.gender}
-                appearance={{
-                  gender: character.gender,
-                  hairStyle: character.hairStyle,
-                  facialHair: character.facialHair,
-                  hairColor: character.hairColor,
-                  eyeColor: character.eyeColor,
-                  outfitHue: character.outfitHue,
-                }}
-                equip={character.equip}
-              />
-            </span>
-            <span class="strip-label">{character.name}</span>
-            <span class="strip-sublabel">{CLASSES[character.classId as ClassId]?.name ?? ''}</span>
-          </button>
-        {:else}
-          <div class="sub empty">No champions yet.</div>
-        {/each}
-        <button type="button" class="strip-item strip-add" onclick={() => (mode = "create")}>
-          <span class="strip-badge strip-badge-add">+</span>
-          <span class="strip-label">New</span>
+  <div class="roster-strip" class:create-mode={mode === "create"}>
+    {#if mode === "select"}
+      {#each characters as character (character.id)}
+        {@const accent = CLASS_ACCENT[character.classId as ClassId] ?? "var(--rc-gold)"}
+        <button
+          type="button"
+          class="strip-item"
+          class:active={character.id === selectedCharacterId}
+          style:--accent={accent}
+          onclick={() => selectCharacter(character)}
+        >
+          <span class="strip-badge">
+            <img
+              class="strip-graphic"
+              src={CLASS_GRAPHICS[character.classId as ClassId] ?? CLASS_GRAPHICS.warrior}
+              alt={character.name}
+            />
+          </span>
+          <span class="strip-label">{character.name}</span>
+          <span class="strip-sublabel">{CLASSES[character.classId as ClassId]?.name ?? ''}</span>
         </button>
       {:else}
-        <button type="button" class="strip-item strip-back" onclick={() => (mode = "select")}>
-          <span class="strip-badge strip-badge-back">
-            <span class="back-arrow">‹</span>
+        <div class="sub empty">No champions yet.</div>
+      {/each}
+      <button type="button" class="strip-item strip-add" onclick={() => (mode = "create")}>
+        <span class="strip-badge strip-badge-add">+</span>
+        <span class="strip-label">New</span>
+      </button>
+    {:else}
+      <button type="button" class="strip-item strip-back" onclick={() => (mode = "select")}>
+        <span class="strip-badge strip-badge-back">
+          <span class="back-arrow">‹</span>
+        </span>
+        <span class="strip-label">Back</span>
+      </button>
+      {#each CLASS_IDS as classId (classId)}
+        {@const cls = CLASSES[classId]}
+        {@const accent = CLASS_ACCENT[classId] ?? "var(--rc-gold)"}
+        <button
+          type="button"
+          class="strip-item"
+          class:active={selectedClassId === classId}
+          style:--accent={accent}
+          onclick={() => selectClass(classId)}
+          onmouseenter={() => (hoveredClassId = classId)}
+          onmouseleave={() => (hoveredClassId = null)}
+          onfocus={() => (hoveredClassId = classId)}
+          onblur={() => (hoveredClassId = null)}
+        >
+          <span class="strip-badge">
+            <img
+              class="strip-graphic"
+              src={CLASS_GRAPHICS[classId]}
+              alt={cls.name}
+            />
           </span>
-          <span class="strip-label">Back</span>
+          <span class="strip-label">{cls.name}</span>
         </button>
-        {#each CLASS_IDS as classId (classId)}
-          {@const cls = CLASSES[classId]}
-          {@const accent = CLASS_ACCENT[classId] ?? "var(--rc-gold)"}
-          <button
-            type="button"
-            class="strip-item"
-            class:active={selectedClassId === classId}
-            style:--accent={accent}
-            onclick={() => selectClass(classId)}
-            onmouseenter={() => (hoveredClassId = classId)}
-            onmouseleave={() => (hoveredClassId = null)}
-            onfocus={() => (hoveredClassId = classId)}
-            onblur={() => (hoveredClassId = null)}
-          >
-            <span class="strip-badge">
-              <CharacterThumbnail
-                classId={classId}
-                gender={draftGender}
-                appearance={stageAppearance}
-              />
-            </span>
-            <span class="strip-label">{cls.name}</span>
-          </button>
-        {/each}
-      {/if}
-    </div>
-  {/if}
+      {/each}
+    {/if}
+  </div>
 
   <div class="corner-bar corner-left"></div>
 
@@ -878,7 +837,7 @@
     100% { opacity: 0;   transform: translateY(-130px) translateX(calc(var(--drift) * 1.4)); }
   }
   .stage-canvas {
-    /* Increased character size */
+    /* Main 3D character model on turntable pedestal */
     width: clamp(260px, 27vw, 540px);
     height: clamp(360px, 66vh, 780px);
     display: block;
@@ -888,42 +847,12 @@
     opacity: 1;
     transition: opacity 0.25s ease;
   }
+  .stage-canvas:active {
+    cursor: grabbing;
+  }
   .stage-canvas.loading {
     opacity: 0;
     pointer-events: none;
-  }
-  /* Spinner centred in the viewport (not the canvas) while loading */
-  .stage-loading {
-    position: fixed;
-    inset: 0;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 16px;
-    pointer-events: none;
-    z-index: 1;
-  }
-  .stage-spinner {
-    width: 44px;
-    height: 44px;
-    border-radius: 50%;
-    border: 3px solid rgba(212, 175, 92, 0.25);
-    border-top-color: var(--rc-gold-bright);
-    animation: stage-spin 0.9s linear infinite;
-  }
-  .stage-loading-text {
-    font-family: var(--rc-display);
-    font-size: 13px;
-    letter-spacing: 1.5px;
-    text-transform: uppercase;
-    color: var(--rc-ink-dim);
-  }
-  @keyframes stage-spin {
-    to { transform: rotate(360deg); }
-  }
-  .stage-canvas:active {
-    cursor: grabbing;
   }
 
   /* --- Right info panel (stats / equipment / abilities) --------------- */
@@ -1258,6 +1187,19 @@
       0 0 20px color-mix(in srgb, var(--accent, rgba(180,100,255,1)) 60%, transparent),
       0 0 6px rgba(140,60,255,0.8),
       0 4px 12px rgba(0,0,0,0.6);
+  }
+
+  .strip-graphic {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    object-position: center 15%;
+    pointer-events: none;
+    border-radius: 6px;
+    transition: transform 0.2s ease;
+  }
+  .strip-item:hover .strip-graphic {
+    transform: scale(1.08);
   }
 
   /* ---- CSS class portrait head ---------------------------------------- */

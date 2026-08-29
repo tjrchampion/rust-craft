@@ -55,6 +55,7 @@ self.onmessage = (e: MessageEvent<InMsg>) => {
       data.colors.buffer,
       data.weightsA.buffer,
       data.weightsB.buffer,
+      data.weightsC.buffer,
     ]);
   }
 };

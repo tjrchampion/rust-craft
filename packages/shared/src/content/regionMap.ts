@@ -35,6 +35,14 @@ export interface RegionMapNpc {
   vendorId?: string;
 }
 
+export interface RegionMapPoi {
+  id: string;
+  name: string;
+  localX: number;
+  localZ: number;
+  revealShape: { x: number; z: number }[];
+}
+
 export interface RegionMapMobSpawn {
   id: string;
   mobTypeId?: string;
@@ -55,6 +63,8 @@ export interface RegionMapEntry {
   portalWorldX: number;
   portalWorldZ: number;
   isStartingRegion?: boolean;
+  minLevel?: number;
+  maxLevel?: number;
   entryLocal: { x: number; z: number };
   colorGrading?: RegionColorGrading;
   villages: RegionMapVillage[];
@@ -62,4 +72,5 @@ export interface RegionMapEntry {
   worldEvents: RegionMapEvent[];
   npcs: RegionMapNpc[];
   mobSpawns?: RegionMapMobSpawn[];
+  pois?: RegionMapPoi[];
 }

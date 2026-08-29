@@ -9,6 +9,7 @@ import {
   TICK_DT,
   WATER_LEVEL,
   clamp,
+  smoothstep,
   dist2D,
   hashString,
   itemDef,
@@ -104,7 +105,11 @@ import {
 import { DUNGEON_THEME_COLORS, DungeonInteriorRenderer } from "../render/dungeonInterior";
 import { RegionInteriorRenderer } from "../render/regionInterior";
 import { OVERVIEW_EDGE, DETAIL_EDGE } from "../ui/worldMapThumbnail";
-import { requestRegionThumbnailAsync, requestRegionLandMaskAsync } from "../render/worldMapThumbnailWorker";
+import {
+  requestRegionThumbnailAsync,
+  requestRegionLandMaskAsync,
+  requestRegionArtistMapAsync,
+} from "../render/worldMapThumbnailWorker";
 import { RegionContinent } from "../render/regionContinent";
 import { StreamBudget } from "../render/streamBudget";
 import { nextFrame } from "../render/idleScheduler";
@@ -117,12 +122,15 @@ import {
   type AtmosphereSample,
 } from "../render/regionAtmosphere";
 import { SkyDome } from "../render/skyDome";
+import { HorizonOcean } from "../render/horizonOcean";
 import { buildShrine } from "../render/models";
 import { NpcManager } from "../render/npcs";
 import { sound, resolveFootSurface } from "./sound";
 import { music } from "./music";
-import { game as ui, type CharacterTab } from "../ui/gameState.svelte";
+import { game as ui, type CharacterTab, type QuestMarker } from "../ui/gameState.svelte";
 import { app } from "../ui/appState.svelte";
+import { perfMark, perfTime, recentPerfEvents } from "../render/perfBus";
+import { PerfOverlay } from "../render/perfOverlay";
 
 /** Default orbit arm — also the farthest zoom-out. */
 const CAMERA_DISTANCE_DEFAULT = 6.5;
@@ -131,12 +139,31 @@ const CAMERA_DISTANCE_MAX = CAMERA_DISTANCE_DEFAULT;
 /** One scroll / trackpad tick. Keep small so a single gesture is subtle. */
 const CAMERA_ZOOM_STEP = 0.35;
 const CAMERA_HEIGHT = 2.2;
+/** POI-discovery cinematic timing (ease out -> hold+orbit -> ease back). */
+const CINEMATIC_OUT_MS = 2500;
+const CINEMATIC_HOLD_MS = 1000;
+const CINEMATIC_BACK_MS = 1500;
+/** Yaw swept during the hold, so the shot reads as a deliberate pan rather
+ *  than a frozen screenshot. */
+const CINEMATIC_ORBIT_SWEEP = (40 * Math.PI) / 180;
+/** Camera height above the POI during the overlook shot (world units). */
+const CINEMATIC_OVERLOOK_HEIGHT = 20;
 const GATHER_RANGE = 4.0;
 /** How often the interact-prompt label (and its underlying node/corpse/dead-
  *  player scans) is recomputed. It's a UI string, not a physics check, so it
  *  doesn't need 60Hz precision -- ~8Hz is imperceptibly different to a player
  *  but cuts several full linear scans down to a fraction of their frame cost. */
 const INTERACT_PROMPT_INTERVAL_MS = 120;
+/** How often kill-quest map/minimap markers re-scan for the nearest matching
+ *  live mob. Mob positions only actually change at SNAPSHOT_RATE (10Hz), so
+ *  this doesn't need to be per-frame -- just often enough that the marker
+ *  visibly tracks a moving/fleeing mob rather than looking stuck. */
+const KILL_QUEST_MARKER_INTERVAL_MS = 400;
+/** How far (world units) a kill-quest marker will look for a matching mob.
+ *  Comfortably past server INTEREST_RADIUS (120m) so it never falsely caps
+ *  what's actually visible -- the real limit is what the client has been
+ *  sent, not this number. */
+const KILL_QUEST_MARKER_RANGE = 250;
 /** Render the sun's shadow map once every N frames instead of every frame. The
  *  shadow-casting scene re-render is the biggest GPU cost when fill/shadow-bound;
  *  3 keeps shadows within ~2 frames of the player (imperceptible for a high sun)
@@ -230,6 +257,8 @@ export class Game {
    *  the several full linear scans (nodes/corpses/dead players) it does at
    *  60Hz; ms timestamp of the last recompute. */
   private interactPromptAt = -Infinity;
+  /** Throttle updateKillQuestMarkers -- see KILL_QUEST_MARKER_INTERVAL_MS. */
+  private killQuestMarkerAt = -Infinity;
   /** Depleted gather-node ids from welcome / nodeUpdate. */
   private depletedNodeIds = new Set<string>();
   /** Last mounted-region revision used for authored gather-node sync. */
@@ -245,6 +274,7 @@ export class Game {
   private grass!: GrassField;
   private clouds!: CloudField;
   private water!: WaterField;
+  private horizonOcean: HorizonOcean;
   /** Villages keyed by id → scene group; streamed by ADT tile ring. */
   private streamedVillages = new Map<string, { group: THREE.Group; signs: THREE.Object3D[] }>();
   /** Latest viewer pose for deferred ADT/village streaming (runs after paint). */
@@ -256,6 +286,33 @@ export class Game {
   /** Orbit arm length; scroll wheel adjusts while pointer-locked. */
   private cameraDistance = CAMERA_DISTANCE_DEFAULT;
   private smoothCameraDistance = CAMERA_DISTANCE_DEFAULT;
+  /** updateCamera()'s wall-pull-in collider subset, cached since it otherwise
+   *  re-filters every frame (including frames where only the camera rotated,
+   *  not the player) -- see cameraColliderCacheStale() for invalidation. */
+  private cameraColliderCache: RegionAssetCollider[] | null = null;
+  private cameraColliderCacheSource: unknown = null;
+  private cameraColliderCachePx = Infinity;
+  private cameraColliderCachePz = Infinity;
+  private cameraColliderCacheRange = -1;
+  /** Active POI-discovery camera pan, or null when the camera is under
+   *  normal player-locked control. See startDiscoveryCinematic/
+   *  updateCinematicCamera. */
+  private cinematicState: {
+    poiX: number;
+    poiY: number;
+    poiZ: number;
+    standoff: number;
+    /** Orbit start angle, fixed at cinematic start -- NOT re-read from
+     *  this.cameraYaw per frame, since mouse-look input isn't suppressed
+     *  during the pan and would otherwise make the shot drift/jitter. */
+    startYaw: number;
+    phase: "out" | "hold" | "back";
+    phaseStart: number;
+    fromPos: THREE.Vector3;
+    fromLookAt: THREE.Vector3;
+    backTargetPos: THREE.Vector3 | null;
+    backTargetLookAt: THREE.Vector3 | null;
+  } | null = null;
   private selfId = "";
   private selfClassId = "warrior";
   private selfGender: CharacterGender = "male";
@@ -283,6 +340,14 @@ export class Game {
    *  smooth per-frame interpolation -- worse the faster you move, since a
    *  bigger per-tick step is more visible held static for those 2 frames. */
   private tickRenderFrom = { x: 0, y: 4, z: 0 };
+  /** Throttles ui.playerX/playerZ writes to ~10Hz -- these only feed the
+   *  minimap/world-map/event-banner proximity checks (MiniMap.svelte,
+   *  WorldEventBanner.svelte, WorldMap.svelte), all of which are fine at
+   *  SNAPSHOT_RATE cadence, not per-render-frame. Writing them every frame
+   *  made every $derived blip projection in MiniMap.svelte recompute at
+   *  60Hz while moving (project() reads game.playerX/playerZ internally).
+   *  Does not affect the actual render/camera/prediction position below. */
+  private nextUiPosAt = 0;
   private cameraYaw = 0;
   private cameraPitch = -0.35;
   /** Smoothed body pitch while swimming — driven by camera look angle. */
@@ -303,12 +368,23 @@ export class Game {
   /** Rolling perf sampler (DEV). See perfSnapshot()/window.__rc.perf(). */
   private perf = {
     frame: [] as number[], // total ms between frames (incl. browser idle)
+    frameTs: [] as number[], // performance.now() at each frame.push -- parallel to `frame`, lets the export find WHEN the worst frame happened (not just its value) so it can be lined up against perfBus events
     render: [] as number[], // renderer.render() ms only
     logic: [] as number[], // frame() work excluding render()
     stream: [] as number[], // post-paint updateZoneAndStreaming() task ms
     prewarm: [] as number[], // prewarmScene() compile+upload ms (on new mounts)
     lastLogAt: 0,
+    lastProgramCount: 0,
+    /** Every time renderer.info.programs.length changes -- a real GPU shader
+     *  link happened somewhere in that frame's render() call. Cross-reference
+     *  against perfBus's streaming-event log (same performance.now() clock)
+     *  to see what caused it. See PerfOverlay / window.__rc.perfSnapshot(). */
+    programJumps: [] as { ts: number; from: number; to: number }[],
   };
+  /** DEV-only main-thread streaming/compile diagnostic overlay -- toggle with
+   *  the backtick key (see bindOverlayToggle) or window.__rc.perfOverlay.toggle(). */
+  private perfOverlay: PerfOverlay | null = null;
+  private perfOverlayKeyHandler: ((e: KeyboardEvent) => void) | null = null;
   private jumpQueued = false;
   private running = false;
   private disposed = false;
@@ -336,6 +412,18 @@ export class Game {
     this.antialiasActive = this.graphics.antialias;
 
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: this.antialiasActive });
+    // Profiled directly (Firefox profiler, see the "first time only" stream
+    // stalls this was chasing): WebGLProgram's onFirstUse() calls
+    // gl.getProgramInfoLog()/getShaderInfoLog() the first time any new
+    // material's program is actually used, purely for dev-time shader-error
+    // diagnostics -- but in a multi-process browser (Firefox's PWebGL, and
+    // Chrome's GPU process) those calls force a synchronous IPC round-trip
+    // that blocks the main thread on __psynch_cvwait until the GPU process
+    // finishes linking, measured at 51ms for one program in this exact repo.
+    // This is the actual mechanism behind every "pop, then fine after that"
+    // stall this session traced to shader compilation -- disabling it is the
+    // standard THREE.js production fix (dev builds/debugging can re-enable).
+    this.renderer.debug.checkShaderErrors = false;
     this.renderer.setPixelRatio(effectivePixelRatio(this.graphics, window.devicePixelRatio));
     this.renderer.setSize(window.innerWidth, window.innerHeight);
     this.renderer.shadowMap.enabled = this.graphics.shadowsEnabled;
@@ -381,6 +469,9 @@ export class Game {
     this.scene.add(this.sun.target);
     this.ambient = new THREE.AmbientLight(0x8899bb, 0.75);
     this.scene.add(this.sun, this.ambient, this.fillLight);
+
+    // Global endless horizon ocean plane at sea level
+    this.horizonOcean = new HorizonOcean(this.scene);
 
     // Regions-only: no procedural overworld map. Catalog + name map still load
     // so the continent streamer can mount neighboring regions.
@@ -458,6 +549,26 @@ export class Game {
 
     // Dev-only handle for verification tooling (scene inspection, teleporting).
     if (import.meta.env.DEV) (window as unknown as { __rc: Game }).__rc = this;
+
+    // Dev-only main-thread streaming/compile overlay -- toggle with backtick,
+    // copy the full report (for pasting into chat) with shift+backtick (~).
+    // Answers "what just streamed in that made this frame hitch" by lining up
+    // perfBus's event log against renderer.info.programs.length jumps, rather
+    // than guessing from a one-off browser profiler capture.
+    if (import.meta.env.DEV) {
+      this.perfOverlay = new PerfOverlay();
+      this.perfOverlayKeyHandler = (e: KeyboardEvent) => {
+        if (e.key !== "`" && e.key !== "~") return;
+        const target = e.target as HTMLElement | null;
+        if (target && /^(input|textarea|select)$/i.test(target.tagName)) return;
+        if (e.key === "~") {
+          void this.perfOverlay?.copyReport();
+          return;
+        }
+        this.perfOverlay?.toggle();
+      };
+      window.addEventListener("keydown", this.perfOverlayKeyHandler);
+    }
   }
 
   /** Dev helper: expose scene + local state for browser inspection. */
@@ -611,7 +722,7 @@ export class Game {
     const catalog = this.continentCatalog();
     const a = findRegionAtWorld(catalog, x0, z0);
     const b = findRegionAtWorld(catalog, x1, z1);
-    return a !== null && b !== null && a.id !== b.id;
+    return a !== b;
   };
 
   /** Bind primary renderer/music to the ownership region (no tear-down). */
@@ -685,6 +796,7 @@ export class Game {
         ui.questMarkers = this.npcManager.questMarkers();
         ui.questLog = msg.questLog;
         ui.achievements = msg.achievements ?? [];
+        ui.discoveredPoiIds = new Set(msg.discoveredPoiIds ?? []);
         ui.levelRewards = msg.levelRewards ?? [];
         ui.levelRewardOpenId = null;
         void this.preloadAndEnter(msg);
@@ -773,6 +885,23 @@ export class Game {
         ui.toast(`Achievement: ${msg.name} (+${msg.xp} XP)`);
         ui.addCombat(`Achievement unlocked: ${msg.name}`);
         sound.play("levelup");
+        break;
+      }
+      case "poiDiscovered": {
+        // Trigger point is this server ack, never the raw interact keypress --
+        // discoverPoi() is idempotent/range-checked server-side, so a spam
+        // click or an out-of-range interact simply never reaches here twice.
+        ui.discoveredPoiIds = new Set([...ui.discoveredPoiIds, msg.poiId]);
+        ui.addCombat(`Discovered: ${msg.name} (+${msg.xp} XP)`);
+        sound.play("levelup");
+        // Modal (not a toast) mirrors LevelUpModal -- setUiMode(true) same as
+        // every other unprompted popup (questOffer etc.), which also
+        // releases pointer lock so the player can click Continue. The
+        // cinematic pan below is independent of uiMode/pointer state (it
+        // writes camera.position/lookAt directly), so both run concurrently.
+        ui.discoveryReward = { id: msg.poiId, name: msg.name, description: msg.description, xp: msg.xp };
+        this.setUiMode(true);
+        this.startDiscoveryCinematic(msg.x, msg.y, msg.z, msg.revealShape);
         break;
       }
       case "questComplete":
@@ -1312,6 +1441,32 @@ export class Game {
     const actions = this.input.sample(dt);
     ui.lastDevice = this.input.lastDevice;
 
+    // Any real gameplay-intent input skips an active discovery cinematic --
+    // deliberately not InputManager.uiMode (that also releases pointer lock,
+    // which would force a re-click to recapture the mouse mid-skip). Mouse
+    // look is intentionally NOT a skip trigger (below) and isn't suppressed
+    // either -- it's harmless during the pan since the cinematic camera never
+    // reads live cameraYaw/pitch, only the fixed startYaw it captured.
+    if (this.cinematicState) {
+      const skipCinematic =
+        actions.moveX !== 0 ||
+        actions.moveY !== 0 ||
+        actions.jump ||
+        actions.attackPressed ||
+        actions.interactPressed ||
+        actions.dodgePressed;
+      if (skipCinematic) this.cinematicState = null;
+    }
+    if (this.cinematicState) {
+      // Player stays put and doesn't act while the camera is elsewhere.
+      actions.moveX = 0;
+      actions.moveY = 0;
+      actions.jump = false;
+      actions.attackPressed = false;
+      actions.interactPressed = false;
+      actions.dodgePressed = false;
+    }
+
     // Camera orbit
     this.cameraYaw += actions.lookX;
     // Allow steeper look-down so swim aiming can point into the water.
@@ -1346,7 +1501,7 @@ export class Game {
     // character screen and Quest Dialog get the same up/down/confirm/cancel
     // handling from one dispatch.
     let escapeConsumedByPanel = false;
-    const activePanel = ui.inventoryOpen ? "inventory" : ui.questOffer ? "quest" : null;
+    const activePanel = ui.inventoryOpen ? "inventory" : ui.questOffer ? "quest" : ui.discoveryReward ? "discovery" : null;
     if (activePanel) {
       const cancel = actions.menuCancel && !(activePanel === "inventory" && actions.inventoryPressed);
       const nav = {
@@ -1454,13 +1609,19 @@ export class Game {
     }
 
     // Fixed-step prediction + input streaming (20 Hz)
-    this.accumulator += dt;
-    while (this.accumulator >= TICK_DT) {
+    // Clamp accumulator to avoid runaway cascades or character sliding during frame stalls
+    this.accumulator = Math.min(this.accumulator + dt, TICK_DT * 3);
+    let stepCount = 0;
+    while (this.accumulator >= TICK_DT && stepCount < 3) {
       this.tickRenderFrom.x = this.move.x;
       this.tickRenderFrom.y = this.move.y;
       this.tickRenderFrom.z = this.move.z;
       this.accumulator -= TICK_DT;
       if (!dead && ui.connected) this.stepLocal(actions);
+      stepCount++;
+    }
+    if (this.accumulator > TICK_DT) {
+      this.accumulator = 0;
     }
 
     // Decay the reconcile error so the smoothed render position eases to the
@@ -1477,8 +1638,11 @@ export class Game {
     const rx = smoothX + this.posError.x;
     const ry = smoothY + this.posError.y;
     const rz = smoothZ + this.posError.z;
-    ui.playerX = rx;
-    ui.playerZ = rz;
+    if (now >= this.nextUiPosAt) {
+      ui.playerX = rx;
+      ui.playerZ = rz;
+      this.nextUiPosAt = now + 100;
+    }
 
     // Avatar + camera + world updates (rendered at the smoothed position)
     this.syncMount();
@@ -1494,7 +1658,8 @@ export class Game {
       this.mountMesh.group.rotation.y = this.cameraYaw;
     }
     this.animateSelf(dt, actions);
-    this.updateCamera(rx, ry, rz);
+    if (this.cinematicState) this.updateCinematicCamera(now, rx, ry, rz);
+    else this.updateCamera(rx, ry, rz);
     this.syncAuthoredRegionNodes();
     this.nodes?.update(rx, rz, now, dt);
     // Mirror the local player's lasting positive buffs (HoTs, shields, haste)
@@ -1506,8 +1671,13 @@ export class Game {
       this.interactPromptAt = now;
       this.updateInteractPrompt();
     }
+    if (now - this.killQuestMarkerAt >= KILL_QUEST_MARKER_INTERVAL_MS) {
+      this.killQuestMarkerAt = now;
+      this.updateKillQuestMarkers(rx, rz);
+    }
     this.updateDayNight(rx, rz, dt);
     this.skyDome.update(dt, this.camera);
+    this.horizonOcean.update(dt, this.camera);
     this.pumpTextureUploads();
 
     // Refresh the shadow map only every Nth frame (autoUpdate is off). The full
@@ -1568,9 +1738,39 @@ export class Game {
     const frameMs = prev ? now - prev : 0;
     const renderMs = end - renderStart;
     const logicMs = Math.max(0, renderStart - now);
-    if (frameMs > 0) push120(p.frame, frameMs);
+    if (frameMs > 0) {
+      push120(p.frame, frameMs);
+      push120(p.frameTs, now);
+    }
     push120(p.render, renderMs);
     push120(p.logic, logicMs);
+
+    // A changed program count means renderer.render() just linked a brand-new
+    // WebGLProgram somewhere in that frame (a real GPU shader compile, not a
+    // cheap draw) -- see perfOverlay.ts / the "shader compile" investigation
+    // this instrumentation exists for. Log the jump so it can be lined up
+    // against perfBus's streaming-event timestamps.
+    const progCount = this.renderer.info.programs?.length ?? 0;
+    if (progCount !== p.lastProgramCount) {
+      p.programJumps.push({ ts: end, from: p.lastProgramCount, to: progCount });
+      if (p.programJumps.length > 60) p.programJumps.shift();
+      p.lastProgramCount = progCount;
+    }
+
+    this.perfOverlay?.update({
+      frame: p.frame,
+      frameTs: p.frameTs,
+      render: p.render,
+      logic: p.logic,
+      stream: p.stream,
+      programJumps: p.programJumps,
+      drawCalls: this.renderer.info.render.calls,
+      triangles: this.renderer.info.render.triangles,
+      geometries: this.renderer.info.memory.geometries,
+      textures: this.renderer.info.memory.textures,
+      programs: progCount,
+    });
+
     if ((window as unknown as { __rcPerf?: boolean }).__rcPerf && now - p.lastLogAt > 2000) {
       p.lastLogAt = now;
       // eslint-disable-next-line no-console
@@ -1600,6 +1800,8 @@ export class Game {
       shadowAutoUpdate: this.renderer.shadowMap.autoUpdate,
       shadowMapSize: this.sun.shadow.mapSize.x,
       pixelRatio: this.renderer.getPixelRatio(),
+      programJumps: p.programJumps.slice(-10),
+      recentStreamEvents: recentPerfEvents(3000),
     };
   }
 
@@ -1685,17 +1887,107 @@ export class Game {
         Math.hypot(x - this.continentSyncAt.x, z - this.continentSyncAt.z) > 24;
       if (moved || now - this.continentSyncAt.t > 1500) {
         this.continentSyncAt = { x, z, t: now };
-        // Mount neighbours ahead of the seam. We deliberately do NOT pre-warm the
-        // scene here: prewarmScene() does a full-scene renderer.compile(), whose
-        // cost grows with scene size (measured up to ~935ms once many regions are
-        // resident) and fired on every new mount -- far worse than the first-draw
-        // stutter it was meant to prevent. Shader programs now compile lazily on
-        // first draw (spread across frames as props enter the frustum) and
-        // textures upload incrementally via pumpTextureUploads().
-        void this.continent.syncAround(x, z, this.continentCatalog(), { urgentId: regionId });
+        // Mount neighbours ahead of the seam. A full-scene renderer.compile()
+        // here was tried and reverted -- its cost grows with total resident
+        // scene size (measured up to ~935ms once many regions are resident),
+        // far worse than the first-draw stutter it was meant to prevent. But
+        // leaving shaders to compile lazily on first draw (as props/terrain/
+        // grass enter the frustum) is exactly the "fine every time except the
+        // first" stutter this was meant to avoid.
+        //
+        // Scoping compile() to just the newly mounted layer's own group (not
+        // the whole scene) isn't enough by itself, either -- profiled directly
+        // (Firefox profiler): compile() walks its whole subtree and prepares
+        // EVERY unique material synchronously in one call, so a single region
+        // with enough distinct materials (foliage variety, building/prop
+        // textures, NPC gear) still produced one 807ms frame, all attributed
+        // to WebGLProgram.getUniforms's first-use path. So compileNewLayer
+        // below additionally time-slices per-mesh across frames, same
+        // cooperative-yield pattern used elsewhere this session (idleScheduler,
+        // preloadRegionAssets) -- same total GPU work, but spread thin enough
+        // that no single frame pays for more than a few materials' worth.
+        void this.continent.syncAround(x, z, this.continentCatalog(), { urgentId: regionId }).then(async ({ mountedNew, newLayerIds }) => {
+          if (!mountedNew || !this.continent) return;
+          for (const id of newLayerIds) {
+            if (this.disposed) return;
+            const layer = this.continent.getLayer(id);
+            if (layer) await this.compileNewLayer(layer.group);
+          }
+        });
       }
     }
-    this.continent?.update(dt, this.sun, x, z, this.camera);
+    this.continent?.update(dt, this.sun, x, z, this.camera, this.currentGrassSky(), this.renderer);
+  }
+
+  /** Precompile a newly mounted region layer's shaders a few meshes at a
+   *  time, yielding a frame between batches, instead of one synchronous
+   *  renderer.compile(wholeGroup) call -- see the ambient syncAround call
+   *  site's comment for why that single-call version still produced an
+   *  800ms+ frame for a region with enough distinct materials. `this.scene`
+   *  (not `group`) is passed as compile()'s targetScene so the real lights
+   *  (this.sun/this.ambient, top-level scene children, not nested per-region)
+   *  get gathered correctly -- compiling against zero lights would prepare
+   *  the wrong shader variant for what's actually needed at real draw time. */
+  private async compileNewLayer(group: THREE.Object3D): Promise<void> {
+    // Dedupe by material, not mesh. A region's ~40-50 distinct foliage/prop
+    // materials get reused across hundreds of individual InstancedMesh
+    // objects (one per spatial cell per model -- see regionInterior.ts's
+    // instanceModel), so walking every mesh compiled the same handful of
+    // programs 10x over. That made the sweep take 2.5-8+ seconds to cover a
+    // ~483-mesh layer -- long enough that content already visible in the
+    // scene (added synchronously, not gated on this sweep) got drawn for
+    // real before its material's turn came up, paying a live shader-link
+    // stall inside renderer.render() instead (a captured profile showed
+    // this exact race: a 1.1s render() call with no matching sweep-complete
+    // mark, meaning the sweep simply hadn't reached that material yet).
+    // Compiling by unique material instead cuts the list ~10x and closes
+    // most of that race window.
+    const meshes: THREE.Object3D[] = [];
+    const seenMaterials = new Set<THREE.Material>();
+    group.traverse((o) => {
+      const m = o as THREE.Mesh & THREE.Points & THREE.Line & THREE.Sprite;
+      if (!(m.isMesh || m.isPoints || m.isLine || m.isSprite)) return;
+      const mats = Array.isArray(m.material) ? m.material : [m.material];
+      const hasNewMaterial = mats.some((mat) => mat && !seenMaterials.has(mat));
+      if (!hasNewMaterial) return;
+      for (const mat of mats) if (mat) seenMaterials.add(mat);
+      meshes.push(o);
+    });
+    const BATCH = 3;
+    // One perfMark for the whole sweep, not one per mesh -- compileNewLayer
+    // can touch hundreds of meshes across ~100 yielded frames, and logging
+    // each individually used to flood perfBus's ring buffer and evict every
+    // other streaming event from the window that actually mattered.
+    const sweepStart = performance.now();
+    const programsBefore = this.renderer.info.programs?.length ?? 0;
+    let compileMs = 0;
+    for (let i = 0; i < meshes.length; i += BATCH) {
+      if (this.disposed) return;
+      for (let j = i; j < Math.min(i + BATCH, meshes.length); j++) {
+        const t0 = performance.now();
+        this.renderer.compile(meshes[j]!, this.camera, this.scene);
+        compileMs += performance.now() - t0;
+      }
+      await nextFrame();
+    }
+    const programsAfter = this.renderer.info.programs?.length ?? 0;
+    perfMark(
+      "game:compile:newLayer:sweep",
+      compileMs,
+      `${meshes.length} unique materials, ${Math.round(performance.now() - sweepStart)}ms wall, programs ${programsBefore}->${programsAfter}`,
+    );
+  }
+
+  /** Real sky colors for QuickGrassField.setSky (via RegionInteriorRenderer)
+   *  so grass's own fog/rim-light shading matches the actual SkyDome instead
+   *  of a fixed default that never tracked time of day or region color
+   *  grading -- same source atmosphereDisplay used by updateDayNight's own
+   *  SkyDome.setAtmosphere call, just read here too since this is a
+   *  different call path (the per-frame continent sync). */
+  private currentGrassSky(): { horizon: THREE.Color; zenith: THREE.Color; fog: THREE.Color; ground?: THREE.Color } | undefined {
+    const a = this.atmosphereDisplay;
+    if (!a) return undefined;
+    return { horizon: a.horizonSkyColor, zenith: a.zenithColor, fog: a.fogColor, ground: a.groundTint };
   }
 
 
@@ -1861,7 +2153,7 @@ export class Game {
       this.scene.add(warmupGroup);
       // Synchronous compile only -- see prewarm360GpuPass's comment for why
       // compileAsync() is unsafe here (a proven crash, not a hypothetical).
-      this.renderer.compile(this.scene, this.camera);
+      perfTime("game:compile:commonModelShaders", () => this.renderer.compile(this.scene, this.camera));
       this.scene.remove(warmupGroup);
       warmupGroup.clear();
     } catch (e) {
@@ -1904,7 +2196,7 @@ export class Game {
         this.cameraYaw = angle;
         this.updateCamera(px, py, pz);
         if (this.continent) {
-          this.continent.update(0, this.sun, px, pz, this.camera);
+          this.continent.update(0, this.sun, px, pz, this.camera, this.currentGrassSky(), this.renderer);
         }
         // Synchronous compile() only. compileAsync() polls checkMaterialsReady
         // via a detached setTimeout, reading materialProperties.currentProgram
@@ -1916,7 +2208,7 @@ export class Game {
         // from inside the timer callback -- outside any promise chain, so it's
         // an UNCAUGHT global exception no try/catch here can stop. Reproduced
         // in this exact codebase; compile() has no such polling and is safe.
-        this.renderer.compile(this.scene, this.camera);
+        perfTime("game:compile:prewarm360", () => this.renderer.compile(this.scene, this.camera));
       }
 
       // --- Pass 2: render (offscreen-equivalent) to upload texture data to VRAM ---
@@ -1932,7 +2224,7 @@ export class Game {
         this.cameraYaw = angle;
         this.updateCamera(px, py, pz);
         if (this.continent) {
-          this.continent.update(0.016, this.sun, px, pz, this.camera);
+          this.continent.update(0.016, this.sun, px, pz, this.camera, this.currentGrassSky(), this.renderer);
         }
         if (this.graphics.shadowsEnabled) {
           this.renderer.shadowMap.needsUpdate = true;
@@ -2292,21 +2584,43 @@ export class Game {
     // Inside regions: pull the camera in when the arm hits solid walls so
     // interiors / upstairs rooms stay usable instead of clipping through.
     if (this.continent || this.regionRenderer) {
-      const allColliders = this.continent
-        ? this.continent.collidersWorld()
-        : [
-            ...regionAssetColliders(this.regionRenderer!.assets),
-            ...regionVolumeColliders(this.regionRenderer!.terrainVolumes ?? []),
-            ...regionBarrierColliders(this.regionRenderer!.blueprint.barrierVolumes),
-          ];
+      const source: unknown = this.continent ?? this.regionRenderer;
       const maxRange = targetDist + 4;
-      const colliders = allColliders.filter((c) => {
-        if (c.climbable || c.solid || c.radius <= 0) return false;
-        const dx = c.x - px;
-        const dz = c.z - pz;
-        const lim = maxRange + c.radius;
-        return dx * dx + dz * dz <= lim * lim;
-      });
+      const dxCache = px - this.cameraColliderCachePx;
+      const dzCache = pz - this.cameraColliderCachePz;
+      // Re-filter only when the source (region/continent swap), the search
+      // range (zoom), or the player's position (>0.5m) actually changed --
+      // this ran unconditionally every frame before, including frames where
+      // only the camera rotated (mouse-look) with the player standing still.
+      const stale =
+        !this.cameraColliderCache ||
+        source !== this.cameraColliderCacheSource ||
+        maxRange !== this.cameraColliderCacheRange ||
+        dxCache * dxCache + dzCache * dzCache > 0.25;
+      let colliders: RegionAssetCollider[];
+      if (stale) {
+        const allColliders = this.continent
+          ? this.continent.collidersWorld()
+          : [
+              ...regionAssetColliders(this.regionRenderer!.assets),
+              ...regionVolumeColliders(this.regionRenderer!.terrainVolumes ?? []),
+              ...regionBarrierColliders(this.regionRenderer!.blueprint.barrierVolumes),
+            ];
+        colliders = allColliders.filter((c) => {
+          if (c.climbable || c.solid || c.radius <= 0) return false;
+          const dx = c.x - px;
+          const dz = c.z - pz;
+          const lim = maxRange + c.radius;
+          return dx * dx + dz * dz <= lim * lim;
+        });
+        this.cameraColliderCache = colliders;
+        this.cameraColliderCacheSource = source;
+        this.cameraColliderCachePx = px;
+        this.cameraColliderCachePz = pz;
+        this.cameraColliderCacheRange = maxRange;
+      } else {
+        colliders = this.cameraColliderCache!;
+      }
       const headY = py + 1.5;
       for (let t = 0.6; t < targetDist; t += 0.35) {
         const sx = px - Math.sin(cy) * (t * Math.cos(cp));
@@ -2386,6 +2700,131 @@ export class Game {
     // player on the fastest vertical motion in normal play: jumping.
     this.camera.position.set(targetX, targetY, targetZ);
     this.camera.lookAt(px, py + 1.5, pz);
+  }
+
+  /** Kick off the skippable overlook pan played when a POI is discovered
+   *  (see the "poiDiscovered" server message handler). Detaches the camera
+   *  from the player for a few seconds -- updateCinematicCamera drives it
+   *  every frame from here on until it finishes or is skipped. */
+  private startDiscoveryCinematic(
+    poiX: number,
+    poiY: number,
+    poiZ: number,
+    revealShape: { x: number; z: number }[],
+  ): void {
+    // Bounding radius of the hand-drawn shape (max vertex distance from the
+    // POI's own position) replaces the old flat revealRadius input -- an
+    // irregular polygon has no single "radius", but the shot only needs a
+    // sensible standoff distance to frame it, not the exact boundary.
+    let boundingRadius = 0;
+    for (const p of revealShape) {
+      boundingRadius = Math.max(boundingRadius, Math.hypot(p.x - poiX, p.z - poiZ));
+    }
+    this.cinematicState = {
+      poiX,
+      poiY,
+      poiZ,
+      standoff: Math.max(15, boundingRadius * 0.6),
+      startYaw: this.cameraYaw,
+      phase: "out",
+      phaseStart: performance.now(),
+      fromPos: this.camera.position.clone(),
+      fromLookAt: new THREE.Vector3(this.move.x, this.move.y + 1.5, this.move.z),
+      backTargetPos: null,
+      backTargetLookAt: null,
+    };
+  }
+
+  /** Drives the camera while a discovery cinematic is active, in place of
+   *  updateCamera(). Never mutates player/movement state -- only the
+   *  camera transform -- so ending the cinematic (finished or skipped) can
+   *  hand back to updateCamera() on the very next frame with no seam. */
+  private updateCinematicCamera(now: number, rx: number, ry: number, rz: number): void {
+    const s = this.cinematicState;
+    if (!s) return;
+    const overlookLookAt = new THREE.Vector3(s.poiX, s.poiY + 1, s.poiZ);
+    const overlookPos = (yaw: number): THREE.Vector3 =>
+      new THREE.Vector3(
+        s.poiX - Math.sin(yaw) * s.standoff,
+        s.poiY + CINEMATIC_OVERLOOK_HEIGHT,
+        s.poiZ - Math.cos(yaw) * s.standoff,
+      );
+
+    if (s.phase === "out") {
+      const e = smoothstep(clamp((now - s.phaseStart) / CINEMATIC_OUT_MS, 0, 1));
+      this.camera.position.copy(s.fromPos.clone().lerp(overlookPos(s.startYaw), e));
+      this.camera.lookAt(s.fromLookAt.clone().lerp(overlookLookAt, e));
+      if (e >= 1) {
+        s.phase = "hold";
+        s.phaseStart = now;
+      }
+      return;
+    }
+
+    if (s.phase === "hold") {
+      const t = clamp((now - s.phaseStart) / CINEMATIC_HOLD_MS, 0, 1);
+      const yaw = s.startYaw + CINEMATIC_ORBIT_SWEEP * t;
+      this.camera.position.copy(overlookPos(yaw));
+      this.camera.lookAt(overlookLookAt);
+      if (t >= 1) {
+        // Capture the real player-locked pose via the normal camera update
+        // (respects wall pull-in / water submersion) instead of duplicating
+        // that logic here, then keep rendering the cinematic pose until the
+        // "back" interpolation actually reaches it.
+        s.fromPos = overlookPos(yaw);
+        s.fromLookAt = overlookLookAt.clone();
+        this.updateCamera(rx, ry, rz);
+        s.backTargetPos = this.camera.position.clone();
+        s.backTargetLookAt = new THREE.Vector3(rx, ry + 1.5, rz);
+        this.camera.position.copy(s.fromPos);
+        this.camera.lookAt(s.fromLookAt);
+        s.phase = "back";
+        s.phaseStart = now;
+      }
+      return;
+    }
+
+    // phase === "back"
+    const e = smoothstep(clamp((now - s.phaseStart) / CINEMATIC_BACK_MS, 0, 1));
+    this.camera.position.copy(s.fromPos.clone().lerp(s.backTargetPos!, e));
+    this.camera.lookAt(s.fromLookAt.clone().lerp(s.backTargetLookAt!, e));
+    if (e >= 1) this.cinematicState = null; // next frame's updateCamera() call takes over
+  }
+
+  /** Keep a map/minimap marker pointing at the nearest live mob matching each
+   *  active kill-quest's objectiveTarget -- same "escort_<id>" push/replace/
+   *  filter idiom regionInterior.ts's escort-quest tracking already uses on
+   *  ui.questMarkers, just sourced from EntityManager.nearestMobOfType instead
+   *  of a waypoint-following NPC. Only ever finds a mob already streamed to
+   *  this client (see nearestMobOfType's doc comment) -- no marker at all
+   *  just means nothing matching happens to be nearby right now. */
+  private updateKillQuestMarkers(px: number, pz: number): void {
+    const activeKillIds = new Set(
+      ui.questLog.filter((q) => q.status === "active" && q.objectiveKind === "kill").map((q) => `kill_${q.id}`),
+    );
+    // Drop markers for quests turned in / abandoned since the last scan.
+    if (ui.questMarkers.some((m) => m.id.startsWith("kill_") && !activeKillIds.has(m.id))) {
+      ui.questMarkers = ui.questMarkers.filter((m) => !m.id.startsWith("kill_") || activeKillIds.has(m.id));
+    }
+    for (const q of ui.questLog) {
+      if (q.status !== "active" || q.objectiveKind !== "kill") continue;
+      const markerId = `kill_${q.id}`;
+      const nearest = this.entities.nearestMobOfType(px, pz, q.objectiveTarget, KILL_QUEST_MARKER_RANGE);
+      const existingIdx = ui.questMarkers.findIndex((m) => m.id === markerId);
+      if (!nearest) {
+        if (existingIdx >= 0) ui.questMarkers.splice(existingIdx, 1);
+        continue;
+      }
+      const marker: QuestMarker = {
+        id: markerId,
+        name: mobDef(q.objectiveTarget).name,
+        x: nearest.x,
+        z: nearest.z,
+        marker: "kill",
+      };
+      if (existingIdx >= 0) ui.questMarkers[existingIdx] = marker;
+      else ui.questMarkers.push(marker);
+    }
   }
 
   private updateInteractPrompt(): void {
@@ -2479,6 +2918,17 @@ export class Game {
             const destName = this.regionNameMap.get(portalLink.targetRegionId) || portalLink.name || "Region Portal";
             ui.interactLabel = `Travel to ${destName}`;
             this.interactNodeId = `poi_region_link_${portalLink.id}`;
+            return;
+          }
+        }
+      }
+      if (activeBp?.pois) {
+        for (const poi of activeBp.pois) {
+          if (ui.discoveredPoiIds.has(poi.id)) continue; // already found -- permanent, no re-prompt
+          const poiW = regionLocalToWorld(activeBp, poi.localX, poi.localZ);
+          if (dist2D(this.move.x, this.move.z, poiW.x, poiW.z) <= (poi.interactRadius ?? 6)) {
+            ui.interactLabel = `Discover ${poi.name}`;
+            this.interactNodeId = `poi_marker_${poi.id}`;
             return;
           }
         }
@@ -2623,7 +3073,7 @@ export class Game {
         fogColor = fogLocal.color;
       }
       const baseDensity = clampRegionFogDensity(a.fogDensity);
-      const density = Math.min(0.12, (baseDensity + fogWeight * 0.04) * this.fogScale);
+      const density = Math.min(0.04, (baseDensity + fogWeight * 0.008) * this.fogScale);
       if (this.scene.fog instanceof THREE.FogExp2) {
         this.scene.fog.color.copy(fogColor);
         this.scene.fog.density = density;
@@ -2641,6 +3091,7 @@ export class Game {
       } else {
         this.regionRenderer.syncWaterEnvironment(waterEnv);
       }
+      this.horizonOcean.syncWaterEnvironment(waterEnv);
       return;
     }
     this.atmosphereDisplay = null;
@@ -2696,6 +3147,11 @@ export class Game {
     (this.scene.background as THREE.Color).set(0x02040a);
     this.scene.fog!.color.copy(outdoor.fogColor);
     this.clouds?.setDayness?.(dayness);
+    this.horizonOcean.syncWaterEnvironment({
+      skyColor: outdoor.skyMidColor,
+      fogColor: outdoor.fogColor,
+      groundTint: outdoor.groundTint,
+    });
     if (this.water?.mesh.material instanceof THREE.MeshLambertMaterial) {
       applyWaterEnvironment(this.water.mesh.material, {
         skyColor: outdoor.skyMidColor,
@@ -2799,6 +3255,11 @@ export class Game {
 
   closeQuestDialog(): void {
     ui.questOffer = null;
+    this.setUiMode(false);
+  }
+
+  closeDiscoveryModal(): void {
+    ui.discoveryReward = null;
     this.setUiMode(false);
   }
 
@@ -2909,6 +3370,8 @@ export class Game {
         portalWorldX: src.portalWorldX,
         portalWorldZ: src.portalWorldZ,
         isStartingRegion: src.isStartingRegion,
+        minLevel: src.minLevel,
+        maxLevel: src.maxLevel,
         entryLocal: src.entryLocal ?? { x: 0, z: 0 },
         colorGrading: src.colorGrading,
         villages: (src.villages ?? []).map((v) => ({
@@ -2943,19 +3406,35 @@ export class Game {
             vendorId: vId,
           };
         }),
+        mobSpawns: (src.mobSpawns ?? []).map((m, idx) => ({
+          id: String(idx),
+          mobTypeId: m.type,
+          localX: m.localX,
+          localZ: m.localZ,
+        })),
+        pois: (src.pois ?? []).map((p) => ({
+          id: p.id,
+          name: p.name,
+          localX: p.localX,
+          localZ: p.localZ,
+          revealShape: p.revealShape ?? [],
+        })),
       };
     });
   }
 
   public readonly prewarmedThumbnails = new Map<string, string>();
   public readonly prewarmedLandMasks = new Map<string, string>();
+  public readonly prewarmedArtistMaps = new Map<string, string>();
   public readonly prewarmedDetails = new Map<string, string>();
   public readonly prewarmedMinimaps = new Map<
     string,
     {
       thumb: string;
+      artistMap?: string;
       bounds: { minX: number; maxX: number; minZ: number; maxZ: number };
       npcs: Array<{ id: string; name: string; x: number; z: number; kind: "vendor" | "quest" | "npc" }>;
+      pois: Array<{ id: string; name: string; x: number; z: number; revealShape: { x: number; z: number }[] }>;
     }
   >();
 
@@ -2975,7 +3454,10 @@ export class Game {
    *  minimap needs immediately). Cheap; skips if already cached. */
   private async warmMinimapThumb(bp: RegionBlueprint, id: string): Promise<void> {
     if (this.prewarmedMinimaps.has(id)) return;
-    const minimapThumb = await requestRegionThumbnailAsync(bp, { edge: 224 });
+    const [minimapThumb, artistThumb] = await Promise.all([
+      requestRegionThumbnailAsync(bp, { edge: 224 }),
+      requestRegionArtistMapAsync(bp, { edge: 224 }),
+    ]);
     if (!minimapThumb || this.disposed) return;
     const origin = this.regionWorldOriginOf(id) ?? { x: bp.worldOriginX ?? 0, z: bp.worldOriginZ ?? 0 };
     const halfX = regionHalfSpanX(bp);
@@ -2991,7 +3473,14 @@ export class Game {
         | "quest"
         | "npc",
     }));
-    this.prewarmedMinimaps.set(id, { thumb: minimapThumb, bounds, npcs });
+    const pois = (bp.pois ?? []).map((p) => ({
+      id: p.id,
+      name: p.name,
+      x: origin.x + p.localX,
+      z: origin.z + p.localZ,
+      revealShape: (p.revealShape ?? []).map((v) => ({ x: origin.x + v.x, z: origin.z + v.z })),
+    }));
+    this.prewarmedMinimaps.set(id, { thumb: minimapThumb, artistMap: artistThumb ?? undefined, bounds, npcs, pois });
   }
 
   /** Pre-render one region's map rasters (minimap thumb + world-map overview /
@@ -3004,16 +3493,27 @@ export class Game {
     const maskPromise = this.prewarmedLandMasks.has(id)
       ? null
       : requestRegionLandMaskAsync(bp, { edge: OVERVIEW_EDGE });
+    const artistPromise = this.prewarmedArtistMaps.has(id)
+      ? null
+      : requestRegionArtistMapAsync(bp, { edge: OVERVIEW_EDGE });
     const detailPromise = this.prewarmedDetails.has(id)
       ? null
       : requestRegionThumbnailAsync(bp, { edge: DETAIL_EDGE });
 
-    const [thumbUrl, maskUrl, detailUrl] = await Promise.all([thumbPromise, maskPromise, detailPromise]);
+    const [thumbUrl, maskUrl, artistUrl, detailUrl] = await Promise.all([
+      thumbPromise,
+      maskPromise,
+      artistPromise,
+      detailPromise,
+    ]);
     if (thumbUrl && !this.prewarmedThumbnails.has(id)) {
       this.prewarmedThumbnails.set(id, thumbUrl);
     }
     if (maskUrl && !this.prewarmedLandMasks.has(id)) {
       this.prewarmedLandMasks.set(id, maskUrl);
+    }
+    if (artistUrl && !this.prewarmedArtistMaps.has(id)) {
+      this.prewarmedArtistMaps.set(id, artistUrl);
     }
     if (detailUrl && !this.prewarmedDetails.has(id)) {
       this.prewarmedDetails.set(id, detailUrl);
@@ -3110,6 +3610,7 @@ export class Game {
     }
     this.streamArgs = null;
     this.destroyContinent();
+    this.horizonOcean.dispose();
     this.skyDome.dispose();
     this.scene.remove(this.skyDome.group);
     if (this.mountMesh) {
@@ -3118,7 +3619,10 @@ export class Game {
     }
     this.unsubscribe?.();
     this.connection.disconnect();
+    this.input.dispose();
     window.removeEventListener("resize", this.onResize);
+    if (this.perfOverlayKeyHandler) window.removeEventListener("keydown", this.perfOverlayKeyHandler);
+    this.perfOverlay?.destroy();
     this.renderer.dispose();
   }
 }

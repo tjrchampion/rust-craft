@@ -31,6 +31,7 @@ export interface RegionPaletteAsset {
 /** Top-level Asset Explorer / palette pack filters. */
 export const REGION_PALETTE_PACKS: { id: string; label: string }[] = [
   { id: "all", label: "All packs" },
+  { id: "Imported", label: "Imported" },
   { id: "Core", label: "Core" },
   { id: "Medieval Village", label: "Medieval Village" },
   { id: "Stylized Nature", label: "Stylized Nature" },
@@ -1763,3 +1764,43 @@ export function flattenRegionPalette(
   }
   return out;
 }
+
+export interface PoiLandmarkPreset {
+  id: string;
+  name: string;
+  category: RegionAssetCategory;
+  model: string;
+  defaultScale?: number;
+}
+
+export const POI_LANDMARK_PRESETS: PoiLandmarkPreset[] = [
+  { id: "castle_ruins", name: "Castle Ruins", category: "building", model: "castle_ruins/CastleRuins.glb", defaultScale: 1.0 },
+  { id: "ancient_column", name: "Ancient Column Shrine", category: "prop", model: "imported/olumn_ancient_ruins.glb", defaultScale: 1.0 },
+  { id: "church", name: "Ancient Cathedral / Church", category: "building", model: "building_church.gltf", defaultScale: 1.0 },
+  { id: "watchtower", name: "Highland Watchtower", category: "building", model: "building_tower_A.gltf", defaultScale: 1.0 },
+  { id: "well", name: "Ancient Well", category: "building", model: "building_well.gltf", defaultScale: 1.2 },
+  { id: "destroyed_keep", name: "Ruined Keep", category: "building", model: "building_destroyed.gltf", defaultScale: 1.0 },
+  { id: "stone_bridge", name: "Stone Bridge", category: "building", model: "building_bridge_A.gltf", defaultScale: 1.0 },
+  { id: "windmill", name: "Old Windmill", category: "building", model: "building_windmill.gltf", defaultScale: 1.0 },
+  { id: "monolith", name: "Stylized Monolith Stone", category: "prop", model: "stylized_stone_2.glb", defaultScale: 1.0 },
+  { id: "skull_gate", name: "Skull Gate Entrance", category: "prop", model: "imported/skull_door_dungeon_entrance.glb", defaultScale: 0.8 },
+];
+
+export function resolvePoiModelUrl(model?: string, category?: RegionAssetCategory): string {
+  if (!model) return "";
+  if (model.startsWith("/") || model.startsWith("http")) return model;
+  if (model === "stylized_stone_2.glb") return `/assets/models/stylized_stone_2.glb`;
+  if (category && REGION_ASSET_DIR[category]) {
+    return regionAssetUrl(category, model);
+  }
+  if (model.startsWith("buildings/") || model.startsWith("props/") || model.startsWith("foliage/")) {
+    return `/assets/models/${model}`;
+  }
+  const preset = POI_LANDMARK_PRESETS.find((p) => p.model === model || p.id === model);
+  if (preset) {
+    if (preset.model === "stylized_stone_2.glb") return `/assets/models/stylized_stone_2.glb`;
+    return regionAssetUrl(preset.category, preset.model);
+  }
+  return `/assets/models/buildings/${model}`;
+}
+

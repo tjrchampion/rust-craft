@@ -33,7 +33,7 @@ const GRASS_FEATHER_START = 0.55;
  *  `dens < 0.02` blade-collapse rule). */
 const MIN_SPAWN_DENSITY = 0.0001;
 
-const MAX_PATCHES = 520;
+const MAX_PATCHES = 160;
 
 /** Density grid target spacing (meters) — decoupled from the terrain
  *  heightmap's own pitch (often 6m+ on an authored region), which was too
@@ -63,6 +63,14 @@ export interface QuickGrassField {
   /** Optional sun override from scene lights; pass null to clear and fall
    *  back to settings elevation/azimuth. */
   setSunFromLight(dir: THREE.Vector3 | null, color?: THREE.Color, intensity?: number): void;
+  /** Real sky gradient colors (matches SkyDome.setAtmosphere's own mapping)
+   *  so grass's own procedural sky (used for blade rim-lighting) actually
+   *  matches the sky dome, instead of a fixed default that never changes
+   *  with time of day, weather, or region color grading. `fog` is the
+   *  separate ground-level atmospheric fog colour (AtmosphereSample.fogColor,
+   *  same value scene.fog.color uses) -- applyFog's blend target, distinct
+   *  from `horizon` (the sky dome's own gradient band). */
+  setSky(horizon: THREE.Color, zenith: THREE.Color, fog: THREE.Color, ground?: THREE.Color): void;
   /** Stream patches around camera + advance wind time. Call every frame. */
   update(camera: THREE.Camera, dt: number): void;
   /** Force geometry rebuild (segments / bladesPerPatch / patchSize). */
@@ -130,8 +138,12 @@ interface QuickGrassUniforms {
   uSunColour: THREE.IUniform<THREE.Color>;
   uSunGlow: THREE.IUniform<THREE.Color>;
   uGroundColour: THREE.IUniform<THREE.Color>;
+  /** Actual ground-level fog colour (applyFog's blend target) -- distinct
+   *  from uSkyHorizon, which is the sky dome's own gradient band. */
+  uFogColour: THREE.IUniform<THREE.Color>;
   uSunIntensity: THREE.IUniform<number>;
   uHaze: THREE.IUniform<number>;
+  uFogDist: THREE.IUniform<number>;
   uExposure: THREE.IUniform<number>;
   uAmbient: THREE.IUniform<number>;
   uTranslucency: THREE.IUniform<number>;
@@ -162,11 +174,13 @@ function createUniforms(settings: QuickGrassSettings): QuickGrassUniforms {
     uSunDir: { value: new THREE.Vector3(0, 1, 0) },
     uSkyHorizon: { value: new THREE.Color(0x53709c).convertSRGBToLinear() },
     uSkyZenith: { value: new THREE.Color(0x0e1730).convertSRGBToLinear() },
+    uFogColour: { value: new THREE.Color(0x53709c).convertSRGBToLinear() },
     uSunColour: { value: new THREE.Color(0xfff0d2).convertSRGBToLinear() },
     uSunGlow: { value: new THREE.Color(0x40506a).convertSRGBToLinear() },
     uGroundColour: { value: new THREE.Color(0x1b2114).convertSRGBToLinear() },
     uSunIntensity: { value: settings.sunIntensity },
     uHaze: { value: settings.haze },
+    uFogDist: { value: settings.drawDistance },
     uExposure: { value: settings.exposure },
     uAmbient: { value: settings.ambient },
     uTranslucency: { value: settings.translucency },
@@ -280,12 +294,19 @@ export function createQuickGrassField(
   const U = createUniforms(settings);
   const matHigh = createGrassMaterial(U, 0xff4d3d, settings.heightVariation, settings.tipTaper);
   const matLow = createGrassMaterial(U, 0x3d7bff, settings.heightVariation, settings.tipTaper);
+  const matFar = createGrassMaterial(U, 0x3dff6e, settings.heightVariation, settings.tipTaper);
 
   let geoHigh: THREE.InstancedBufferGeometry | null = null;
   let geoLow: THREE.InstancedBufferGeometry | null = null;
+  /** Third LOD tier: same low segment count as geoLow but a fraction of the
+   *  blade count -- geoHigh/geoLow only ever varied per-blade segments by
+   *  distance, not blade density, so a crowded view of far grass paid full
+   *  bladesPerPatch cost per patch regardless of how few pixels it covered. */
+  let geoFar: THREE.InstancedBufferGeometry | null = null;
   const poolHigh: THREE.Mesh[] = [];
   const poolLow: THREE.Mesh[] = [];
-  const cursor = { high: 0, low: 0 };
+  const poolFar: THREE.Mesh[] = [];
+  const cursor = { high: 0, low: 0, far: 0 };
 
   let heightmapState: { gridSize: number; pitch: number; heights: Float32Array } | null = null;
   // Density has its own grid, independent of (and much finer than) the
@@ -306,7 +327,7 @@ export function createQuickGrassField(
   let needsRebuild = false;
   let lastStats = { patches: 0, blades: 0, tris: 0 };
 
-  function takePatch(pool: THREE.Mesh[], key: "high" | "low", geo: THREE.InstancedBufferGeometry, mat: THREE.Material): THREE.Mesh | null {
+  function takePatch(pool: THREE.Mesh[], key: "high" | "low" | "far", geo: THREE.InstancedBufferGeometry, mat: THREE.Material): THREE.Mesh | null {
     const i = cursor[key]++;
     if (i < pool.length) return pool[i]!;
     if (pool.length >= MAX_PATCHES) return null;
@@ -321,27 +342,40 @@ export function createQuickGrassField(
   function hideAllPatches(): void {
     for (const m of poolHigh) m.visible = false;
     for (const m of poolLow) m.visible = false;
+    for (const m of poolFar) m.visible = false;
     cursor.high = 0;
     cursor.low = 0;
+    cursor.far = 0;
   }
 
   function rebuildGrass(): void {
     for (const m of poolHigh) group.remove(m);
     for (const m of poolLow) group.remove(m);
+    for (const m of poolFar) group.remove(m);
     poolHigh.length = 0;
     poolLow.length = 0;
+    poolFar.length = 0;
     cursor.high = 0;
     cursor.low = 0;
+    cursor.far = 0;
     geoHigh?.dispose();
     geoLow?.dispose();
+    geoFar?.dispose();
 
     const segHigh = settings.segments | 0;
     const segLow = 1;
-    geoHigh = createGrassGeometry(segHigh, settings.bladesPerPatch | 0, settings.patchSize);
-    geoLow = createGrassGeometry(segLow, settings.bladesPerPatch | 0, settings.patchSize);
+    const bladesPerPatch = settings.bladesPerPatch | 0;
+    // A third of near-tier density reads as noticeably thinner up close, but
+    // far patches cover far fewer screen pixels (perspective shrinkage) so
+    // the reduction is much less noticeable there -- exactly why it's cheap.
+    const bladesFar = Math.max(1, Math.round(bladesPerPatch / 3));
+    geoHigh = createGrassGeometry(segHigh, bladesPerPatch, settings.patchSize);
+    geoLow = createGrassGeometry(segLow, bladesPerPatch, settings.patchSize);
+    geoFar = createGrassGeometry(segLow, bladesFar, settings.patchSize);
 
     (matHigh.uniforms.uGrassParams!.value as THREE.Vector4).set(segHigh, (segHigh + 1) * 2, settings.heightVariation, settings.tipTaper);
     (matLow.uniforms.uGrassParams!.value as THREE.Vector4).set(segLow, (segLow + 1) * 2, settings.heightVariation, settings.tipTaper);
+    (matFar.uniforms.uGrassParams!.value as THREE.Vector4).set(segLow, (segLow + 1) * 2, settings.heightVariation, settings.tipTaper);
     needsRebuild = false;
   }
 
@@ -488,6 +522,7 @@ export function createQuickGrassField(
     U.uAmbient.value = settings.ambient;
     U.uTranslucency.value = settings.translucency;
     U.uHaze.value = settings.haze;
+    U.uFogDist.value = settings.drawDistance;
     U.uExposure.value = settings.exposure;
     U.uShowLod.value = settings.showLod ? 1 : 0;
     U.uBaseColour.value.set(settings.baseColour).convertSRGBToLinear();
@@ -513,9 +548,12 @@ export function createQuickGrassField(
     (matHigh.uniforms.uGrassParams!.value as THREE.Vector4).w = settings.tipTaper;
     (matLow.uniforms.uGrassParams!.value as THREE.Vector4).z = settings.heightVariation;
     (matLow.uniforms.uGrassParams!.value as THREE.Vector4).w = settings.tipTaper;
+    (matFar.uniforms.uGrassParams!.value as THREE.Vector4).z = settings.heightVariation;
+    (matFar.uniforms.uGrassParams!.value as THREE.Vector4).w = settings.tipTaper;
 
     matHigh.wireframe = settings.wireframe;
     matLow.wireframe = settings.wireframe;
+    matFar.wireframe = settings.wireframe;
   }
 
   const tmpCenter = new THREE.Vector3();
@@ -527,6 +565,8 @@ export function createQuickGrassField(
   /** Last-frame high-LOD membership — hysteresis stops near/far geo flipping
    *  every few frames (reads as a 1–3 s grass "flicker" with camera bob). */
   const lodHigh = new Map<number, boolean>();
+  /** Same hysteresis idea for the low/far density boundary (see updatePatches). */
+  const lodFar = new Map<number, boolean>();
   /** Sticky visible set so MAX_PATCHES thrashing doesn't pop the same cells. */
   const stickyVisible = new Set<number>();
 
@@ -538,7 +578,7 @@ export function createQuickGrassField(
    *  (no frustum cull) — frustum edge tests strobed patches when the orbit
    *  camera bobbed. High/low LOD still uses hysteresis below. */
   function updatePatches(camera: THREE.Camera): { patches: number; blades: number; tris: number } {
-    if (!geoHigh || !geoLow || !heightmapState) return { patches: 0, blades: 0, tris: 0 };
+    if (!geoHigh || !geoLow || !geoFar || !heightmapState) return { patches: 0, blades: 0, tris: 0 };
 
     hideAllPatches();
 
@@ -547,6 +587,14 @@ export function createQuickGrassField(
     const lodD = settings.detailDistance;
     const lodEnter = lodD * 0.88;
     const lodExit = lodD * 1.22;
+    // Low/far density boundary -- independent hysteresis pair, same idea as
+    // lodEnter/lodExit above (asymmetric thresholds so a cell doesn't flip
+    // tiers every few frames while its distance hovers near one cutoff).
+    // Placed past lodExit (grass never skips high -> far in one step) and
+    // comfortably inside keepD so it doesn't fight the visibility cutoff.
+    const farD = maxD * 0.6;
+    const farEnter = farD * 1.15;
+    const farRetreat = farD * 0.85;
     // Keep cells a bit past drawDistance so they don't pop when distance
     // oscillates around the cutoff (walk bob / smooth camera).
     const keepD = maxD * 1.12;
@@ -607,7 +655,9 @@ export function createQuickGrassField(
     let tris = 0;
     const bladesHigh = geoHigh.instanceCount;
     const bladesLow = geoLow.instanceCount;
+    const bladesFar = geoFar.instanceCount;
     const segHigh = settings.segments | 0;
+    const seenFarLod = new Set<number>();
 
     for (const c of list) {
       const key = cellKey(c.x, c.z);
@@ -617,17 +667,38 @@ export function createQuickGrassField(
       const near = wasHigh ? c.d <= lodExit : c.d <= lodEnter;
       lodHigh.set(key, near);
 
-      const m = near ? takePatch(poolHigh, "high", geoHigh, matHigh) : takePatch(poolLow, "low", geoLow, matLow);
+      let m: THREE.Mesh | null;
+      let tierBlades: number;
+      if (near) {
+        m = takePatch(poolHigh, "high", geoHigh, matHigh);
+        tierBlades = bladesHigh;
+        tris += bladesHigh * segHigh * 4;
+      } else {
+        seenFarLod.add(key);
+        const wasFar = lodFar.get(key) ?? c.d > farD;
+        const isFar = wasFar ? c.d > farRetreat : c.d > farEnter;
+        lodFar.set(key, isFar);
+        if (isFar) {
+          m = takePatch(poolFar, "far", geoFar, matFar);
+          tierBlades = bladesFar;
+        } else {
+          m = takePatch(poolLow, "low", geoLow, matLow);
+          tierBlades = bladesLow;
+        }
+        tris += tierBlades * 4;
+      }
       if (!m) continue;
       m.position.set(c.x, 0, c.z);
       m.visible = true;
       patches++;
-      blades += near ? bladesHigh : bladesLow;
-      tris += (near ? bladesHigh * segHigh : bladesLow) * 4;
+      blades += tierBlades;
     }
 
     for (const key of [...lodHigh.keys()]) {
       if (!seenLod.has(key)) lodHigh.delete(key);
+    }
+    for (const key of [...lodFar.keys()]) {
+      if (!seenFarLod.has(key)) lodFar.delete(key);
     }
 
     return { patches, blades, tris };
@@ -691,6 +762,18 @@ export function createQuickGrassField(
         intensity: grassI,
       };
     },
+    setSky(horizon, zenith, fog, ground) {
+      // No convertSRGBToLinear here -- matches SkyDome.setAtmosphere, which
+      // copies these same AtmosphereSample colors straight into its own
+      // shader uniforms with no conversion. Applying one here (on top of
+      // the createUniforms() defaults' own convertSRGBToLinear, which exists
+      // because *those* literal hex defaults were authored as sRGB-viewed
+      // colors) would double-convert relative to what the sky dome shows.
+      U.uSkyHorizon.value.copy(horizon);
+      U.uSkyZenith.value.copy(zenith);
+      U.uFogColour.value.copy(fog);
+      if (ground) U.uGroundColour.value.copy(ground);
+    },
     update(camera, dt) {
       if (needsRebuild) rebuildGrass();
       if (!heightmapState) {
@@ -710,17 +793,22 @@ export function createQuickGrassField(
     dispose() {
       for (const m of poolHigh) group.remove(m);
       for (const m of poolLow) group.remove(m);
+      for (const m of poolFar) group.remove(m);
       poolHigh.length = 0;
       poolLow.length = 0;
+      poolFar.length = 0;
       geoHigh?.dispose();
       geoLow?.dispose();
+      geoFar?.dispose();
       matHigh.dispose();
       matLow.dispose();
+      matFar.dispose();
       heightTexture?.dispose();
       densityTexture?.dispose();
       parent.remove(group);
       cells = [];
       lodHigh.clear();
+      lodFar.clear();
       stickyVisible.clear();
     },
     stats() {
